@@ -91,6 +91,33 @@ const ComicStore = (() => {
     return getAll().find(c => c.id === id) || null;
   }
 
+  // Pide al navegador que el almacenamiento de este sitio sea "persistente"
+  // (no elegible para borrado automático bajo presión de espacio) — reduce
+  // el riesgo de que el navegador borre IndexedDB/OPFS/localStorage sin que
+  // el autor haya hecho nada. Se pide UNA sola vez por navegador (no en
+  // cada guardado) y en el momento de guardar datos reales — nunca al
+  // arrancar la app — porque en Firefox esta llamada puede mostrar un
+  // permiso emergente al autor, y pedirlo sin contexto (nada más abrir la
+  // app) resultaría confuso y con más probabilidad de ser rechazado.
+  // En Chrome/Edge nunca muestra ningún emergente (lo decide solo, según
+  // uso de la app) — pedirlo aquí no tiene coste en esos navegadores.
+  let _persistAsked = false;
+  function _requestPersistentStorageOnce() {
+    if (_persistAsked) return;
+    if (localStorage.getItem('cx_persist_asked') === '1') { _persistAsked = true; return; }
+    _persistAsked = true;
+    try {
+      if (navigator.storage && navigator.storage.persist && navigator.storage.persisted) {
+        navigator.storage.persisted().then(already => {
+          if (already) { localStorage.setItem('cx_persist_asked', '1'); return; }
+          navigator.storage.persist().finally(() => {
+            try { localStorage.setItem('cx_persist_asked', '1'); } catch(_e) {}
+          });
+        }).catch(() => {});
+      }
+    } catch(_e) {}
+  }
+
   // save() devuelve Promise — permite await cuando se necesita garantizar OPFS escrito
   function save(comic) {
     const list = getAll();
@@ -103,6 +130,7 @@ const ComicStore = (() => {
     }
     saveAll(list);
     _emit('save', comic.id);
+    _requestPersistentStorageOnce();
 
     // Guardar editorData en OPFS — devolver Promise para que el llamador pueda hacer await
     const _opfsPromise = (comic.editorData || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl))

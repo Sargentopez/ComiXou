@@ -514,6 +514,17 @@ function _mcCheckStorage() {
 
 function MyComicsView_init() {
   _mcInitTitlePillObserver();
+  // Comprobación de fiabilidad del almacenamiento local (localStorage/OPFS/
+  // biblioteca) — definida en editor.js. Se dispara aquí, no al arrancar la
+  // app entera: una persona puede entrar solo para LEER obras, sin crear ni
+  // editar nada, y en ese caso el guardado local no le afecta — mostrarle
+  // el aviso sería confuso e irrelevante. "Mis creaciones" es la vista
+  // donde de verdad importa. Una sola vez por sesión (poco después de
+  // entrar, sin bloquear el resto de la inicialización de la vista).
+  if (!window._cxStorageCheckedThisSession && typeof window._cxCheckStorageReliability === 'function') {
+    window._cxStorageCheckedThisSession = true;
+    setTimeout(() => { window._cxCheckStorageReliability().catch(() => {}); }, 500);
+  }
   // Detectar disponibilidad real de IDB probando una escritura en cxAnims.
   // Más fiable que detectar incógnito por APIs — en Chrome incógnito IDB existe
   // pero puede fallar silenciosamente o tener cuota insuficiente.

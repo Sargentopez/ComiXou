@@ -21507,6 +21507,33 @@ function _edShowIncognitoWarning(msg) {
 }
 window._edShowIncognitoWarning = _edShowIncognitoWarning;
 
+// Instrucciones concretas (no solo genéricas) para reactivar el guardado
+// local, adaptadas al navegador detectado — a petición de Alberto: cuando
+// el aviso de almacenamiento SÍ tiene que aparecer (el usuario ha
+// bloqueado el guardado de verdad), debe darle el camino exacto para
+// arreglarlo, no solo "revisa la configuración de cookies".
+function _cxStorageHelpText() {
+  const ua = navigator.userAgent || '';
+  const isEdge    = /Edg\//.test(ua);
+  const isFirefox = !isEdge && /Firefox/.test(ua);
+  const isChrome  = !isEdge && !isFirefox && /Chrome/.test(ua);
+  const isSafari  = !isEdge && !isFirefox && !isChrome && /Safari/.test(ua);
+  if (isFirefox) {
+    return 'En Firefox: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" no esté bloqueado para esta página. Revisa también Ajustes → Privacidad y seguridad → que no tengas activado "Eliminar cookies y datos del sitio al cerrar Firefox", ni la navegación privada.';
+  }
+  if (isEdge) {
+    return 'En Edge: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" esté permitido para esta página. Revisa también Ajustes → Cookies y permisos del sitio → que esta página no esté bloqueada ni se borre al cerrar el navegador.';
+  }
+  if (isSafari) {
+    return 'En Safari: ve a Ajustes → Privacidad y comprueba que "Bloquear todas las cookies" esté desactivado (en Safari, bloquear cookies también bloquea el guardado local de esta app). Evita también la Navegación privada.';
+  }
+  if (isChrome) {
+    return 'En Chrome: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" esté permitido para esta página. Revisa también Ajustes → Privacidad y seguridad → Cookies y otros datos de sitios → que esta página no esté bloqueada ni se borre al cerrar el navegador.';
+  }
+  return 'Revisa la configuración de cookies/datos de sitio de este navegador (que no estén bloqueados para esta página ni se borren al cerrarla) o prueba con otro navegador.';
+}
+window._cxStorageHelpText = _cxStorageHelpText;
+
 // Aviso persistente para fallos REALES de almacenamiento local (distinto del
 // de incógnito) — IndexedDB u OPFS no funcionan como deberían en este
 // navegador/dispositivo. Mismo patrón visual que _edShowIncognitoWarning,
@@ -26070,6 +26097,15 @@ function edConfirm(msg, onOk, okLabel='Eliminar'){
    ══════════════════════════════════════════ */
 function EditorView_init(){
   _edInitWindowTitlePillObserver();
+  // Comprobación de fiabilidad del almacenamiento local — normalmente ya se
+  // disparó al entrar en "Mis creaciones", pero también se puede llegar
+  // aquí directamente (p.ej. botón "Editar" de una obra propia en Home) sin
+  // pasar por esa vista. El flag _cxStorageCheckedThisSession evita que se
+  // repita si ya se hizo.
+  if (!window._cxStorageCheckedThisSession && typeof window._cxCheckStorageReliability === 'function') {
+    window._cxStorageCheckedThisSession = true;
+    setTimeout(() => { window._cxCheckStorageReliability().catch(() => {}); }, 500);
+  }
   // Precargar todas las fuentes de texto en la caché del browser.
   // Canvas 2D requiere que la fuente esté cargada ANTES de usarla; si no, cae
   // al fallback silenciosamente. document.fonts.load() fuerza la carga inmediata.
@@ -28554,31 +28590,51 @@ let _bibSavePromise = null; // última operación de guardado pendiente
 // lo deja constancia sin que Alberto tenga que adivinarlo.
 let _bibWriteVerifyFailures = [];
 window._bibWriteVerifyFailures = _bibWriteVerifyFailures;
-function _bibVerifyWrite(db, key, expectedData) {
-  try {
-    const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
-    const req = tx.objectStore(_BIB_IDB_STORE).get(key);
-    const _expectedItems = (expectedData.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-    req.onsuccess = () => {
-      const readBack = req.result;
-      const _readItems = (readBack?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
-      const _mismatch = !readBack
-        || _readItems !== _expectedItems
-        || readBack._localModifiedAt !== expectedData._localModifiedAt;
-      if (_mismatch) {
-        _bibWriteVerifyFailures.push({
-          ts: new Date().toISOString(), key,
-          expectedItems: _expectedItems, readItems: _readItems,
-          expectedStamp: expectedData._localModifiedAt, readStamp: readBack?._localModifiedAt,
-        });
-        if (_bibWriteVerifyFailures.length > 20) _bibWriteVerifyFailures.shift();
-      }
-    };
-    req.onerror = () => {
-      _bibWriteVerifyFailures.push({ ts: new Date().toISOString(), key, error: 'la relectura de verificación falló' });
-      if (_bibWriteVerifyFailures.length > 20) _bibWriteVerifyFailures.shift();
-    };
-  } catch(_e) {}
+function _bibLogWriteFailure(key, extra) {
+  _bibWriteVerifyFailures.push({ ts: new Date().toISOString(), key, ...extra });
+  if (_bibWriteVerifyFailures.length > 20) _bibWriteVerifyFailures.shift();
+}
+// Relee el dato recién escrito y comprueba que coincide con lo esperado.
+// Devuelve una Promise<boolean> (true = verificado OK) en vez de solo
+// registrar el fallo — así _bibSave puede reintentar/avisar según el
+// resultado real, no solo dejar constancia para el diagnóstico.
+function _bibVerifyWriteAsync(db, key, expectedData) {
+  return new Promise(res => {
+    try {
+      const tx  = db.transaction(_BIB_IDB_STORE, 'readonly');
+      const req = tx.objectStore(_BIB_IDB_STORE).get(key);
+      const _expectedItems = (expectedData.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+      req.onsuccess = () => {
+        const readBack = req.result;
+        const _readItems = (readBack?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
+        const _mismatch = !readBack
+          || _readItems !== _expectedItems
+          || readBack._localModifiedAt !== expectedData._localModifiedAt;
+        if (_mismatch) {
+          _bibLogWriteFailure(key, {
+            expectedItems: _expectedItems, readItems: _readItems,
+            expectedStamp: expectedData._localModifiedAt, readStamp: readBack?._localModifiedAt,
+          });
+        }
+        res(!_mismatch);
+      };
+      req.onerror = () => { _bibLogWriteFailure(key, { error: 'la relectura de verificación falló' }); res(false); };
+    } catch(_e) { res(false); }
+  });
+}
+// Un único intento de escritura+verificación — lanza si falla algo (la
+// transacción, o la verificación de relectura), para que el llamador
+// decida si reintentar.
+async function _bibWriteAttempt(key, data) {
+  const db = await _bibOpenIdb();
+  await new Promise((res, rej) => {
+    const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
+    tx.oncomplete = res;
+    tx.onerror = () => rej(tx.error || new Error('transacción de escritura falló'));
+    tx.objectStore(_BIB_IDB_STORE).put(data, key);
+  });
+  const verified = await _bibVerifyWriteAsync(db, key, data);
+  if (!verified) throw new Error('la relectura de verificación no coincide');
 }
 function _bibSave(data) {
   // Sello de "última modificación LOCAL real" — se usa en my-comics.js para
@@ -28599,21 +28655,45 @@ function _bibSave(data) {
   // Capturar la clave AHORA — _bibKey() usa edProjectId que puede cambiar
   // si edLoadProject carga otra obra mientras esta promesa async está pendiente.
   const _bibSaveKey = _bibKey();
-  _bibSavePromise = _bibOpenIdb().then(db => {
-    return new Promise((res, rej) => {
-      const tx = db.transaction(_BIB_IDB_STORE, 'readwrite');
-      tx.oncomplete = () => { _bibVerifyWrite(db, _bibSaveKey, data); res(); };
-      tx.onerror = () => res(); // silencioso
-      tx.objectStore(_BIB_IDB_STORE).put(data, _bibSaveKey);
-    });
-  }).catch(() => {
-    // IDB falló — puede ser transitorio (SW tomó control, versionchange).
-    // Invalidar singleton para forzar reapertura en el siguiente intento.
-    // Solo marcar _bibIdbUnavailable si OPFS tampoco existe (incógnito real).
-    _bibDb = null;
-    const _realIncognito2 = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
-    if (_realIncognito2) _bibIdbUnavailable = true;
-  });
+  // La biblioteca es tan fundamental como el resto del guardado local (a
+  // petición expresa de Alberto): si el guardado falla en silencio, el autor
+  // pierde sus cambios sin enterarse hasta reabrir la obra. Antes, tanto un
+  // error de transacción como un fallo al abrir IDB se resolvían como si
+  // hubieran tenido éxito (`tx.onerror = () => res()`, `.catch(() => {})`),
+  // y el mismatch de verificación solo quedaba registrado para el 🩺.
+  // Ahora: un intento fallido se reintenta una vez (filtra interferencias
+  // transitorias — mismo criterio que el autotest de arranque) y, si sigue
+  // fallando, se avisa de inmediato con el mismo aviso severo del resto del
+  // guardado local, en vez de descubrirlo al reabrir la obra.
+  _bibSavePromise = (async () => {
+    try {
+      await _bibWriteAttempt(_bibSaveKey, data);
+      return;
+    } catch(e1) {
+      _bibDb = null; // invalidar singleton — fuerza reapertura en el reintento
+      await new Promise(res => setTimeout(res, 500));
+      try {
+        await _bibWriteAttempt(_bibSaveKey, data);
+        return; // el reintento sí funcionó — fallo transitorio, sin aviso
+      } catch(e2) {
+        _bibDb = null;
+        _bibLogWriteFailure(_bibSaveKey, { error: (e2 && e2.message) || String(e2) });
+        // Solo marcar _bibIdbUnavailable si OPFS tampoco existe (incógnito
+        // real) — igual que antes, no confundir un fallo puntual de IDB
+        // con incógnito real cuando el resto del almacenamiento sí funciona.
+        const _realIncognito2 = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
+        if (_realIncognito2) _bibIdbUnavailable = true;
+        if (typeof _edShowStorageWarning === 'function') {
+          _edShowStorageWarning(
+            'No se ha podido guardar tu último cambio en la biblioteca en este dispositivo. ' +
+            'Si cierras la app ahora, ese cambio podría perderse. Sube la obra a la nube (☁️) ' +
+            'para conservarlo. ' +
+            (typeof _cxStorageHelpText === 'function' ? _cxStorageHelpText() : '')
+          );
+        }
+      }
+    }
+  })();
   return _bibSavePromise;
 }
 // Esperar a que la última escritura de biblioteca en IDB complete
@@ -28645,9 +28725,27 @@ async function _bibFlush() {
 // mas no en otro con la MISMA versión — indicando un problema del propio
 // navegador/perfil (permisos, borrado automático de datos, política de
 // almacenamiento), no del código. Esto hace una prueba real de
-// escritura+lectura+borrado en IndexedDB (biblioteca) y en OPFS (obra) nada
-// más cargar la app, UNA vez por sesión, y avisa de forma visible y
-// persistente si alguna falla — no requiere ir a buscar un diagnóstico.
+// escritura+lectura+borrado en localStorage, OPFS (obra) e IndexedDB
+// (biblioteca) nada más cargar la app, UNA vez por sesión, y avisa de
+// forma visible y persistente si algo falla — no requiere ir a buscar
+// un diagnóstico.
+//
+// IMPORTANTE — evitar falsos positivos (Alberto detectó el aviso rojo
+// severo apareciendo pese a que el guardado local SÍ funcionaba):
+// 1. El guardado REAL de una obra usa localStorage (índice ligero) +
+//    OPFS (editorData/páginas completas) — ver ComicStore en storage.js.
+//    La biblioteca (IndexedDB 'cxBiblioteca') es una función APARTE
+//    (recursos reutilizables): si falla solo ella, las obras se siguen
+//    guardando con total normalidad. Antes se trataban las tres pruebas
+//    como igual de críticas y cualquier fallo mostraba el mismo aviso
+//    de "el guardado local no está disponible" — inexacto si solo
+//    fallaba la biblioteca.
+// 2. Las operaciones de IndexedDB/OPFS pueden fallar de forma transitoria
+//    (conexión momentáneamente bloqueada por otra pestaña, primer acceso
+//    tras instalar la PWA, etc.) sin que exista un problema real y
+//    persistente del navegador. Antes UN solo fallo, sea transitorio o
+//    no, disparaba el aviso permanente. Ahora cada prueba se reintenta
+//    una vez tras una breve espera antes de darla por fallida de verdad.
 // ═══════════════════════════════════════════════════════════════
 async function _cxTestIdbBiblioteca() {
   const _testKey = '__cx_storage_selftest__';
@@ -28676,44 +28774,82 @@ async function _cxTestIdbBiblioteca() {
     return false;
   }
 }
+// Prueba en la MISMA subcarpeta que usa el guardado real ('comixou/', ver
+// _opfsRoot en storage.js) en vez de la raíz de OPFS — más fiel a lo que
+// realmente ocurre al guardar una obra. No se borra la carpeta 'comixou'
+// (solo el archivo de prueba): es la misma que usa el guardado real y
+// dejarla creada no tiene coste ni efecto secundario.
 async function _cxTestOpfs() {
   try {
     if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') return false;
     const root = await navigator.storage.getDirectory();
+    const dir  = await root.getDirectoryHandle('comixou', { create: true });
     const _testName = '__cx_storage_selftest__.txt';
     const _testContent = 'selftest-' + Date.now();
-    const fh = await root.getFileHandle(_testName, { create: true });
+    const fh = await dir.getFileHandle(_testName, { create: true });
     const ws = await fh.createWritable();
     await ws.write(_testContent);
     await ws.close();
     const file = await fh.getFile();
     const text = await file.text();
-    try { await root.removeEntry(_testName); } catch(_e) {}
+    try { await dir.removeEntry(_testName); } catch(_e) {}
     return text === _testContent;
   } catch(e) {
     return false;
   }
 }
+// localStorage: usado para el ÍNDICE ligero de obras (ComicStore.saveAll) —
+// parte crítica del guardado local, pero nunca se había comprobado en el
+// autotest de arranque.
+function _cxTestLocalStorage() {
+  const _testKey = '__cx_storage_selftest__';
+  try {
+    localStorage.setItem(_testKey, String(Date.now()));
+    const ok = localStorage.getItem(_testKey) !== null;
+    localStorage.removeItem(_testKey);
+    return ok;
+  } catch(e) {
+    return false;
+  }
+}
+// Reintenta una prueba UNA vez tras una breve espera antes de darla por
+// fallida — filtra interferencias transitorias (ver nota más arriba).
+async function _cxTestWithRetry(testFn) {
+  try { if (await testFn()) return true; } catch(_e) {}
+  await new Promise(res => setTimeout(res, 600));
+  try { return await testFn(); } catch(_e) { return false; }
+}
 async function _cxCheckStorageReliability() {
-  const idbOk  = await _cxTestIdbBiblioteca();
-  const opfsOk = await _cxTestOpfs();
-  window._cxStorageCheck = { idbOk, opfsOk, ts: new Date().toISOString() };
-  if (!idbOk || !opfsOk) {
+  const lsOk   = _cxTestLocalStorage();
+  const opfsOk = await _cxTestWithRetry(_cxTestOpfs);
+  const idbOk  = await _cxTestWithRetry(_cxTestIdbBiblioteca);
+  window._cxStorageCheck = { lsOk, idbOk, opfsOk, ts: new Date().toISOString() };
+
+  // La biblioteca (IndexedDB) es TAN FUNDAMENTAL como localStorage/OPFS (a
+  // petición expresa de Alberto): si sus cambios no se guardan en este
+  // dispositivo y el autor no se entera, los pierde sin más al reabrir la
+  // obra. Las tres pruebas se tratan pues con la MISMA severidad — ya no
+  // se distingue "biblioteca = menor" frente a "obras = crítico".
+  if (!lsOk || !opfsOk || !idbOk) {
     const _partes = [];
-    if (!idbOk)  _partes.push('la base de datos local (biblioteca)');
-    if (!opfsOk) _partes.push('el almacenamiento de archivos local (obras)');
+    if (!lsOk)   _partes.push('el índice de tus obras');
+    if (!opfsOk) _partes.push('el contenido de tus obras (páginas y capas)');
+    if (!idbOk)  _partes.push('tu biblioteca de recursos reutilizables');
     _edShowStorageWarning(
       'Este navegador no está guardando correctamente ' + _partes.join(' ni ') + '. ' +
       'Los cambios podrían no persistir al cerrar o reabrir la app. ' +
-      'Revisa la configuración de cookies/datos de sitio de este navegador ' +
-      '(que no estén bloqueados ni se borren al cerrar) o prueba con otro navegador.'
+      _cxStorageHelpText()
     );
   }
   return window._cxStorageCheck;
 }
 window._cxCheckStorageReliability = _cxCheckStorageReliability;
-// Ejecutar una vez, poco después de cargar el script — no bloquea nada más.
-setTimeout(() => { _cxCheckStorageReliability().catch(() => {}); }, 800);
+// NO se ejecuta automáticamente al cargar el script — a petición de Alberto:
+// una persona puede entrar a la app solo para LEER obras (no crear/editar),
+// y en ese caso el guardado local no le afecta en absoluto; mostrarle este
+// aviso sería confuso e irrelevante. Se dispara en su lugar desde
+// MyComicsView_init() (js/my-comics.js) — la vista "Mis creaciones", que es
+// donde el guardado local sí importa — una única vez por sesión.
 
 
 window._bibSave = _bibSave;
