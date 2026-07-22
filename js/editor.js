@@ -6939,6 +6939,80 @@ function edAddBubble(){
   _edDrawLockUI(); _edPropsOverlayShow();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
+// Duplica TODOS los miembros de un grupo (gid) como una unidad — misma lógica
+// que usaba el botón "Duplicar" (⧉) del panel de grupo, extraída aquí como
+// función reutilizable para poder llamarla también desde Ctrl+D (antes
+// Ctrl+D solo duplicaba el objeto individual bajo edSelectedIdx, ignorando
+// que perteneciera a un grupo — bug reportado por Alberto: solo se duplicaba
+// ese único miembro, dejando el resto del grupo intacto y sin agrupar la copia).
+function _edDuplicateGroup(gid) {
+  const idxs = _edGroupMemberIdxs(gid);
+  if (!idxs.length) return;
+  const newGid = _edNewGroupId();
+  edPushHistory();
+  const copies = [];
+  // Rastrear qué _uid ya se procesaron para no duplicar sub-capas dos veces
+  const _processedUids = new Set();
+  idxs.forEach(i => {
+    const la = edLayers[i]; if (!la) return;
+    const _uid = la._uid || la._fillLayerId;
+    // Si es stroke con sub-capas, duplicar el grupo completo
+    if (la.type === 'stroke' && _uid && !_processedUids.has(_uid)) {
+      _processedUids.add(_uid);
+      const _npid = _edGenUid();
+      // Clonar stroke
+      const slCopy = edDeserLayer(edSerLayer(la));
+      if (!slCopy) return;
+      slCopy.groupId = newGid;
+      slCopy.x += 0.03; slCopy.y += 0.03;
+      if (slCopy._fillLayerId)       slCopy._fillLayerId       = _npid;
+      if (slCopy._pencilLayerId)     slCopy._pencilLayerId     = _npid;
+      if (slCopy._watercolorLayerId) slCopy._watercolorLayerId = _npid;
+      slCopy._uid = _npid;
+      // Función helper para clonar sub-capa
+      function _cloneGrpSub(type, LayerClass, prefix) {
+        const orig = edLayers.find(l => l.type === type && l._drawLayerId === _uid);
+        if (!orig) return null;
+        const cl = new LayerClass();
+        cl._drawLayerId = _npid;
+        cl._uid = prefix + _npid;
+        cl.x = slCopy.x; cl.y = slCopy.y;
+        cl.width = orig.width; cl.height = orig.height;
+        cl.rotation = orig.rotation || 0;
+        cl.opacity = orig.opacity ?? 1;
+        cl.hidden = orig.hidden || false;
+        const w = orig._canvas.width, h = orig._canvas.height;
+        cl._canvas.width = w; cl._canvas.height = h;
+        cl._ctx = cl._canvas.getContext('2d');
+        cl._ctx.drawImage(orig._canvas, 0, 0);
+        return cl;
+      }
+      const flCopy = _cloneGrpSub('fill', FillLayer, 'fl_');
+      const plCopy = _cloneGrpSub('pencil', PencilLayer, 'pencil_');
+      const wlCopy = _cloneGrpSub('watercolor', WatercolorLayer, 'wc_');
+      // Orden correcto del grupo: fill → watercolor → pencil → stroke
+      if (flCopy) copies.push(flCopy);
+      if (wlCopy) copies.push(wlCopy);
+      if (plCopy) copies.push(plCopy);
+      copies.push(slCopy);
+    } else if (la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor') {
+      // Otros tipos sin sub-capas (image, shape, line, text, bubble)
+      const copy = edDeserLayer(edSerLayer(la));
+      if (copy) {
+        copy.groupId = newGid; copy.x += 0.03; copy.y += 0.03;
+        delete copy._fusionId;
+      }
+      copies.push(copy);
+    }
+    // fill/pencil/watercolor: se procesan junto con su stroke — ignorar aquí
+  });
+  // Insertar justo encima del grupo original
+  const _insertGrpAt = idxs.length ? Math.max(...idxs) + 1 : edLayers.length;
+  edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
+  edPushHistory(); edRedraw();
+  edToast('Grupo duplicado ✓');
+}
+
 function edDuplicateSelected(){
   if(edSelectedIdx < 0 || edSelectedIdx >= edLayers.length) return;
   const la = edLayers[edSelectedIdx];
@@ -7225,11 +7299,20 @@ function edDeleteSelected(){
     edShapeBarHide();
     if(typeof _edShapeClearHistory==='function') _edShapeClearHistory();
     if(typeof _vsClear==='function') _vsClear();
-    _edDrawUnlockUI();
     edActiveTool='select'; edCanvas.className='';
     const _dpPanel = document.getElementById('edOptionsPanel');
     if(_dpPanel){ _dpPanel.classList.remove('open'); delete _dpPanel.dataset.mode; }
   }
+  // Desbloquear SIEMPRE la barra de herramientas al eliminar, sin importar el
+  // tipo de objeto (bug reportado por Alberto): al pulsar la tecla Delete del
+  // teclado con el panel de propiedades abierto, se llama a edDeleteSelected()
+  // directamente — a diferencia del botón "Eliminar" del propio panel, que
+  // además llama a edCloseOptionsPanel() (el único sitio que hacía este
+  // desbloqueo para objetos que no fueran shape/line). El panel SÍ se cerraba
+  // bien vía edRenderOptionsPanel() de más abajo, pero la barra se quedaba
+  // bloqueada porque nada llamaba a _edDrawUnlockUI() fuera del caso shape/line.
+  // _edMenuLock(false) es idempotente — repetirla para shape/line no tiene efecto.
+  _edDrawUnlockUI();
   edPushHistory();edRedraw();edRenderOptionsPanel();
 }
 
@@ -18139,82 +18222,7 @@ function edRenderOptionsPanel(mode){
       });
       // Duplicar todo el grupo con un nuevo groupId
       $('pp-grp-dup')?.addEventListener('click',()=>{
-        const idxs = _edGroupMemberIdxs(gid);
-        const newGid = _edNewGroupId();
-        edPushHistory();
-        const copies = [];
-        // Rastrear qué _uid ya se procesaron para no duplicar sub-capas dos veces
-        const _processedUids = new Set();
-        idxs.forEach(i=>{
-          const la = edLayers[i]; if(!la) return;
-          const _uid = la._uid || la._fillLayerId;
-          // Si es stroke con sub-capas, duplicar el grupo completo
-          if(la.type === 'stroke' && _uid && !_processedUids.has(_uid)){
-            _processedUids.add(_uid);
-            const _npid = _edGenUid();
-            // Clonar stroke
-            const slCopy = edDeserLayer(edSerLayer(la));
-            if(!slCopy) return;
-            slCopy.groupId = newGid;
-            slCopy.x += 0.03; slCopy.y += 0.03;
-            // BUG FIX: remapear los flags de vinculación ANTES de buscar las sub-capas,
-            // y en base a si el PROPIO slCopy ya trae ese flag (heredado del original vía
-            // edSerLayer/edDeserLayer) — NO en base a si luego se localiza el objeto real.
-            // Así la copia siempre queda con IDs propios y diferenciados del original para
-            // cualquier flag que herede, incluso si la búsqueda de la sub-capa fallara.
-            if(slCopy._fillLayerId)       slCopy._fillLayerId       = _npid;
-            if(slCopy._pencilLayerId)     slCopy._pencilLayerId     = _npid;
-            if(slCopy._watercolorLayerId) slCopy._watercolorLayerId = _npid;
-            slCopy._uid = _npid;
-            // Función helper para clonar sub-capa
-            function _cloneGrpSub(type, LayerClass, prefix){
-              const orig = edLayers.find(l=>l.type===type&&l._drawLayerId===_uid);
-              if(!orig) return null;
-              const cl = new LayerClass();
-              cl._drawLayerId = _npid;
-              cl._uid = prefix + _npid;
-              cl.x = slCopy.x; cl.y = slCopy.y;
-              cl.width = orig.width; cl.height = orig.height;
-              cl.rotation = orig.rotation||0;
-              cl.opacity = orig.opacity??1;
-              cl.hidden = orig.hidden||false;
-              const w = orig._canvas.width, h = orig._canvas.height;
-              cl._canvas.width = w; cl._canvas.height = h;
-              cl._ctx = cl._canvas.getContext('2d');
-              cl._ctx.drawImage(orig._canvas, 0, 0);
-              return cl;
-            }
-            const flCopy = _cloneGrpSub('fill', FillLayer, 'fl_');
-            const plCopy = _cloneGrpSub('pencil', PencilLayer, 'pencil_');
-            const wlCopy = _cloneGrpSub('watercolor', WatercolorLayer, 'wc_');
-            // Orden correcto del grupo: fill → watercolor → pencil → stroke (BUG FIX:
-            // antes se empujaba pencil antes que watercolor, invirtiendo su apilado).
-            if(flCopy) copies.push(flCopy);
-            if(wlCopy) copies.push(wlCopy);
-            if(plCopy) copies.push(plCopy);
-            copies.push(slCopy);
-          } else if(la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor'){
-            // Otros tipos sin sub-capas (image, shape, line, text, bubble)
-            const copy = edDeserLayer(edSerLayer(la));
-            if(copy){
-              copy.groupId=newGid; copy.x+=0.03; copy.y+=0.03;
-              delete copy._fusionId;
-              // NOTA: no tocar copy.points aquí (ver nota equivalente en
-              // edDuplicateSelected) — desplazar x/y ya mueve el objeto completo;
-              // desplazar points también duplicaba el desplazamiento y descuadraba
-              // el 'line' respecto al resto de elementos del grupo duplicado.
-            }
-            copies.push(copy);
-          }
-          // fill/pencil/watercolor: se procesan junto con su stroke — ignorar aquí
-        });
-        // Insertar justo encima del grupo original (BUG FIX: antes se hacía push() al
-        // final de edLayers, colocando el duplicado por encima de TODOS los objetos de
-        // la página en vez de solo por encima del grupo original).
-        const _insertGrpAt = idxs.length ? Math.max(...idxs) + 1 : edLayers.length;
-        edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
-        edPushHistory(); edRedraw();
-        edToast('Grupo duplicado ✓');
+        _edDuplicateGroup(gid);
       });
       // Simetría — refleja el grupo entero respecto al eje vertical central
       $('pp-grp-mirror')?.addEventListener('click',()=>{
@@ -27315,10 +27323,20 @@ function EditorView_init(){
         return;
       }
     }
-    // Ctrl+D → duplicar objeto seleccionado
+    // Ctrl+D → duplicar objeto seleccionado (o el grupo completo si pertenece a uno)
     if(ctrl && e.key.toLowerCase() === 'd'){
       e.preventDefault();
-      if(edSelectedIdx >= 0) edDuplicateSelected();
+      if(edSelectedIdx >= 0){
+        const _selLa = edLayers[edSelectedIdx];
+        // BUG FIX (reportado por Alberto): antes esto llamaba siempre a
+        // edDuplicateSelected(), que solo duplica UN objeto — si el
+        // seleccionado pertenecía a un grupo, solo se copiaba ese miembro,
+        // dejando el resto del grupo intacto y la copia sin agrupar. El
+        // botón "Duplicar" del panel de grupo (pp-grp-dup) ya hacía esto
+        // bien; ahora Ctrl+D usa la misma función compartida.
+        if(_selLa && _selLa.groupId) _edDuplicateGroup(_selLa.groupId);
+        else edDuplicateSelected();
+      }
       return;
     }
     // Ctrl+] / Ctrl+Shift+↑  subir capa   | Ctrl+Alt+] / Ctrl+Shift+Alt+↑  al frente
@@ -35397,6 +35415,26 @@ function _gcpSaveToLib(onDone) {
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
     existingLayer._animReady=false; existingLayer._animFrames=null;
+    // BUG (reportado por Alberto): _apngSrc es el APNG ya "horneado" (con fcTL
+    // propio) que se descarga de la nube al abrir la obra — pero NUNCA se
+    // invalidaba al reeditar la animación en el GCP. Como en todo el código
+    // se usa el patrón "l._apngSrc || l._pngFrames" para decidir qué datos
+    // reproducir/subir, y _apngSrc SIEMPRE tenía prioridad si existía, los
+    // cambios nuevos (incluidas las pausas del botón T) quedaban ignorados
+    // en silencio: tanto en el visor interno (misma sesión, loadAnim seguía
+    // recibiendo el APNG viejo) como al volver a subir a la nube (la entrada
+    // de IndexedDB bajo _pngFramesKey/animKey seguía siendo el string viejo,
+    // así que _buildApngFromFrames ni se llegaba a invocar — ver
+    // supabase-client.js). Limpiar _apngSrc aquí y refrescar esa entrada de
+    // IDB con los frames NUEVOS (un array, no un string) hace que ambos
+    // caminos vuelvan a reconstruir el APNG desde _pngFrames/_gcpFrameHolds
+    // actuales, ya sea localmente o al volver a exportar/subir.
+    existingLayer._apngSrc = null;
+    { const _reIdbKey = existingLayer.animKey || existingLayer._pngFramesKey;
+      if (_reIdbKey && window._sbAnimIdbSave) {
+        window._sbAnimIdbSave(_reIdbKey, pngFrames).catch(function(e){ console.warn('GCP IDB re-save (reedición):', e); });
+      }
+    }
     // animKey se preserva si ya existía
     existingLayer._gcpFrameDelay   = window._gcpFrameDelay;
     existingLayer._gcpFrameHolds   = window._gcpFrameHolds.slice();
