@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v35.03</footer>
+    <footer class="app-version">v35.10</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -989,26 +989,6 @@ Router.register('editor', {
       </div>
       <div id="tdMenuBar">
         <div id="tdMenuScroll">
-          <trix-toolbar id="tdToolbar">
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" title="Deshacer">↩</button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" title="Rehacer">↪</button>
-            <div class="ed-menu-sep"></div>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" title="Negrita"><b>N</b></button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" title="Cursiva"><i>K</i></button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
-            <div class="ed-menu-sep"></div>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
-          </trix-toolbar>
-          <div class="ed-menu-sep"></div>
-          <div class="ed-menu-item" style="position:relative">
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdParrafo" title="Opciones de párrafo (cita y listas)">Párrafo ▾</button>
-            <div class="ed-dropdown" id="dd-tdParrafo">
-              <button type="button" class="ed-dropdown-item" data-value="quote">&quot; Cita</button>
-              <button type="button" class="ed-dropdown-item" data-value="bullet">• Lista de viñetas</button>
-              <button type="button" class="ed-dropdown-item" data-value="number">1. Lista numerada</button>
-            </div>
-          </div>
-          <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontFamily" title="Tipo de letra de la selección">Fuente ▾</button>
             <div class="ed-dropdown" id="dd-tdFontFamily">
@@ -1051,6 +1031,26 @@ Router.register('editor', {
               <button class="ed-dropdown-item" data-value="alignCenter">Centrado</button>
               <button class="ed-dropdown-item" data-value="alignRight">A la derecha</button>
               <button class="ed-dropdown-item" data-value="alignJustify">Justificado</button>
+            </div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <trix-toolbar id="tdToolbar">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" title="Deshacer">↩</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" title="Rehacer">↪</button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" title="Negrita"><b>N</b></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" title="Cursiva"><i>K</i></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" title="Tachado"><s>S</s></button>
+            <div class="ed-menu-sep"></div>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" title="Título">Título</button>
+          </trix-toolbar>
+          <div class="ed-menu-sep"></div>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdParrafo" title="Opciones de párrafo (cita y listas)">Párrafo ▾</button>
+            <div class="ed-dropdown" id="dd-tdParrafo">
+              <button type="button" class="ed-dropdown-item" data-value="quote">&quot; Cita</button>
+              <button type="button" class="ed-dropdown-item" data-value="bullet">• Lista de viñetas</button>
+              <button type="button" class="ed-dropdown-item" data-value="number">1. Lista numerada</button>
             </div>
           </div>
         </div>

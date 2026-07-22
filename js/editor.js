@@ -1966,6 +1966,46 @@ class TextLayer extends BaseLayer {
     lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
     ctx.restore();
   }
+  // Selección por píxel para el flujo de texto paginado (richLines) cuando su
+  // fondo es transparente (bgOpacity===0) — a petición de Alberto: el marco de
+  // un flujo de texto ocupa todo el lienzo, y si es transparente no debe
+  // bloquear el toque sobre objetos de capas inferiores en las zonas sin
+  // texto. Usa directamente los datos de layout YA calculados por
+  // _tdLayoutPages (line.y, run.x/width) — más preciso y barato que renderizar
+  // a un canvas auxiliar (que además perdería precisión al escalar para
+  // evitar OOM, como hace FillLayer/ShapeLayer con formas). El margen PAD
+  // amplía un poco la zona de toque de cada línea/palabra para facilitar el
+  // toque, sin invadir tanto como para tapar objetos vecinos.
+  // Con fondo NO transparente se mantiene el test de caja completo (correcto:
+  // ahí SÍ hay un rectángulo visible que ocupa todo el marco).
+  contains(px, py) {
+    if (this.richLines && this.richLines.length && (this.bgOpacity ?? 1) === 0) {
+      if (!super.contains(px, py)) return false; // bbox rápido primero (descarta la mayoría)
+      const pw = edPageW(), ph = edPageH();
+      const w = this.width * pw, h = this.height * ph;
+      // Mismo cambio de espacio que _drawRichLines: centro → rotación → (-w/2,-h/2)
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = (dx * Math.cos(-rot) - dy * Math.sin(-rot)) + w / 2;
+      const ly = (dx * Math.sin(-rot) + dy * Math.cos(-rot)) + h / 2;
+      const PAD = 10; // margen de toque ampliado, en píxeles reales de página
+      for (const line of this.richLines) {
+        const fs = line.fontSize || 16;
+        // Banda vertical aproximada del glifo (ascendente/descendente típicos
+        // sobre la línea base) + margen de toque.
+        if (ly < line.y - fs * 0.85 - PAD || ly > line.y + fs * 0.3 + PAD) continue;
+        if (line.marker) {
+          const mx0 = Math.max(0, line.indent - fs * 0.95) - PAD;
+          if (lx >= mx0 && lx <= line.indent + PAD) return true;
+        }
+        for (const r of (line.runs || [])) {
+          if (lx >= r.x - PAD && lx <= r.x + r.width + PAD) return true;
+        }
+      }
+      return false;
+    }
+    return super.contains(px, py);
+  }
 }
 
 
@@ -2968,10 +3008,13 @@ class ShapeLayer extends BaseLayer {
         octx.fillStyle = this.fillColor;
         octx.fill();
       }
-      // Sin relleno: zona de hit mínima 12 px en escala real (≥1 px en canvas)
+      // Sin relleno: zona de hit mínima ampliada en escala real (≥1 px en canvas)
+      // — 12px resultaba muy difícil de seleccionar con ratón en PC (con dedo
+      // en táctil ya compensa por sí solo el área de contacto más ancha, y por
+      // eso ahí no se notaba — bug reportado por Alberto).
       if (this.lineWidth > 0) {
         octx.strokeStyle = '#000';
-        octx.lineWidth = Math.max(Math.max(this.lineWidth, _noFill ? 12 : 0) * _sc, 1);
+        octx.lineWidth = Math.max(Math.max(this.lineWidth, _noFill ? 18 : 0) * _sc, 1);
         octx.stroke();
       }
       const bx = Math.floor(lx * _sc + cw/2);
@@ -3318,8 +3361,11 @@ class LineLayer extends BaseLayer {
         if (this.closed && this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(); }
       }
       octx.strokeStyle = '#000';
-      // Sin relleno: zona de hit mínima 12 px en escala real (≥1 px en canvas)
-      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth*_sc, _noFillL ? Math.max(12*_sc, 1) : 1) : 0, 0);
+      // Sin relleno: zona de hit mínima ampliada en escala real (≥1 px en
+      // canvas) — 12px resultaba muy difícil de seleccionar con ratón en PC
+      // (en táctil ya compensa el área de contacto del dedo, por eso ahí no
+      // se notaba — bug reportado por Alberto).
+      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth*_sc, _noFillL ? Math.max(18*_sc, 1) : 1) : 0, 0);
       if (this.lineWidth > 0) octx.stroke();
       const bx = Math.floor(lx*_sc + cw/2);
       const by = Math.floor(ly*_sc + ch/2);
@@ -3487,7 +3533,16 @@ function _edSnapLayerFragment(l){
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
                     'borderColor','borderWidth','padding','explosionRadii','thoughtBig','thoughtSmall',
-                    'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount']){
+                    'tail','tailStart','tailEnd','tailStarts','tailEnds','style','voiceCount',
+                    // Hoja de texto paginada (Editor de textos) — BUG FIX (reportado por Alberto):
+                    // faltaban aquí, así que un deshacer/rehacer reconstruía la capa de texto SIN
+                    // su maquetación rica (richLines/sourceHTML/_tdFlowId...), cayendo al
+                    // renderizado simple (una sola línea centrada, resto "perdido" visualmente,
+                    // aunque la hoja siguiente del flujo -no tocada por ESE snapshot- seguía
+                    // mostrando su propio contenido bien). edSerLayer (guardado) ya los incluía;
+                    // esta lista, usada solo por el historial de deshacer, se había desincronizado.
+                    'richLines','richFontFamily','sourceHTML','_tdFlowId','_tdExceptFlow',
+                    '_tdBoxManualH','lineHeightMult','marginXFrac','manualBreakChars']){
       if(l[k] !== undefined) o[k] = l[k];
     }
     if(l.type === 'group') return null; // obsoleto — ignorar grupos viejos
@@ -18434,7 +18489,7 @@ function edRenderOptionsPanel(mode){
         html+=`
         <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
         <div class="op-prop-row">
-          <button id="pp-td-edit" style="flex:1;background:var(--violet);color:var(--black);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar texto</button>
+          <button id="pp-td-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar texto</button>
         </div>
         <div class="op-prop-row"><span class="op-prop-label">Color</span>
           <input type="color" id="pp-color" value="${la.color}">
@@ -19224,11 +19279,22 @@ const _ED_RULE_LINE_HIT = 6;  // tolerancia línea en PC (px workspace)
 const _ED_RULE_LINE_HIT_TOUCH = 22; // tolerancia línea en táctil (px workspace)
 
 function _edRuleAdd() {
-  const mx = edMarginX(), my = edMarginY();
-  const pw = edPageW(),   ph = edPageH();
-  const cy = my + ph / 2;
+  // Centrada con la CÁMARA (zona visible actual), no con el lienzo entero —
+  // y con longitud 2/3 del ancho visible, no del lienzo completo. Antes, la
+  // guía nueva se creaba siempre centrada en el lienzo y con su anchura
+  // total: si se estaba trabajando con zoom en una esquina, la guía nueva
+  // podía aparecer fuera de la vista, obligando a alejar el zoom para
+  // encontrarla y moverla (bug reportado por Alberto).
+  const z = edCamera.z || 1;
+  const visLeft   = (0 - edCamera.x) / z;
+  const visRight  = (edCanvas.width  - edCamera.x) / z;
+  const visTop    = (0 - edCamera.y) / z;
+  const visBottom = (edCanvas.height - edCamera.y) / z;
+  const cx = (visLeft + visRight) / 2;
+  const cy = (visTop + visBottom) / 2;
+  const halfLen = (visRight - visLeft) * (2/3) / 2;
   const id = ++_edRuleId;
-  edRules.push({ id, x1: mx - _ED_RULE_R*2, y1: cy, x2: mx + pw + _ED_RULE_R*2, y2: cy });
+  edRules.push({ id, x1: cx - halfLen, y1: cy, x2: cx + halfLen, y2: cy });
   edRedraw();
 }
 
@@ -35607,11 +35673,20 @@ function _gcpSaveToLib(onDone) {
    ══════════════════════════════════════════════════════════════════════ */
 
 function _gcpRuleAdd() {
-  const mx = edMarginX(), my = edMarginY();
-  const pw = edPageW(),   ph = edPageH();
-  const cy = my + ph / 2;
+  // Mismo criterio que _edRuleAdd (editor general): centrada con la zona
+  // VISIBLE de la cámara, no con el lienzo entero, y con longitud 2/3 del
+  // ancho visible — a petición de Alberto, para que la guía nueva no
+  // aparezca fuera de la vista al trabajar con zoom.
+  const z = edCamera.z || 1;
+  const visLeft   = (0 - edCamera.x) / z;
+  const visRight  = (gcpCanvas.width  - edCamera.x) / z;
+  const visTop    = (0 - edCamera.y) / z;
+  const visBottom = (gcpCanvas.height - edCamera.y) / z;
+  const cx = (visLeft + visRight) / 2;
+  const cy = (visTop + visBottom) / 2;
+  const halfLen = (visRight - visLeft) * (2/3) / 2;
   const id = ++_gcpRuleId;
-  _gcpRules.push({ id, x1: mx - _ED_RULE_R*2, y1: cy, x2: mx + pw + _ED_RULE_R*2, y2: cy });
+  _gcpRules.push({ id, x1: cx - halfLen, y1: cy, x2: cx + halfLen, y2: cy });
   _gcpRedraw();
 }
 

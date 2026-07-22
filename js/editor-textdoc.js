@@ -84,6 +84,10 @@ function _tdNewFlowId(){ return 'tdflow_' + Date.now().toString(36) + '_' + (_td
 // Flujo que se está reeditando (null = "Aplicar" crea un texto nuevo al final;
 // con valor = "Aplicar" sustituye in situ las hojas de ese flujo — ver _tdApplyToCanvas)
 let _tdEditingFlowId = null;
+// true si hay cambios sin guardar desde la última apertura o aplicación —
+// a petición de Alberto: al tocar la X, si hay cambios, preguntar si
+// guardar o no, igual que ya hace el editor de animaciones (gcpClose).
+let _tdDirty = false;
 
 function edOpenTextDoc(editLayer){
   if(typeof edCloseMenus === 'function') edCloseMenus();
@@ -121,6 +125,7 @@ function edOpenTextDoc(editLayer){
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
+    _tdDirty = false; // recién abierto — sin cambios todavía (ver edCloseTextDoc)
     _tdViewCurPage = 0;
     _tdCurrentOffset = 0;
     _tdAutoFollow = true;
@@ -190,9 +195,57 @@ function _tdFindFlowLayer(flowId){
 // editor general (bug reportado por Alberto: acababa en "Mis creaciones").
 let _tdAwaitingSelfPopstate = false;
 
+// Aviso de "cambios sin guardar" al cerrar el editor de textos — mismo
+// patrón visual e interacción que _gcpSavePop del editor de animaciones,
+// a petición de Alberto.
+function _tdShowSavePrompt(){
+  document.getElementById('_tdSavePop')?.remove();
+  const pop = document.createElement('div');
+  pop.id = '_tdSavePop';
+  pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
+  const _actionLabel = _tdEditingFlowId ? 'Guardar cambios' : 'Aplicar al lienzo';
+  pop.innerHTML = `<div id="_tdSaveBox" style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
+    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">Tienes cambios sin guardar</p>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button id="_tdPopSi" style="padding:12px;border:none;border-radius:8px;background:#ffe066;font-size:.95rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
+      <button id="_tdPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">Salir sin guardar</button>
+    </div>
+  </div>`;
+  document.body.appendChild(pop);
+  // Tocar fuera del cuadro → volver al editor de textos sin hacer nada
+  pop.addEventListener('pointerdown', e => {
+    if(!e.target.closest('#_tdSaveBox')) pop.remove();
+    e.stopPropagation();
+  }, true);
+  pop.addEventListener('touchstart', e => e.stopPropagation(), { passive: true, capture: true });
+  // Salir sin guardar → descartar y cerrar de verdad
+  pop.querySelector('#_tdPopDiscard').addEventListener('pointerup', e => {
+    e.stopPropagation();
+    pop.remove();
+    _tdDirty = false; // descartado — el siguiente cierre no debe volver a preguntar
+    edCloseTextDoc();
+  });
+  // Guardar / Aplicar → aplica (que ya marca _tdDirty=false y cierra al final)
+  pop.querySelector('#_tdPopSi').addEventListener('pointerup', e => {
+    e.stopPropagation();
+    pop.remove();
+    _tdApplyToCanvas();
+  });
+}
 function edCloseTextDoc(fromPopstate){
   const shell = document.getElementById('tdShell');
   const wasOpen = !!shell && shell.style.display !== 'none' && shell.style.display !== '';
+  // Si hay cambios sin guardar, preguntar antes de cerrar — mismo patrón que
+  // el editor de animaciones (gcpClose), a petición de Alberto. Se excluye
+  // el cierre por atrás/popstate (fromPopstate=true): esa entrada de
+  // historial ya se consumió sola, y complicar su reversión con un cuadro
+  // de confirmación es más frágil de lo que vale la pena — ver los
+  // comentarios de _tdAwaitingSelfPopstate más abajo sobre lo delicada que
+  // es esa ruta.
+  if(wasOpen && !fromPopstate && _tdDirty){
+    _tdShowSavePrompt();
+    return;
+  }
   const finishClose = () => {
     if(shell) shell.style.display = 'none';
     _tdEditingFlowId = null;
@@ -290,7 +343,11 @@ function _tdInitOnce(){
   if(!shell || shell._tdBound) return;
   shell._tdBound = true;
 
-  document.getElementById('tdCloseBtn')?.addEventListener('click', edCloseTextDoc);
+  // Envuelto en una función anónima — si se pasara edCloseTextDoc directamente,
+  // el clic lo invocaría con el propio Event como primer argumento (fromPopstate),
+  // que al ser "truthy" hacía que el aviso de cambios sin guardar nunca se
+  // disparase (bug reportado por Alberto: cerraba sin preguntar nada).
+  document.getElementById('tdCloseBtn')?.addEventListener('click', () => edCloseTextDoc());
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
   document.getElementById('tdDiagBtn')?.addEventListener('click', _tdRunDiag);
   const editorEl = document.getElementById('tdEditor');
@@ -394,6 +451,7 @@ function _tdInitOnce(){
       // Cambio real de texto: esto SÍ es "se está escribiendo" — reactiva
       // el seguimiento aunque un arrastre manual lo hubiera apagado antes.
       _tdAutoFollow = true;
+      _tdDirty = true; // hay cambios sin guardar — ver edCloseTextDoc
       // Paginación en vivo: recalcular con retardo (evita rehacer el cálculo
       // en cada pulsación) y mantener centrada la línea que se está escribiendo.
       clearTimeout(_tdRecomputeTimer);
@@ -2597,6 +2655,7 @@ function _tdApplyToCanvas(){
   const editorEl = document.getElementById('tdEditor');
   if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
   _tdEditingFlowId = null;
+  _tdDirty = false; // ya aplicado — el cierre de aquí abajo no debe volver a preguntar
 
   edCloseTextDoc();
 }
