@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v35.01</footer>
+    <footer class="app-version">v35.02</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -387,6 +387,11 @@ Router.register('editor', {
               <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn">⬇ Descargar selección ▸</button>
                 <div class="ed-submenu" id="dd-export-sel-sub">
+                  <label class="ed-dropdown-item" id="dd-exportsel-insert-wrap" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="dd-exportsel-insert-chk" style="margin:0">
+                    <span>Insertar en el canvas</span>
+                  </label>
+                  <div class="ed-dropdown-sep"></div>
                   <button class="ed-dropdown-item" id="dd-exportselpng">PNG (transparencias)</button>
                   <button class="ed-dropdown-item" id="dd-exportseljpg">JPG (fondo blanco)</button>
                   <button class="ed-dropdown-item" id="dd-exportselsvg">SVG</button>

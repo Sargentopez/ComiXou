@@ -27065,8 +27065,9 @@ function EditorView_init(){
     e.stopPropagation();
     $('dd-export-sel-sub')?.classList.toggle('open');
   });
-  $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png'); edCloseMenus(); });
-  $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg'); edCloseMenus(); });
+  $('dd-exportsel-insert-wrap')?.addEventListener('click', e => { e.stopPropagation(); });
+  $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png', $('dd-exportsel-insert-chk')?.checked); edCloseMenus(); });
+  $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg', $('dd-exportsel-insert-chk')?.checked); edCloseMenus(); });
   $('dd-exportselsvg')?.addEventListener('click',()=>{ edExportSelectionSVG(); edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
@@ -28098,7 +28099,7 @@ function edExportPagePNG(format){
   }, mimeType, quality);
 }
 
-function edExportSelectionPNG(format) {
+function edExportSelectionPNG(format, insertMode) {
   format = format || 'png';
   // Calcular bbox de la selección (single o multi)
   let bb = null;
@@ -28174,6 +28175,40 @@ function edExportSelectionPNG(format) {
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
+
+  if (insertMode) {
+    // Insertar en el canvas en vez de descargar (a petición de Alberto).
+    // IMPORTANTE: el tamaño del nuevo objeto debe ser el tamaño REAL del
+    // recorte capturado (bxPx×byPx → workspace), NUNCA el width/height propio
+    // de los objetos originales — si el objeto estaba rotado, su bbox axis-
+    // aligned (bb.w/bb.h) es más grande que su width/height nominal, y usar
+    // este último desincronizaría el raster insertado del tamaño declarado
+    // (mismo problema ya resuelto en _gcpVectorToImage/_gcpMergeLayersToImage:
+    // "encoge el objeto visible" si se usa el tamaño nominal en vez del real).
+    // Esto vale igual con fondo blanco (JPG) que transparente (PNG): en ambos
+    // casos el raster capturado mide bxPx×byPx, así que el cálculo es el mismo.
+    const finalW = bxPx / pw;
+    const finalH = byPx / ph;
+    const dataUrl = off.toDataURL(mimeType, quality);
+    const img = new Image();
+    img.onload = () => {
+      const imgLayer = new ImageLayer(img, bb.cx, bb.cy, finalW);
+      imgLayer.height = finalH;
+      // La rotación ya quedó horneada en el recorte (cada l.draw() la aplicó
+      // al renderizar sobre el canvas axis-aligned) — reasignarla aquí la
+      // duplicaría.
+      imgLayer.src = dataUrl;
+      imgLayer._keepSize = true;
+      edLayers.push(imgLayer);
+      edMultiSel = []; edMultiBbox = null;
+      edSelectedIdx = edLayers.length - 1;
+      edPushHistory(); edRedraw();
+      edToast('Objeto insertado en el canvas ✓');
+    };
+    img.src = dataUrl;
+    return;
+  }
+
   off.toBlob(async blob => {
     if(!blob){ edToast('Error al exportar'); return; }
     const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
