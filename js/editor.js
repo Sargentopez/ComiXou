@@ -27272,7 +27272,20 @@ function EditorView_init(){
     if(tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable){
       const isDrawTool = ['draw','eraser','fill'].includes(edActiveTool);
       const isUndoRedo = ctrl && (e.key.toLowerCase()==='z' || e.key.toLowerCase()==='y');
-      if(!(isDrawTool && isUndoRedo)) return;
+      // Ctrl+D (duplicar): el panel de propiedades de un objeto o de un grupo
+      // tiene sus propios inputs number/range (rotación, opacidad...) — si el
+      // usuario los tocó justo antes de pulsar Ctrl+D, el foco del navegador
+      // se queda ahí y este atajo se tragaba en silencio sin llegar nunca a
+      // ejecutarse (bug reportado por Alberto: "sigue sin duplicar grupos").
+      // Se deja pasar SOLO para number/range — nunca para texto/contentEditable,
+      // ya que el propio editor de texto (Trix) tiene su PROPIO atajo nativo
+      // Ctrl+D ("borrar carácter hacia delante" al escribir) que no debe
+      // interferirse.
+      const _activeType = document.activeElement?.type;
+      const isDuplicateFromPanelInput = ctrl && e.key.toLowerCase() === 'd'
+        && tag === 'input' && (_activeType === 'number' || _activeType === 'range')
+        && edSelectedIdx >= 0;
+      if(!((isDrawTool && isUndoRedo) || isDuplicateFromPanelInput)) return;
     }
     // Enter: cerrar panel de opciones abierto (OK)
     if(e.key === 'Enter' && !ctrl){
@@ -29786,7 +29799,7 @@ function _bibRenderPanel(panel) {
 
       edSelectedIdx = -1;
       edPushHistory(); edRedraw();
-      edToast('Objeto insertado ✓');
+      edToast('Objeto insertado en el canvas ✓');
     });
   });
 
@@ -34417,6 +34430,7 @@ function gcpInsertFromBib(entry) {
     if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
     _gcpRedraw();
     _gcpHintSet('saveFrame');
+    edToast('Objeto insertado en el canvas ✓');
   };
 
   const insertLayer = (la) => {
