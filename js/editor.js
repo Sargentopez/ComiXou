@@ -27339,14 +27339,29 @@ function EditorView_init(){
     // Ctrl+D → duplicar objeto seleccionado (o el grupo completo si pertenece a uno)
     if(ctrl && e.key.toLowerCase() === 'd'){
       e.preventDefault();
+      // BUG FIX (reportado por Alberto: "sigue sin duplicar grupos"): un grupo
+      // YA EXISTENTE seleccionado con UN SOLO toque/clic (sin llegar a abrir su
+      // panel con doble toque) NO usa edSelectedIdx — usa edMultiSel +
+      // edActiveTool='multiselect' (ver más arriba: "_fla.groupId &&
+      // edActiveTool !== 'multiselect'" → _gidxs = _edGroupMemberIdxs(...),
+      // edMultiSel = _gidxs, edSelectedIdx = -1). Mi corrección anterior solo
+      // cubría el caso del panel YA abierto (doble toque, edSelectedIdx
+      // apuntando al miembro) — pero esta es la forma más habitual y directa
+      // de seleccionar un grupo: un solo toque, sin abrir su panel, y pulsar
+      // Ctrl+D directamente. Mismo patrón de dos ramas que ya usa la tecla
+      // Delete un poco más abajo en este mismo archivo.
+      if(edActiveTool === 'multiselect' && edMultiSel.length){
+        const _msGid = edLayers[edMultiSel[0]]?.groupId;
+        const _msAllSameGroup = _msGid && edMultiSel.every(i => edLayers[i]?.groupId === _msGid);
+        if(_msAllSameGroup) _edDuplicateGroup(_msGid);
+        // Multiselección sin groupId común (rubber-band de objetos sueltos):
+        // sin cambios — fuera del alcance de este bug.
+        return;
+      }
       if(edSelectedIdx >= 0){
         const _selLa = edLayers[edSelectedIdx];
-        // BUG FIX (reportado por Alberto): antes esto llamaba siempre a
-        // edDuplicateSelected(), que solo duplica UN objeto — si el
-        // seleccionado pertenecía a un grupo, solo se copiaba ese miembro,
-        // dejando el resto del grupo intacto y la copia sin agrupar. El
-        // botón "Duplicar" del panel de grupo (pp-grp-dup) ya hacía esto
-        // bien; ahora Ctrl+D usa la misma función compartida.
+        // El mismo grupo, pero con su panel YA abierto (doble toque):
+        // edSelectedIdx apunta a uno de sus miembros.
         if(_selLa && _selLa.groupId) _edDuplicateGroup(_selLa.groupId);
         else edDuplicateSelected();
       }
@@ -31639,30 +31654,15 @@ function _gcpReinterpolateAround(fi) {
   _gcpUpdateFramesBar();
 }
 
-// Elimina columnas finales donde TODOS los objetos de todas las capas no existen.
+// ANULADA a petición de Alberto (v35.00): debe ser posible añadir frames SIN
+// contenido (columnas completamente vacías) al final de la animación — antes
+// esta función las eliminaba automáticamente en cuanto se detectaban, lo que
+// impedía dejar a propósito un frame final en blanco. Se deja la función
+// definida (no-op) en vez de borrarla, para no tener que tocar sus varios
+// puntos de llamada repartidos por el archivo. _gcpTrimLeadingInvisible NO
+// se toca — solo se pidió anular el recorte de la ÚLTIMA columna.
 function _gcpTrimTrailingInvisible() {
-  if (!window._gcpLayers || !window._gcpLayers.length) return;
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const total = _gcpGetTotalFrames();
-    if (total === 0) break;
-    const lastFi = total - 1;
-    const allInvis = window._gcpLayers.every(la => {
-      if (!la._frames || lastFi >= la._frames.length) return true;
-      return !la._frames[lastFi];
-    });
-    if (allInvis) {
-      window._gcpLayers.forEach(la => {
-        if (la._frames && lastFi < la._frames.length) la._frames.splice(lastFi, 1);
-      });
-      if (window._gcpFrameHolds && lastFi < window._gcpFrameHolds.length) window._gcpFrameHolds.splice(lastFi, 1);
-      changed = true;
-    }
-  }
-  const newTotal = _gcpGetTotalFrames();
-  if (window._gcpGlobalFrameIdx >= newTotal && newTotal > 0)
-    window._gcpGlobalFrameIdx = newTotal - 1;
+  return;
 }
 
 // Elimina columnas INICIALES donde TODOS los objetos de todas las capas no existen.
@@ -31701,8 +31701,11 @@ function _gcpTrimLeadingInvisible() {
 
 // Duplica la COLUMNA fi entera: cada capa inserta una copia de su propio
 // estado en fi (exista o no) en la posición fi+1 — así todas quedan alineadas.
-// window._gcpFrameHolds viaja con el mismo splice() para que la pausa de un
-// frame se duplique junto con él, igual que su posición/tamaño/rotación.
+// window._gcpFrameHolds NO viaja con el splice(): el frame nuevo se inserta
+// siempre SIN pausa definida (null), aunque el original sí la tuviera — a
+// petición expresa de Alberto (antes se copiaba la pausa junto con el frame,
+// igual que su posición/tamaño/rotación; ahora la pausa es la única
+// propiedad que NO se hereda al duplicar).
 function _gcpDuplicateFrameColumn(fi) {
   _gcpPushHistory(); // guardar antes de duplicar
   window._gcpLayers.forEach(otherLa => {
@@ -31715,7 +31718,7 @@ function _gcpDuplicateFrameColumn(fi) {
   });
   if (!window._gcpFrameHolds) window._gcpFrameHolds = [];
   while (window._gcpFrameHolds.length <= fi) window._gcpFrameHolds.push(null);
-  window._gcpFrameHolds.splice(fi + 1, 0, window._gcpFrameHolds[fi] ?? null);
+  window._gcpFrameHolds.splice(fi + 1, 0, null);
 
   window._gcpDirty = true;
   window._gcpGlobalFrameIdx = fi + 1;

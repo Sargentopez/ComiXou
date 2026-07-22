@@ -380,7 +380,7 @@ function _lyBuildEyeBtn(la) {
   const btn = document.createElement('button');
   btn.className = 'ed-layer-del';
   btn.title = la.hidden ? 'Mostrar capa' : 'Ocultar capa';
-  btn.style.opacity = la.hidden ? '0.4' : '';
+  btn.style.opacity = la.hidden ? '0.5' : '1';
   btn.textContent = '👁';
   btn.addEventListener('pointerup', e => {
     e.stopPropagation();
@@ -515,7 +515,7 @@ function _lyBuildGroupItem(groupId, members) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.title = _allHidden ? 'Mostrar grupo' : 'Ocultar grupo';
-  eyeBtn.style.opacity = _allHidden ? '0.4' : '';
+  eyeBtn.style.opacity = _allHidden ? '0.5' : '1';
   eyeBtn.textContent = '👁';
   eyeBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
@@ -808,7 +808,7 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.textContent = '👁';
-  eyeBtn.style.opacity = la.hidden ? '0.4' : '';
+  eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
   eyeBtn.title = la.hidden ? 'Mostrar' : 'Ocultar';
   eyeBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
@@ -897,7 +897,7 @@ function _lyBuildFillSubRowOld(la, realIdx) {
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
   eyeBtn.textContent = '👁';
-  eyeBtn.style.opacity = la.hidden ? '0.4' : '';
+  eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
   eyeBtn.title = la.hidden ? 'Mostrar relleno' : 'Ocultar relleno';
   eyeBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
@@ -1301,7 +1301,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
       return _subs.length > 0 && _subs.every(l => l.hidden);
     };
     _eyeBtn.title  = _eyeAllHidden() ? 'Mostrar grupo' : 'Ocultar grupo';
-    _eyeBtn.style.opacity = _eyeAllHidden() ? '0.4' : '';
+    _eyeBtn.style.opacity = _eyeAllHidden() ? '0.5' : '1';
     _eyeBtn.addEventListener('pointerup', e => {
       e.stopPropagation();
       const _newHidden = !la.hidden;
