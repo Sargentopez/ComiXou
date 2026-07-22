@@ -7006,8 +7006,29 @@ function _edDuplicateGroup(gid) {
     }
     // fill/pencil/watercolor: se procesan junto con su stroke — ignorar aquí
   });
-  // Insertar justo encima del grupo original
-  const _insertGrpAt = idxs.length ? Math.max(...idxs) + 1 : edLayers.length;
+  // Insertar justo encima del grupo original — el punto de inserción debe
+  // considerar también las sub-capas (fill/pencil/watercolor) de cada stroke
+  // del grupo, no solo los índices con groupId (idxs). BUG FIX (detectado
+  // por Alberto: tras duplicar, arrastrar distintos objetos del grupo movía
+  // unas veces solo el objeto y otras el grupo entero): si una sub-capa de
+  // un stroke original queda en un índice MAYOR que Math.max(...idxs) —cosa
+  // que ocurre siempre que el propio stroke va justo antes de crear su copia,
+  // ya que fill/watercolor/pencil se dibujan ANTES del stroke en el orden de
+  // capas pero pueden vivir en cualquier posición del array—, la inserción
+  // caía EN MEDIO del stroke original y su propia sub-capa, separándolos y
+  // rompiendo la contigüidad fill→watercolor→pencil→stroke de ESE grupo
+  // (invariante que edGroupSelected() sí protege al crear un grupo nuevo).
+  let _maxIdx = idxs.length ? Math.max(...idxs) : -1;
+  idxs.forEach(i => {
+    const la = edLayers[i];
+    const _mUid = la && (la._uid || la._fillLayerId);
+    if (!_mUid) return;
+    ['fill', 'pencil', 'watercolor'].forEach(t => {
+      const _si = edLayers.findIndex(l => l.type === t && l._drawLayerId === _mUid);
+      if (_si > _maxIdx) _maxIdx = _si;
+    });
+  });
+  const _insertGrpAt = _maxIdx >= 0 ? _maxIdx + 1 : edLayers.length;
   edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
   edPushHistory(); edRedraw();
   edToast('Grupo duplicado ✓');
