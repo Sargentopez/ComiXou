@@ -663,7 +663,7 @@ function _renderCreditsCanvas() {
     const sloganY = rightStartY + sloganFS * 2;
     ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+    ctx.fillText('IDEA Y COMPARTE', rightCX, sloganY);
 
     const linkY    = sloganY + sloganFS * 3;
     const linkText = 'Visita más obras del autor';
@@ -743,7 +743,7 @@ function _renderCreditsCanvas() {
     const sloganY  = logoY + sloganFS * 2;
     ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
     ctx.fillStyle = '#555555';
-    ctx.fillText('Crea y Comparte', cx, sloganY);
+    ctx.fillText('IDEA Y COMPARTE', cx, sloganY);
 
     const linkFS   = Math.round(fRef * 0.038);
     const linkY    = sloganY + sloganFS * 3;

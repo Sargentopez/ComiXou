@@ -27,9 +27,9 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ============================================================
-   header.js — Cabecera global SPA  v4.4
-   Fila 1: logo + usuario
-   Fila 2: tagline  +  acciones de sistema (⛶ FS  |  📱 Abrir app)
+   header.js — Cabecera global SPA  v4.5
+   Fila 1: logo (+ tagline centrado bajo el logo) + usuario
+   Fila 2: acciones de sistema (⛶ FS  |  📱 Abrir app)
    ============================================================ */
 
 const Header = (() => {
@@ -114,6 +114,7 @@ const Header = (() => {
             + '<a href="#home" class="logo-link logo-img-link" data-route="home">'
               + '<img src="logo.svg" alt="ComiXou" class="logo-img">'
             + '</a>'
+            + '<span class="home-tagline">' + T('tagline') + '</span>'
           + '</div>'
           + '<div class="home-user-area">'
             + sysBtns
@@ -131,9 +132,8 @@ const Header = (() => {
             + '</div>'
           + '</div>'
         + '</div>'
-        /* Fila 2: tagline izq + botón FS derecha */
+        /* Fila 2: botón FS a la derecha (tagline ahora bajo el logo, en fila 1) */
         + '<div class="home-header-row2">'
-          + '<span class="home-tagline">' + T('tagline') + '</span>'
           + fsBtnHtml
         + '</div>'
       + '</div>'

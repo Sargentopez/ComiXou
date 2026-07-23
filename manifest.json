@@ -1,7 +1,7 @@
 {
   "name": "ComXow",
   "short_name": "ComXow",
-  "description": "La creatividad es la inteligencia divirtiéndose",
+  "description": "IDEA Y COMPARTE",
   "start_url": "./index.html",
   "scope": "./",
   "display": "fullscreen",

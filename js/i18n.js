@@ -35,7 +35,7 @@
 const TRANSLATIONS = {
   es: {
     // Cabecera
-    tagline:          "Arte Humano, para Humanos",
+    tagline:          "IDEA Y COMPARTE",
     register:         "Regístrate",
     login:            "Entrar",
     myComics:         "Mis creaciones",

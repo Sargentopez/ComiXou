@@ -3095,7 +3095,7 @@ function _renderCredits() {
     }
     const sloganY = rightStartY + sloganFS * 2;
     ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
-    ctx.fillText('Crea y Comparte', rightCX, sloganY);
+    ctx.fillText('IDEA Y COMPARTE', rightCX, sloganY);
     const linkY = sloganY + sloganFS * 3;
     ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
     ctx.fillText('Visita más obras del autor', rightCX, linkY);
@@ -3139,7 +3139,7 @@ function _renderCredits() {
     }
     const sloganFS = Math.round(fRef * 0.042), sloganY = logoY + sloganFS * 2;
     ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
-    ctx.fillText('Crea y Comparte', cx, sloganY);
+    ctx.fillText('IDEA Y COMPARTE', cx, sloganY);
     const linkFS = Math.round(fRef * 0.038), linkY = sloganY + sloganFS * 3;
     ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
     ctx.fillText('Visita más obras del autor', cx, linkY);
