@@ -1020,6 +1020,67 @@ let _edPenPendingStroke = null; // punto inicial diferido para lápiz
 const _ED_PEN_MIN_PRESSURE = 0.05; // tldraw/perfect-freehand: presión mínima para considerar contacto real
 let _edPenLowPressureTimer = null; // timer de 250ms para presión baja — si expira, termina el trazo
 let _edPenCanDraw = false;         // true cuando se ha confirmado presión suficiente al menos una vez
+
+// ── Trazo rápido con prioridad (dedo, sin lápiz) ──────────────────────────
+// Antes: al tocar con un dedo para dibujar/borrar se esperaban 120ms antes de
+// llamar a edStartPaint, para saber si el toque era en realidad el inicio de
+// un pinch de 2 dedos. Ese retardo perdía todo el movimiento del dedo durante
+// esos 120ms y, al expirar el timer, el trazo arrancaba desde la posición YA
+// OBSOLETA del pointerdown — cortando el principio de cualquier trazo rápido.
+// Ahora: el trazo empieza YA (igual que con lápiz/ratón). Si un 2º dedo llega
+// dentro de _ED_FAST_TOUCH_MS, se entiende que era un gesto y no un trazo: se
+// revierte lo dibujado (los píxeles vuelven al estado justo anterior al
+// primer punto) y se cede el control al pinch. Pasada la ventana sin 2º dedo,
+// el trazo queda confirmado y se comporta exactamente como hasta ahora si
+// luego aparece un 2º dedo (edPainting se corta sin revertir — caso ya
+// aceptado de "llevo un rato dibujando y decido hacer pinch").
+const _ED_FAST_TOUCH_MS = 120; // misma ventana que el resto de timers táctiles
+let _edFastTouchArmed = false; // true durante la ventana de gracia de un trazo revertible
+let _edFastTouchTimer  = null; // desarma la ventana al expirar sin 2º dedo
+let _edFastTouchSnap   = null; // {ctx, data} snapshot pre-trazo del canvas temporal activo
+// Resuelve el mismo canvas temporal que va a recibir el próximo beginStroke()
+// (misma lógica de _edTmp.active que usa edStartPaint) para snapshotearlo.
+function _edFastTouchResolveProxy(){
+  if(edActiveTool === 'eraser'){
+    // conserva la capa activa actual (o _edEraserLayer) — igual que _edTmpProxy()
+  } else if(typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil'){
+    _edTmp.active = 'pencil';
+  } else {
+    _edTmp.active = 'pen';
+  }
+  return _edTmpProxy();
+}
+// Arma la ventana de gracia y toma el snapshot ANTES del primer beginStroke().
+// Llamar justo antes de edStartPaint(e) en el toque táctil simple (sin _cof).
+function _edFastTouchArmStart(){
+  _edGetOrCreateDrawLayer();
+  const dl = _edFastTouchResolveProxy();
+  _edFastTouchSnap = null;
+  if(dl && dl._canvas){
+    try {
+      const c = dl._canvas, ctx = dl._ctx || c.getContext('2d');
+      _edFastTouchSnap = { ctx, data: ctx.getImageData(0, 0, c.width, c.height) };
+    } catch(_){ _edFastTouchSnap = null; }
+  }
+  _edFastTouchArmed = true;
+  clearTimeout(_edFastTouchTimer);
+  _edFastTouchTimer = setTimeout(() => {
+    _edFastTouchArmed = false; _edFastTouchSnap = null; _edFastTouchTimer = null;
+  }, _ED_FAST_TOUCH_MS);
+}
+// El trazo terminó con normalidad (mismo dedo levantado, sin gesto): conservarlo.
+function _edFastTouchConfirm(){
+  _edFastTouchArmed = false;
+  if(_edFastTouchTimer){ clearTimeout(_edFastTouchTimer); _edFastTouchTimer = null; }
+  _edFastTouchSnap = null;
+}
+// Llegó un 2º dedo dentro de la ventana: era un gesto — revertir el trazo.
+function _edFastTouchCancel(){
+  if(_edFastTouchSnap){
+    try { _edFastTouchSnap.ctx.putImageData(_edFastTouchSnap.data, 0, 0); edRedraw(); } catch(_){}
+  }
+  _edFastTouchConfirm();
+}
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
@@ -9754,6 +9815,10 @@ function edOnStart(e){
     // IMPORTANTE: edPinchStart necesita capturar el estado actual (trazo en curso incluido)
     // antes de que _edDrawApplyHistory lo revierta. edPinchStart se llama justo después.
     if(edPainting){
+      // Trazo rápido con prioridad: si el dedo llevaba menos de _ED_FAST_TOUCH_MS
+      // dibujando, era el inicio de un gesto de 2 dedos, no un trazo — revertir
+      // los píxeles al estado justo anterior al primer punto.
+      if(_edFastTouchArmed) _edFastTouchCancel();
       edPainting = false;
       // Resetear _lastX/_lastY del DrawLayer para que el siguiente trazo
       // arranque limpio (evita el bug del "solo un punto" post-pinch).
@@ -10227,12 +10292,12 @@ function edOnStart(e){
         }
         return;
       }
-      // ── Modo dibujo normal (sin cursor offset) ──
-      window._edDrawTouchTimer = setTimeout(() => {
-        if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
-        if(!['draw','eraser'].includes(edActiveTool)) return;
-        edStartPaint(_eSaved);
-      }, 120);
+      // ── Trazo rápido con prioridad (sin cursor offset) ──
+      // Empezar YA, igual que lápiz/ratón. Si llega un 2º dedo dentro de
+      // _ED_FAST_TOUCH_MS, se revierte (ver _edFastTouchCancel, bloque
+      // _edActivePointers.size===2 más arriba en esta misma función).
+      _edFastTouchArmStart();
+      edStartPaint(_eSaved);
       return;
     }
     // PC/ratón: inmediato — verificar buttons===1 (perfect-freehand pattern)
@@ -10927,10 +10992,14 @@ function edOnStart(e){
             _cofHandleTouch(_eSaved2);
           }, 120);
         }
+      } else if(['draw','eraser'].includes(edActiveTool)){
+        // Trazo rápido con prioridad — mismo criterio que al tocar zona vacía
+        _edFastTouchArmStart();
+        edStartPaint(_eSaved2);
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
-          if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
+          if(!(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
           edStartPaint(_eSaved2);
         }, 120);
       }
@@ -15573,6 +15642,7 @@ function _edCloseInkGapsInRegion(dl, x0, y0, x1, y1) {
 
 function edSaveDrawData(){
   _edPenPendingStroke = null;
+  _edFastTouchConfirm(); // el trazo terminó con normalidad: no revertir
   if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
   _edPenCanDraw = false;
   edPainting = false;
@@ -19939,6 +20009,7 @@ function _edEraserPick(anchorEl) {
       // Limpiar pointers fantasma (táctil)
       if (window._edActivePointers) window._edActivePointers.clear();
       clearTimeout(window._edDrawTouchTimer);
+      _edFastTouchConfirm();
       edPinching = false; edPainting = false;
       if (window._edWcFl) { window._edWcFl = null; window._edWcLast = null; }
       // Activar borrador en la capa elegida
@@ -20271,6 +20342,7 @@ function edInitDrawBar() {
     // Limpiar para evitar que el siguiente toque sea interpretado como pinch.
     if (window._edActivePointers) window._edActivePointers.clear();
     clearTimeout(window._edDrawTouchTimer);
+    _edFastTouchConfirm();
     edPinching = false;
     edPainting = false;
     if (window._edWcFl) { window._edWcFl = null; window._edWcLast = null; }
