@@ -1035,17 +1035,9 @@ let _edPenCanDraw = false;         // true cuando se ha confirmado presión sufi
 // luego aparece un 2º dedo (edPainting se corta sin revertir — caso ya
 // aceptado de "llevo un rato dibujando y decido hacer pinch").
 const _ED_FAST_TOUCH_MS = 120; // misma ventana que el resto de timers táctiles
-// Margen (en px de workspace) alrededor del punto de toque para el snapshot
-// de revert. Medido con node-canvas: getImageData sobre el canvas COMPLETO
-// (1800x2340) tarda ~12.5ms — con varios trazos rápidos y seguidos ese coste
-// se nota como un retraso visible antes de que aparezca cada punto. Acotar a
-// una región de ~900x900 alrededor del toque baja el coste a ~1-2ms
-// (imperceptible) y es de sobra: lo que se revierte es como mucho lo
-// dibujado en _ED_FAST_TOUCH_MS, nunca un trazo largo.
-const _ED_FAST_TOUCH_SNAP_MARGIN = 450;
 let _edFastTouchArmed = false; // true durante la ventana de gracia de un trazo revertible
 let _edFastTouchTimer  = null; // desarma la ventana al expirar sin 2º dedo
-let _edFastTouchSnap   = null; // {ctx, x, y, data} snapshot pre-trazo (región acotada) del canvas temporal activo
+let _edFastTouchSnap   = null; // {ctx, data} snapshot pre-trazo del canvas temporal activo
 // Resuelve el mismo canvas temporal que va a recibir el próximo beginStroke()
 // (misma lógica de _edTmp.active que usa edStartPaint) para snapshotearlo.
 function _edFastTouchResolveProxy(){
@@ -1060,24 +1052,14 @@ function _edFastTouchResolveProxy(){
 }
 // Arma la ventana de gracia y toma el snapshot ANTES del primer beginStroke().
 // Llamar justo antes de edStartPaint(e) en el toque táctil simple (sin _cof).
-// e: el pointerdown original — se usa solo para anclar la región del snapshot.
-function _edFastTouchArmStart(e){
+function _edFastTouchArmStart(){
   _edGetOrCreateDrawLayer();
   const dl = _edFastTouchResolveProxy();
   _edFastTouchSnap = null;
   if(dl && dl._canvas){
     try {
       const c = dl._canvas, ctx = dl._ctx || c.getContext('2d');
-      // edCoords(e).px/py ya son la coordenada absoluta en px de workspace
-      // (misma que usará beginStroke internamente vía _wsCoords) — ancla
-      // la región del snapshot exactamente donde va a caer el primer punto.
-      const _anchor = edCoords(e);
-      const x0 = Math.max(0, Math.floor(_anchor.px - _ED_FAST_TOUCH_SNAP_MARGIN));
-      const y0 = Math.max(0, Math.floor(_anchor.py - _ED_FAST_TOUCH_SNAP_MARGIN));
-      const x1 = Math.min(c.width,  Math.ceil(_anchor.px + _ED_FAST_TOUCH_SNAP_MARGIN));
-      const y1 = Math.min(c.height, Math.ceil(_anchor.py + _ED_FAST_TOUCH_SNAP_MARGIN));
-      const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
-      _edFastTouchSnap = { ctx, x: x0, y: y0, data: ctx.getImageData(x0, y0, w, h) };
+      _edFastTouchSnap = { ctx, data: ctx.getImageData(0, 0, c.width, c.height) };
     } catch(_){ _edFastTouchSnap = null; }
   }
   _edFastTouchArmed = true;
@@ -1095,7 +1077,7 @@ function _edFastTouchConfirm(){
 // Llegó un 2º dedo dentro de la ventana: era un gesto — revertir el trazo.
 function _edFastTouchCancel(){
   if(_edFastTouchSnap){
-    try { _edFastTouchSnap.ctx.putImageData(_edFastTouchSnap.data, _edFastTouchSnap.x, _edFastTouchSnap.y); edRedraw(); } catch(_){}
+    try { _edFastTouchSnap.ctx.putImageData(_edFastTouchSnap.data, 0, 0); edRedraw(); } catch(_){}
   }
   _edFastTouchConfirm();
 }
@@ -10314,7 +10296,7 @@ function edOnStart(e){
       // Empezar YA, igual que lápiz/ratón. Si llega un 2º dedo dentro de
       // _ED_FAST_TOUCH_MS, se revierte (ver _edFastTouchCancel, bloque
       // _edActivePointers.size===2 más arriba en esta misma función).
-      _edFastTouchArmStart(_eSaved);
+      _edFastTouchArmStart();
       edStartPaint(_eSaved);
       return;
     }
@@ -11012,7 +10994,7 @@ function edOnStart(e){
         }
       } else if(['draw','eraser'].includes(edActiveTool)){
         // Trazo rápido con prioridad — mismo criterio que al tocar zona vacía
-        _edFastTouchArmStart(_eSaved2);
+        _edFastTouchArmStart();
         edStartPaint(_eSaved2);
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
