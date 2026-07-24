@@ -29,6 +29,13 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // Redirección permanente del dominio antiguo de GitHub Pages al dominio propio.
+    if (location.hostname === 'sargentopez.github.io') {
+      var _p = location.pathname.replace(/^\/ComiXou/, '') || '/';
+      location.replace('https://comxow.com' + _p + location.search + location.hash);
+    }
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>ComXow — Lector</title>
   <meta name="theme-color" content="#111111">
@@ -37,19 +44,17 @@
   <meta property="og:type"        content="website">
   <meta property="og:site_name"   content="ComiXou">
   <meta property="og:title"       content="ComiXou — IDEA Y COMPARTE">
-  <meta property="og:image"       content="https://sargentopez.github.io/ComiXou/og-card.png?v=30.75">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=30.78">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:url"         content="https://sargentopez.github.io/ComiXou/reader/">
+  <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
   <meta name="twitter:title"      content="ComiXou — IDEA Y COMPARTE">
-  <meta name="twitter:image"      content="https://sargentopez.github.io/ComiXou/og-card.png?v=30.75">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=30.78">
 
-  <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad -->
+  <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/fonts.css">
-  <!-- Fallback Google Fonts -->
-  <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Bebas+Neue&family=Comic+Neue:wght@400;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Oswald:wght@400;700&family=Patrick+Hand&family=Permanent+Marker&family=Press+Start+2P&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-  <link rel="stylesheet" href="reader.css?v=30.75">
+  <link rel="stylesheet" href="reader.css?v=30.78">
 </head>
 <script>
   if ('serviceWorker' in navigator)
@@ -60,7 +65,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=30.75" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=30.78" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="ComiXou" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
@@ -99,15 +104,15 @@
     <div id="readerToast" class="reader-toast"></div>
 
     <!-- Versión — desaparece tras 4s -->
-    <div id="readerVersion" style="position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.75</div>
+    <div id="readerVersion" style="position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.78</div>
 
   </div>
 
   <script src="../js/pako.min.js"></script>
   <script src="../js/UPNG.js"></script>
-  <script src="../js/fullscreen.js?v=30.75"></script>
+  <script src="../js/fullscreen.js?v=30.78"></script>
   <script src="../js/logo-data.js"></script>
   <script src="../js/icon-data.js"></script>
-  <script src="reader.js?v=30.75"></script>
+  <script src="reader.js?v=30.78"></script>
 </body>
 </html>

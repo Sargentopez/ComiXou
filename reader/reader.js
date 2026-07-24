@@ -3168,7 +3168,7 @@ function _mountCreditsButtons() {
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
-    if (isLink) { el.href = 'https://sargentopez.github.io/ComiXou/index.html'; }
+    if (isLink) { el.href = 'https://comxow.com/'; }
     el.className = '_cxCreditBtn';
     // Coordenadas canvas → pantalla
     const screenX = rect.left + data.cx * sx;

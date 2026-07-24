@@ -1,0 +1,58 @@
+Copyright © 2026 Alberto Gavina Costero. Todos los derechos reservados.
+
+Este repositorio contiene el código fuente de ComiXou / ComXow (en adelante,
+"la Aplicación"), incluyendo pero no limitado a sus archivos HTML, CSS,
+JavaScript, activos gráficos y cualquier otro material contenido en él.
+
+Salvo por las bibliotecas de terceros listadas más abajo, todo el código y
+los contenidos de este repositorio son propiedad exclusiva de Alberto
+Gavina Costero.
+
+QUEDA EXPRESAMENTE PROHIBIDO, sin autorización previa y por escrito del
+titular de los derechos:
+
+  - Copiar, reproducir o redistribuir este código, en todo o en parte.
+  - Modificarlo o crear obras derivadas.
+  - Utilizarlo con fines comerciales.
+  - Publicarlo en otro repositorio, sitio web o plataforma.
+
+El hecho de que este repositorio sea (o haya sido) accesible públicamente
+no constituye una licencia de uso, copia, modificación o redistribución de
+ningún tipo. El acceso al código no implica cesión de derechos de ninguna
+clase.
+
+Para solicitar autorización de uso, contactar con:
+albertobicho@gmail.com
+
+
+──────────────────────────────────────────────────────────────────────────
+BIBLIOTECAS DE TERCEROS
+
+Este proyecto incorpora las siguientes bibliotecas de código abierto, cuyas
+licencias originales permanecen plenamente vigentes y no se ven afectadas
+por los términos anteriores:
+
+- omggif (codificador/decodificador GIF)
+    Autor: Dean McNamee <dean@gmail.com>
+    Licencia: MIT
+    https://github.com/deanm/omggif
+
+- pako (compresión zlib/gzip)
+    Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project)
+    Licencia: MIT
+    https://github.com/nodeca/pako
+
+- UPNG.js (codificador/decodificador PNG)
+    Autor: Ivan Kutskir
+    Licencia: MIT
+    https://github.com/photopea/UPNG.js
+
+- LZW decompression (puerto JavaScript de implementación Java)
+    Referencia original: https://gist.github.com/devunwired/4479231
+    Licencia: dominio público / uso libre
+
+- Trix (editor de texto enriquecido)
+    Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
+    Licencia: MIT
+    https://trix-editor.org/ · https://github.com/basecamp/trix
+──────────────────────────────────────────────────────────────────────────
