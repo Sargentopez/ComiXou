@@ -122,16 +122,21 @@ function openShareModal(comic) {
   const param = isDraft ? 'draft=' + comic.supabaseId : 'id=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
   const title = comic.title || 'Una creación en ComiXou';
+  // Texto del mensaje: el título va entre asteriscos porque WhatsApp lo
+  // interpreta como negrita al enviarlo (convención propia de WhatsApp,
+  // no HTML). En apps sin ese formato (SMS, email) se verán los asteriscos
+  // literalmente, pero el texto sigue siendo perfectamente legible.
+  const shareText = `Mira *${title}* en este enlace`;
 
   if ('share' in navigator) {
-    navigator.share({ title, url }).catch(e => {
+    navigator.share({ title, text: shareText, url }).catch(e => {
       if (e.name !== 'AbortError') console.warn('share:', e);
     });
   } else {
     // Fallback: copiar enlace al portapapeles
     const _nota = isDraft ? '\n\n⚠️ Es un borrador — cualquier persona con el enlace podrá verlo.' : '';
-    navigator.clipboard.writeText(url).then(() => {
-      appAlert('✅ Enlace copiado al portapapeles:\n' + url + _nota);
+    navigator.clipboard.writeText(shareText + '\n' + url).then(() => {
+      appAlert('✅ Enlace copiado al portapapeles:\n' + shareText + '\n' + url + _nota);
     }).catch(() => {
       appAlert('Copia este enlace para compartirlo:\n' + url + _nota);
     });
