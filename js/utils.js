@@ -111,7 +111,98 @@ function closeReaderModalGlobal() {
 /* ══════════════════════════════════════════
    MODAL ENVIAR — compartir enlace al reader
    ══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   MODAL CAMBIAR CONTRASEÑA
+   Estilos propios (no depende de auth.css, que
+   solo se carga en las rutas login/register).
+   ══════════════════════════════════════════ */
+function openChangePasswordModal() {
+  const MODAL_ID = 'pwdModalOverlay';
+  let overlay = document.getElementById(MODAL_ID);
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = MODAL_ID;
+    overlay.className = 'pwd-modal-overlay hidden';
+    overlay.innerHTML = `
+      <div class="pwd-modal-card">
+        <h2 class="pwd-modal-title">${T('changePasswordTitle')}</h2>
+        <form id="pwdChangeForm" novalidate>
+          <div class="pwd-form-group">
+            <label class="pwd-form-label" for="pwdNewInput">${T('newPassword')}</label>
+            <div class="pwd-pass-wrap">
+              <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
+            </div>
+          </div>
+          <div class="pwd-form-group">
+            <label class="pwd-form-label" for="pwdConfirmInput">${T('confirmPassword')}</label>
+            <div class="pwd-pass-wrap">
+              <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
+            </div>
+          </div>
+          <span class="pwd-form-error" id="pwdFormError"></span>
+          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${T('savePassword')}</button>
+          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${T('cancel')}</button>
+        </form>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', e => { if (e.target === overlay) _closeChangePasswordModal(); });
+    overlay.querySelector('#pwdCancelBtn').addEventListener('click', _closeChangePasswordModal);
+
+    overlay.querySelectorAll('.pwd-pass-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const inp = document.getElementById(btn.dataset.target);
+        inp.type = inp.type === 'password' ? 'text' : 'password';
+      });
+    });
+
+    overlay.querySelector('#pwdChangeForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const errEl = document.getElementById('pwdFormError');
+      const pass1 = document.getElementById('pwdNewInput').value;
+      const pass2 = document.getElementById('pwdConfirmInput').value;
+      errEl.textContent = '';
+
+      if (pass1.length < 6) { errEl.textContent = T('passwordTooShort'); return; }
+      if (pass1 !== pass2)  { errEl.textContent = T('passwordMismatch'); return; }
+
+      const submitBtn = document.getElementById('pwdSubmitBtn');
+      submitBtn.disabled = true;
+      const result = await Auth.changePassword(pass1);
+      submitBtn.disabled = false;
+
+      if (result.ok) {
+        showToast(T('passwordChanged'));
+        _closeChangePasswordModal();
+      } else if (result.err === 'errNoAuth') {
+        errEl.textContent = T('passwordChangeNoAuth');
+      } else {
+        errEl.textContent = T('passwordChangeError');
+      }
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const ov = document.getElementById(MODAL_ID);
+        if (ov && !ov.classList.contains('hidden')) _closeChangePasswordModal();
+      }
+    });
+  }
+  // Reset del formulario cada vez que se abre
+  overlay.querySelector('#pwdChangeForm').reset();
+  document.getElementById('pwdFormError').textContent = '';
+  overlay.classList.remove('hidden');
+}
+
+function _closeChangePasswordModal() {
+  const overlay = document.getElementById('pwdModalOverlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
 function openShareModal(comic) {
+
   if (!comic.supabaseId) {
     appAlert('Esta obra no está en la nube. Súbela primero para poder compartirla.');
     return;

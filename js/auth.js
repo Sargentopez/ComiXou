@@ -213,6 +213,27 @@ const Auth = (() => {
     localStorage.removeItem('cs_refresh');
   }
 
+  async function changePassword(newPassword) {
+    const session = getSession();
+    if (!session || !session.token) return { ok: false, err: 'errNoAuth' };
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/user`, {
+        method: 'PUT',
+        headers: {
+          'apikey': SB_KEY,
+          'Authorization': `Bearer ${session.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ password: newPassword })
+      });
+      if (res.ok) return { ok: true };
+      const data = await res.json().catch(() => ({}));
+      return { ok: false, err: data.error_description || data.msg || 'errUnknown' };
+    } catch (_) {
+      return { ok: false, err: 'errNetwork' };
+    }
+  }
+
   // Migra obras locales del ID antiguo al nuevo UUID de Supabase
   // Cubre: IDs legacy conocidos (u_admin, u_macario) y IDs generados localmente (u_TIMESTAMP)
   function _migrateLocalWorks(email, newId) {
@@ -345,7 +366,7 @@ const Auth = (() => {
     return comic.userId === u.id || comic.username === u.username;
   }
 
-  return { login, register, logout, deleteAccount, currentUser, isLogged, isAdmin, canManage };
+  return { login, register, logout, deleteAccount, changePassword, currentUser, isLogged, isAdmin, canManage };
 })();
 
 // Exponer _tryRefresh globalmente para que supabase-client pueda refrescar el token antes de escribir

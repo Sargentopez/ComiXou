@@ -80,6 +80,7 @@ const Header = (() => {
 
     var dotsItems = user
       ? '<a href="#" class="dropdown-item danger-item" id="dotsDeleteAccount">' + T('deleteAccount') + '</a>'
+        + '<a href="#" class="dropdown-item" id="dotsChangePassword">' + T('changePassword') + '</a>'
       : '<a href="#register" class="dropdown-item" data-route="register">' + T('register') + '</a>';
 
     /* ── Botón pantalla completa — se renderiza siempre, se oculta en app por CSS ── */
@@ -127,7 +128,6 @@ const Header = (() => {
                 + '<div class="dropdown-divider"></div>'
                 + '<span class="dropdown-item disabled-item">ℹ️ Info</span>'
                 + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
-                + '<span class="dropdown-item disabled-item">☕ Invítame a un café</span>'
               + '</div>'
             + '</div>'
           + '</div>'
@@ -189,6 +189,16 @@ const Header = (() => {
         await Auth.deleteAccount();
         Header.refresh();
         Router.go('home');
+      });
+    }
+
+    /* ── Cambiar contraseña ── */
+    var pwdBtn = document.getElementById('dotsChangePassword');
+    if (pwdBtn) {
+      pwdBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+        if (typeof openChangePasswordModal === 'function') openChangePasswordModal();
       });
     }
 
