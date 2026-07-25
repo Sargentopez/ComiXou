@@ -251,6 +251,88 @@ function _closeChangePasswordModal() {
   if (overlay) overlay.classList.add('hidden');
 }
 
+/* ══════════════════════════════════════════
+   MODAL DE CRÉDITOS — menú ⋮ → ℹ️ Info
+   Mismo diseño de ventana que las de ayuda del editor (Atajos de teclado,
+   Crear animaciones, Herramientas de dibujo — clase .sc-box, ver
+   editor.css), duplicado aquí con reglas propias en main.css porque
+   editor.css solo se carga en la vista del editor y este modal tiene que
+   poder abrirse desde cualquier vista (el menú ⋮ vive en la cabecera
+   global). Mismo cierre por botón ✕, clic fuera y Escape que el resto de
+   modales globales de este archivo (openReaderModalGlobal,
+   openChangePasswordModal). Contenido: el mismo bloque de créditos que ya
+   encabeza cada archivo del proyecto (autoría + librerías de terceros), no
+   texto nuevo.
+   ══════════════════════════════════════════ */
+const _CREDITS_LIBS = [
+  { name: 'omggif',            desc: 'GIF encoder/decoder',                            meta: 'Autor: Dean McNamee · Licencia: MIT', url: 'https://github.com/deanm/omggif' },
+  { name: 'pako',               desc: 'compresión zlib/gzip',                           meta: 'Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project) · Licencia: MIT', url: 'https://github.com/nodeca/pako' },
+  { name: 'UPNG.js',            desc: 'codificador/decodificador PNG',                  meta: 'Autor: Ivan Kutskir · Licencia: MIT', url: 'https://github.com/photopea/UPNG.js' },
+  { name: 'LZW decompression',  desc: 'puerto JavaScript de implementación Java',       meta: 'Licencia: dominio público / uso libre', url: 'https://gist.github.com/devunwired/4479231' },
+  { name: 'Trix',                desc: 'editor de texto enriquecido',                    meta: 'Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson · Licencia: MIT', url: 'https://trix-editor.org/' }
+];
+
+function _creditsModalHtml() {
+  const rows = _CREDITS_LIBS.map(lib => `
+    <div class="cr-row">
+      <div class="cr-name">${lib.name} <span class="cr-desc">— ${lib.desc}</span></div>
+      <div class="cr-meta">${lib.meta}</div>
+      <div class="cr-meta"><a href="${lib.url}" target="_blank" rel="noopener">${lib.url}</a></div>
+    </div>`).join('');
+
+  // Mismo texto que el fichero LICENSE de la raíz del proyecto (sin repetir
+  // aquí la lista de bibliotecas de terceros, que el propio LICENSE también
+  // incluye — ya se muestra arriba con sus enlaces).
+  const licenseParagraphs = [
+    'Copyright © 2026 Alberto Gavina Costero. Todos los derechos reservados.',
+    'Este repositorio contiene el código fuente de ComiXou / ComXow (en adelante, "la Aplicación"), incluyendo pero no limitado a sus archivos HTML, CSS, JavaScript, activos gráficos y cualquier otro material contenido en él.',
+    'Salvo por las bibliotecas de terceros listadas arriba, todo el código y los contenidos de este repositorio son propiedad exclusiva de Alberto Gavina Costero.',
+    'Queda expresamente prohibido, sin autorización previa y por escrito del titular de los derechos: copiar, reproducir o redistribuir este código (en todo o en parte); modificarlo o crear obras derivadas; utilizarlo con fines comerciales; publicarlo en otro repositorio, sitio web o plataforma.',
+    'El hecho de que este repositorio sea (o haya sido) accesible públicamente no constituye una licencia de uso, copia, modificación o redistribución de ningún tipo. El acceso al código no implica cesión de derechos de ninguna clase.'
+  ].map(p => `<p class="cr-license">${p}</p>`).join('');
+
+  return `
+    <div class="sc-box">
+      <div class="sc-header">
+        <span class="sc-title">Créditos</span>
+        <button class="sc-close" id="creditsClose">✕</button>
+      </div>
+      <div class="sc-body">
+        <p class="cr-app">Comxow/COMXOW, creada por A. Gavina Costero (2026) — <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a></p>
+        <div class="sc-section">Librerías de terceros</div>
+        ${rows}
+        <div class="sc-section">Licencia</div>
+        ${licenseParagraphs}
+        <p class="cr-license">Para solicitar autorización de uso, contactar con <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a>.</p>
+      </div>
+    </div>`;
+}
+
+function openCreditsModal() {
+  const MODAL_ID = 'creditsModal';
+  let overlay = document.getElementById(MODAL_ID);
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = MODAL_ID;
+    overlay.innerHTML = _creditsModalHtml();
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('pointerdown', e => { if (e.target === overlay) _closeCreditsModal(); });
+    document.getElementById('creditsClose').addEventListener('click', _closeCreditsModal);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const ov = document.getElementById(MODAL_ID);
+        if (ov && ov.classList.contains('open')) _closeCreditsModal();
+      }
+    });
+  }
+  overlay.classList.add('open');
+}
+
+function _closeCreditsModal() {
+  document.getElementById('creditsModal')?.classList.remove('open');
+}
+
 function openShareModal(comic) {
 
   if (!comic.supabaseId) {

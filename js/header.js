@@ -68,6 +68,7 @@ const Header = (() => {
         + '<a href="#editor" class="dropdown-item" data-route="my-comics">' + T('myComics') + '</a>'
         + adminLink
         + '<div class="dropdown-divider"></div>'
+        + '<a href="#" class="dropdown-item" id="avatarChangePassword">' + T('changePassword') + '</a>'
         + '<a href="#" class="dropdown-item" id="logoutBtn">' + T('logout') + '</a>'
         + '</div></div>';
     } else {
@@ -80,7 +81,6 @@ const Header = (() => {
 
     var dotsItems = user
       ? '<a href="#" class="dropdown-item danger-item" id="dotsDeleteAccount">' + T('deleteAccount') + '</a>'
-        + '<a href="#" class="dropdown-item" id="dotsChangePassword">' + T('changePassword') + '</a>'
       : '<a href="#register" class="dropdown-item" data-route="register">' + T('register') + '</a>';
 
     /* ── Botón pantalla completa — se renderiza siempre, se oculta en app por CSS ── */
@@ -95,7 +95,7 @@ const Header = (() => {
       ? '<div class="hdr-sys-btns">' + openAppBtn + '</div>'
       : '';
 
-    /* Botón pantalla completa — en row2, ajustado a la derecha, con texto adaptativo */
+    /* Botón pantalla completa — ahora en row1, a la derecha del logo, con texto adaptativo */
     var fsBtnHtml = fsSupported
       ? '<button class="hdr-fs-row2-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">'
         + '<span class="hdr-fs-label-long">mejor en pantalla completa</span>'
@@ -117,6 +117,12 @@ const Header = (() => {
             + '</a>'
             + '<span class="home-tagline">' + T('tagline') + '</span>'
           + '</div>'
+          + fsBtnHtml
+        + '</div>'
+        /* Fila 2: usuario (avatar + menú ⋮) a la derecha — el botón de
+           pantalla completa pasó a la fila 1, petición explícita de Alberto
+           de intercambiar el orden de ambas filas. */
+        + '<div class="home-header-row2">'
           + '<div class="home-user-area">'
             + sysBtns
             + userBlock
@@ -126,15 +132,11 @@ const Header = (() => {
                 + dotsItems
                 + installItem
                 + '<div class="dropdown-divider"></div>'
-                + '<span class="dropdown-item disabled-item">ℹ️ Info</span>'
+                + '<a href="#" class="dropdown-item" id="dotsInfo">ℹ️ Info</a>'
                 + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
               + '</div>'
             + '</div>'
           + '</div>'
-        + '</div>'
-        /* Fila 2: botón FS a la derecha (tagline ahora bajo el logo, en fila 1) */
-        + '<div class="home-header-row2">'
-          + fsBtnHtml
         + '</div>'
       + '</div>'
     + '</header>';
@@ -193,12 +195,22 @@ const Header = (() => {
     }
 
     /* ── Cambiar contraseña ── */
-    var pwdBtn = document.getElementById('dotsChangePassword');
+    var pwdBtn = document.getElementById('avatarChangePassword');
     if (pwdBtn) {
       pwdBtn.addEventListener('click', function(e) {
         e.preventDefault();
         document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
         if (typeof openChangePasswordModal === 'function') openChangePasswordModal();
+      });
+    }
+
+    /* ── Info / Créditos ── */
+    var infoBtn = document.getElementById('dotsInfo');
+    if (infoBtn) {
+      infoBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+        if (typeof openCreditsModal === 'function') openCreditsModal();
       });
     }
 
