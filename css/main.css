@@ -697,7 +697,8 @@ body.editor-page { padding-top: 0; }
 .mc-modal-box,
 .ed-modal-sheet,
 .modal-box,
-.auth-card {
+.auth-card,
+.pwd-modal-card {
   max-height: 92dvh;   /* dvh = dynamic viewport height, se actualiza con el teclado */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -708,7 +709,8 @@ body.editor-page { padding-top: 0; }
   .mc-modal-box,
   .ed-modal-sheet,
   .modal-box,
-  .auth-card {
+  .auth-card,
+  .pwd-modal-card {
     max-height: 92vh;
   }
 }
@@ -756,7 +758,6 @@ body.editor-page { padding-top: 0; }
   border-radius: var(--radius);
   box-shadow: var(--box-shadow-lg);
   width: 100%; max-width: 380px;
-  max-height: 90vh; overflow-y: auto;
   padding: 24px;
 }
 .pwd-modal-title {
