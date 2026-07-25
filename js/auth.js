@@ -47,9 +47,21 @@ const Auth = (() => {
   // ANTES de que Router.start() (línea posterior en index.html) intente
   // interpretarlo como nombre de ruta.
   let _recoveryToken = null;
+  let _recoveryError = false;
   (function _detectPasswordRecovery() {
     const hash = window.location.hash;
-    if (!hash || !hash.includes('type=recovery') || !hash.includes('access_token=')) return;
+    if (!hash) return;
+    // Caso de error: Supabase devuelve #error=...&error_code=otp_expired&...
+    // (enlace caducado o ya usado — típico de probar "olvidé contraseña" varias
+    // veces seguidas: el servicio de correo por defecto de Supabase solo manda
+    // 2 emails/hora por proyecto, así que los intentos de más reutilizan el
+    // mismo enlace ya consumido).
+    if (hash.includes('error=') && hash.includes('error_code=')) {
+      _recoveryError = true;
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return;
+    }
+    if (!hash.includes('type=recovery') || !hash.includes('access_token=')) return;
     const params = new URLSearchParams(hash.slice(1));
     const token = params.get('access_token');
     if (!token) return;
@@ -72,8 +84,11 @@ const Auth = (() => {
     } catch (_) { /* enlace caducado o inválido — el usuario tendrá que pedir otro */ }
   }
 
-  function _openPasswordModalWhenReady() {
-    const _open = () => { if (typeof openChangePasswordModal === 'function') openChangePasswordModal(); };
+  function _openPasswordModalWhenReady(beforeOpen) {
+    const _open = () => {
+      if (typeof beforeOpen === 'function') beforeOpen();
+      if (typeof openChangePasswordModal === 'function') openChangePasswordModal();
+    };
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', _open, { once: true });
     } else {
@@ -386,6 +401,9 @@ const Auth = (() => {
   // Si veníamos de un enlace de recuperación de contraseña, completar el login
   // temporal y abrir el modal de "elegir contraseña nueva" en cuanto cargue la página.
   if (_recoveryToken) _completeRecoveryLogin(_recoveryToken);
+  if (_recoveryError) _openPasswordModalWhenReady(() => {
+    if (typeof showToast === 'function') showToast(I18n.t('resetLinkExpired'), 4500);
+  });
 
   function currentUser() {
     const s = getSession();
