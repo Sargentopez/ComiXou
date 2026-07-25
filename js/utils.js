@@ -430,3 +430,114 @@ function appAlert(msg) {
   };
   okBtn.addEventListener('click', close);
 }
+
+/* ══════════════════════════════════════════
+   TECLADO VIRTUAL EN MODALES CON CAMPOS
+   Afecta a: login/registro (.auth-card), cambiar/recuperar contraseña
+   (.pwd-modal-card), nuevo proyecto en Mis Creaciones (.mc-modal-box),
+   datos del proyecto del editor (.ed-modal-sheet) y el genérico .modal-box
+   — los mismos 5 selectores que main.css ya agrupa bajo el comentario
+   "Teclado virtual" (max-height:92dvh + overflow-y:auto). Esa regla por sí
+   sola no basta: la app usa <meta viewport interactive-widget=
+   overlays-content> (necesario para el editor, ver _tdSyncViewportHeight
+   en editor-textdoc.js) y bajo ese modo NI window.innerHeight NI
+   window.visualViewport.height reflejan el teclado — se quedan midiendo la
+   pantalla completa aunque el teclado esté abierto tapando media pantalla
+   (confirmado ya una vez al resolver este mismo problema para el editor de
+   textos). Por eso dvh tampoco sirve aquí: no es un tamaño de viewport el
+   que cambia, es un elemento flotante tapando por encima sin que el
+   navegador considere que haya ningún "desbordamiento" que scrollear.
+
+   Se reutiliza la MISMA técnica ya probada en editor-textdoc.js (no la
+   Visual Viewport API sola, que ahí se demostró que no sirve en esta app):
+   combinar navigator.virtualKeyboard.boundingRect.height con una sonda CSS
+   invisible ligada a env(keyboard-inset-height), quedándose con el mayor
+   de los dos. Sonda propia (_kbModalProbe), independiente de #tdKbProbe,
+   para no tocar el sistema del editor de textos — ya afinado y delicado —
+   por algo que cuesta nada duplicar (un div de 1px invisible).
+   ══════════════════════════════════════════ */
+const _KB_MODAL_SEL = '.auth-card, .pwd-modal-card, .mc-modal-box, .ed-modal-sheet, .modal-box';
+const _KB_MODAL_MIN_H = 80; // px — por debajo de esto se considera "teclado cerrado" (filtra ruido)
+let _kbModalAdjustedCard = null;
+let _kbModalPollTimer = null;
+
+function _kbModalProbeEl() {
+  let probe = document.getElementById('_kbModalProbe');
+  if (!probe) {
+    probe = document.createElement('div');
+    probe.id = '_kbModalProbe';
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;height:env(keyboard-inset-height, 0px);';
+    document.body.appendChild(probe);
+  }
+  return probe;
+}
+
+function _kbModalReadHeight() {
+  let apiH = 0;
+  if ('virtualKeyboard' in navigator) {
+    try { apiH = navigator.virtualKeyboard.boundingRect.height || 0; } catch (_e) { /* API presente pero rechaza leerse: seguir con la sonda CSS */ }
+  }
+  const probeH = _kbModalProbeEl().getBoundingClientRect().height || 0;
+  return Math.max(apiH, probeH);
+}
+
+function _kbModalResetCard(card) {
+  if (!card) return;
+  card.style.maxHeight = '';
+  if (card.parentElement) card.parentElement.style.alignItems = '';
+}
+
+function _kbModalAdjust() {
+  const active = document.activeElement;
+  const card = (active && active.closest) ? active.closest(_KB_MODAL_SEL) : null;
+  const kbH  = _kbModalReadHeight();
+
+  if (card && kbH > _KB_MODAL_MIN_H) {
+    if (_kbModalAdjustedCard && _kbModalAdjustedCard !== card) _kbModalResetCard(_kbModalAdjustedCard);
+    // Base "pantalla completa" — bajo overlays-content ninguna de las dos
+    // refleja el teclado, así que sirven igual; se prefiere visualViewport
+    // por si acaso algún día refleja además la barra de URL del navegador.
+    const baseH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    const safeHeight = Math.max(120, Math.round(baseH - kbH - 24));
+    card.style.maxHeight = safeHeight + 'px';
+    // Alinear arriba mientras el teclado está abierto: si el modal se queda
+    // centrado en el alto COMPLETO (que no se encoge), el centrado se calcula
+    // sobre una caja más alta de lo que en realidad se ve y la tarjeta puede
+    // quedar recolocada fuera de la zona visible real, aunque ya quepa entera.
+    if (card.parentElement) card.parentElement.style.alignItems = 'flex-start';
+    _kbModalAdjustedCard = card;
+  } else if (_kbModalAdjustedCard) {
+    _kbModalResetCard(_kbModalAdjustedCard);
+    _kbModalAdjustedCard = null;
+  }
+}
+
+if ('virtualKeyboard' in navigator) {
+  try {
+    navigator.virtualKeyboard.overlaysContent = true;
+    navigator.virtualKeyboard.addEventListener('geometrychange', () => _kbModalAdjust());
+  } catch (_e) { /* contexto no seguro u otro motivo por el que la API rechace activarse */ }
+}
+
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (!t || !t.closest || !t.closest(_KB_MODAL_SEL)) return;
+  // El evento de foco llega antes de que el teclado termine de animarse (el
+  // retardo varía bastante entre dispositivos) — se reintenta varias veces
+  // en vez de fiarse de una sola lectura, mismo patrón que en
+  // editor-textdoc.js para este mismo problema.
+  [50, 200, 400, 650].forEach(ms => setTimeout(() => {
+    _kbModalAdjust();
+    t.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, ms));
+  clearInterval(_kbModalPollTimer);
+  _kbModalPollTimer = setInterval(_kbModalAdjust, 350);
+});
+
+document.addEventListener('focusout', e => {
+  const t = e.target;
+  if (!t || !t.closest || !t.closest(_KB_MODAL_SEL)) return;
+  clearInterval(_kbModalPollTimer);
+  setTimeout(_kbModalAdjust, 50);
+});

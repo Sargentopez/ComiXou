@@ -691,9 +691,14 @@ body.editor-page { padding-top: 0; }
   -webkit-text-size-adjust: 100%;
 }
 
-/* Teclado virtual: cuando el viewport se encoge por el teclado,
-   los modales ya están en top, pero también aseguramos que los
-   formularios son scrollables */
+/* Teclado virtual: dvh cubre el caso general (barra de URL, rotación...),
+   pero bajo interactive-widget=overlays-content (meta viewport de
+   index.html) el teclado NO reduce ningún viewport, así que esta regla por
+   sí sola no evita que tape parte del modal en pantallas bajas (tablet en
+   horizontal). El complemento real (medir el teclado y encoger/realinear
+   el modal en consecuencia) vive en utils.js — ver el bloque "TECLADO
+   VIRTUAL EN MODALES CON CAMPOS" — que actúa sobre estos mismos 5
+   selectores mediante max-height inline cuando detecta el teclado abierto. */
 .mc-modal-box,
 .ed-modal-sheet,
 .modal-box,
