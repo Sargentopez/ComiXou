@@ -125,25 +125,25 @@ function openChangePasswordModal() {
     overlay.className = 'pwd-modal-overlay hidden';
     overlay.innerHTML = `
       <div class="pwd-modal-card">
-        <h2 class="pwd-modal-title">${T('changePasswordTitle')}</h2>
+        <h2 class="pwd-modal-title">${I18n.t('changePasswordTitle')}</h2>
         <form id="pwdChangeForm" novalidate>
           <div class="pwd-form-group">
-            <label class="pwd-form-label" for="pwdNewInput">${T('newPassword')}</label>
+            <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
             <div class="pwd-pass-wrap">
               <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
               <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
             </div>
           </div>
           <div class="pwd-form-group">
-            <label class="pwd-form-label" for="pwdConfirmInput">${T('confirmPassword')}</label>
+            <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
             <div class="pwd-pass-wrap">
               <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
               <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
             </div>
           </div>
           <span class="pwd-form-error" id="pwdFormError"></span>
-          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${T('savePassword')}</button>
-          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${T('cancel')}</button>
+          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${I18n.t('savePassword')}</button>
+          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
         </form>
       </div>`;
     document.body.appendChild(overlay);
@@ -165,8 +165,8 @@ function openChangePasswordModal() {
       const pass2 = document.getElementById('pwdConfirmInput').value;
       errEl.textContent = '';
 
-      if (pass1.length < 6) { errEl.textContent = T('passwordTooShort'); return; }
-      if (pass1 !== pass2)  { errEl.textContent = T('passwordMismatch'); return; }
+      if (pass1.length < 6) { errEl.textContent = I18n.t('passwordTooShort'); return; }
+      if (pass1 !== pass2)  { errEl.textContent = I18n.t('passwordMismatch'); return; }
 
       const submitBtn = document.getElementById('pwdSubmitBtn');
       submitBtn.disabled = true;
@@ -174,12 +174,12 @@ function openChangePasswordModal() {
       submitBtn.disabled = false;
 
       if (result.ok) {
-        showToast(T('passwordChanged'));
+        showToast(I18n.t('passwordChanged'));
         _closeChangePasswordModal();
       } else if (result.err === 'errNoAuth') {
-        errEl.textContent = T('passwordChangeNoAuth');
+        errEl.textContent = I18n.t('passwordChangeNoAuth');
       } else {
-        errEl.textContent = T('passwordChangeError');
+        errEl.textContent = I18n.t('passwordChangeError');
       }
     });
 
