@@ -123,34 +123,75 @@ function openChangePasswordModal() {
     overlay = document.createElement('div');
     overlay.id = MODAL_ID;
     overlay.className = 'pwd-modal-overlay hidden';
-    overlay.innerHTML = `
-      <div class="pwd-modal-card">
-        <h2 class="pwd-modal-title">${I18n.t('changePasswordTitle')}</h2>
-        <form id="pwdChangeForm" novalidate>
-          <div class="pwd-form-group">
-            <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
-            <div class="pwd-pass-wrap">
-              <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
-              <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
-            </div>
-          </div>
-          <div class="pwd-form-group">
-            <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
-            <div class="pwd-pass-wrap">
-              <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
-              <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
-            </div>
-          </div>
-          <span class="pwd-form-error" id="pwdFormError"></span>
-          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${I18n.t('savePassword')}</button>
-          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
-        </form>
-      </div>`;
     document.body.appendChild(overlay);
 
     overlay.addEventListener('click', e => { if (e.target === overlay) _closeChangePasswordModal(); });
-    overlay.querySelector('#pwdCancelBtn').addEventListener('click', _closeChangePasswordModal);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const ov = document.getElementById(MODAL_ID);
+        if (ov && !ov.classList.contains('hidden')) _closeChangePasswordModal();
+      }
+    });
+  }
 
+  // El mismo modal, dos formularios distintos según haya sesión o no:
+  // con sesión -> elegir contraseña nueva directamente.
+  // sin sesión (llegó aquí desde "¿Olvidaste tu contraseña?") -> pedir email
+  // para recibir el enlace de recuperación.
+  const loggedIn = typeof Auth !== 'undefined' && Auth.isLogged();
+  overlay.innerHTML = loggedIn ? _pwdSetFormHtml() : _pwdRequestFormHtml();
+  _bindPwdModalContent(overlay, loggedIn);
+
+  overlay.classList.remove('hidden');
+}
+
+function _pwdSetFormHtml() {
+  return `
+    <div class="pwd-modal-card">
+      <h2 class="pwd-modal-title">${I18n.t('changePasswordTitle')}</h2>
+      <form id="pwdChangeForm" novalidate>
+        <div class="pwd-form-group">
+          <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
+          <div class="pwd-pass-wrap">
+            <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+            <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
+          </div>
+        </div>
+        <div class="pwd-form-group">
+          <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
+          <div class="pwd-pass-wrap">
+            <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+            <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
+          </div>
+        </div>
+        <span class="pwd-form-error" id="pwdFormError"></span>
+        <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${I18n.t('savePassword')}</button>
+        <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
+      </form>
+    </div>`;
+}
+
+function _pwdRequestFormHtml() {
+  return `
+    <div class="pwd-modal-card">
+      <h2 class="pwd-modal-title">${I18n.t('resetTitle')}</h2>
+      <p class="pwd-modal-desc">${I18n.t('resetInstructions')}</p>
+      <form id="pwdResetForm" novalidate>
+        <div class="pwd-form-group">
+          <label class="pwd-form-label" for="pwdResetEmail">${I18n.t('email')}</label>
+          <input type="email" id="pwdResetEmail" class="pwd-form-input" autocomplete="email" required>
+        </div>
+        <span class="pwd-form-error" id="pwdFormError"></span>
+        <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdResetSubmitBtn">${I18n.t('sendResetLink')}</button>
+        <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
+      </form>
+    </div>`;
+}
+
+function _bindPwdModalContent(overlay, loggedIn) {
+  overlay.querySelector('#pwdCancelBtn').addEventListener('click', _closeChangePasswordModal);
+
+  if (loggedIn) {
     overlay.querySelectorAll('.pwd-pass-toggle').forEach(btn => {
       btn.addEventListener('click', () => {
         const inp = document.getElementById(btn.dataset.target);
@@ -182,18 +223,27 @@ function openChangePasswordModal() {
         errEl.textContent = I18n.t('passwordChangeError');
       }
     });
+  } else {
+    overlay.querySelector('#pwdResetForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const errEl = document.getElementById('pwdFormError');
+      const email = document.getElementById('pwdResetEmail').value.trim();
+      errEl.textContent = '';
+      if (!email) { errEl.textContent = I18n.t('errRequired'); return; }
 
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') {
-        const ov = document.getElementById(MODAL_ID);
-        if (ov && !ov.classList.contains('hidden')) _closeChangePasswordModal();
+      const submitBtn = document.getElementById('pwdResetSubmitBtn');
+      submitBtn.disabled = true;
+      const result = await Auth.requestPasswordReset(email);
+      submitBtn.disabled = false;
+
+      if (result.ok) {
+        showToast(I18n.t('resetLinkSent'));
+        _closeChangePasswordModal();
+      } else {
+        errEl.textContent = I18n.t('resetLinkError');
       }
     });
   }
-  // Reset del formulario cada vez que se abre
-  overlay.querySelector('#pwdChangeForm').reset();
-  document.getElementById('pwdFormError').textContent = '';
-  overlay.classList.remove('hidden');
 }
 
 function _closeChangePasswordModal() {

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v35.26</footer>
+    <footer class="app-version">v35.27</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -88,7 +88,7 @@ Router.register('login', {
             <span class="form-error" id="passError"></span>
           </div>
           <div class="form-group forgot-row">
-            <a href="#" class="forgot-link" data-i18n="forgotPass">¿Olvidaste tu contraseña?</a>
+            <a href="#" class="forgot-link" id="forgotPassLink" data-i18n="forgotPass">¿Olvidaste tu contraseña?</a>
           </div>
           <button type="submit" class="btn btn-primary btn-full" data-i18n="submitLogin">Entrar</button>
         </form>

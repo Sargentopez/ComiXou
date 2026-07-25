@@ -41,6 +41,46 @@ const Auth = (() => {
   const SB_URL      = 'https://qqgsbyylaugsagbxsetc.supabase.co';
   const SB_KEY      = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
+  // ── Detección del enlace de recuperación de contraseña ──────────────────
+  // Supabase redirige aquí con el token en el #hash tras el email de
+  // recuperación. Se comprueba y se limpia el hash ya, de forma síncrona,
+  // ANTES de que Router.start() (línea posterior en index.html) intente
+  // interpretarlo como nombre de ruta.
+  let _recoveryToken = null;
+  (function _detectPasswordRecovery() {
+    const hash = window.location.hash;
+    if (!hash || !hash.includes('type=recovery') || !hash.includes('access_token=')) return;
+    const params = new URLSearchParams(hash.slice(1));
+    const token = params.get('access_token');
+    if (!token) return;
+    _recoveryToken = token;
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  })();
+
+  async function _completeRecoveryLogin(token) {
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/user`, {
+        headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) return;
+      const userData = await res.json();
+      const profile  = await _fetchProfile(userData.id, token);
+      const role     = profile?.role || userData.user_metadata?.role || 'user';
+      const username = profile?.username || userData.user_metadata?.username || (userData.email || '').split('@')[0];
+      _saveSession(_buildSession(userData.id, username, userData.email, role, token));
+      _openPasswordModalWhenReady();
+    } catch (_) { /* enlace caducado o inválido — el usuario tendrá que pedir otro */ }
+  }
+
+  function _openPasswordModalWhenReady() {
+    const _open = () => { if (typeof openChangePasswordModal === 'function') openChangePasswordModal(); };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _open, { once: true });
+    } else {
+      _open();
+    }
+  }
+
   function getSession()    { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
   function _saveSession(s) { localStorage.setItem(KEY_SESSION, JSON.stringify(s)); }
   function _clearSession() { localStorage.removeItem(KEY_SESSION); }
@@ -211,6 +251,28 @@ const Auth = (() => {
     }
   }
 
+  // Solicita el email de recuperación de contraseña. Supabase redirige al
+  // enlace del correo de vuelta a esta misma URL, con el token en el #hash
+  // (ver _detectPasswordRecovery más abajo). Siempre responde {ok:true} si
+  // la petición se envía correctamente, exista o no esa cuenta — es el
+  // comportamiento de Supabase, para no revelar qué emails están registrados.
+  async function requestPasswordReset(email) {
+    const key = email.toLowerCase().trim();
+    const redirectTo = window.location.origin
+      + window.location.pathname.replace(/\/index\.html$/, '').replace(/\/$/, '') + '/index.html';
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, {
+        method: 'POST',
+        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: key }),
+      });
+      if (res.ok) return { ok: true };
+      return { ok: false, err: 'errNetwork' };
+    } catch (_) {
+      return { ok: false, err: 'errNetwork' };
+    }
+  }
+
   // Migra obras locales del ID antiguo al nuevo UUID de Supabase
   // Cubre: IDs legacy conocidos (u_admin, u_macario) y IDs generados localmente (u_TIMESTAMP)
   function _migrateLocalWorks(email, newId) {
@@ -321,6 +383,10 @@ const Auth = (() => {
   // Ejecutar validación tras el intento de refresh para no solapar peticiones
   _tryRefresh().then(() => _validateServerSession());
 
+  // Si veníamos de un enlace de recuperación de contraseña, completar el login
+  // temporal y abrir el modal de "elegir contraseña nueva" en cuanto cargue la página.
+  if (_recoveryToken) _completeRecoveryLogin(_recoveryToken);
+
   function currentUser() {
     const s = getSession();
     if(!s) return null;
@@ -341,7 +407,7 @@ const Auth = (() => {
     return comic.userId === u.id || comic.username === u.username;
   }
 
-  return { login, register, logout, deleteAccount, changePassword, currentUser, isLogged, isAdmin, canManage };
+  return { login, register, logout, deleteAccount, changePassword, requestPasswordReset, currentUser, isLogged, isAdmin, canManage };
 })();
 
 // Exponer _tryRefresh globalmente para que supabase-client pueda refrescar el token antes de escribir

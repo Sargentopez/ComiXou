@@ -83,6 +83,15 @@ function AuthView_init() {
     });
   }
 
+  // ── ¿Olvidaste tu contraseña? ──
+  const forgotLink = document.getElementById('forgotPassLink');
+  if (forgotLink) {
+    forgotLink.addEventListener('click', e => {
+      e.preventDefault();
+      if (typeof openChangePasswordModal === 'function') openChangePasswordModal();
+    });
+  }
+
   // ── LOGIN ──
   const loginForm = document.getElementById('loginForm');
   if (loginForm) {

@@ -762,6 +762,9 @@ body.editor-page { padding-top: 0; }
 .pwd-modal-title {
   font-size: 1.2rem; margin-bottom: 16px; color: var(--ink);
 }
+.pwd-modal-desc {
+  font-size: .9rem; color: var(--gray-700); margin-bottom: 16px; line-height: 1.4;
+}
 .pwd-form-group { margin-bottom: 14px; }
 .pwd-form-label {
   display: block; font-size: .85rem; font-weight: 700;
