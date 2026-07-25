@@ -27,34 +27,19 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ============================================================
-   auth.js  v5.0 — Autenticación híbrida
+   auth.js  v6.0 — Autenticación híbrida
    - Login/Registro: Supabase Auth (JWT, seguro, multi-dispositivo)
    - Sesión: cacheada en localStorage para acceso síncrono
-   - Fallback: usuarios fijos admin+macario siguen funcionando
-     aunque Supabase no esté disponible
+   - Sin usuarios de repuesto: admin y macario son cuentas reales de
+     Supabase (v6.0 — el mecanismo FIXED_USERS se retiró tras confirmar
+     que ambas funcionan con email/contraseña propios). Sin conexión,
+     la app sigue siendo usable en modo invitado.
    ============================================================ */
 
 const Auth = (() => {
   const KEY_SESSION = 'cs_session';
   const SB_URL      = 'https://qqgsbyylaugsagbxsetc.supabase.co';
   const SB_KEY      = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-
-  function simpleHash(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
-    return 'h' + Math.abs(h).toString(36);
-  }
-
-  const FIXED_USERS = {
-    'admin@comixow.com': {
-      id: 'u_admin', username: 'Admin',
-      email: 'admin@comixow.com', passHash: simpleHash('123456'), role: 'admin'
-    },
-    'macario@yo.com': {
-      id: 'u_macario', username: 'Macario',
-      email: 'macario@yo.com', passHash: simpleHash('123456'), role: 'author'
-    }
-  };
 
   function getSession()    { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
   function _saveSession(s) { localStorage.setItem(KEY_SESSION, JSON.stringify(s)); }
@@ -143,19 +128,11 @@ const Auth = (() => {
       }
     } catch (_) {}
 
-    // Fallback usuarios fijos (sin red o Supabase caído)
-    const fixed = FIXED_USERS[key];
-    if (fixed && fixed.passHash === simpleHash(password)) {
-      const session = _buildSession(fixed.id, fixed.username, key, fixed.role, null);
-      _saveSession(session);
-      return { ok: true, user: session };
-    }
     return { ok: false, err: 'errUserNotFound' };
   }
 
   async function register(username, email, password) {
     const key = email.toLowerCase().trim();
-    if (FIXED_USERS[key]) return { ok: false, err: 'errUserExists' };
     const uname = username.trim();
     // Verificar username único contra tabla authors ANTES de crear la cuenta
     try {
@@ -240,8 +217,8 @@ const Auth = (() => {
     try {
       const store = JSON.parse(localStorage.getItem('cs_comics') || '{}');
       const legacyMap = {
-        'admin@comixow.com': 'u_admin',
-        'macario@yo.com':    'u_macario',
+        'albertobicho+admin@gmail.com':   'u_admin',
+        'albertobicho+macario@gmail.com': 'u_macario',
       };
       const legacyId = legacyMap[email];
       // Obtener sesión previa para detectar el ID antiguo de este usuario
@@ -326,8 +303,6 @@ const Auth = (() => {
     const session = getSession();
     if (!session?.token) return;              // sin sesión → nada que validar
     if (_tokenExpired(session.token)) return; // caducado localmente → _tryRefresh ya lo maneja
-    // Usuarios fijos (no-Supabase) → no tienen token JWT real, saltamos
-    if (session.id === 'u_admin' || session.id === 'u_macario') return;
     try {
       const res = await fetch(`${SB_URL}/auth/v1/user`, {
         headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${session.token}` }

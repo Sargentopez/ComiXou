@@ -110,14 +110,6 @@ async function renderUsers(panel) {
     if (res.ok) list = await res.json();
   } catch (_) {}
 
-  // Fallback: usuarios fijos si Supabase no devuelve nada
-  if (!list.length) {
-    list = [
-      { id: 'u_admin',   username: 'Admin',   email: 'admin@comixow.com', role: 'admin'  },
-      { id: 'u_macario', username: 'Macario', email: 'macario@yo.com',    role: 'author' },
-    ];
-  }
-
   panel.innerHTML = '';
   if (!list.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`; return; }
 

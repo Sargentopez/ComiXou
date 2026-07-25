@@ -35,12 +35,11 @@
 
 (function seedData() {
 
-  // ── USUARIOS FIJOS ──
-  // Admin y Macario son hardcoded en auth.js — no necesitan localStorage.
-  // Solo aseguramos que seed de cómics usa los IDs correctos.
-  console.log('ℹ️  Usuarios fijos gestionados por auth.js:');
-  console.log('   admin@comixow.com / 123456  (rol: admin)');
-  console.log('   macario@yo.com   / 123456  (rol: author)');
+  // ── USUARIOS ──
+  // Admin y Macario son ahora cuentas reales de Supabase (ver auth.js v6.0).
+  // Este script ya no gestiona sus credenciales; usa las tuyas propias
+  // al probar, o entra en modo invitado si solo necesitas datos de prueba.
+  console.log('ℹ️  Admin y Macario son cuentas reales de Supabase — usa tus credenciales.');
 
   // ── PORTADA DEFAULT (canvas gris con número) ──
   function makeThumb(n) {
@@ -108,7 +107,7 @@
 
   for (let i = 1; i <= 20; i++) {
     const autorNum = Math.ceil(i / 2);
-    const userId   = autorNum <= 5 ? 'u_autor1' : 'u_admin';
+    const userId   = autorNum <= 5 ? 'u_autor1' : '8cf8b5b7-0e1d-47d7-b385-c51ccf724db9'; // UUID real de admin
     const genre    = seedGenres[(i - 1) % 3]; // reparte: comic, fotografia, underground, comic...
     const thumbUrl = makeThumb(i);
 
