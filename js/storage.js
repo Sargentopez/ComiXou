@@ -69,6 +69,15 @@ const ComicStore = (() => {
         return { ...p, dataUrl: null };
       });
     }
+    // coverDataUrl: misma imagen pesada (JPEG en base64) que panels[0].dataUrl,
+    // solo que con el texto horneado — se guarda aparte en OPFS (ver
+    // _opfsWrite), no aquí. Sin este recorte, el índice de localStorage
+    // (un único JSON con TODAS las obras) puede superar la cuota y el
+    // guardado del índice entero falla en silencio (saveAll solo hace
+    // console.error, no lanza) — la miniatura se ve en blanco porque los
+    // metadatos nunca llegaron a escribirse de verdad.
+    if (c.coverDataUrl) c._hasCoverDataUrl = true;
+    delete c.coverDataUrl;
     return c;
   }
 
@@ -283,8 +292,9 @@ const ComicStore = (() => {
     try {
       // Guardar solo los datos pesados
       const payload = {
-        editorData: comic.editorData || null,
-        panels:     comic.panels     || [],
+        editorData:   comic.editorData   || null,
+        panels:       comic.panels       || [],
+        coverDataUrl: comic.coverDataUrl || null,
       };
       const fh = await dir.getFileHandle(id + '.json', { create: true });
       const ws = await fh.createWritable();
@@ -383,9 +393,10 @@ const ComicStore = (() => {
     if (!_fsDirHandle) return;
     try {
       const payload = {
-        editorData: comic.editorData || null,
-        panels:     comic.panels     || [],
-        meta:       _stripHeavy(comic),
+        editorData:   comic.editorData   || null,
+        panels:       comic.panels       || [],
+        coverDataUrl: comic.coverDataUrl || null,
+        meta:         _stripHeavy(comic),
       };
       const fh = await _fsDirHandle.getFileHandle(id + '.json', { create: true });
       const ws = await fh.createWritable();
