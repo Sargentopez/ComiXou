@@ -5255,7 +5255,7 @@ function edIsTouchDevice(){
      - 'tablet'  → táctil + pantalla grande: NUEVO — se escala la interfaz.
    Umbral 600px = breakpoint "medium" de Material Design 3 (m3.material.io/
    foundations/layout/breakpoints), el mismo que usa Android para distinguir
-   teléfono de tablet — coherente con que ComiXou tiene Android PWA como
+   teléfono de tablet — coherente con que Comxow tiene Android PWA como
    objetivo principal. Se usa Math.min(ancho,alto) en vez de solo el ancho para
    que el resultado no cambie solo por rotar el dispositivo. */
 function edGetDeviceClass() {
@@ -36644,11 +36644,11 @@ async function _edRunDiag() {
     // El footer .app-version pertenece a otra vista (biblioteca) y no está en
     // el DOM al ejecutar el diagnóstico desde dentro del editor. Fuente
     // alternativa: el nombre de la caché del Service Worker, que ya es
-    // obligatorio actualizar en cada entrega (comixow-v32-24 → v32.24).
+    // obligatorio actualizar en cada entrega (comxow-v32-24 → v32.24).
     try {
       const _cacheNames = await caches.keys();
-      const _vCache = _cacheNames.find(n => /^comixow-v\d+-\d+$/.test(n));
-      if (_vCache) _edDiagVersion = _vCache.replace('comixow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
+      const _vCache = _cacheNames.find(n => /^comxow-v\d+-\d+$/.test(n));
+      if (_vCache) _edDiagVersion = _vCache.replace('comxow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);

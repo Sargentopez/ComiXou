@@ -136,7 +136,7 @@
     banner.innerHTML = `
       <div class="install-banner-icon">📲</div>
       <div class="install-banner-text">
-        <img src="logo.svg" alt="ComiXou" style="height:18px;width:auto;vertical-align:middle;">${msg}
+        <img src="logo.svg" alt="Comxow" style="height:18px;width:auto;vertical-align:middle;">${msg}
       </div>
       <div class="install-banner-actions">
         <button class="install-btn install-btn-ok"      id="installBtnOk">${installLabel}</button>
@@ -207,7 +207,7 @@
       banner.className = 'install-banner';
       banner.innerHTML = `
         <div class="install-banner-icon">📲</div>
-        <div class="install-banner-text"><img src="logo.svg" alt="ComiXou" style="height:18px;width:auto;vertical-align:middle;">${msg}</div>
+        <div class="install-banner-text"><img src="logo.svg" alt="Comxow" style="height:18px;width:auto;vertical-align:middle;">${msg}</div>
         <div class="install-banner-actions">
           <button class="install-btn install-btn-dismiss" id="installBtnDismiss">
             ${lang === 'en' ? 'Got it' : 'Entendido'}

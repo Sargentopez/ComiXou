@@ -32,12 +32,17 @@
    la vista login o register — busca elementos frescos del DOM.
    ============================================================ */
 
-// Franja blanca tras el título de login/registro — mismo criterio que en el
-// editor: desde el borde izquierdo de la ventana hasta el final del texto,
-// semicírculo a la derecha.
-function _authFitTitlePill(){
-  document.querySelectorAll('.auth-card-header').forEach(header => {
-    const title = header.querySelector('.auth-title');
+// Franja blanca tras el título de las ventanas fuera del editor (login,
+// registro, cambiar/recuperar contraseña) — mismo criterio que en el
+// editor (ver _edFitWindowTitlePill/_edWinTitleHeaderSel en editor.js):
+// desde el borde izquierdo de la ventana hasta el final del texto,
+// semicírculo a la derecha. Selectores en lista para poder cubrir varias
+// cabeceras con la misma función, igual que hace el editor.
+const _WIN_TITLE_HEADER_SEL = '.auth-card-header, .pwd-modal-header, #creditsModal .sc-header';
+const _WIN_TITLE_SEL = '.auth-title, .pwd-modal-title, #creditsModal .sc-title';
+function _winFitTitlePill(){
+  document.querySelectorAll(_WIN_TITLE_HEADER_SEL).forEach(header => {
+    const title = header.querySelector(_WIN_TITLE_SEL);
     if (!title) return;
     let pill = header.querySelector(':scope > .win-title-pill');
     if (!pill) {
@@ -55,11 +60,11 @@ function _authFitTitlePill(){
     pill.style.width  = Math.max(0, titleRect.right - headerRect.left + 4) + 'px';
   });
 }
-window.removeEventListener('resize', _authFitTitlePill); // evita duplicados si AuthView_init se llama varias veces
-window.addEventListener('resize', _authFitTitlePill);
+window.removeEventListener('resize', _winFitTitlePill); // evita duplicados si AuthView_init se llama varias veces
+window.addEventListener('resize', _winFitTitlePill);
 
 function AuthView_init() {
-  _authFitTitlePill();
+  _winFitTitlePill();
 
   // ── Cerrar al clicar fuera de la tarjeta ──
   const authMain = document.querySelector('.auth-main');

@@ -874,8 +874,8 @@ async function _tdRunDiag(){
     // mismo fallback que usa _edRunDiag: el nombre de caché del Service Worker.
     try{
       const _cacheNamesV = await caches.keys();
-      const _vCache = _cacheNamesV.find(n => /^comixow-v\d+-\d+$/.test(n));
-      if(_vCache) _tdDiagVersion = _vCache.replace('comixow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
+      const _vCache = _cacheNamesV.find(n => /^comxow-v\d+-\d+$/.test(n));
+      if(_vCache) _tdDiagVersion = _vCache.replace('comxow-v', 'v').replace(/-(\d+)$/, '.$1') + ' (por SW cache)';
     }catch(_e){}
   }
   L('Versión: ' + _tdDiagVersion);

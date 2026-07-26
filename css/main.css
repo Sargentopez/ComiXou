@@ -697,7 +697,8 @@ body.editor-page { padding-top: 0; }
 .form-input,
 .mc-field input, .mc-field select,
 .ed-modal-field input, .ed-modal-field select,
-.auth-form input, .auth-form select {
+.auth-form input, .auth-form select,
+.pwd-form-input {
   font-size: 16px !important;  /* ≥16px previene autozoom en iOS Safari */
   min-height: 44px;            /* mínimo táctil recomendado por Google/Apple */
   -webkit-text-size-adjust: 100%;
@@ -761,7 +762,14 @@ body.editor-page { padding-top: 0; }
 }
 .reader-modal-close:hover { background: rgba(180,0,0,.8); }
 
-/* ── MODAL CAMBIAR CONTRASEÑA (autocontenido, no depende de auth.css) ── */
+/* ── MODAL CAMBIAR CONTRASEÑA (autocontenido, no depende de auth.css) ──
+   Mismo estilo de "ventana" que el resto de la app (auth-card en login/
+   registro, ventanas del editor): cabecera degradada con franja blanca tras
+   el título (.win-title-pill, ver _winFitTitlePill en auth-pages.js) y
+   cuerpo aparte. @keyframes authSlideDown se define aquí (no solo en
+   auth.css) porque esta tarjeta —y la de "Nuevo proyecto" en home.css,
+   que ya la usaba sin tenerla disponible fuera de login/registro— puede
+   abrirse desde cualquier vista, no solo login/registro. */
 .pwd-modal-overlay {
   position: fixed; inset: 0; z-index: 9500;
   background: rgba(26,26,26,.6);
@@ -769,17 +777,35 @@ body.editor-page { padding-top: 0; }
   padding: 20px;
 }
 .pwd-modal-overlay.hidden { display: none; }
+@keyframes authSlideDown {
+  from { transform: translateY(-24px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
 .pwd-modal-card {
-  background: var(--paper);
-  border: 3px solid var(--black);
-  border-radius: var(--radius);
-  box-shadow: var(--box-shadow-lg);
+  background: var(--white);
+  border: 2.5px solid var(--black);
+  border-radius: 16px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.25); /* misma sombra difusa que auth-card, no la plana de los botones (--box-shadow-lg) */
   width: 100%; max-width: 380px;
-  padding: 24px;
+  animation: authSlideDown .22s cubic-bezier(.4,0,.2,1) both;
+}
+.pwd-modal-header {
+  position: relative;
+  background: linear-gradient(to right, var(--yellow) 33%, #fff8cc 50%, var(--yellow) 67%);
+  border-bottom: 2.5px solid var(--black);
+  border-radius: inherit;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding: 12px 16px 10px;
 }
 .pwd-modal-title {
-  font-size: 1.2rem; margin-bottom: 16px; color: var(--ink);
+  position: relative; z-index: 1;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.4rem; letter-spacing: 1px; color: var(--black);
+  margin: 0;
 }
+.pwd-modal-body { padding: 18px 24px 24px; }
 .pwd-modal-desc {
   font-size: .9rem; color: var(--gray-700); margin-bottom: 16px; line-height: 1.4;
 }

@@ -142,49 +142,66 @@ function openChangePasswordModal() {
   overlay.innerHTML = loggedIn ? _pwdSetFormHtml() : _pwdRequestFormHtml();
   _bindPwdModalContent(overlay, loggedIn);
 
+  // Quitar 'hidden' ANTES de medir la franja blanca del título: con el
+  // overlay todavía en display:none el título mide 0×0 y _winFitTitlePill
+  // deja la franja a width:0 sin ninguna otra llamada posterior que la
+  // corrija — por eso no se veía. Se llama dos veces (síncrona + rAF) por
+  // si el navegador tarda un frame en aplicar el cambio de display.
   overlay.classList.remove('hidden');
+  if (typeof _winFitTitlePill === 'function') {
+    _winFitTitlePill();
+    requestAnimationFrame(_winFitTitlePill);
+  }
 }
 
 function _pwdSetFormHtml() {
   return `
     <div class="pwd-modal-card">
-      <h2 class="pwd-modal-title">${I18n.t('changePasswordTitle')}</h2>
-      <form id="pwdChangeForm" novalidate>
-        <div class="pwd-form-group">
-          <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
-          <div class="pwd-pass-wrap">
-            <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
-            <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
+      <div class="pwd-modal-header">
+        <h2 class="pwd-modal-title">${I18n.t('changePasswordTitle')}</h2>
+      </div>
+      <div class="pwd-modal-body">
+        <form id="pwdChangeForm" novalidate>
+          <div class="pwd-form-group">
+            <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
+            <div class="pwd-pass-wrap">
+              <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
+            </div>
           </div>
-        </div>
-        <div class="pwd-form-group">
-          <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
-          <div class="pwd-pass-wrap">
-            <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
-            <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
+          <div class="pwd-form-group">
+            <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
+            <div class="pwd-pass-wrap">
+              <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
+            </div>
           </div>
-        </div>
-        <span class="pwd-form-error" id="pwdFormError"></span>
-        <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${I18n.t('savePassword')}</button>
-        <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
-      </form>
+          <span class="pwd-form-error" id="pwdFormError"></span>
+          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdSubmitBtn">${I18n.t('savePassword')}</button>
+          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
+        </form>
+      </div>
     </div>`;
 }
 
 function _pwdRequestFormHtml() {
   return `
     <div class="pwd-modal-card">
-      <h2 class="pwd-modal-title">${I18n.t('resetTitle')}</h2>
-      <p class="pwd-modal-desc">${I18n.t('resetInstructions')}</p>
-      <form id="pwdResetForm" novalidate>
-        <div class="pwd-form-group">
-          <label class="pwd-form-label" for="pwdResetEmail">${I18n.t('email')}</label>
-          <input type="email" id="pwdResetEmail" class="pwd-form-input" autocomplete="email" required>
-        </div>
-        <span class="pwd-form-error" id="pwdFormError"></span>
-        <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdResetSubmitBtn">${I18n.t('sendResetLink')}</button>
-        <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
-      </form>
+      <div class="pwd-modal-header">
+        <h2 class="pwd-modal-title">${I18n.t('resetTitle')}</h2>
+      </div>
+      <div class="pwd-modal-body">
+        <p class="pwd-modal-desc">${I18n.t('resetInstructions')}</p>
+        <form id="pwdResetForm" novalidate>
+          <div class="pwd-form-group">
+            <label class="pwd-form-label" for="pwdResetEmail">${I18n.t('email')}</label>
+            <input type="email" id="pwdResetEmail" class="pwd-form-input" autocomplete="email" required>
+          </div>
+          <span class="pwd-form-error" id="pwdFormError"></span>
+          <button type="submit" class="btn btn-primary pwd-btn-full" id="pwdResetSubmitBtn">${I18n.t('sendResetLink')}</button>
+          <button type="button" class="btn pwd-btn-full" id="pwdCancelBtn">${I18n.t('cancel')}</button>
+        </form>
+      </div>
     </div>`;
 }
 
@@ -285,7 +302,7 @@ function _creditsModalHtml() {
   // incluye — ya se muestra arriba con sus enlaces).
   const licenseParagraphs = [
     'Copyright © 2026 Alberto Gavina Costero. Todos los derechos reservados.',
-    'Este repositorio contiene el código fuente de ComiXou / ComXow (en adelante, "la Aplicación"), incluyendo pero no limitado a sus archivos HTML, CSS, JavaScript, activos gráficos y cualquier otro material contenido en él.',
+    'Este repositorio contiene el código fuente de Comxow (en adelante, "la Aplicación"), incluyendo pero no limitado a sus archivos HTML, CSS, JavaScript, activos gráficos y cualquier otro material contenido en él.',
     'Salvo por las bibliotecas de terceros listadas arriba, todo el código y los contenidos de este repositorio son propiedad exclusiva de Alberto Gavina Costero.',
     'Queda expresamente prohibido, sin autorización previa y por escrito del titular de los derechos: copiar, reproducir o redistribuir este código (en todo o en parte); modificarlo o crear obras derivadas; utilizarlo con fines comerciales; publicarlo en otro repositorio, sitio web o plataforma.',
     'El hecho de que este repositorio sea (o haya sido) accesible públicamente no constituye una licencia de uso, copia, modificación o redistribución de ningún tipo. El acceso al código no implica cesión de derechos de ninguna clase.'
@@ -326,7 +343,16 @@ function openCreditsModal() {
       }
     });
   }
+  // Igual que en openChangePasswordModal: la franja blanca hay que medirla
+  // con el modal ya visible (con display:none mide 0 y se queda así), y hay
+  // que repetirlo en CADA apertura (no solo la primera, que es cuando se
+  // crea el overlay) — un resize con el modal cerrado deja la franja a 0
+  // por estar oculta, y solo un nuevo cálculo al reabrir la corrige.
   overlay.classList.add('open');
+  if (typeof _winFitTitlePill === 'function') {
+    _winFitTitlePill();
+    requestAnimationFrame(_winFitTitlePill);
+  }
 }
 
 function _closeCreditsModal() {
@@ -344,7 +370,7 @@ function openShareModal(comic) {
   const isDraft = !comic.published;
   const param = isDraft ? 'draft=' + comic.supabaseId : 'id=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
-  const title = comic.title || 'Una creación en ComiXou';
+  const title = comic.title || 'Una creación en Comxow';
   // Texto del mensaje: el título va entre asteriscos porque WhatsApp lo
   // interpreta como negrita al enviarlo (convención propia de WhatsApp,
   // no HTML). En apps sin ese formato (SMS, email) se verán los asteriscos
