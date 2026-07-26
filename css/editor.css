@@ -134,9 +134,39 @@ body.editor-page #appView {
 }
 .ed-top-action:active { opacity: .8; }
 
-/* Nav de páginas en topbar */
+/* Pantalla completa / vista previa / guardar local / guardar en nube: como
+   icono suelto, sin marco visible — igual que edBackBtn, el botón "◀" de al
+   lado. Antes tenían fondo negro sólido (heredado de .ed-top-action) que se
+   veía como un marco alrededor del icono. Se limita a #edTopbar (la
+   cabecera del editor GENERAL) para no tocar gcpPreviewBtn ni tdApplyBtn/
+   tdDiagBtn, que comparten la misma clase base pero vivan en otras
+   cabeceras (editor de animaciones, editor de texto) no mencionadas aquí. */
+#edTopbar .ed-top-action {
+  background: none;
+  color: var(--black);
+  border: 1px solid var(--black);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 1.05rem; /* mismo tamaño que edBackBtn */
+  font-weight: normal;
+  transition: background .15s;
+}
+#edTopbar .ed-top-action:hover   { background: rgba(0,0,0,.1); }
+#edTopbar .ed-top-action:active  { background: rgba(0,0,0,.2); }
+
+/* Nav de páginas en topbar — el centrado HORIZONTAL (position:absolute +
+   left:50%) pasa a estar siempre activo, en cualquier ancho de pantalla:
+   antes solo aplicaba a partir de 768px, por debajo se quedaba en flujo
+   normal, pegado a la izquierda de los botones de acción, sin centrar de
+   verdad. La alineación VERTICAL se deja intacta y sigue siendo condicional
+   como antes (align-self + padding-bottom) — en móvil es flex-end con 4px
+   de margen inferior, ajuste que costó conseguir para no quedar tapado por
+   la cámara frontal; a partir de 768px pasa a center sin margen, igual que
+   siempre. No tocar esta parte sin que Alberto lo pida explícitamente. */
 .ed-top-pagnav {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 2;
   display: flex;
   align-items: center;
@@ -147,9 +177,6 @@ body.editor-page #appView {
 }
 @media (min-width: 768px) {
   .ed-top-pagnav {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
     align-self: center;
     padding-bottom: 0;
   }
@@ -1208,7 +1235,7 @@ body.ed-scale-tablet {
   font-weight: 900;
 }
 
-#edProjectModal {
+#edProjectModal, #edSaveChoiceModal {
   position: fixed; inset: 0;
   z-index: 500;
   background: rgba(0,0,0,.6);
@@ -1219,7 +1246,7 @@ body.ed-scale-tablet {
   justify-content: center;
   opacity: 0; pointer-events: none; transition: opacity .22s;
 }
-#edProjectModal.open {
+#edProjectModal.open, #edSaveChoiceModal.open {
   opacity: 1; pointer-events: all;
   touch-action: pan-y; /* permitir scroll nativo dentro del modal */
 }
@@ -1233,12 +1260,12 @@ body.ed-scale-tablet {
   animation: none;
   box-shadow: 0 -4px 32px rgba(0,0,0,.25);
 }
-#edProjectModal.open .ed-modal-sheet {
+#edProjectModal.open .ed-modal-sheet, #edSaveChoiceModal.open .ed-modal-sheet {
   animation: edOverlayUp .24s cubic-bezier(.4,0,.2,1) both;
 }
 @media (pointer: fine) {
   /* PC/ratón: centrar en vez de bottom-sheet, igual que el resto de ventanas */
-  #edProjectModal { align-items: center; }
+  #edProjectModal, #edSaveChoiceModal { align-items: center; }
   .ed-modal-sheet {
     border-bottom: 2.5px solid var(--black) !important;
     border-radius: 18px !important;
@@ -1246,7 +1273,7 @@ body.ed-scale-tablet {
   }
 }
 @media (min-height: 600px) {
-  #edProjectModal { align-items: center; }
+  #edProjectModal, #edSaveChoiceModal { align-items: center; }
   .ed-modal-sheet {
     border-radius: 18px;
     border-bottom: 2.5px solid var(--black);
@@ -1259,7 +1286,7 @@ body.ed-scale-tablet {
    suele coincidir con una tablet pero no lo garantiza, p.ej. en modo
    multi-ventana estrecho) — esta regla lo hace explícito y ya no depende de
    una coincidencia. */
-body.ed-scale-tablet #edProjectModal { align-items: center; }
+body.ed-scale-tablet #edProjectModal, body.ed-scale-tablet #edSaveChoiceModal { align-items: center; }
 body.ed-scale-tablet .ed-modal-sheet {
   border-bottom: 2.5px solid var(--black) !important;
   border-radius: 18px !important;
@@ -1303,6 +1330,26 @@ body.ed-scale-tablet .ed-modal-sheet {
 .ed-modal-btn { flex: 1; padding: 12px; border: 2px solid var(--black); border-radius: 10px; font-family: var(--font-body); font-weight: 900; font-size: 0.9rem; cursor: pointer; box-shadow: 2px 2px 0 var(--black); }
 .ed-modal-btn.cancel { background: var(--white); }
 .ed-modal-btn.ok { background: var(--yellow); }
+
+/* Ventana "Guardar" (botón 💾 de la cabecera): elegir entre guardado local y
+   en la nube — misma tarjeta con borde negro y sombra plana que ed-modal-btn,
+   pero como fila ancha con icono + texto en vez de un botón de una palabra. */
+.ed-save-choice-opt {
+  display: flex; align-items: center; gap: 14px;
+  width: 100%; background: var(--white);
+  border: 2px solid var(--black); border-radius: 10px;
+  box-shadow: 2px 2px 0 var(--black);
+  padding: 14px 16px; margin-bottom: 12px;
+  font-family: var(--font-body); text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s;
+}
+.ed-save-choice-opt:last-of-type { margin-bottom: 0; }
+.ed-save-choice-opt:active { background: var(--gray-100); }
+.ed-save-choice-icon { font-size: 1.7rem; flex-shrink: 0; line-height: 1; }
+.ed-save-choice-text { display: flex; flex-direction: column; gap: 2px; }
+.ed-save-choice-text strong { font-size: .95rem; font-weight: 900; color: var(--black); }
+.ed-save-choice-text small  { font-size: .75rem; font-weight: 400; color: var(--gray-500); }
 
 /* Modal de confirmación (reemplaza confirm() nativo que rompe fullscreen) */
 .ed-confirm-overlay {
@@ -2136,6 +2183,7 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 }
 #gcpProjectTitle {
   position: relative; z-index: 2;
+  flex: 0 1 auto; min-width: 0;
   font-family: var(--font-display);
   font-weight: 700;
   font-size: 1rem; letter-spacing: 0.5px;

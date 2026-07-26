@@ -1409,6 +1409,22 @@ function _edUpdateTitlePill(){
   const pill  = document.getElementById('edTitlePill');
   const title = document.getElementById('edProjectTitle');
   if(!bar || !pill || !title) return;
+  // Tope de ancho: el grupo de páginas ahora se centra con position:absolute
+  // (.ed-top-pagnav), fuera del flujo flex — ya no "compite" por espacio con
+  // el título de forma natural, así que un título largo podría crecer hasta
+  // tapar el grupo centrado si no se limita aquí. Puede crecer como máximo
+  // hasta tocar la franja blanca de ese grupo (edPageNavPill), con un margen
+  // mínimo para que las dos franjas no se peguen exactamente. Se recalcula
+  // en cada pasada porque el centro depende del ancho de la barra (rotación
+  // del dispositivo, nº de dígitos de la página...).
+  const pagnavPill = document.getElementById('edPageNavPill');
+  if (pagnavPill) {
+    const _titleLeft = title.getBoundingClientRect().left;
+    const _pagnavPillLeft = pagnavPill.getBoundingClientRect().left;
+    title.style.maxWidth = Math.max(0, _pagnavPillLeft - _titleLeft - 6) + 'px';
+  } else {
+    title.style.maxWidth = '';
+  }
   const barRect   = bar.getBoundingClientRect();
   const titleRect = title.getBoundingClientRect();
   if(titleRect.width <= 0){ pill.style.width = '0px'; return; }
@@ -1495,7 +1511,7 @@ function _edInitWindowTitlePillObserver(){
     window._edWinTitlePillRaf = requestAnimationFrame(_edFitAllWindowTitlePills);
   };
   const _obs = new MutationObserver(_cb);
-  ['edProjectModal','edShortcutsModal','edAnimTutorialModal','edHelpRefModal','edMpBehaviourModal'].forEach(id => {
+  ['edProjectModal','edShortcutsModal','edAnimTutorialModal','edHelpRefModal','edMpBehaviourModal','edSaveChoiceModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el) _obs.observe(el, { attributes: true, attributeFilter: ['class'] });
   });
@@ -3841,7 +3857,8 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   '.ed-page-thumb',               // miniatura del panel completo de páginas — mismo motivo
   '#edPagesClose',                // cerrar el panel completo de páginas (no modifica nada)
   '#edMinimizeBtn',               // ocultar/mostrar menú
-  '#edSaveBtn', '#edCloudSaveBtn',// guardar (el propio guardado ya tiene su seguimiento)
+  '#edSaveBtn',                   // guardar (el propio guardado ya tiene su seguimiento)
+  '#edSaveChoiceModal',           // ventana de elegir dónde guardar (elegir no modifica nada)
   '#edPreviewBtn',                // vista previa / reproducir
   '#edFsBtn',                     // pantalla completa
   '#edDiagBtn',                   // diagnóstico
@@ -6715,11 +6732,18 @@ function edLoadPage(idx){
 function edUpdateNavPages(){
   // Actualizar número de página en topbar
   const pnum=$('edPageNum');
+  const _pnumChanged = pnum && pnum.textContent !== String(edCurrentPage+1);
   if(pnum) pnum.textContent = edCurrentPage+1;
   // Habilitar/deshabilitar flechas en topbar
   const pprev=$('edPagePrev'), pnext=$('edPageNext');
   if(pprev) pprev.disabled = edCurrentPage <= 0;
   if(pnext) pnext.disabled = edCurrentPage >= edPages.length-1;
+  // El grupo de páginas puede cambiar de ancho (más dígitos, p.ej. 9→10) —
+  // recalcular el tope de ancho del título para que no quede desactualizado
+  // (ver _edUpdateTitlePill: el título no puede tapar este grupo centrado).
+  // Solo cuando el número realmente cambia, para no forzar un reflow de más
+  // en llamadas repetidas que no lo modifican.
+  if (_pnumChanged && typeof _edUpdateTitlePill === 'function') _edUpdateTitlePill();
 
   const wrap=$('ddNavPages');if(!wrap)return;
   wrap.innerHTML='';
@@ -22068,8 +22092,6 @@ async function edCloudSave() {
     _edCloudSaving = false;
     _edSaveOverlayHide();
     _edCloudSavingStop();
-    const _btnFinal = $('edCloudSaveBtn');
-    if (_btnFinal) { _btnFinal.textContent = '☁️'; _btnFinal.disabled = false; }
   }
 }
 async function _edCloudSaveInner() {
@@ -22203,8 +22225,6 @@ async function _edCloudSaveInner() {
   // de subir en esta pasada; quedará pendiente para el siguiente guardado.
   const _cloudCounterSnapshots = edPages.map(p => p._dirtyCountCloud || 0);
 
-  const btn = $('edCloudSaveBtn');
-  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
   _edCloudSaving = true;
   _edCloudSavingStart = Date.now();
   _edCloudSavingUpdateBadge();
@@ -22287,7 +22307,6 @@ async function _edCloudSaveInner() {
     _edSaveOverlayHide();
     _edCloudSaving = false;
     _edCloudSavingStop();
-    if (btn) { btn.textContent = '☁️'; btn.disabled = false; }
   }
 }
 
@@ -24280,6 +24299,15 @@ async function edLoadProject(id){
   }
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   _edUpdateTitlePill();
+  // Al abrir la obra el título se mide con lo que haya en pantalla en ese
+  // instante — si la fuente del título aún no ha terminado de cargar (fuente
+  // autoalojada, no siempre en caché), la franja sale con el ancho del
+  // fallback y se queda así hasta el siguiente resize (por eso solo se veía
+  // bien tras entrar en pantalla completa, que sí dispara un resize). Mismas
+  // 3 pasadas que ya usa _adjustSpacing en router.js para este mismo problema.
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
+  setTimeout(_edUpdateTitlePill, 200);
+  setTimeout(_edUpdateTitlePill, 600);
   if(comic.editorData){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
@@ -25434,6 +25462,9 @@ function edOpenProjectModal(){
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
 
+function edOpenSaveChoiceModal(){ $('edSaveChoiceModal')?.classList.add('open'); }
+function edCloseSaveChoiceModal(){ $('edSaveChoiceModal')?.classList.remove('open'); }
+
 /* ── Destruir vista: eliminar todos los listeners de document/window ── */
 // Detecta si el toque está en el lado "retroceder" según orientación física del dispositivo.
 // El navegador ya transforma las coordenadas táctiles al sistema del usuario.
@@ -26001,6 +26032,9 @@ async function edSaveProjectModal(){
   edProjectMeta.social  = _newSocial;
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
   _edUpdateTitlePill();
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
+  setTimeout(_edUpdateTitlePill, 200);
+  setTimeout(_edUpdateTitlePill, 600);
 
   if (_titleChanged) {
     // Crear obra nueva independiente con el nuevo nombre
@@ -26606,8 +26640,13 @@ function EditorView_init(){
     edRedraw();
     _edScrollbarsUpdate();
   });
-  $('edSaveBtn')?.addEventListener('click', () => edSaveProject());
-  $('edCloudSaveBtn')?.addEventListener('click', edCloudSave);
+  $('edSaveBtn')?.addEventListener('click', edOpenSaveChoiceModal);
+  $('edSaveChoiceLocal')?.addEventListener('click', () => { edCloseSaveChoiceModal(); edSaveProject(); });
+  $('edSaveChoiceCloud')?.addEventListener('click', () => { edCloseSaveChoiceModal(); edCloudSave(); });
+  $('edSaveChoiceCancel')?.addEventListener('click', edCloseSaveChoiceModal);
+  document.getElementById('edSaveChoiceModal')?.addEventListener('pointerdown', e => {
+    if (e.target === document.getElementById('edSaveChoiceModal')) edCloseSaveChoiceModal();
+  });
   $('edDiagBtn')?.addEventListener('click', _edRunDiag);
   $('edPreviewBtn')?.addEventListener('click', edOpenViewer);
   // Botón pantalla completa en topbar
@@ -26760,7 +26799,7 @@ function EditorView_init(){
   // listeners globales del editor — en concreto edOnMove (registrado sobre
   // document), que paneaba la cámara del canvas al hacer scroll dentro del
   // cuerpo del modal en vez de scrollear el propio modal.
-  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal', 'edProjectModal'].forEach(_mid => {
+  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal', 'edProjectModal', 'edSaveChoiceModal'].forEach(_mid => {
     const _mEl = document.getElementById(_mid);
     if (!_mEl) return;
     ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
@@ -35036,7 +35075,12 @@ function gcpOpen(edLayerIdx) {
   // texto) se hace con gcpShell aún en display:none — getBoundingClientRect()
   // devuelve tamaño 0 y la píldora nunca se dibuja. Recalcular ahora que el
   // shell ya es visible (rAF: esperar a que el navegador aplique el layout).
+  // Mismo problema de fuentes que en _edUpdateTitlePill: si la fuente del
+  // título aún no ha cargado, el ancho medido no es el definitivo.
   requestAnimationFrame(_gcpUpdateTitlePill);
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(_gcpUpdateTitlePill);
+  setTimeout(_gcpUpdateTitlePill, 200);
+  setTimeout(_gcpUpdateTitlePill, 600);
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) {
     blocker.style.display = 'block';

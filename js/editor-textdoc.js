@@ -103,6 +103,9 @@ function edOpenTextDoc(editLayer){
   if(!wasOpen) history.pushState({ tdShellOpen: true }, '', location.href);
   _tdRegisterBackInterceptor();
   requestAnimationFrame(_tdUpdateTitlePill);
+  (document.fonts ? document.fonts.ready : Promise.resolve()).then(_tdUpdateTitlePill);
+  setTimeout(_tdUpdateTitlePill, 200);
+  setTimeout(_tdUpdateTitlePill, 600);
   const editorEl = document.getElementById('tdEditor');
   const applyBtn = document.getElementById('tdApplyBtn');
   const _tdSpacer = document.getElementById('tdSelTopSpacer');
@@ -1860,9 +1863,17 @@ function _tdUpdateViewPageNav(){
   const prev = document.getElementById('tdPagePrev');
   const next = document.getElementById('tdPageNext');
   const total = _tdViewPageStartChars.length;
-  if(num) num.textContent = (_tdViewCurPage + 1) + ' / ' + total;
+  const _newText = (_tdViewCurPage + 1) + ' / ' + total;
+  const _changed = num && num.textContent !== _newText;
+  if(num) num.textContent = _newText;
   if(prev) prev.disabled = _tdViewCurPage <= 0;
   if(next) next.disabled = _tdViewCurPage >= total - 1;
+  // Recalcular el tope de ancho del título SOLO cuando el texto "X / Y"
+  // cambia de verdad — esta función se llama en cada evento de scroll
+  // continuo (arrastre táctil/rueda, vía _tdSyncPageNavFromOffset), no solo
+  // al cambiar de página, así que forzar el reflow de _tdUpdateTitlePill en
+  // cada tick sería caro y no aporta nada si el texto sigue siendo el mismo.
+  if (_changed && typeof _tdUpdateTitlePill === 'function') _tdUpdateTitlePill();
 }
 
 // Posición de desplazamiento actual, en px — no atada a una página exacta:
@@ -1984,6 +1995,19 @@ function _tdUpdateTitlePill(){
   const pill = document.getElementById('tdTitlePill');
   const title = document.getElementById('tdProjectTitle');
   if(!bar || !pill || !title) return;
+  // Tope de ancho: .ed-top-pagnav (clase compartida con el editor general) se
+  // centra con position:absolute, fuera del flujo flex — el título podría
+  // crecer hasta tapar el grupo de páginas si no se limita aquí. Mismo
+  // criterio que _edUpdateTitlePill: como máximo hasta tocar la franja
+  // blanca de ese grupo, con un margen mínimo.
+  const pagnavPill = document.getElementById('tdPageNavPill');
+  if (pagnavPill) {
+    const _titleLeft = title.getBoundingClientRect().left;
+    const _pagnavPillLeft = pagnavPill.getBoundingClientRect().left;
+    title.style.maxWidth = Math.max(0, _pagnavPillLeft - _titleLeft - 6) + 'px';
+  } else {
+    title.style.maxWidth = '';
+  }
   const barRect = bar.getBoundingClientRect();
   const titleRect = title.getBoundingClientRect();
   if(titleRect.width <= 0){ pill.style.width = '0px'; return; }

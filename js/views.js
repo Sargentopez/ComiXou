@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v35.41</footer>
+    <footer class="app-version">v35.50</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -307,8 +307,7 @@ Router.register('editor', {
              panel) sigue activa aunque el botón que abre el panel esté oculto.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         -->
-        <button class="ed-top-action" id="edSaveBtn" title="Guardar local">💾</button>
-        <button class="ed-top-action" id="edCloudSaveBtn" title="Guardar en nube">☁️</button>
+        <button class="ed-top-action" id="edSaveBtn" title="Guardar">💾</button>
       </div>
 
       <!-- ── BARRA DE MENÚ ── -->
@@ -737,6 +736,29 @@ Router.register('editor', {
           <button class="ed-modal-btn cancel" id="edMCancel">Cancelar</button>
           <button class="ed-modal-btn ok" id="edMSave">Guardar ✓</button>
         </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL ELEGIR DÓNDE GUARDAR -->
+    <div id="edSaveChoiceModal">
+      <div class="ed-modal-sheet">
+        <div class="ed-modal-handle"></div>
+        <div class="ed-modal-header">
+          <h3 class="ed-modal-title">Guardar</h3>
+        </div>
+        <div class="ed-modal-body">
+          <button class="ed-save-choice-opt" id="edSaveChoiceLocal">
+            <span class="ed-save-choice-icon">💾</span>
+            <span class="ed-save-choice-text"><strong>Guardar localmente</strong><small>En este dispositivo</small></span>
+          </button>
+          <button class="ed-save-choice-opt" id="edSaveChoiceCloud">
+            <span class="ed-save-choice-icon">☁️</span>
+            <span class="ed-save-choice-text"><strong>Guardar en la nube</strong><small>Sincronizado en tu cuenta</small></span>
+          </button>
+          <div class="ed-modal-actions">
+            <button class="ed-modal-btn cancel" id="edSaveChoiceCancel">Cancelar</button>
+          </div>
         </div>
       </div>
     </div>
