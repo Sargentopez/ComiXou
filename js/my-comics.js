@@ -98,6 +98,30 @@ async function _mcLoadLocalThumb(comicId) {
   } catch(_e) {}
 }
 
+// Reactivo a ComicStore.save() (evento 'cx:store', ver storage.js) — sin
+// esto la miniatura se quedaba con lo primero que se cacheó en esta sesión:
+// guardar de nuevo (local o nube) no la refrescaba hasta recargar la app
+// entera. Invalida las dos claves posibles (id local y supabaseId, ver
+// buildRow más abajo) y las vuelve a pedir.
+// El evento se dispara ANTES de que termine la escritura async en OPFS
+// (donde vive coverDataUrl) — pequeño margen para no leer justo antes de
+// que se complete.
+function _mcOnStoreChange(e) {
+  if (!document.getElementById('myComicsList')) return;
+  if (e?.detail?.type !== 'save') return;
+  const id = e?.detail?.id;
+  if (!id) return;
+  _mcThumbCache.delete(id);
+  setTimeout(() => {
+    _mcLoadLocalThumb(id);
+    const local = ComicStore.getById(id);
+    if (local && local.supabaseId && local.supabaseId !== id) {
+      _mcThumbCache.delete(local.supabaseId);
+      _mcLoadThumb(local.supabaseId);
+    }
+  }, 400);
+}
+
 // Franja blanca tras el título de los modales de "Mis Creaciones" (Nuevo
 // proyecto, Título duplicado) — mismo criterio que en el editor: desde el
 // borde izquierdo de la ventana hasta el final del texto, semicírculo a la
@@ -525,6 +549,7 @@ function _mcCheckStorage() {
 
 function MyComicsView_init() {
   _mcInitTitlePillObserver();
+  window.addEventListener('cx:store', _mcOnStoreChange);
   // Comprobación de fiabilidad del almacenamiento local (localStorage/OPFS/
   // biblioteca) — definida en editor.js. Se dispara aquí, no al arrancar la
   // app entera: una persona puede entrar solo para LEER obras, sin crear ni
@@ -1412,6 +1437,7 @@ function _mcToast(msg) {
 }
 
 function MyComicsView_destroy() {
+  window.removeEventListener('cx:store', _mcOnStoreChange);
   _mcRemoveModal();
   // Cancelar el check de huérfanos si aún no se ha ejecutado
   if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
