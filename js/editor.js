@@ -22176,6 +22176,12 @@ async function _edCloudSaveInner() {
         texts: [],
       }));
     }
+    // Idem con la portada con texto horneado (ver coverDataUrl en edSaveProject)
+    if (!comic.coverDataUrl && edPages[0]) {
+      comic.coverDataUrl = edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))
+        ? edRenderPage(edPages[0], true)
+        : (comic.panels[0]?.dataUrl || null);
+    }
   }
 
   // Enriquecer comic.editorData con _pngFrames y _apngSrc del layer vivo en memoria.
@@ -22652,11 +22658,23 @@ async function _edSaveProjectInner(_keepOverlay){
     // Esperar a que la última escritura de biblioteca en IDB complete antes de guardar en OPFS.
     if (typeof _bibFlush === 'function') await _bibFlush();
   }
+  // Portada con texto horneado, para las miniaturas de Mis Creaciones/home —
+  // panels[0].dataUrl se queda sin texto a propósito (el reader lo superpone
+  // aparte), pero una miniatura estática no tiene ese mecanismo. Reutiliza
+  // edRenderPage(page, withText) — ver más abajo — no una función nueva.
+  // Solo la hoja 1, y solo si tiene textos/bocadillos de verdad: si no hay
+  // ninguno, panels[0].dataUrl ya es idéntico visualmente y no hace falta
+  // duplicar el render.
+  let _coverDataUrl = panels[0]?.dataUrl || null;
+  if (edPages[0] && edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) {
+    _coverDataUrl = edRenderPage(edPages[0], true);
+  }
   await ComicStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
     panels,
+    coverDataUrl: _coverDataUrl,
     editorData:{
       orientation:edOrientation,
       pages:_edPages,
@@ -22715,7 +22733,7 @@ async function _edSaveProjectInner(_keepOverlay){
   // Limpiar autosave — awaitar para garantizar que se borra antes de retornar
   await _edAutosaveClear(edProjectId);
 }
-function edRenderPage(page){
+function edRenderPage(page, withText){
   const _savedOrient = edOrientation;
   const _savedPage   = edCurrentPage;
   const _pageIdx     = edPages.indexOf(page);
@@ -22775,6 +22793,18 @@ function edRenderPage(page){
     }
     if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
   });
+  // withText=true: para la miniatura/portada de la obra (Mis Creaciones, home,
+  // cover_url) — a diferencia del render normal, aquí SÍ hace falta hornear el
+  // texto/bocadillos en la imagen, porque una miniatura estática no tiene el
+  // mecanismo de superposición del reader. Reutiliza el mismo draw() de
+  // TextLayer/BubbleLayer que ya usa _edRenderPageThumb para el panel de
+  // páginas del editor — no se inventa nada nuevo.
+  if (withText) {
+    ctx.save();
+    ctx.globalAlpha = page.textLayerOpacity ?? 1;
+    page.layers.forEach(l => { if (l && _textTypes.has(l.type)) l.draw(ctx, full); });
+    ctx.restore();
+  }
   // Recortar zona de la página del canvas de trabajo
   const outCtx=tmp.getContext('2d');
   outCtx.drawImage(full, edMarginX(), edMarginY(), pw, ph, 0, 0, pw, ph);

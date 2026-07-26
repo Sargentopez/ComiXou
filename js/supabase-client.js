@@ -599,7 +599,10 @@ const SupabaseClient = (() => {
     if (!panels.length) return;
 
     // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
-    const _firstDataUrl = panels[0]?.dataUrl || null;
+    // coverDataUrl (con el texto horneado, ver edRenderPage(page,withText) y
+    // edSaveProject en editor.js) si existe — obras guardadas antes de este
+    // cambio no lo tienen, panels[0].dataUrl sigue de respaldo.
+    const _firstDataUrl = comic.coverDataUrl || panels[0]?.dataUrl || null;
     if (_firstDataUrl) {
       const _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
       if (_coverUrlResult) {
@@ -941,21 +944,25 @@ const SupabaseClient = (() => {
   async function _fetchWorks(filter) {
     const works = await _get(
       `works?${filter}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at,cover_url`
     );
     if (!works || !works.length) return [];
 
-    // Pedir solo el panel_order=0 de cada obra para el thumbnail
-    const ids = works.map(w => w.id).join(',');
+    // cover_url (con el texto horneado, ver edRenderPage(page,withText) en
+    // editor.js) si existe — obras guardadas antes de este cambio no lo
+    // tienen, el panel_order=0 (sin texto) sigue de respaldo para esas.
+    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
     let thumbMap = {};
-    try {
-      const panels = await _get(
-        `panels?work_id=in.(${ids})&panel_order=eq.0&select=work_id,data_url`
-      );
-      (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
-    } catch(e) { /* sin thumbnails */ }
+    if (_needFallback.length) {
+      try {
+        const panels = await _get(
+          `panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`
+        );
+        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
+      } catch(e) { /* sin thumbnails */ }
+    }
 
-    return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
+    return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
   async function fetchPendingWorks() {
@@ -1211,16 +1218,20 @@ continue;
     if(!authorId) return [];
     const works = await _get(
       `works?author_id=eq.${authorId}&order=updated_at.desc` +
-      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at`
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at,cover_url`
     ).catch(() => []);
     if(!works || !works.length) return [];
-    const ids = works.map(w => w.id).join(',');
+    // cover_url (con el texto horneado) si existe; respaldo al panel_order=0
+    // (sin texto) solo para las obras que aún no lo tengan.
+    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
     let thumbMap = {};
-    try {
-      const panels = await _get(`panels?work_id=in.(${ids})&panel_order=eq.0&select=work_id,data_url`);
-      (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
-    } catch(_) {}
-    return works.map(w => _workToComic(w, w.published, thumbMap[w.id] || ''));
+    if (_needFallback.length) {
+      try {
+        const panels = await _get(`panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`);
+        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
+      } catch(_) {}
+    }
+    return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
     return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };

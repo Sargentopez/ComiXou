@@ -59,11 +59,20 @@ function _mcLoadThumb(supabaseId) {
   const _sess = JSON.parse(localStorage.getItem('cs_session') || 'null');
   const _tok = _sess?.token || _MC_KEY;
   const _hdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_tok}` };
-  fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
-    { headers: _hdrs, cache: 'no-store' })
+  // cover_url (con el texto horneado, ver edRenderPage(page,withText) en
+  // editor.js) si existe; si la obra es de antes de este cambio y no lo
+  // tiene, respaldo al panel_order=0 (sin texto) de siempre.
+  fetch(`${_MC_BASE}/works?id=eq.${supabaseId}&select=cover_url`, { headers: _hdrs, cache: 'no-store' })
     .then(r => r.json())
     .then(rows => {
-      const url = rows?.[0]?.data_url || '';
+      const _cover = rows?.[0]?.cover_url;
+      if (_cover) return _cover;
+      return fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
+        { headers: _hdrs, cache: 'no-store' })
+        .then(r => r.json())
+        .then(panelRows => panelRows?.[0]?.data_url || '');
+    })
+    .then(url => {
       if (!url) return;
       _mcThumbCache.set(supabaseId, url);
       // Actualizar contenedor en DOM si existe
@@ -79,7 +88,9 @@ async function _mcLoadLocalThumb(comicId) {
   _mcThumbCache.set(comicId, ''); // marca como en progreso
   try {
     const full = ComicStore.getByIdFull ? await ComicStore.getByIdFull(comicId) : null;
-    const url = full && full.panels && full.panels[0] ? full.panels[0].dataUrl : '';
+    // coverDataUrl (con el texto horneado) si existe — obras guardadas antes
+    // de este cambio no lo tienen, panels[0].dataUrl sigue de respaldo.
+    const url = full ? (full.coverDataUrl || (full.panels && full.panels[0] ? full.panels[0].dataUrl : '')) : '';
     if (!url) return;
     _mcThumbCache.set(comicId, url);
     const div = document.querySelector(`[data-local-thumb-id="${comicId}"]`);
