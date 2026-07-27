@@ -141,7 +141,9 @@ body.editor-page #appView {
    cabecera del editor GENERAL) para no tocar gcpPreviewBtn ni tdApplyBtn/
    tdDiagBtn, que comparten la misma clase base pero vivan en otras
    cabeceras (editor de animaciones, editor de texto) no mencionadas aquí. */
-#edTopbar .ed-top-action {
+#edTopbar .ed-top-action,
+#gcpTopbar .ed-top-action,
+#tdTopbar .ed-top-action {
   background: none;
   color: var(--black);
   border: 1px solid var(--black);
@@ -151,8 +153,12 @@ body.editor-page #appView {
   font-weight: normal;
   transition: background .15s;
 }
-#edTopbar .ed-top-action:hover   { background: rgba(0,0,0,.1); }
-#edTopbar .ed-top-action:active  { background: rgba(0,0,0,.2); }
+#edTopbar .ed-top-action:hover,
+#gcpTopbar .ed-top-action:hover,
+#tdTopbar .ed-top-action:hover   { background: rgba(0,0,0,.1); }
+#edTopbar .ed-top-action:active,
+#gcpTopbar .ed-top-action:active,
+#tdTopbar .ed-top-action:active  { background: rgba(0,0,0,.2); }
 
 /* Nav de páginas en topbar — el centrado HORIZONTAL (position:absolute +
    left:50%) pasa a estar siempre activo, en cualquier ancho de pantalla:
@@ -2586,7 +2592,12 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   display: none;
   position: fixed;
   inset: 0;
-  padding-top: env(safe-area-inset-top, 0px);
+  /* Sin padding-top de safe-area-inset-top a propósito: a diferencia de
+     #gcpShell (que también lo tenía pero su cabecera es position:absolute
+     y lo ignora) aquí #tdTopbar es un elemento flex normal (position:
+     relative) que SÍ lo respetaba, dejando una franja vacía arriba en
+     pantalla completa móvil. #editorShell tampoco tiene este padding y
+     funciona bien, así que no hacía falta en ningún caso. */
   z-index: 600;
   background: var(--gray-100);
   flex-direction: column;
