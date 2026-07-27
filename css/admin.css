@@ -88,7 +88,7 @@
 .admin-row-thumb { flex-shrink: 0; }
 .admin-thumb {
   width: 56px; height: 78px;
-  object-fit: cover; display: block;
+  object-fit: contain; display: block;
   border: 1.5px solid var(--gray-200);
 }
 .admin-thumb-empty {

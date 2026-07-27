@@ -134,7 +134,7 @@
 }
 .comic-row-thumb img {
   width: 72px; height: 72px; min-width: 72px; max-width: 72px;
-  object-fit: cover; display: block;
+  object-fit: contain; display: block;
 }
 .comic-row-info {
   flex: 1; min-width: 0;

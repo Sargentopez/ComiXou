@@ -77,7 +77,7 @@ function _mcLoadThumb(supabaseId) {
       _mcThumbCache.set(supabaseId, url);
       // Actualizar contenedor en DOM si existe
       const div = document.querySelector(`[data-thumb-id="${supabaseId}"]`);
-      if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:cover;display:block">`; }
+      if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:contain;display:block">`; }
     })
     .catch(() => {});
 }
@@ -94,7 +94,7 @@ async function _mcLoadLocalThumb(comicId) {
     if (!url) return;
     _mcThumbCache.set(comicId, url);
     const div = document.querySelector(`[data-local-thumb-id="${comicId}"]`);
-    if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:cover;display:block">`; }
+    if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:contain;display:block">`; }
   } catch(_e) {}
 }
 
@@ -106,8 +106,14 @@ async function _mcLoadLocalThumb(comicId) {
 // El evento se dispara ANTES de que termine la escritura async en OPFS
 // (donde vive coverDataUrl) — pequeño margen para no leer justo antes de
 // que se complete.
+// IMPORTANTE: el guardado ocurre con el EDITOR abierto (vista distinta),
+// no con "Mis Creaciones" visible — por eso este listener se registra una
+// sola vez, de forma global, al cargar el script (ver más abajo), y NO
+// depende de si #myComicsList existe en el momento del guardado. Antes
+// estaba atado a MyComicsView_init()/_destroy(), así que en la práctica
+// nunca llegaba a reaccionar a un guardado real (solo a acciones hechas ya
+// estando dentro de Mis Creaciones, que no es cuando se guarda).
 function _mcOnStoreChange(e) {
-  if (!document.getElementById('myComicsList')) return;
   if (e?.detail?.type !== 'save') return;
   const id = e?.detail?.id;
   if (!id) return;
@@ -121,6 +127,7 @@ function _mcOnStoreChange(e) {
     }
   }, 400);
 }
+window.addEventListener('cx:store', _mcOnStoreChange);
 
 // Franja blanca tras el título de los modales de "Mis Creaciones" (Nuevo
 // proyecto, Título duplicado) — mismo criterio que en el editor: desde el
@@ -549,7 +556,6 @@ function _mcCheckStorage() {
 
 function MyComicsView_init() {
   _mcInitTitlePillObserver();
-  window.addEventListener('cx:store', _mcOnStoreChange);
   // Comprobación de fiabilidad del almacenamiento local (localStorage/OPFS/
   // biblioteca) — definida en editor.js. Se dispara aquí, no al arrancar la
   // app entera: una persona puede entrar solo para LEER obras, sin crear ni
@@ -1437,7 +1443,6 @@ function _mcToast(msg) {
 }
 
 function MyComicsView_destroy() {
-  window.removeEventListener('cx:store', _mcOnStoreChange);
   _mcRemoveModal();
   // Cancelar el check de huérfanos si aún no se ha ejecutado
   if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
