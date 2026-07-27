@@ -788,6 +788,23 @@ const SupabaseClient = (() => {
   }
 
   // Borrar todas las obras de un autor y su perfil de authors
+  // ── GESTIÓN DE USUARIOS (panel de admin) ────────────────────────────────
+  // Usa _get/_patch (token real de sesión vía _hdrsUser) — NO la clave anon
+  // sola: desde que authors_select_public se restringió a "tu propia fila o
+  // admin" (auditoría RLS), una petición sin el token de quien de verdad es
+  // admin no vería ninguna fila.
+  async function fetchAllUsers() {
+    return _get('authors?select=id,username,email,role&order=role.asc,username.asc');
+  }
+
+  // Da o quita el rol de admin a un usuario. El trigger prevent_role_self_change
+  // (ver auditoría RLS) exige que quien haga la petición YA sea admin — si no,
+  // la revierte en silencio. No hace falta comprobarlo aquí: si quien llama a
+  // esta función no es admin, la fila no cambia y ya está.
+  async function setUserRole(userId, role) {
+    return _patch('authors', `id=eq.${userId}`, { role });
+  }
+
   async function deleteAuthorData(authorId) {
     const works = await _get(`works?author_id=eq.${authorId}&select=id`).catch(() => []);
     for (const w of (works || [])) {
@@ -1234,5 +1251,5 @@ continue;
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole };
 })();

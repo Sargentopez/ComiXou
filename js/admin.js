@@ -101,19 +101,20 @@ async function renderUsers(panel) {
   panel.innerHTML = `<p class="admin-empty">Cargando usuarios…</p>`;
   let list = [];
   try {
-    const SB_URL = 'https://qqgsbyylaugsagbxsetc.supabase.co';
-    const SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-    const res = await fetch(
-      `${SB_URL}/rest/v1/authors?select=id,username,email,role&order=role.asc,username.asc`,
-      { headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}` }, cache: 'no-store' }
-    );
-    if (res.ok) list = await res.json();
+    // SupabaseClient.fetchAllUsers() usa el token real de la sesión (no la
+    // clave anon sola) — necesario desde que authors_select_public se
+    // restringió a "tu propia fila o admin" (auditoría RLS).
+    list = await SupabaseClient.fetchAllUsers();
   } catch (_) {}
 
   panel.innerHTML = '';
   if (!list.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`; return; }
 
+  const myId = Auth.currentUser()?.id;
+
   list.forEach(user => {
+    const isAdminUser = user.role === 'admin';
+    const isSelf = user.id === myId;
     const row = document.createElement('div');
     row.className = 'admin-row';
     row.innerHTML = `
@@ -122,10 +123,40 @@ async function renderUsers(panel) {
         <span class="admin-row-meta">${escHtml(user.email || '')} · ${user.role || 'user'}</span>
       </div>
       <div class="admin-row-actions">
-        ${user.role !== 'admin'
-          ? `<button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">Eliminar</button>`
-          : '<span class="admin-badge">Admin</span>'}
+        ${isAdminUser
+          ? (isSelf
+              ? '<span class="admin-badge">Admin (tú)</span>'
+              : `<button class="admin-btn admin-btn-warn" data-role-uid="${user.id}" data-new-role="user">Quitar admin</button>`)
+          : `<button class="admin-btn admin-btn-ok" data-role-uid="${user.id}" data-new-role="admin">Hacer admin</button>
+             <button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">Eliminar</button>`}
       </div>`;
+
+    // Dar/quitar el rol de admin — no aparece sobre tu propia fila (evita
+    // que te quites el admin a ti mismo sin querer y te quedes fuera).
+    row.querySelector('[data-role-uid]')?.addEventListener('click', function() {
+      const uid     = this.dataset.roleUid;
+      const newRole = this.dataset.newRole;
+      const uname   = user.username;
+      const btn     = this;
+      const msg = newRole === 'admin'
+        ? `¿Dar permisos de administrador a ${uname}? Podrá aprobar/eliminar obras de cualquier autor y gestionar usuarios, igual que tú.`
+        : `¿Quitar permisos de administrador a ${uname}?`;
+      appConfirm(msg, async () => {
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          await SupabaseClient.setUserRole(uid, newRole);
+          showToast(newRole === 'admin' ? `${uname} ya es administrador` : `${uname} ya no es administrador`);
+        } catch(e) {
+          console.warn('setUserRole error:', e);
+          showToast('Error al cambiar el rol: ' + e.message);
+          btn.disabled = false;
+          btn.textContent = newRole === 'admin' ? 'Hacer admin' : 'Quitar admin';
+          return;
+        }
+        renderTab('users');
+      });
+    });
+
     row.querySelector('[data-uid]')?.addEventListener('click', function() {
       const uid   = this.dataset.uid;
       const uname = user.username;
