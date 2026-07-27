@@ -23373,6 +23373,7 @@ function edSerLayer(l){
   if(l.type==='gif'){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
     if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true;
+    if(l.name) _g.name=l.name;
     if(l._motionPath && l._motionPath.length >= 2) _g._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _g._motionPathClosed = true;
     if(l._motionSpeed != null) _g._motionSpeed = l._motionSpeed;
@@ -23398,6 +23399,7 @@ function edSerLayer(l){
     if(l._pngFramesKey) _r._pngFramesKey = l._pngFramesKey;
     if(l._apngIdbKey)   _r._apngIdbKey   = l._apngIdbKey;
     if(l._bibItemId)    _r._bibItemId    = l._bibItemId; // id del item en biblioteca para re-edición
+    if(l.name) _r.name=l.name;
     // _apngSrc NO se serializa — es el dataUrl enorme, va al bucket por animKey
     if(l._gcpLayersData) _r._gcpLayersData=l._gcpLayersData;
     if(l._gcpFramesData) _r._gcpFramesData=l._gcpFramesData;
@@ -23437,6 +23439,7 @@ function edSerLayer(l){
     if(l._tdFlowId) _o._tdFlowId=l._tdFlowId;
     if(l._tdExceptFlow) _o._tdExceptFlow=l._tdExceptFlow;
     if(l._tdBoxManualH) _o._tdBoxManualH=true;
+    if(l.name) _o.name=l.name;
     if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
     if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
     if(l.manualBreakChars && l.manualBreakChars.length) _o.manualBreakChars=l.manualBreakChars;
@@ -23464,6 +23467,7 @@ function edSerLayer(l){
     if(l.groupId)_bobj.groupId=l.groupId;
     if(l.locked)_bobj.locked=true;
     if(l.hidden)_bobj.hidden=true;
+    if(l.name)_bobj.name=l.name;
     // Para estilos complejos: guardar bitmap completo (forma+cola+texto) para reproducción fiel
     if(l.style==='thought'||l.style==='explosion'){
       try{
@@ -23539,10 +23543,10 @@ function edSerLayer(l){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -23552,6 +23556,7 @@ function edSerLayer(l){
     if(l.groupId)_sobj.groupId=l.groupId;
     if(l.locked)_sobj.locked=true;
     if(l.hidden)_sobj.hidden=true;
+    if(l.name)_sobj.name=l.name;
     // Si tiene cornerRadii con valores, generar bitmap fiel
     const _hasCR=l.cornerRadii&&l.cornerRadii.some&&l.cornerRadii.some(r=>r>0);
     const _hasCRg=l.cornerRadius&&l.cornerRadius>0;
@@ -23594,6 +23599,7 @@ function edSerLayer(l){
     if(l.groupId)_lobj.groupId=l.groupId;
     if(l.locked)_lobj.locked=true;
     if(l.hidden)_lobj.hidden=true;
+    if(l.name)_lobj.name=l.name;
     if(l._fusionId)_lobj._fusionId=l._fusionId; // T1: preservar en historial vectorial
     // Objeto unido (⊕ Unir): preservar flag y estilos individuales por contorno
     if(l.grouped) _lobj.grouped=true;
@@ -23740,6 +23746,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._uid) dl._uid=d._uid;
     if(d._fillLayerId) dl._fillLayerId=d._fillLayerId;
     if(d.opacity !== undefined) dl.opacity = d.opacity;
+    if(d.name) dl.name = d.name;
 
     if(d._motionPath)          dl._motionPath       = d._motionPath;
     if(d._motionPathClosed)    dl._motionPathClosed = true;
@@ -23772,6 +23779,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._fillLayerId) sl._fillLayerId = d._fillLayerId;
     if(d._pencilLayerId) sl._pencilLayerId = d._pencilLayerId;
     if(d._watercolorLayerId) sl._watercolorLayerId = d._watercolorLayerId;
+    if(d.name) sl.name = d.name;
 
     if(d._motionPath)          sl._motionPath       = d._motionPath;
     if(d._motionPathClosed)    sl._motionPathClosed = true;
@@ -23791,6 +23799,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.groupId) l.groupId=d.groupId;
     if(d.locked) l.locked=true;
     if(d.hidden) l.hidden=true;
+    if(d.name) l.name=d.name;
 
     if(d._motionPath)          l._motionPath       = d._motionPath;
     if(d._motionPathClosed)      l._motionPathClosed = true;
@@ -23818,6 +23827,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.grouped) l.grouped=true;
     if(d.groupedStyles) l.groupedStyles=d.groupedStyles.map(s=>({...s}));
     if(d.hidden) l.hidden=true;
+    if(d.name) l.name=d.name;
 
     if(d._motionPath)          l._motionPath       = d._motionPath;
     if(d._motionPathClosed)      l._motionPathClosed = true;
@@ -23861,6 +23871,7 @@ function edDeserLayer(d, pageOrientation){
       });
     }).catch(()=>{});
     if(d.hidden) l.hidden=true;
+    if(d.name) l.name=d.name;
 
     if(d._motionPath)          l._motionPath       = d._motionPath;
     if(d._motionPathClosed)      l._motionPathClosed = true;
@@ -23878,6 +23889,7 @@ function edDeserLayer(d, pageOrientation){
     if(d.opacity!==undefined) l.opacity=d.opacity;
     if(d.locked) l.locked=true;
     if(d.hidden) l.hidden=true;
+    if(d.name) l.name=d.name;
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;
@@ -35032,7 +35044,11 @@ function gcpOpen(edLayerIdx) {
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
       _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
       const titleEl = document.getElementById('gcpProjectTitle');
-      if (titleEl) titleEl.textContent = 'Editar animación';
+      // Si se renombró a mano desde la ventana de capas (doble toque, ver
+      // _lyStartNameEdit en editor-layers.js — la misma capa "Imagen"/APNG
+      // ya guarda .name, ver edSerLayer), reflejarlo aquí; si no, el texto
+      // genérico de siempre.
+      if (titleEl) titleEl.textContent = gifLayer.name || 'Editar animación';
     }
   }
   // Si es nueva animación (sin capas previas), calcular título con contador de bib

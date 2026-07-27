@@ -97,6 +97,13 @@ function edOpenTextDoc(editLayer){
   const wasOpen = shell.style.display !== 'none' && shell.style.display !== '';
   shell.style.display = 'flex';
   if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
+  // Título: "Editor de textos" en creación nueva; el nombre asignado a este
+  // texto (ver _tdComputeFlowName/_tdApplyToCanvas) si se está reeditando uno
+  // ya aplicado — antes de las pasadas de recálculo de la franja blanca de
+  // más abajo, para que midan el título definitivo y no el que hubiera
+  // quedado puesto de una reedición anterior en esta misma sesión.
+  const _tdTitleEl = document.getElementById('tdProjectTitle');
+  if(_tdTitleEl) _tdTitleEl.textContent = (editLayer && editLayer.name) || 'Editor de textos';
   // Botón/gesto atrás (PC y Android): cerrar el shell en vez de salir del editor.
   // Empuja una entrada de historial solo si no estaba ya abierto (evita duplicar
   // entradas si se reabre en modo edición sobre el mismo shell ya visible).
@@ -2490,6 +2497,25 @@ function _tdPlainSummary(pageLines){
   return joined.slice(0, 60) || 'Texto';
 }
 
+// Nombre de un flujo de texto, para la ventana de capas (editor-layers.js,
+// propiedad la.name — ya editable a mano ahí con doble toque, ver
+// _lyStartNameEdit) y para el título del Editor de textos al reeditar (ver
+// edOpenTextDoc). Si hay algún bloque marcado como título (kind:'heading',
+// ver _tdParseBlocks) con texto real, se usa ese; si no, la primera línea
+// con contenido, sea del tipo que sea (párrafo, cita, lista...). Se
+// recalcula tanto al insertarse por primera vez como en cada reedición
+// posterior (ver _tdApplyToCanvas) — petición explícita de Alberto: si se
+// añade un título o cambia el inicio del texto, el nombre debe actualizarse
+// con él, aunque eso sobrescriba un renombrado manual hecho antes desde la
+// ventana de capas.
+function _tdComputeFlowName(blocks){
+  const blockText = b => (b.runs || []).filter(r => r.text).map(r => r.text).join('').trim().replace(/\s+/g, ' ');
+  const heading = (blocks || []).find(b => b.kind === 'heading' && blockText(b));
+  if (heading) return blockText(heading).slice(0, 60);
+  const first = (blocks || []).find(b => blockText(b));
+  return first ? blockText(first).slice(0, 60) : 'Editor de textos';
+}
+
 function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac, manualBreakChars){
   const tl = new TextLayer(_tdPlainSummary(pageLines), 0.5, 0.5);
   tl.x = 0.5; tl.y = 0.5; tl.width = 1; tl.height = 1;
@@ -2585,6 +2611,13 @@ function _tdApplyToCanvas(){
     return;
   }
 
+  // Nombre del flujo — ver _tdComputeFlowName. Se calcula aquí (antes de
+  // crear/reeditar hojas) porque necesita los "blocks" originales (con su
+  // kind: 'heading'/'paragraph'/...), no las líneas ya paginadas por hoja.
+  // Se usa tanto en creación nueva como en reedición: si se añade un título
+  // o cambia el inicio del texto, el nombre debe reflejarlo.
+  const flowName = _tdComputeFlowName(blocks);
+
   const lineHeightMult = _tdLineHeightMult;
 
   // Red de seguridad: si algo de aquí abajo lanza un error inesperado (el
@@ -2619,6 +2652,11 @@ function _tdApplyToCanvas(){
       // está abierto, aunque el panel en sí ya no se vea.
       const r = _tdReflowFlowInPlace(existingLayer, false, true);
       if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se pudo actualizar el texto'); return; }
+      // El nombre SÍ se actualiza también al reeditar (petición explícita):
+      // si se añade un título o cambia el inicio del texto, el nombre debe
+      // reflejarlo. Puede abarcar varias páginas tras el reflujo, así que no
+      // basta con existingLayer.
+      edPages.forEach(pg => (pg.layers || []).forEach(l => { if (l && l._tdFlowId === _tdEditingFlowId) l.name = flowName; }));
       if(!_wasPanelOpenBefore) edLoadPage(r.firstIdx); // mismo respaldo que había, por si no hubiera panel que cerrar
       if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
       if(typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
@@ -2658,6 +2696,9 @@ function _tdApplyToCanvas(){
         _dirtyCountCloud: 1,
       }));
       if(newPages.length) { edPages.push(...newPages); if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty(); }
+      // Nombre del flujo (ver _tdComputeFlowName) en todas sus hojas, tanto
+      // las ya existentes reutilizadas como las nuevas recién creadas.
+      edPages.forEach(pg => (pg.layers || []).forEach(l => { if (l && l._tdFlowId === flowId) l.name = flowName; }));
 
       edLoadPage(startIdx);
       edPushHistory();
