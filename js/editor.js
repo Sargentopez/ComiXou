@@ -8494,24 +8494,70 @@ function _edViewerMpTick() {
       rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     }
     if (rel) {
-      l._pathCurX = (l.x || 0.5) + rel.x;
-      l._pathCurY = (l.y || 0.5) + rel.y;
-      // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
-      if (l._motionPathOrient) {
-        l._pathCurRotDeg = _edPathOrientDelta(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
-      } else {
-        delete l._pathCurRotDeg;
-      }
-      _mpUpdated = true;
-      // Propagar a capas fill/pencil/watercolor vinculadas
-      const _mpUid = l._uid || l._fillLayerId;
-      if (_mpUid) {
+      const _mpAngleDeg = l._motionPathOrient
+        ? _edPathOrientDelta(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph)
+        : null;
+      const _mpGidxs = l.groupId ? _edGroupMemberIdxs(l.groupId) : null;
+      const _mpPropagate = (m) => {
+        const _mUid = m._uid || m._fillLayerId;
+        if (!_mUid) return;
         (page.layers||[]).forEach(_lk => {
-          if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mpUid) {
-            _lk._pathCurX = l._pathCurX; _lk._pathCurY = l._pathCurY;
-            if (l._pathCurRotDeg != null) _lk._pathCurRotDeg = l._pathCurRotDeg; else delete _lk._pathCurRotDeg;
+          if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
+            _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
+            if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
           }
         });
+      };
+      if (_mpAngleDeg != null && _mpGidxs && _mpGidxs.length > 1) {
+        // Grupo con orientación automática activa: el grupo entero rota como
+        // un solo objeto rígido — cada miembro ORBITA alrededor del centro
+        // común del grupo, en vez de girar cada uno sobre su propio centro
+        // (bug reportado: "se aplica a cada elemento por separado"). Mismo
+        // criterio de pivote (centroide de los miembros, sin DrawLayer) que
+        // _msRecalcBbox usa para la rotación manual del grupo (pinch de
+        // multiselección) — incluye objetos animados (gif/imagen) igual que
+        // cualquier otro miembro; su reproducción de fotogramas es un
+        // sistema aparte (_applyFrame) que esto no toca.
+        let _pivX = 0, _pivY = 0, _pivN = 0;
+        _mpGidxs.forEach(gi => {
+          const m = edLayers[gi];
+          if (!m || m.type === 'draw') return;
+          _pivX += m.x; _pivY += m.y; _pivN++;
+        });
+        if (_pivN) {
+          _pivX /= _pivN; _pivY /= _pivN;
+          const _rotRad = _mpAngleDeg * Math.PI / 180;
+          const _cosA = Math.cos(_rotRad), _sinA = Math.sin(_rotRad);
+          const _pivCurX = _pivX + rel.x, _pivCurY = _pivY + rel.y;
+          _mpGidxs.forEach(gi => {
+            const m = edLayers[gi];
+            if (!m) return;
+            if (m.type === 'draw') {
+              // No soporta rotación propia (ver su propio draw()) — se
+              // traslada con el grupo, sin orbitar el pivote.
+              m._pathCurX = (m.x || 0.5) + rel.x;
+              m._pathCurY = (m.y || 0.5) + rel.y;
+              _mpPropagate(m);
+              return;
+            }
+            const _offX = (m.x - _pivX) * _vpw, _offY = (m.y - _pivY) * _vph;
+            m._pathCurX = _pivCurX + (_offX * _cosA - _offY * _sinA) / _vpw;
+            m._pathCurY = _pivCurY + (_offX * _sinA + _offY * _cosA) / _vph;
+            m._pathCurRotDeg = _mpAngleDeg;
+            _mpPropagate(m);
+          });
+          _mpUpdated = true;
+        }
+      } else {
+        // Objeto suelto, o grupo sin orientación automática activa (la
+        // traslación relativa ya mantiene las posiciones del grupo
+        // correctamente sin necesitar rotación rígida): mismo cálculo de
+        // siempre, sin cambios.
+        l._pathCurX = (l.x || 0.5) + rel.x;
+        l._pathCurY = (l.y || 0.5) + rel.y;
+        if (_mpAngleDeg != null) l._pathCurRotDeg = _mpAngleDeg; else delete l._pathCurRotDeg;
+        _mpPropagate(l);
+        _mpUpdated = true;
       }
     }
   });
@@ -8609,23 +8655,75 @@ function _edMpPreviewTick() {
   }
 
   if (rel) {
-    la._pathCurX = (la.x || 0.5) + rel.x;
-    la._pathCurY = (la.y || 0.5) + rel.y;
-    // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
-    if (la._motionPathOrient) {
-      la._pathCurRotDeg = _edPathOrientDelta(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
-    } else {
-      delete la._pathCurRotDeg;
-    }
-    const _pvUid = la._uid || la._fillLayerId;
-    if (_pvUid) {
-      const _pvPg = edPages[edCurrentPage];
-      if (_pvPg) (_pvPg.layers||[]).forEach(_lk => {
-        if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_pvUid) {
-          _lk._pathCurX = la._pathCurX; _lk._pathCurY = la._pathCurY;
-          if (la._pathCurRotDeg != null) _lk._pathCurRotDeg = la._pathCurRotDeg; else delete _lk._pathCurRotDeg;
+    const _mpvAngleDeg = la._motionPathOrient
+      ? _edPathOrientDelta(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph)
+      : null;
+    const _mpvGidxs = la.groupId ? _edGroupMemberIdxs(la.groupId) : null;
+    const _mpvPropagate = (m) => {
+      const _mUid = m._uid || m._fillLayerId;
+      if (!_mUid) return;
+      const _pvPg2 = edPages[edCurrentPage];
+      if (!_pvPg2) return;
+      (_pvPg2.layers||[]).forEach(_lk => {
+        if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
+          _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
+          if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
         }
       });
+    };
+    if (_mpvAngleDeg != null && _mpvGidxs && _mpvGidxs.length > 1) {
+      // Mismo criterio que _edViewerMpTick: el grupo entero rota como un
+      // solo objeto rígido — cada miembro orbita alrededor del centro común,
+      // no solo el objeto que se está editando (bug reportado: "solo uno de
+      // los objetos se reproduce, el otro no se desplaza").
+      let _pivX2 = 0, _pivY2 = 0, _pivN2 = 0;
+      _mpvGidxs.forEach(gi => {
+        const m = edLayers[gi];
+        if (!m || m.type === 'draw') return;
+        _pivX2 += m.x; _pivY2 += m.y; _pivN2++;
+      });
+      if (_pivN2) {
+        _pivX2 /= _pivN2; _pivY2 /= _pivN2;
+        const _rotRad2 = _mpvAngleDeg * Math.PI / 180;
+        const _cosA2 = Math.cos(_rotRad2), _sinA2 = Math.sin(_rotRad2);
+        const _pivCurX2 = _pivX2 + rel.x, _pivCurY2 = _pivY2 + rel.y;
+        _mpvGidxs.forEach(gi => {
+          const m = edLayers[gi];
+          if (!m) return;
+          if (m.type === 'draw') {
+            m._pathCurX = (m.x || 0.5) + rel.x;
+            m._pathCurY = (m.y || 0.5) + rel.y;
+            _mpvPropagate(m);
+            return;
+          }
+          const _offX2 = (m.x - _pivX2) * _pw, _offY2 = (m.y - _pivY2) * _ph;
+          m._pathCurX = _pivCurX2 + (_offX2 * _cosA2 - _offY2 * _sinA2) / _pw;
+          m._pathCurY = _pivCurY2 + (_offX2 * _sinA2 + _offY2 * _cosA2) / _ph;
+          m._pathCurRotDeg = _mpvAngleDeg;
+          _mpvPropagate(m);
+        });
+      }
+    } else if (_mpvGidxs && _mpvGidxs.length > 1) {
+      // Grupo SIN orientación automática activa: aun así hay que mover a
+      // TODOS los miembros — a diferencia de _edViewerMpTick (que recorre
+      // todas las capas de la página), esta función solo procesa "la", el
+      // objeto sobre el que se entró a editar. Sin este bloque, el resto del
+      // grupo se quedaba quieto salvo que "girar según trayectoria" estuviera
+      // activo (ese caso sí entraba en la rama de arriba). Traslación simple,
+      // sin rotación/órbita — no hace falta, no hay ángulo que aplicar.
+      _mpvGidxs.forEach(gi => {
+        const m = edLayers[gi];
+        if (!m) return;
+        m._pathCurX = (m.x || 0.5) + rel.x;
+        m._pathCurY = (m.y || 0.5) + rel.y;
+        delete m._pathCurRotDeg;
+        _mpvPropagate(m);
+      });
+    } else {
+      la._pathCurX = (la.x || 0.5) + rel.x;
+      la._pathCurY = (la.y || 0.5) + rel.y;
+      if (_mpvAngleDeg != null) la._pathCurRotDeg = _mpvAngleDeg; else delete la._pathCurRotDeg;
+      _mpvPropagate(la);
     }
   }
   _edMpPreviewActive = true;
@@ -8844,6 +8942,14 @@ function _edEndMotionPath(save) {
             if (la._motionPathEnd)    _m._motionPathEnd    = la._motionPathEnd;    else delete _m._motionPathEnd;
             if (la._motionPathAccel)  _m._motionPathAccel  = la._motionPathAccel;  else delete _m._motionPathAccel;
             if (la._motionPathOrient) _m._motionPathOrient = la._motionPathOrient; else delete _m._motionPathOrient;
+            // _motionCycles/_motionCyclesDur: si la (el objeto cuya trayectoria se
+            // acaba de editar) es una animación sincronizada por ciclos, el resto
+            // del grupo debe usar la MISMA duración de ciclo — si no, cada miembro
+            // calcula su progreso por el recorrido con una fórmula distinta
+            // (velocidad en px/s unos, ciclos de animación otro) y acaban en
+            // puntos distintos del mismo camino con el tiempo, rompiendo el grupo.
+            if (la._motionCycles)    _m._motionCycles    = la._motionCycles;    else delete _m._motionCycles;
+            if (la._motionCyclesDur) _m._motionCyclesDur = la._motionCyclesDur; else delete _m._motionCyclesDur;
           } else {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
             delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel;

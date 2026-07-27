@@ -1735,23 +1735,63 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
         }
         if (_mpPos) {
-          layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
-          layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
-          // Orientar el objeto según la tangente de la trayectoria (opcional, por capa)
-          if (layer._motionPathOrient) {
-            layer._pathCurRotDeg = _pathOrientDelta(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
-          } else {
-            delete layer._pathCurRotDeg;
-          }
-          // Propagar a capas fill/pencil/watercolor vinculadas
-          const _mpUid = layer._uid || layer._fillLayerId;
-          if (_mpUid) {
+          const _mpAngleDegR = layer._motionPathOrient
+            ? _pathOrientDelta(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh)
+            : null;
+          const _mpGidxsR = layer.groupId
+            ? (panel.layers||[]).reduce((acc,l2,i2)=>{ if (l2 && l2.groupId===layer.groupId) acc.push(i2); return acc; }, [])
+            : null;
+          const _mpPropagateR = (m) => {
+            const _mUid = m._uid || m._fillLayerId;
+            if (!_mUid) return;
             (panel.layers||[]).forEach(_lk => {
-              if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mpUid) {
-                _lk._pathCurX = layer._pathCurX; _lk._pathCurY = layer._pathCurY;
-                if (layer._pathCurRotDeg != null) _lk._pathCurRotDeg = layer._pathCurRotDeg; else delete _lk._pathCurRotDeg;
+              if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
+                _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
+                if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
               }
             });
+          };
+          if (_mpAngleDegR != null && _mpGidxsR && _mpGidxsR.length > 1) {
+            // Grupo con orientación automática activa: el grupo entero rota
+            // como un solo objeto rígido — cada miembro ORBITA alrededor del
+            // centro común del grupo, no gira cada uno sobre su propio
+            // centro (mismo criterio y mismo motivo que _edViewerMpTick en
+            // editor.js — ver ese comentario para el porqué completo).
+            let _pivXR = 0, _pivYR = 0, _pivNR = 0;
+            _mpGidxsR.forEach(gi => {
+              const m = panel.layers[gi];
+              if (!m || m.type === 'draw') return;
+              _pivXR += m.x; _pivYR += m.y; _pivNR++;
+            });
+            if (_pivNR) {
+              _pivXR /= _pivNR; _pivYR /= _pivNR;
+              const _rotRadR = _mpAngleDegR * Math.PI / 180;
+              const _cosR = Math.cos(_rotRadR), _sinR = Math.sin(_rotRadR);
+              const _pivCurXR = _pivXR + _mpPos.x, _pivCurYR = _pivYR + _mpPos.y;
+              _mpGidxsR.forEach(gi => {
+                const m = panel.layers[gi];
+                if (!m) return;
+                if (m.type === 'draw') {
+                  // No soporta rotación propia — se traslada con el grupo, sin orbitar.
+                  m._pathCurX = (m.x || 0.5) + _mpPos.x;
+                  m._pathCurY = (m.y || 0.5) + _mpPos.y;
+                  _mpPropagateR(m);
+                  return;
+                }
+                const _offXR = (m.x - _pivXR) * _mpPw, _offYR = (m.y - _pivYR) * _mpPh;
+                m._pathCurX = _pivCurXR + (_offXR * _cosR - _offYR * _sinR) / _mpPw;
+                m._pathCurY = _pivCurYR + (_offXR * _sinR + _offYR * _cosR) / _mpPh;
+                m._pathCurRotDeg = _mpAngleDegR;
+                _mpPropagateR(m);
+              });
+            }
+          } else {
+            // Objeto suelto, o grupo sin orientación automática activa: mismo
+            // cálculo de siempre, sin cambios.
+            layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
+            layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
+            if (_mpAngleDegR != null) layer._pathCurRotDeg = _mpAngleDegR; else delete layer._pathCurRotDeg;
+            _mpPropagateR(layer);
           }
         }
         panelChanged = true;
