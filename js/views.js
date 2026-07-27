@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v35.62</footer>
+    <footer class="app-version">v35.63</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -924,6 +924,9 @@ Router.register('editor', {
                 </label>
                 <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;font-family:var(--font-body);cursor:pointer;padding:2px 0;margin-top:2px">
                   <input type="checkbox" id="gcpInvisAtEnd" style="cursor:pointer;accent-color:var(--black)"> Al final
+                </label>
+                <label style="display:flex;align-items:center;gap:7px;font-size:.8rem;font-family:var(--font-body);cursor:pointer;padding:2px 0;margin-top:2px">
+                  <input type="checkbox" id="gcpInvisGradual" checked style="cursor:pointer;accent-color:var(--black)"> Gradual
                 </label>
               </div>
               <!-- Resumen editable (teclado PC/Android además del slider) -->

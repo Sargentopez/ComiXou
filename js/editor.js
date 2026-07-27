@@ -1719,20 +1719,26 @@ class ImageLayer extends BaseLayer {
         this._fIdx = _circEnd ? 0 : total - 1;
         this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
         this._playing = false;
-        // Fade out si gcpInvisAtEnd y reproducción finita
+        // Fade out si gcpInvisAtEnd y reproducción finita (inmediato si Gradual está desmarcado)
         if (this._gcpInvisAtEnd && repeatCount > 0) {
-          const _selfFO = this;
-          const _natFO = this.opacity ?? 1;
-          const _t0FO = performance.now();
-          const _durFO = 150;
-          const _doFO = () => {
-            const p = Math.min((performance.now() - _t0FO) / _durFO, 1);
-            _selfFO._animFadeOpacity = (1 - p) * _natFO;
+          if (this._gcpInvisGradual === false) {
+            this._animFadeOpacity = 0;
             if (typeof edRedraw === 'function') edRedraw();
             if (typeof edUpdateViewer === 'function') edUpdateViewer();
-            if (p < 1) requestAnimationFrame(_doFO);
-          };
-          requestAnimationFrame(_doFO);
+          } else {
+            const _selfFO = this;
+            const _natFO = this.opacity ?? 1;
+            const _t0FO = performance.now();
+            const _durFO = 150;
+            const _doFO = () => {
+              const p = Math.min((performance.now() - _t0FO) / _durFO, 1);
+              _selfFO._animFadeOpacity = (1 - p) * _natFO;
+              if (typeof edRedraw === 'function') edRedraw();
+              if (typeof edUpdateViewer === 'function') edUpdateViewer();
+              if (p < 1) requestAnimationFrame(_doFO);
+            };
+            requestAnimationFrame(_doFO);
+          }
         }
         // Reinicio automático tras delay (si está configurado)
         const _rd = (this._gcpRestartDelay != null ? this._gcpRestartDelay : 0);
@@ -1754,17 +1760,25 @@ class ImageLayer extends BaseLayer {
                 _self._playing = true;
                 delete _self._pathStartTime;
                 delete _self._pathStopped;
-                // Fade in al arrancar el nuevo ciclo
-                const _natFIR = _self.opacity ?? 1;
-                const _t0FIR = performance.now();
-                const _doFIR = () => {
-                  const p = Math.min((performance.now() - _t0FIR) / 300, 1);
-                  _self._animFadeOpacity = p >= 1 ? null : p * _natFIR;
-                  if (typeof edRedraw === 'function') edRedraw();
-                  if (typeof edUpdateViewer === 'function') edUpdateViewer();
-                  if (p < 1) requestAnimationFrame(_doFIR);
-                };
-                requestAnimationFrame(_doFIR);
+                // Fade in al arrancar el nuevo ciclo (inmediato si Gradual está desmarcado)
+                if (_self._gcpInvisGradual === false) {
+                  _self._animFadeOpacity = null;
+                  requestAnimationFrame(() => {
+                    if (typeof edRedraw === 'function') edRedraw();
+                    if (typeof edUpdateViewer === 'function') edUpdateViewer();
+                  });
+                } else {
+                  const _natFIR = _self.opacity ?? 1;
+                  const _t0FIR = performance.now();
+                  const _doFIR = () => {
+                    const p = Math.min((performance.now() - _t0FIR) / 300, 1);
+                    _self._animFadeOpacity = p >= 1 ? null : p * _natFIR;
+                    if (typeof edRedraw === 'function') edRedraw();
+                    if (typeof edUpdateViewer === 'function') edUpdateViewer();
+                    if (p < 1) requestAnimationFrame(_doFIR);
+                  };
+                  requestAnimationFrame(_doFIR);
+                }
                 _self._applyFrame(0);
               }, _sdMsR);
             } else {
@@ -3645,6 +3659,7 @@ function _edSnapLayerFragment(l){
       if(l._gcpStartDelay)    o._gcpStartDelay    = l._gcpStartDelay;
       if(l._gcpInvisBeforeStart) o._gcpInvisBeforeStart = true;
       if(l._gcpInvisAtEnd)       o._gcpInvisAtEnd       = true;
+      if(l._gcpInvisGradual === false) o._gcpInvisGradual = false;
       if(l._gcpCircularEnd)  o._gcpCircularEnd  = true;
       if(l._gcpLayersData)   o._gcpLayersData   = l._gcpLayersData;
       if(l._gcpFramesData)   o._gcpFramesData   = l._gcpFramesData;
@@ -23521,6 +23536,7 @@ function edSerLayer(l){
     if(l._gcpStartDelay   != null && l._gcpStartDelay   > 0) _r._gcpStartDelay   = l._gcpStartDelay;
     if(l._gcpInvisBeforeStart) _r._gcpInvisBeforeStart = true;
     if(l._gcpInvisAtEnd)       _r._gcpInvisAtEnd       = true;
+    if(l._gcpInvisGradual === false) _r._gcpInvisGradual = false;
     if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
     if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
     if(l._motionPathClosed) _r._motionPathClosed = true;
@@ -24014,6 +24030,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._gcpStartDelay   != null) l._gcpStartDelay   = d._gcpStartDelay;
     if(d._gcpInvisBeforeStart)     l._gcpInvisBeforeStart = true;
     if(d._gcpInvisAtEnd)           l._gcpInvisAtEnd       = true;
+    if(d._gcpInvisGradual === false) l._gcpInvisGradual   = false;
     if(d._gcpCircularEnd)         l._gcpCircularEnd  = true;
     if(d._motionPath)             l._motionPath       = d._motionPath;
     if(d._motionPathClosed)       l._motionPathClosed = true;
@@ -25259,19 +25276,26 @@ function _edStartPageAnims(pageIdx) {
         // Resetear el recorrido para que arranque sincronizado con la animación
         delete l._pathStartTime;
         delete l._pathStopped;
-        // Fade in si gcpInvisBeforeStart (transición rápida pero gradual)
+        // Fade in si gcpInvisBeforeStart (transición rápida pero gradual —
+        // inmediato en su lugar si Gradual está desmarcado)
         if (l._gcpInvisBeforeStart && _startMs > 0) {
-          const _natFI = l.opacity ?? 1;
-          const _t0FI = performance.now();
-          const _durFI = 300;
-          const _doFI = () => {
-            const p = Math.min((performance.now() - _t0FI) / _durFI, 1);
-            l._animFadeOpacity = p >= 1 ? null : p * _natFI;
+          if (l._gcpInvisGradual === false) {
+            l._animFadeOpacity = null;
             if (typeof edRedraw === 'function') edRedraw();
             if (typeof edUpdateViewer === 'function') edUpdateViewer();
-            if (p < 1) requestAnimationFrame(_doFI);
-          };
-          requestAnimationFrame(_doFI);
+          } else {
+            const _natFI = l.opacity ?? 1;
+            const _t0FI = performance.now();
+            const _durFI = 300;
+            const _doFI = () => {
+              const p = Math.min((performance.now() - _t0FI) / _durFI, 1);
+              l._animFadeOpacity = p >= 1 ? null : p * _natFI;
+              if (typeof edRedraw === 'function') edRedraw();
+              if (typeof edUpdateViewer === 'function') edUpdateViewer();
+              if (p < 1) requestAnimationFrame(_doFI);
+            };
+            requestAnimationFrame(_doFI);
+          }
         }
         if (l._animReady && l._animFrames && l._animFrames.length > 0) {
           l._applyFrame(0);
@@ -29527,6 +29551,7 @@ function edBibGuardar() {
     if (_la2._gcpStartDelay)           entry.gcpStartDelay   = _la2._gcpStartDelay;
     if (_la2._gcpInvisBeforeStart)     entry.gcpInvisBeforeStart = true;
     if (_la2._gcpInvisAtEnd)           entry.gcpInvisAtEnd       = true;
+    if (_la2._gcpInvisGradual === false) entry.gcpInvisGradual  = false;
     if (_la2._gcpCircularEnd)          entry.gcpCircularEnd  = true;
     // Datos GCP para re-edición: capas y frames del editor de animaciones
     // Sin estos campos el GCP abre sin capas al hacer doble tap sobre la animación
@@ -29999,6 +30024,7 @@ function _bibRenderPanel(panel) {
           if (entry.gcpStartDelay)           la._gcpStartDelay   = entry.gcpStartDelay;
           if (entry.gcpInvisBeforeStart)     la._gcpInvisBeforeStart = true;
           if (entry.gcpInvisAtEnd)           la._gcpInvisAtEnd       = true;
+          if (entry.gcpInvisGradual === false) la._gcpInvisGradual  = false;
           if (entry.gcpCircularEnd)          la._gcpCircularEnd  = true;
           // Generar animKey — guardar frames individuales en IDB síncronamente
           // (evita race condition con FileReader asíncrono)
@@ -31576,6 +31602,7 @@ window._gcpBehavMode   = 'vel'; // modo activo del dropdown Comportamiento: 'vel
 window._gcpStartDelay  = 0;    // segundos (paso 0.5) antes de comenzar la reproducción
 window._gcpInvisBeforeStart = false; // true = capa invisible durante el startDelay (fade-in al iniciar)
 window._gcpInvisAtEnd       = false; // true = capa se desvanece al terminar todas las reproducciones
+window._gcpInvisGradual     = true;  // false = aparición/desaparición inmediata, sin fade (por defecto true = gradual, como ya era el comportamiento antes de esta opción)
 window._gcpDirty       = false; // true si hay cambios sin guardar
 // Posición de scroll de la Matriz (horizontal/vertical) — persistente entre
 // reconstrucciones. Se actualiza SOLO desde los listeners de 'scroll' reales
@@ -32944,10 +32971,17 @@ function _gcpPreview() {
       loopN++;
       if (repeatMax > 0 && loopN >= repeatMax) {
         if (window._gcpInvisAtEnd) {
-          // Fade-out rápido (150ms) antes de detener el preview
-          if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.15s ease-in'; gcpCanvas.style.opacity = '0'; }
-          clearTimeout(_gcpPreviewTimer);
-          _gcpPreviewTimer = setTimeout(() => stop(true), 160);
+          if (window._gcpInvisGradual === false) {
+            // Inmediato: sin transición, directo a opacidad 0
+            if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '0'; }
+            clearTimeout(_gcpPreviewTimer);
+            _gcpPreviewTimer = setTimeout(() => stop(true), 0);
+          } else {
+            // Fade-out rápido (150ms) antes de detener el preview
+            if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.15s ease-in'; gcpCanvas.style.opacity = '0'; }
+            clearTimeout(_gcpPreviewTimer);
+            _gcpPreviewTimer = setTimeout(() => stop(true), 160);
+          }
         } else { stop(true); }
         return;
       }
@@ -32970,8 +33004,12 @@ function _gcpPreview() {
     if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '0'; }
     _gcpPreviewTimer = setTimeout(() => {
       if (!btn || btn.textContent === '▶') return; // detenido externamente
-      // Fade in al arrancar
-      if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.3s ease-out'; gcpCanvas.style.opacity = '1'; }
+      // Fade in al arrancar (inmediato si Gradual está desmarcado)
+      if (window._gcpInvisGradual === false) {
+        if (gcpCanvas) { gcpCanvas.style.transition = 'none'; gcpCanvas.style.opacity = '1'; }
+      } else {
+        if (gcpCanvas) { gcpCanvas.style.transition = 'opacity 0.3s ease-out'; gcpCanvas.style.opacity = '1'; }
+      }
       _gcpPreviewTimer = setTimeout(loop, _frame0Delay);
     }, _pvDelay);
   } else {
@@ -35175,6 +35213,7 @@ function gcpOpen(edLayerIdx) {
   // Resetear valores por defecto antes de leer de la capa
   window._gcpInvisBeforeStart = false;
   window._gcpInvisAtEnd       = false;
+  window._gcpInvisGradual     = true;
   if (window._gcpEdLayerIdx >= 0) {
     const _gl = edLayers[window._gcpEdLayerIdx];
     if (_gl) {
@@ -35187,6 +35226,7 @@ function gcpOpen(edLayerIdx) {
       if (_gl._gcpStartDelay  != null) window._gcpStartDelay  = _gl._gcpStartDelay;
       window._gcpInvisBeforeStart = !!_gl._gcpInvisBeforeStart;
       window._gcpInvisAtEnd       = !!_gl._gcpInvisAtEnd;
+      window._gcpInvisGradual     = _gl._gcpInvisGradual !== false;
     }
     // Sincronizar UI de comportamiento al abrir
     requestAnimationFrame(() => { if (typeof _gcpSyncComportamiento === 'function') _gcpSyncComportamiento(); });
@@ -35431,12 +35471,14 @@ function gcpOpen(edLayerIdx) {
       if (_timerLbl)  _timerLbl.style.display  = mode === 'timer' ? 'block' : 'none';
       if (_invisSect) _invisSect.style.display  = mode === 'timer' ? 'block' : 'none';
       if (mode === 'timer') {
-        const _cbBefore = document.getElementById('gcpInvisBeforeStart');
-        const _cbEnd    = document.getElementById('gcpInvisAtEnd');
+        const _cbBefore  = document.getElementById('gcpInvisBeforeStart');
+        const _cbEnd     = document.getElementById('gcpInvisAtEnd');
+        const _cbGradual = document.getElementById('gcpInvisGradual');
         const _sd = window._gcpStartDelay || 0;
         const _rc = window._gcpRepeatCount || 0;
-        if (_cbBefore) { _cbBefore.checked = !!window._gcpInvisBeforeStart; _cbBefore.disabled = _sd === 0; }
-        if (_cbEnd)    { _cbEnd.checked    = !!window._gcpInvisAtEnd;       _cbEnd.disabled    = _rc === 0; }
+        if (_cbBefore)  { _cbBefore.checked  = !!window._gcpInvisBeforeStart; _cbBefore.disabled = _sd === 0; }
+        if (_cbEnd)     { _cbEnd.checked     = !!window._gcpInvisAtEnd;       _cbEnd.disabled    = _rc === 0; }
+        if (_cbGradual) { _cbGradual.checked = window._gcpInvisGradual !== false; }
       }
       if (slider) {
         if (mode === 'vel') {
@@ -35514,6 +35556,11 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpInvisAtEnd')?.addEventListener('change', e => {
       e.stopPropagation();
       window._gcpInvisAtEnd = e.target.checked;
+      window._gcpDirty = true;
+    });
+    document.getElementById('gcpInvisGradual')?.addEventListener('change', e => {
+      e.stopPropagation();
+      window._gcpInvisGradual = e.target.checked;
       window._gcpDirty = true;
     });
 
@@ -35862,6 +35909,7 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpStartDelay   = window._gcpStartDelay;
     existingLayer._gcpInvisBeforeStart = !!window._gcpInvisBeforeStart;
     existingLayer._gcpInvisAtEnd       = !!window._gcpInvisAtEnd;
+    existingLayer._gcpInvisGradual     = window._gcpInvisGradual !== false;
     existingLayer._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
     // Cargar primer frame como imagen visible
     const img=new Image();
@@ -35915,6 +35963,7 @@ function _gcpSaveToLib(onDone) {
       la._gcpStartDelay   = window._gcpStartDelay;
       la._gcpInvisBeforeStart = !!window._gcpInvisBeforeStart;
       la._gcpInvisAtEnd       = !!window._gcpInvisAtEnd;
+      la._gcpInvisGradual     = window._gcpInvisGradual !== false;
       la._gcpCircularEnd = window._gcpCircularInterpFi >= 0;
       // Insertar antes de la primera capa de texto/bocadillo (igual que biblioteca)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');

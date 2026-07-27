@@ -1486,11 +1486,15 @@ function _readerGifTick() {
           if (layer._animStartAt && now >= layer._animStartAt) {
             layer._animLastTick = now;
             layer._animStartAt  = null;
-            // Fade in si gcpInvisBeforeStart
+            // Fade in si gcpInvisBeforeStart (inmediato si _gcpInvisGradual===false)
             if (layer._gcpInvisBeforeStart && layer._animFadeOpacity === 0) {
-              layer._animFadeStart = now;
-              layer._animFadeDur   = 300;
-              layer._animFadeDir   = 'in';
+              if (layer._gcpInvisGradual === false) {
+                layer._animFadeOpacity = null;
+              } else {
+                layer._animFadeStart = now;
+                layer._animFadeDur   = 300;
+                layer._animFadeDir   = 'in';
+              }
             }
             panelChanged = true;
           }
@@ -1548,11 +1552,15 @@ function _readerGifTick() {
                 layer._animStopped   = true;
                 layer._animRestartAt = now + _rd * 1000;
               }
-              // Fade out si gcpInvisAtEnd y reproducción finita
+              // Fade out si gcpInvisAtEnd y reproducción finita (inmediato si _gcpInvisGradual===false)
               if (layer._gcpInvisAtEnd && _repeatCount > 0) {
-                layer._animFadeStart = now;
-                layer._animFadeDur   = 150;
-                layer._animFadeDir   = 'out';
+                if (layer._gcpInvisGradual === false) {
+                  layer._animFadeOpacity = 0;
+                } else {
+                  layer._animFadeStart = now;
+                  layer._animFadeDur   = 150;
+                  layer._animFadeDir   = 'out';
+                }
                 panelChanged = true;
               }
             } else {
