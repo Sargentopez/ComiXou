@@ -2286,6 +2286,27 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   let curY = 0; // relativo al margen superior (0..textH)
   let charsSoFar = 0;
 
+  // Efectos de cortar página: extraído para poder dispararse tanto de forma
+  // REACTIVA (dentro de pushLine, cuando una línea YA decidida no cabe
+  // verticalmente — comportamiento de siempre) como de forma ANTICIPADA
+  // (antes de decidir las palabras de la línea siguiente — ver más abajo en
+  // el bucle de palabras, arreglo del bug "primera línea de la hoja
+  // vertical se sale de la hoja").
+  function _tdDoBreak(){
+    pages.push(curLines);
+    pageBoxHeights.push(pageBoxHeightFor());
+    curLines = [];
+    curY = 0;
+    frameIdx++;
+    loadFrame();
+    const endChars = charsSoFar;
+    // Ver comentario largo más abajo (dentro de pushLine, donde vivía este
+    // código) sobre por qué se usa el último lineStartChars y no charsSoFar
+    // directamente.
+    pageStartChars.push(lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0);
+    while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
+  }
+
   function pushLine(entry){
     const endChars = charsSoFar; // caracteres acumulados hasta el final de ESTA línea
     let shouldBreak = curY + entry.height > textH && curLines.length > 0;
@@ -2306,12 +2327,6 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       shouldBreak = true;
     }
     if(shouldBreak){
-      pages.push(curLines);
-      pageBoxHeights.push(pageBoxHeightFor());
-      curLines = [];
-      curY = 0;
-      frameIdx++;
-      loadFrame();
       // OJO: charsSoFar en este punto YA incluye los caracteres de "entry"
       // (la línea que se está a punto de añadir a la página NUEVA) — sus
       // palabras se contaron en charsSoFar ANTES de que overflow disparara
@@ -2321,8 +2336,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // la línea ANTERIOR, que es exactamente donde arranca esta página —
       // sin él, el punto de corte quedaba una línea entera de más tarde de
       // lo real, el bug reportado ("las rectas un renglón por debajo").
-      pageStartChars.push(lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0);
-      while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
+      _tdDoBreak();
     }
     const baseline = curY + entry.height * 0.78;
     const lineObj = {
@@ -2431,6 +2445,23 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     words.forEach(w => {
       if(w.break){ flushLine(); return; }
       if(w.isSpace && lineRuns.length === 0) return; // no empezar línea con espacio
+      // Salto de página ANTICIPADO: si esta es la primera palabra de una
+      // línea nueva y, por la altura estimada de esa línea (tamaño base de
+      // este bloque — el real de la línea aún no se conoce, depende de qué
+      // palabras entren), no cabe verticalmente en lo que queda de esta
+      // página, cambiar de marco AHORA, antes de decidir cuántas palabras
+      // entran. Si no, el ajuste se decide con el ancho de la hoja VIEJA y,
+      // al saltar a una hoja con otra orientación (p.ej. horizontal→
+      // vertical, más estrecha), la línea se queda demasiado larga para la
+      // hoja nueva y se sale por el borde — bug reportado por Alberto. Es
+      // una estimación (no el tamaño exacto de esta palabra en concreto)
+      // porque cubre el caso normal (tamaño uniforme en el párrafo); el
+      // salto reactivo de pushLine sigue ahí como red de seguridad para
+      // líneas con tamaños de letra dispares que la estimación no acierte.
+      if(lineRuns.length === 0 && curLines.length > 0){
+        const estHeight = baseFontSize * lhMult;
+        if(curY + estHeight > textH) _tdDoBreak();
+      }
       ctx.font = _tdFontStr(w.fontSize, w.bold, w.italic, w.mono, w.fontFamily);
       const width = ctx.measureText(w.text).width;
       const avail = Math.max(20, textW - indentPx); // textW: marco actual, puede cambiar entre líneas
