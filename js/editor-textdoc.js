@@ -1719,6 +1719,19 @@ function _tdEditingFlowFrames(flowId){
   });
   const spanIdxs = [...flowIdxs, ...exceptIdxs].sort((a, b) => a - b);
   const lastIdx = spanIdxs[spanIdxs.length - 1];
+  // Marcos de reserva para el desbordamiento: igual criterio que
+  // _tdReflowFlowInPlace (ver ese comentario para el porqué completo) — un
+  // marco por cada hoja YA existente tras el tramo, con su orientación
+  // real, antes de caer al genérico de "página nueva en la última
+  // orientación del tramo". Deben coincidir EXACTAMENTE para que la vista
+  // previa en vivo del editor de textos no se desincronice de lo que pasa
+  // de verdad al guardar.
+  for (let j = lastIdx + 1; j < edPages.length; j++) {
+    const pg = edPages[j];
+    const orient = pg.orientation || edOrientation;
+    const sv = orient === 'vertical';
+    frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
+  }
   const lastOrient = edPages[lastIdx].orientation || edOrientation;
   const svLast = lastOrient === 'vertical';
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
@@ -2849,9 +2862,24 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     if(!deriveBoxFromContent || (layer && layer._tdBoxManualH)) return { pw: layer.width * pgPw, ph: layer.height * pgPh };
     return { pw: pgPw, ph: pgPh };
   });
-  // Marco de reserva para páginas nuevas: página completa en la orientación
-  // de la última hoja del tramo del flujo (slot o hueco) — mismo criterio
-  // que "Aplicar al lienzo".
+  // Marcos de reserva para el desbordamiento: si YA existen hojas justo
+  // después del tramo actual del flujo, el texto debe fluir EN ELLAS (con
+  // su orientación real, sea cual sea) en vez de crear hojas nuevas de en
+  // medio — pedido explícito de Alberto: "no debe pasar salvo que la hoja
+  // esté específicamente excluida del flujo". Un marco por cada hoja
+  // existente, en orden, con SU orientación real (página completa; no tiene
+  // sentido mirar _tdBoxManualH aquí porque esa hoja aún no pertenece a este
+  // flujo, no tiene su propia capa que medir). Para cualquier desbordamiento
+  // que ya no quepa en hojas existentes (fin de la obra), página completa en
+  // la orientación de la última hoja del tramo — mismo criterio que
+  // "Aplicar al lienzo" de siempre. Debe coincidir con el mismo recorrido de
+  // hojas que el paso 3 más abajo usa para reutilizarlas de verdad.
+  for (let j = lastIdx + 1; j < edPages.length; j++) {
+    const pg = edPages[j];
+    const orient = pg.orientation || edOrientation;
+    const sv = orient === 'vertical';
+    frames.push({ pw: sv ? ED_PAGE_W : ED_PAGE_H, ph: sv ? ED_PAGE_H : ED_PAGE_W });
+  }
   const lastOrient = edPages[lastIdx].orientation || edOrientation;
   const svLast = lastOrient === 'vertical';
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
@@ -2929,37 +2957,66 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     }
   }
 
-  // 3) Si hacen falta más páginas, se añaden justo tras el final ACTUAL del
-  //    tramo (slots + huecos) — recalculado ahora, no con el índice de antes
-  //    de los cambios del paso 2.
+  // 3) Si hacen falta más páginas: reutilizar primero las hojas que YA
+  //    existan justo después del tramo (con su orientación real, sea cual
+  //    sea, y conservando lo demás que ya tuvieran — mismo criterio que los
+  //    "extras" del paso 2). Solo si se agotan las hojas existentes de la
+  //    obra se crean hojas nuevas, al final — pedido explícito de Alberto:
+  //    no debe crearse una hoja intermedia mientras ya exista una hoja ahí
+  //    para recibir el desbordamiento. El recorrido de hojas coincide con
+  //    los marcos de reserva para el desbordamiento de más arriba.
   if(pages.length > reused){
     let insertAt = -1;
     edPages.forEach((p, i) => {
       if((p.layers || []).some(l => l && (l._tdFlowId === flowId || l._tdExceptFlow === flowId))) insertAt = i;
     });
     insertAt = insertAt + 1;
-    const pgPhNew = svLast ? ED_PAGE_H : ED_PAGE_W;
-    const extraPages = pages.slice(reused).map((pageLines, j) => {
-      const tl = _tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
-      // Página nueva, sin posición previa que conservar. Con
-      // deriveBoxFromContent (Guardar cambios o Exceptuar en esta hoja), se
-      // ancla al borde superior con el alto justo para su contenido; si no
-      // (desbordamiento normal al redimensionar con los tiradores en el
-      // editor general), se deja la página completa por defecto — mismo
-      // criterio que "Aplicar al lienzo" de siempre.
+    const overflow = pages.slice(reused);
+    let cursor = insertAt, oi = 0;
+    // Fase A: reutilizar hojas ya existentes, con SU orientación real
+    while(oi < overflow.length && cursor < edPages.length){
+      const pg = edPages[cursor];
+      const orient = pg.orientation || edOrientation;
+      const sv = orient === 'vertical';
+      const pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
+      const tl = _tdMakeTextLayer(overflow[oi], html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
       if(deriveBoxFromContent){
-        const newHeightFrac = boxHeightFracFor(reused + j, pgPhNew);
+        const newHeightFrac = boxHeightFracFor(reused + oi, pgPh);
         tl.height = newHeightFrac;
         tl.y = newHeightFrac / 2;
       }
-      return {
-        layers: [tl],
-        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
-        _dirtyCountLocal: 1,
-        _dirtyCountCloud: 1,
-      };
-    });
-    edPages.splice(insertAt, 0, ...extraPages);
+      pg.layers = pg.layers || [];
+      pg.layers.push(tl);
+      pg._dirtyCountLocal = (pg._dirtyCountLocal || 0) + 1;
+      pg._dirtyCountCloud = (pg._dirtyCountCloud || 0) + 1;
+      cursor++; oi++;
+    }
+    // Fase B: si aún sobra texto tras agotar las hojas existentes de la
+    // obra, crear hojas nuevas al final — mismo criterio de siempre.
+    if(oi < overflow.length){
+      const pgPhNew = svLast ? ED_PAGE_H : ED_PAGE_W;
+      const extraPages = overflow.slice(oi).map((pageLines, j) => {
+        const tl = _tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+        // Página nueva, sin posición previa que conservar. Con
+        // deriveBoxFromContent (Guardar cambios o Exceptuar en esta hoja), se
+        // ancla al borde superior con el alto justo para su contenido; si no
+        // (desbordamiento normal al redimensionar con los tiradores en el
+        // editor general), se deja la página completa por defecto — mismo
+        // criterio que "Aplicar al lienzo" de siempre.
+        if(deriveBoxFromContent){
+          const newHeightFrac = boxHeightFracFor(reused + oi + j, pgPhNew);
+          tl.height = newHeightFrac;
+          tl.y = newHeightFrac / 2;
+        }
+        return {
+          layers: [tl],
+          drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
+          _dirtyCountLocal: 1,
+          _dirtyCountCloud: 1,
+        };
+      });
+      edPages.splice(cursor, 0, ...extraPages);
+    }
     if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
   }
 
