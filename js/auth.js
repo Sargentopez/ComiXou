@@ -189,14 +189,22 @@ const Auth = (() => {
   async function register(username, email, password) {
     const key = email.toLowerCase().trim();
     const uname = username.trim();
-    // Verificar username único contra tabla authors ANTES de crear la cuenta
+    // Verificar username único ANTES de crear la cuenta: llama a la función RPC
+    // username_exists() (ver auditoría RLS) en vez de consultar la tabla authors
+    // directamente. La tabla dejará de ser de lectura pública para proteger el
+    // email de los usuarios — esta comprobación necesita su propia vía dedicada
+    // que solo devuelve true/false, sin exponer ninguna otra columna de la fila.
     try {
       const uCheck = await fetch(
-        `${SB_URL}/rest/v1/authors?username=eq.${encodeURIComponent(uname)}&select=id&limit=1`,
-        { headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' } }
+        `${SB_URL}/rest/v1/rpc/username_exists`,
+        {
+          method: 'POST',
+          headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uname }),
+        }
       );
-      const uData = await uCheck.json();
-      if (Array.isArray(uData) && uData.length > 0) return { ok: false, err: 'errUsernameExists' };
+      const exists = await uCheck.json();
+      if (exists === true) return { ok: false, err: 'errUsernameExists' };
     } catch (_) { /* sin red: dejar que el signup falle después */ }
     try {
       const res = await fetch(`${SB_URL}/auth/v1/signup`, {
