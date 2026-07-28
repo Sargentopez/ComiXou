@@ -64,13 +64,13 @@ function edOpenPages() {
   overlay.innerHTML = `
     <div class="ed-fulloverlay-box">
       <div class="ed-fulloverlay-header">
-        <h2 class="ed-fulloverlay-title">Hojas</h2>
+        <h2 class="ed-fulloverlay-title">${I18n.t('ed_pagesTitle')}</h2>
         <button class="ed-fulloverlay-close" id="edPagesClose">✕</button>
       </div>
-      <p class="ed-fulloverlay-hint">Usa ◀ ▶ para cambiar el orden · toca la miniatura para ir a esa hoja</p>
+      <p class="ed-fulloverlay-hint">${I18n.t('ed_pagesHint')}</p>
       <div class="ed-pages-grid" id="edPagesGrid"></div>
       <div class="ed-fulloverlay-actions">
-        <button class="ed-btn-pri" id="edPagesAdd">+ Nueva hoja</button>
+        <button class="ed-btn-pri" id="edPagesAdd">${I18n.t('ed_pagesAddBtn')}</button>
       </div>
     </div>`;
 
@@ -159,7 +159,7 @@ function _pgBuildCard(page, idx) {
 
   const leftBtn = document.createElement('button');
   leftBtn.className = 'ed-layer-arrow';
-  leftBtn.title = 'Mover izquierda';
+  leftBtn.title = I18n.t('ed_pageMoveLeft');
   leftBtn.textContent = '◀';
   leftBtn.disabled = idx === 0;
   leftBtn.addEventListener('pointerup', e => {
@@ -170,7 +170,7 @@ function _pgBuildCard(page, idx) {
 
   const rightBtn = document.createElement('button');
   rightBtn.className = 'ed-layer-arrow';
-  rightBtn.title = 'Mover derecha';
+  rightBtn.title = I18n.t('ed_pageMoveRight');
   rightBtn.textContent = '▶';
   rightBtn.disabled = idx === edPages.length - 1;
   rightBtn.addEventListener('pointerup', e => {
@@ -196,7 +196,7 @@ function _pgBuildCard(page, idx) {
 
   const dupBtn = document.createElement('button');
   dupBtn.className = 'ed-page-action-btn';
-  dupBtn.title = 'Duplicar hoja';
+  dupBtn.title = I18n.t('ed_pageDuplicate');
   dupBtn.innerHTML = '⧉';
   dupBtn.addEventListener('click', e => {
     e.stopPropagation();
@@ -207,7 +207,7 @@ function _pgBuildCard(page, idx) {
   const rotBtn = document.createElement('button');
   rotBtn.className = 'ed-page-action-btn ed-page-rot';
   const pageOrient = page.orientation || edOrientation;
-  rotBtn.title = 'Cambiar orientación';
+  rotBtn.title = I18n.t('ed_pageRotate');
   rotBtn.innerHTML = _pgOrientIcon(pageOrient);
   rotBtn.addEventListener('click', e => {
     e.stopPropagation();
@@ -217,13 +217,13 @@ function _pgBuildCard(page, idx) {
 
   const delBtn = document.createElement('button');
   delBtn.className = 'ed-page-action-btn ed-page-del';
-  delBtn.title = 'Eliminar hoja';
+  delBtn.title = I18n.t('ed_pageDelete');
   delBtn.innerHTML = '<span style="color:#e63030;font-weight:900">✕</span>';
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (_pgActionLocked()) return;
-    if (edPages.length <= 1) { edToast('No puedes eliminar la última hoja'); return; }
-    edConfirm('¿Eliminar esta hoja?', () => {
+    if (edPages.length <= 1) { edToast(I18n.t('ed_pageDeleteLastErr')); return; }
+    edConfirm(I18n.t('ed_pageDeleteConfirm'), () => {
       edPages.splice(idx, 1);
       if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
       edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
@@ -474,7 +474,7 @@ function _pgDuplicate(idx) {
   edPages.splice(idx + 1, 0, newPage);
   if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
   edPushHistory();
-  edToast(`Hoja ${idx + 1} duplicada`);
+  edToast(I18n.t('ed_pageDuplicatedToast', { n: idx + 1 }));
   _pgRender();
 }
 
@@ -682,6 +682,6 @@ function _pgRotatePage(idx) {
     if (typeof edRedraw === 'function') edRedraw();
   }
 
-  edToast('Orientación cambiada');
+  edToast(I18n.t('ed_pageOrientChanged'));
   _pgRender();
 }

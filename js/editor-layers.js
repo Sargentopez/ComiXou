@@ -81,7 +81,7 @@ function _lyEscHtml(s) {
 function _lyBindNameEdit(nameEl, la) {
   let _lastTime = 0;
   nameEl.classList.add('ed-layer-name-editable');
-  nameEl.title = 'Toca dos veces para renombrar';
+  nameEl.title = I18n.t('ly_renameTip');
   nameEl.addEventListener('pointerup', e => {
     const now = Date.now();
     const isDbl = now - _lastTime < 350;
@@ -161,7 +161,7 @@ function edOpenLayers() {
   overlay.innerHTML = `
     <div class="ed-fulloverlay-box">
       <div class="ed-fulloverlay-header">
-        <h2 class="ed-fulloverlay-title">Capas</h2>
+        <h2 class="ed-fulloverlay-title">${I18n.t('ly_panelTitle')}</h2>
         <button class="ed-fulloverlay-close" id="edLayersClose">✕</button>
       </div>
       <div class="ed-layers-list" id="edLayersList"></div>
@@ -258,7 +258,7 @@ function _lyRender() {
   /* Título */
   const tTitle = document.createElement('div');
   tTitle.className = 'ed-ly-section-title';
-  tTitle.textContent = 'Textos';
+  tTitle.textContent = I18n.t('ly_sectionTexts');
   list.appendChild(tTitle);
 
   /* Botones inmediatos / secuenciales — estilo barra de herramientas */
@@ -267,7 +267,7 @@ function _lyRender() {
 
   const btnImm = document.createElement('button');
   btnImm.className = 'ed-menu-btn' + (!isSeq ? ' open' : '');
-  btnImm.textContent = 'Inmediatos';
+  btnImm.textContent = I18n.t('ly_modeImmediate');
   btnImm.addEventListener('pointerup', () => {
     page.textMode = 'immediate';
     _lyRender();
@@ -278,7 +278,7 @@ function _lyRender() {
 
   const btnSeq = document.createElement('button');
   btnSeq.className = 'ed-menu-btn' + (isSeq ? ' open' : '');
-  btnSeq.textContent = 'Secuenciales';
+  btnSeq.textContent = I18n.t('ly_modeSequential');
   btnSeq.addEventListener('pointerup', () => {
     page.textMode = 'sequential';
     _lyRender();
@@ -292,14 +292,14 @@ function _lyRender() {
   /* Hint de arrastre — gris/azul según modo */
   const dragHint = document.createElement('div');
   dragHint.className = 'ed-ly-drag-hint' + (isSeq ? ' active' : '');
-  dragHint.textContent = 'Arrastra para establecer orden de aparición';
+  dragHint.textContent = I18n.t('ly_dragHintOrder');
   list.appendChild(dragHint);
 
   /* Lista textos */
   if (textObjs.length === 0) {
     const e = document.createElement('p');
     e.className = 'ed-layer-sub-empty';
-    e.textContent = 'Sin textos ni bocadillos';
+    e.textContent = I18n.t('ly_noTexts');
     list.appendChild(e);
   } else {
     textObjs.forEach((la, vi) => {
@@ -316,12 +316,12 @@ function _lyRender() {
   /* ══ SECCIÓN IMÁGENES Y DIBUJOS (combinada) ══ */
   const iTitle = document.createElement('div');
   iTitle.className = 'ed-ly-section-title';
-  iTitle.textContent = 'Imágenes y dibujos';
+  iTitle.textContent = I18n.t('ly_sectionImages');
   list.appendChild(iTitle);
 
   const imgHint = document.createElement('div');
   imgHint.className = 'ed-ly-drag-hint active';
-  imgHint.textContent = 'Arrastra para ordenar visualización';
+  imgHint.textContent = I18n.t('ly_dragHintDisplay');
   list.appendChild(imgHint);
 
   // Combinar imágenes y dibujos (stroke/draw) en una sola lista
@@ -333,7 +333,7 @@ function _lyRender() {
   if (visualPairs.length === 0) {
     const e = document.createElement('p');
     e.className = 'ed-layer-sub-empty';
-    e.textContent = 'Sin imágenes ni dibujos';
+    e.textContent = I18n.t('ly_noImages');
     list.appendChild(e);
   } else {
     // El primero del array edLayers aparece el último en la lista (más abajo visualmente)
@@ -379,7 +379,7 @@ function _lyRender() {
 function _lyBuildEyeBtn(la) {
   const btn = document.createElement('button');
   btn.className = 'ed-layer-del';
-  btn.title = la.hidden ? 'Mostrar capa' : 'Ocultar capa';
+  btn.title = la.hidden ? I18n.t('ly_showLayer') : I18n.t('ly_hideLayer');
   // Color negro explícito (no el gris de .ed-layer-del, compartido con
   // candado/eliminar): con opacity:1 pero color gris claro, el ojo "visible"
   // se percibe como atenuado aunque técnicamente esté al 100% — a petición
@@ -402,7 +402,7 @@ function _lyBuildEyeBtn(la) {
 function _lyBuildLockBtn(la) {
   const btn = document.createElement('button');
   btn.className = 'ed-layer-del';
-  btn.title = la.locked ? 'Desbloquear capa' : 'Bloquear capa';
+  btn.title = la.locked ? I18n.t('ly_unlockLayer') : I18n.t('ly_lockLayer');
   btn.style.opacity = la.locked ? '' : '0.4';
   btn.textContent = '🔒';
   btn.addEventListener('pointerup', e => {
@@ -446,7 +446,7 @@ function _lyBuildGroupItem(groupId, members) {
   thumb.className = 'ed-layer-thumb drag-handle';
   thumb.width = 80; thumb.height = 60;
   _lyDrawGroupCompositeThumb(thumb, members);
-  thumb.title = 'Grupo · toca para seleccionar';
+  thumb.title = I18n.t('ly_groupThumbTip');
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
       // Seleccionar el grupo completo: activar _edGroupSilentTool + multiselección
@@ -488,7 +488,7 @@ function _lyBuildGroupItem(groupId, members) {
   info.className = 'ed-layer-info';
   const name = document.createElement('span');
   name.className = 'ed-layer-name';
-  name.textContent = `⊞ Grupo (${members.length})`;
+  name.textContent = I18n.t('ly_groupLabel', { n: members.length });
   info.appendChild(name);
   item.appendChild(info);
 
@@ -498,7 +498,7 @@ function _lyBuildGroupItem(groupId, members) {
 
   const upBtn = document.createElement('button');
   upBtn.className = 'ed-layer-arrow';
-  upBtn.title = 'Subir grupo';
+  upBtn.title = I18n.t('ly_upGroup');
   upBtn.textContent = '▲';
   upBtn.disabled = _posInCp >= _cpAll.length - 1;
   upBtn.addEventListener('pointerup', e => {
@@ -508,7 +508,7 @@ function _lyBuildGroupItem(groupId, members) {
 
   const dnBtn = document.createElement('button');
   dnBtn.className = 'ed-layer-arrow';
-  dnBtn.title = 'Bajar grupo';
+  dnBtn.title = I18n.t('ly_downGroup');
   dnBtn.textContent = '▼';
   dnBtn.disabled = _posInCp <= 0;
   dnBtn.addEventListener('pointerup', e => {
@@ -519,7 +519,7 @@ function _lyBuildGroupItem(groupId, members) {
   /* Ojo — afecta a todos los miembros */
   const eyeBtn = document.createElement('button');
   eyeBtn.className = 'ed-layer-del';
-  eyeBtn.title = _allHidden ? 'Mostrar grupo' : 'Ocultar grupo';
+  eyeBtn.title = _allHidden ? I18n.t('ly_showGroup') : I18n.t('ly_hideGroup');
   eyeBtn.style.color = 'var(--black)';
   eyeBtn.style.opacity = _allHidden ? '0.5' : '1';
   eyeBtn.textContent = '👁';
@@ -546,7 +546,7 @@ function _lyBuildGroupItem(groupId, members) {
   const _allLocked = members.every(m => m.l.locked) && _lockSubIdxs.every(si => edLayers[si]?.locked);
   const lockBtn = document.createElement('button');
   lockBtn.className = 'ed-layer-del';
-  lockBtn.title = _allLocked ? 'Desbloquear grupo' : 'Bloquear grupo';
+  lockBtn.title = _allLocked ? I18n.t('ly_unlockGroup') : I18n.t('ly_lockGroup');
   lockBtn.style.opacity = _allLocked ? '' : '0.4';
   lockBtn.textContent = '🔒';
   lockBtn.addEventListener('pointerup', e => {
@@ -562,11 +562,11 @@ function _lyBuildGroupItem(groupId, members) {
   /* Eliminar grupo */
   const delBtn = document.createElement('button');
   delBtn.className = 'ed-layer-del';
-  delBtn.title = 'Eliminar grupo';
+  delBtn.title = I18n.t('ly_deleteGroup');
   delBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   delBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
-    edConfirm(`¿Eliminar el grupo (${members.length} capas)?`, () => {
+    edConfirm(I18n.t('ly_confirmDeleteGroup', { n: members.length }), () => {
       // Recoger todos los índices incluyendo sub-capas
       const _toRemove = new Set(memberIdxs);
       memberIdxs.forEach(mi => {
@@ -816,7 +816,7 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   eyeBtn.textContent = '👁';
   eyeBtn.style.color = 'var(--black)';
   eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
-  eyeBtn.title = la.hidden ? 'Mostrar' : 'Ocultar';
+  eyeBtn.title = la.hidden ? I18n.t('ly_show') : I18n.t('ly_hide');
   eyeBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
     la.hidden = !la.hidden;
@@ -828,10 +828,10 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   const clrBtn = document.createElement('button');
   clrBtn.className = 'ed-layer-del';
   clrBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
-  clrBtn.title = 'Eliminar esta sub-capa';
+  clrBtn.title = I18n.t('ly_deleteSubLayer');
   clrBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
-    edConfirm('¿Eliminar esta sub-capa?', () => {
+    edConfirm(I18n.t('ly_confirmDeleteSubLayer'), () => {
       const _flIdx = edLayers.indexOf(la);
       if (_flIdx >= 0) edLayers.splice(_flIdx, 1);
       const _pair = edLayers.find(l => l._uid && (l._fillLayerId===la._drawLayerId ||
@@ -987,7 +987,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   thumb.className = 'ed-layer-thumb-sm' + (draggable ? ' drag-handle' : '');
   thumb.width = 56; thumb.height = 42;
   _lyDrawThumb(thumb, la);
-  thumb.title = draggable ? 'Arrastra para reordenar · toca para seleccionar' : 'Seleccionar';
+  thumb.title = draggable ? I18n.t('ly_dragOrSelectTip') : I18n.t('ly_selectTip');
   thumb.addEventListener('pointerup', e => {
     // Solo seleccionar si no hubo drag
     if (!row.classList.contains('was-dragged')) {
@@ -1018,7 +1018,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   const viIdx = textObjs.indexOf(la);
   const upBtn = document.createElement('button');
   upBtn.className = 'ed-layer-arrow';
-  upBtn.title = 'Subir nivel';
+  upBtn.title = I18n.t('ly_upLevel');
   upBtn.textContent = '▲';
   upBtn.disabled = viIdx <= 0;
   upBtn.addEventListener('pointerup', e => {
@@ -1029,7 +1029,7 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   });
   const dnBtn = document.createElement('button');
   dnBtn.className = 'ed-layer-arrow';
-  dnBtn.title = 'Bajar nivel';
+  dnBtn.title = I18n.t('ly_downLevel');
   dnBtn.textContent = '▼';
   dnBtn.disabled = viIdx >= textObjs.length - 1;
   dnBtn.addEventListener('pointerup', e => {
@@ -1041,11 +1041,11 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   /* Eliminar */
   const del = document.createElement('button');
   del.className = 'ed-layer-del';
-  del.title = 'Eliminar';
+  del.title = I18n.t('delete');
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
-    edConfirm('¿Eliminar esta capa?', ()=>{
+    edConfirm(I18n.t('ly_confirmDeleteLayer'), ()=>{
       // Eliminar FillLayer vinculado si existe
       if (la._fillLayerId) {
         const _flDV=edLayers.findIndex(l=>l.type==='fill'&&l._drawLayerId===la._fillLayerId);
@@ -1106,7 +1106,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   } else {
     _lyDrawThumb(thumb, la);
   }
-  thumb.title = isDrawType ? 'Dibujo · toca para seleccionar' : isShapeType ? 'Objeto · toca para seleccionar' : 'Arrastra para reordenar · toca para seleccionar';
+  thumb.title = isDrawType ? I18n.t('ly_drawTip') : isShapeType ? I18n.t('ly_objectTip') : I18n.t('ly_dragOrSelectTip');
   thumb.addEventListener('pointerup', () => {
     if (!item.classList.contains('was-dragged')) {
       const _idx = realIdx;
@@ -1136,22 +1136,22 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     const _drawIconDibujando = `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0">`;
     const _drawIconDibujo    = `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="image-rendering:pixelated;vertical-align:middle"/>`;
     const _drawIcon = la.type === 'draw' ? _drawIconDibujando : _drawIconDibujo;
-    const _drawDefaultTxt = la.type === 'draw' ? 'Dibujando…' : 'Dibujo';
+    const _drawDefaultTxt = la.type === 'draw' ? I18n.t('ly_drawingInProgress') : I18n.t('ly_drawing');
     name.innerHTML = _drawIcon + ' ' + (la.name ? _lyEscHtml(la.name) : _drawDefaultTxt) + _grpTag;
   } else if (la.type === 'shape') {
     const _shIcon = la.shape === 'ellipse' ? '◯ ' : '▭ ';
-    const _shDefaultTxt = la.shape === 'ellipse' ? 'Elipse' : 'Rectángulo';
+    const _shDefaultTxt = la.shape === 'ellipse' ? I18n.t('ly_ellipse') : I18n.t('ly_rectangle');
     name.textContent = _shIcon + (la.name ? la.name : _shDefaultTxt) + _grpTag;
   } else if (la.type === 'line') {
     const _lnIcon = la.closed ? '⬠ ' : '╱ ';
-    const _lnDefaultTxt = la.closed ? 'Polígono' : 'Recta';
+    const _lnDefaultTxt = la.closed ? I18n.t('ly_polygon') : I18n.t('ly_lineDefault');
     name.textContent = _lnIcon + (la.name ? la.name : _lnDefaultTxt) + _grpTag;
   } else if (la.type === 'gif') {
-    name.textContent = '🎬 ' + (la.name ? la.name : ('GIF ' + (realIdx + 1))) + _grpTag;
+    name.textContent = '🎬 ' + (la.name ? la.name : I18n.t('ly_gifDefault', { n: realIdx + 1 })) + _grpTag;
   } else {
     const _isApng = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length);
     const _imgIcon = _isApng ? '📽️ ' : '';
-    const _imgDefaultTxt = (_isApng ? 'APNG ' : 'Imagen ') + (realIdx + 1);
+    const _imgDefaultTxt = _isApng ? I18n.t('ly_apngDefault', { n: realIdx + 1 }) : I18n.t('ly_imageDefault', { n: realIdx + 1 });
     name.textContent = _imgIcon + (la.name ? la.name : _imgDefaultTxt) + _grpTag;
   }
   info.appendChild(name);
@@ -1165,7 +1165,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
 
   const upBtn = document.createElement('button');
   upBtn.className = 'ed-layer-arrow';
-  upBtn.title = 'Subir nivel';
+  upBtn.title = I18n.t('ly_upLevel');
   upBtn.textContent = '▲';
   upBtn.disabled = posInList >= _cpAll.length - 1;
   upBtn.addEventListener('pointerup', e => {
@@ -1192,7 +1192,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
 
   const dnBtn = document.createElement('button');
   dnBtn.className = 'ed-layer-arrow';
-  dnBtn.title = 'Bajar nivel';
+  dnBtn.title = I18n.t('ly_downLevel');
   dnBtn.textContent = '▼';
   dnBtn.disabled = posInList <= 0;
   dnBtn.addEventListener('pointerup', e => {
@@ -1220,11 +1220,11 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   /* Eliminar */
   const del = document.createElement('button');
   del.className = 'ed-layer-del';
-  del.title = 'Eliminar';
+  del.title = I18n.t('delete');
   del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
   del.addEventListener('pointerup', e => {
     e.stopPropagation();
-    edConfirm('¿Eliminar esta capa?', ()=>{
+    edConfirm(I18n.t('ly_confirmDeleteLayer'), ()=>{
       // T3: si la capa es draw/stroke/shape/line con panel abierto, limpiar UI primero
       const _delLa = edLayers[realIdx];
       const _delType = _delLa ? _delLa.type : '';
@@ -1308,7 +1308,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
         (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_eyeGroupUid);
       return _subs.length > 0 && _subs.every(l => l.hidden);
     };
-    _eyeBtn.title  = _eyeAllHidden() ? 'Mostrar grupo' : 'Ocultar grupo';
+    _eyeBtn.title  = _eyeAllHidden() ? I18n.t('ly_showGroup') : I18n.t('ly_hideGroup');
     _eyeBtn.style.color = 'var(--black)';
     _eyeBtn.style.opacity = _eyeAllHidden() ? '0.5' : '1';
     _eyeBtn.addEventListener('pointerup', e => {
@@ -1341,7 +1341,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
         (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_lockGroupUid);
       return _subs.length > 0 && _subs.every(l => l.locked);
     };
-    _lockBtn.title  = _lockAllLocked() ? 'Desbloquear grupo' : 'Bloquear grupo';
+    _lockBtn.title  = _lockAllLocked() ? I18n.t('ly_unlockGroup') : I18n.t('ly_lockGroup');
     _lockBtn.style.opacity = _lockAllLocked() ? '' : '0.4';
     _lockBtn.addEventListener('pointerup', e => {
       e.stopPropagation();
@@ -1368,7 +1368,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     if (_hasSubs) {
       const _isExp = _lyExpandedGroups.has(_colUid);
       const _colBtn = document.createElement('button');
-      _colBtn.title = _isExp ? 'Colapsar sub-capas' : 'Mostrar sub-capas';
+      _colBtn.title = _isExp ? I18n.t('ly_collapseSubLayers') : I18n.t('ly_expandSubLayers');
       _colBtn.textContent = _isExp ? '▲' : '▼';
       _colBtn.style.cssText = 'position:absolute;bottom:3px;left:50%;transform:translateX(-50%);' +
         'border:none;border-radius:4px;padding:0 10px;font-size:0.8rem;line-height:1.6;cursor:pointer;' +

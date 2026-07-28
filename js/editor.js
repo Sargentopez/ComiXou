@@ -1952,7 +1952,7 @@ class GifLayer extends BaseLayer {
 }
 
 class TextLayer extends BaseLayer {
-  constructor(text='Escribe aquí',x=0.5,y=0.5){
+  constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
     this.text=text;this.fontSize=30;this.fontFamily='Arial';
     this.fontBold=false;this.fontItalic=true;
@@ -2050,7 +2050,7 @@ class TextLayer extends BaseLayer {
       return;
     }
     ctx.font=this._fontStr();
-    const isPlaceholder = this.text==='Escribe aquí';
+    const isPlaceholder = this.text===I18n.t('ed_writeHerePlaceholder');
     ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
@@ -2101,7 +2101,7 @@ class TextLayer extends BaseLayer {
 
 
 class BubbleLayer extends BaseLayer {
-  constructor(text='Escribe aquí',x=0.5,y=0.5){
+  constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('bubble',x,y,0.3,0.15);
     this.text=text;this.fontSize=30;this.fontFamily='Arial';
     this.fontBold=false;this.fontItalic=true;
@@ -2296,7 +2296,7 @@ class BubbleLayer extends BaseLayer {
       // 3 — Texto centrado con offset upward: el blob tiene menos margen en la base
       const _tYOff = -5 * _tsy;
       ctx.font=this._fontStr();
-      const isPlaceholderT=this.text==='Escribe aquí';
+      const isPlaceholderT=this.text===I18n.t('ed_writeHerePlaceholder');
       ctx.fillStyle=isPlaceholderT?'#999999':this.color;ctx.textAlign='center';ctx.textBaseline='middle';
       const linesT=this.getLines(),lhT=this.fontSize*1.2,totalHT=linesT.length*lhT;
       linesT.forEach((l,i)=>ctx.fillText(l,0,_tYOff+(-totalHT/2+lhT/2+i*lhT)));
@@ -2331,7 +2331,7 @@ class BubbleLayer extends BaseLayer {
       }
       // 3 — Texto centrado
       ctx.font=this._fontStr();
-      const isPlaceholderE=this.text==='Escribe aquí';
+      const isPlaceholderE=this.text===I18n.t('ed_writeHerePlaceholder');
       ctx.fillStyle=isPlaceholderE?'#999999':this.color;
       ctx.textAlign='center';ctx.textBaseline='middle';
       const linesE=this.getLines(),lhE=this.fontSize*1.2,totalHE=linesE.length*lhE;
@@ -2363,7 +2363,7 @@ class BubbleLayer extends BaseLayer {
       }
     }
     ctx.font=this._fontStr();
-    const isPlaceholder = this.text==='Escribe aquí';
+    const isPlaceholder = this.text===I18n.t('ed_writeHerePlaceholder');
     ctx.fillStyle=isPlaceholder?'#999999':this.color;
     ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
@@ -3963,11 +3963,11 @@ function edPushHistory(force, movedLayer){
 }
 
 function edUndo(){
-  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
-  if(edHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  if(_edLoadProjectInProgress){ edToast(I18n.t('admin_loading')); return; }
+  if(edHistoryIdx <= 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
   // Verificar que el snapshot al que vamos tiene layers (no es un estado vacío de carga)
   const _prevSnap = edHistory[edHistoryIdx - 1];
-  if(!_prevSnap || !_prevSnap.layersJSON) { edToast('Nada que deshacer'); return; }
+  if(!_prevSnap || !_prevSnap.layersJSON) { edToast(I18n.t('ed_nothingToUndo')); return; }
   const _prevLayers = JSON.parse(_prevSnap.layersJSON);
   // No bloquear deshacer a estado vacío — es válido (canvas antes del primer objeto)
   edHistoryIdx--;
@@ -3975,8 +3975,8 @@ function edUndo(){
 }
 
 function edRedo(){
-  if(_edLoadProjectInProgress){ edToast('Cargando...'); return; }
-  if(edHistoryIdx >= edHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  if(_edLoadProjectInProgress){ edToast(I18n.t('admin_loading')); return; }
+  if(edHistoryIdx >= edHistory.length - 1){ edToast(I18n.t('ed_nothingToRedo')); return; }
   edHistoryIdx++;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
@@ -5597,7 +5597,7 @@ function edAddPage(){
   edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation,_dirtyCountLocal:1,_dirtyCountCloud:1});
   _edMarkPagesStructureDirty();
   edLoadPage(edPages.length-1);
-  edToast('Página añadida');
+  edToast(I18n.t('ed_pageAdded'));
 }
 
 /* ── Icono candado al tocar objeto bloqueado ── */
@@ -5798,7 +5798,7 @@ function _edCropRenderPanel() {
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 0;min-height:32px">
     <span style="font-size:.8rem;font-weight:700;color:var(--gray-600);flex:1">
-      ✂ ${n < 3 ? 'Toca para añadir vértices (mín. 3)' : n + ' vértices · arrastra · doble tap en segmento añade nodo'}
+      ✂ ${n < 3 ? I18n.t('ed_tapAddVerticesMin3') : I18n.t('ed_verticesDragCloseInfo', { n })}
     </span>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
@@ -6091,7 +6091,7 @@ function _edApplyCrop() {
     }
     edFitCanvas();
     edRedraw();
-    edToast('Recorte creado ✓');
+    edToast(I18n.t('ed_cropCreated'));
   };
 
   if (la.type === 'image') {
@@ -6556,8 +6556,8 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
 }
 
 function edDeletePage(){
-  if(edPages.length<=1){edToast('Necesitas al menos una página');return;}
-  edConfirm('¿Eliminar esta hoja?', ()=>{
+  if(edPages.length<=1){edToast(I18n.t('ed_needAtLeastOnePage'));return;}
+  edConfirm(I18n.t('ed_confirmDeletePage'), ()=>{
     edPages.splice(edCurrentPage,1);
     _edMarkPagesStructureDirty();
     edLoadPage(Math.min(edCurrentPage,edPages.length-1));
@@ -6765,7 +6765,7 @@ function edUpdateNavPages(){
   edPages.forEach((p,i)=>{
     const btn=document.createElement('button');
     btn.className='op-btn ed-nav-page-btn'+(i===edCurrentPage?' active':'');
-    btn.title='Hoja '+(i+1);
+    btn.title=I18n.t('ed_pageTitleNum', { n: i+1 });
     btn.style.cssText='padding:3px;min-width:48px;flex-direction:column;align-items:center;gap:2px;justify-content:center';
 
     // Canvas miniatura
@@ -6966,14 +6966,14 @@ function edAddImage(file){
         _edTryLoadApng(ev.target.result, layer, function(isApng) {
           if (!isApng) {
             // PNG estático — flujo normal
-            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast('Imagen añadida ✓');
+            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast(I18n.t('ed_imageAdded'));
           } else {
             // APNG animado — _edTryLoadApng ya lo configuró
-            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast('PNG animado añadido ✓');
+            edPushHistory(); edRedraw(); edRenderOptionsPanel('props'); edToast(I18n.t('ed_apngAdded'));
           }
         });
       } else {
-        edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast('Imagen añadida ✓');
+        edPushHistory();edRedraw();edRenderOptionsPanel('props');edToast(I18n.t('ed_imageAdded'));
       }
     };
     img.src=ev.target.result;
@@ -7000,12 +7000,12 @@ document.addEventListener('paste', e => {
 /* ── Insertar GIF animado ── */
 function edAddGif(file, onLayerReady) {
   if (!file) return;
-  if (!window.GifDecoder) { edToast('GIF no soportado en este navegador'); return; }
+  if (!window.GifDecoder) { edToast(I18n.t('ed_gifNotSupported')); return; }
   const gifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
   const reader = new FileReader();
   reader.onload = ev => {
     const gifSrc = ev.target.result;
-    edToast('Procesando GIF…');
+    edToast(I18n.t('ed_processingGif'));
     const layer = new GifLayer(gifKey, 0.5, 0.5, 0.7);
     layer.load(gifSrc, () => {
       if (layer._oc) {
@@ -7026,7 +7026,7 @@ function edAddGif(file, onLayerReady) {
       if (typeof onLayerReady === 'function') onLayerReady(layer);
       edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
       requestAnimationFrame(() => edRedraw()); // asegurar primer frame visible
-      edToast('GIF añadido ✓ (' + (layer._frames.length) + ' frames)');
+      edToast(I18n.t('ed_gifAdded', { n: layer._frames.length }));
     });
   };
   reader.readAsDataURL(file);
@@ -7083,13 +7083,13 @@ function _edInsertLayerAbove(layer) {
 }
 
 function edAddText(){
-  const l=new TextLayer('Escribe aquí');l.resizeToFitText(edCanvas);
+  const l=new TextLayer(I18n.t('ed_writeHerePlaceholder'));l.resizeToFitText(edCanvas);
   edLayers.push(l); edSelectedIdx=edLayers.length-1;
   _edDrawLockUI(); _edPropsOverlayShow();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
 }
 function edAddBubble(){
-  const l=new BubbleLayer('Escribe aquí');l.resizeToFitText(edCanvas);
+  const l=new BubbleLayer(I18n.t('ed_writeHerePlaceholder'));l.resizeToFitText(edCanvas);
   edLayers.push(l);edSelectedIdx=edLayers.length-1;
   _edDrawLockUI(); _edPropsOverlayShow();
   edPushHistory();edRedraw();edRenderOptionsPanel('props');
@@ -7186,7 +7186,7 @@ function _edDuplicateGroup(gid) {
   const _insertGrpAt = _maxIdx >= 0 ? _maxIdx + 1 : edLayers.length;
   edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
   edPushHistory(); edRedraw();
-  edToast('Grupo duplicado ✓');
+  edToast(I18n.t('ed_groupDuplicated'));
 }
 
 function edDuplicateSelected(){
@@ -7259,7 +7259,7 @@ function edDuplicateSelected(){
   edLayers.splice(insertAt, 0, ...toInsert);
   edSelectedIdx = insertAt + toInsert.length - 1; // apuntar al StrokeLayer
   edPushHistory(); edRedraw();
-  edToast('Objeto duplicado');
+  edToast(I18n.t('ed_objectDuplicated'));
 }
 /* ── T14: Simetría horizontal (flip respecto al eje vertical del objeto) ── */
 function edMirrorSelected(){
@@ -7298,7 +7298,7 @@ function edMirrorSelected(){
         }
       }
       edRedraw();
-      edToast('Dibujo reflejado');
+      edToast(I18n.t('ed_drawingMirrored'));
     }
     return;
   }
@@ -7439,11 +7439,11 @@ function edMirrorSelected(){
   }
 
   edRedraw();
-  edToast('Objeto reflejado');
+  edToast(I18n.t('ed_objectMirrored'));
 }
 
 function edDeleteSelected(){
-  if(edSelectedIdx<0){edToast('Selecciona un objeto');return;}
+  if(edSelectedIdx<0){edToast(I18n.t('ed_selectAnObject'));return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
   // Si el modo recorte está activo, cancelarlo antes de eliminar
   if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edDrawUnlockUI(); _edPropsOverlayHide(); }
@@ -8849,12 +8849,12 @@ function _edRotOpacityRowHtml(la) {
 function _edPathRowHtml(la, withBtnAction) {
   return `
       <div class="op-prop-row">
-        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
-        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido">✕</button>` : ''}
-        ${withBtnAction ? `<button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>` : ''}
+        <button id="pp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? I18n.t('op_editPathBtn') : I18n.t('op_addPathBtn')}</button>
+        ${la._motionPath ? `<button id="pp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="${I18n.t('op_deletePathTitle')}">✕</button>` : ''}
+        ${withBtnAction ? `<button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>` : ''}
       </div>
       ${la._motionPath ? `<div class="op-prop-row">
-        <span class="op-prop-label">⏱ Ciclo</span>
+        <span class="op-prop-label">${I18n.t('op_cycleLabel')}</span>
         ${_edIsAnimLayer(la)
           ? `<div class="ed-slider-wrap" style="flex:1"><input type="range" id="pp-path-speed" min="1" max="20" step="1" value="${la._motionCycles||1}" data-suffix="×" style="flex:1;accent-color:var(--black)"><span class="ed-slider-bubble"></span></div>
              <span id="pp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${(la._motionCycles||1)}×</span>`
@@ -8866,11 +8866,11 @@ function _edPathRowHtml(la, withBtnAction) {
 function _edGrpPathRowHtml(la) {
   return `
         <div class="op-prop-row">
-          <button id="pp-grp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? '🛤️ Editar recorrido' : '🛤️ Añadir recorrido'}</button>
-          ${la._motionPath ? `<button id="pp-grp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="Eliminar recorrido del grupo">✕</button>` : ''}
+          <button id="pp-grp-path-btn" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._motionPath ? I18n.t('op_editPathBtn') : I18n.t('op_addPathBtn')}</button>
+          ${la._motionPath ? `<button id="pp-grp-del-path" style="background:var(--gray-100);border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:.82rem;cursor:pointer;color:#dc2626;font-weight:900" title="${I18n.t('op_deleteGroupPathTitle')}">✕</button>` : ''}
         </div>
         ${la._motionPath ? `<div class="op-prop-row">
-          <span class="op-prop-label">⏱ Ciclo</span>
+          <span class="op-prop-label">${I18n.t('op_cycleLabel')}</span>
           ${_edIsAnimLayer(la)
             ? `<div class="ed-slider-wrap" style="flex:1"><input type="range" id="pp-grp-path-speed" min="1" max="20" step="1" value="${la._motionCycles||1}" data-suffix="×" style="flex:1;accent-color:var(--black)"><span class="ed-slider-bubble"></span></div>
                <span id="pp-grp-path-speed-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:right">${(la._motionCycles||1)}×</span>`
@@ -9791,7 +9791,7 @@ function edOnStart(e){
                 _edShapePushHistory();
                 edRedraw();
               } else {
-                edToast('Mínimo 2 vértices');
+                edToast(I18n.t('ed_minTwoVertices'));
               }
               return;
             }
@@ -13155,7 +13155,7 @@ function _vsApply(snap) {
 
 function _vsUndo() {
   if (_vsHistIdx < 0) {
-    edToast('Nada que deshacer');
+    edToast(I18n.t('ed_nothingToUndo'));
     return;
   }
   if (_vsHistIdx === 0) {
@@ -13385,12 +13385,12 @@ function _edShapeApplyHistory(snapshot){
 }
 
 function edShapeUndo(){
-  if(_vsHistory.length === 0){ edToast('Nada que deshacer'); return; }
+  if(_vsHistory.length === 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
   _vsUndo();
 }
 
 function edShapeRedo(){
-  if(_vsHistIdx >= _vsHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  if(_vsHistIdx >= _vsHistory.length - 1){ edToast(I18n.t('ed_nothingToRedo')); return; }
   _vsRedo();
 }
 
@@ -13466,13 +13466,13 @@ function _edDrawApplyHistory(snapshot){
   edRedraw();
 }
 function edDrawUndo(){
-  if(edDrawHistoryIdx <= 0){ edToast('Nada que deshacer'); return; }
+  if(edDrawHistoryIdx <= 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
   edDrawHistoryIdx--;
   _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
   _edDrawUpdateUndoRedoBtns();
 }
 function edDrawRedo(){
-  if(edDrawHistoryIdx >= edDrawHistory.length - 1){ edToast('Nada que rehacer'); return; }
+  if(edDrawHistoryIdx >= edDrawHistory.length - 1){ edToast(I18n.t('ed_nothingToRedo')); return; }
   edDrawHistoryIdx++;
   _edDrawApplyHistory(edDrawHistory[edDrawHistoryIdx]);
   _edDrawUpdateUndoRedoBtns();
@@ -14113,9 +14113,9 @@ function edFloodFill(nx, ny){
 // ── Suavizar bordes del relleno con antialiasing ──────────────────────────────
 function _edFillSmooth() {
   const bk = _edTmp.bucket;
-  if (!bk?._canvas) { edToast('No hay relleno que suavizar'); return; }
+  if (!bk?._canvas) { edToast(I18n.t('ed_noFillToSmooth')); return; }
   const w = bk._canvas.width, h = bk._canvas.height;
-  if (!w || !h) { edToast('No hay relleno que suavizar'); return; }
+  if (!w || !h) { edToast(I18n.t('ed_noFillToSmooth')); return; }
   // Aplicar blur Gaussiano sobre canvas temporal → antialiasing de bordes
   const tmp = document.createElement('canvas');
   tmp.width = w; tmp.height = h;
@@ -14127,7 +14127,7 @@ function _edFillSmooth() {
   _edDrawPushHistory();
   edPushHistory();
   edRedraw();
-  edToast('Bordes suavizados');
+  edToast(I18n.t('ed_edgesSmoothed'));
 }
 
 // ── Degradado: dibujar preview de la línea en overlay canvas ──────────────────
@@ -14178,7 +14178,7 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   const page = edPages[edCurrentPage]; if (!page) return;
   const dl = _edGetOrCreateDrawLayer();
   const fw = dl?._canvas?.width, fh = dl?._canvas?.height;
-  if (!fw || !fh) { edToast('Abre el panel de dibujo primero'); return; }
+  if (!fw || !fh) { edToast(I18n.t('ed_openDrawPanelFirst')); return; }
 
   // Puntos A y B en píxeles del workspace
   const ax = Math.round(edMarginX() + nx0 * edPageW());
@@ -14187,7 +14187,7 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   const by = Math.round(edMarginY() + ny1 * edPageH());
   const ldx = bx - ax, ldy = by - ay;
   const len = Math.sqrt(ldx*ldx + ldy*ldy);
-  if (len < 1) { edToast('Línea demasiado corta'); return; }
+  if (len < 1) { edToast(I18n.t('ed_lineTooShort')); return; }
 
   // Parsear colores del degradado
   const r1=parseInt(_edGradC1.slice(1,3),16), g1=parseInt(_edGradC1.slice(3,5),16), b1=parseInt(_edGradC1.slice(5,7),16);
@@ -14291,11 +14291,11 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   // ── Validar que algo se rellenó ───────────────────────────────────────────
   let paintedCount = 0;
   for (let i = 0; i < fw*fh; i++) if (filled[i]) paintedCount++;
-  if (!paintedCount) { edToast('La línea no pasa por ninguna zona rellenable'); return; }
+  if (!paintedCount) { edToast(I18n.t('ed_lineNoFillableArea')); return; }
 
   // ── Escribir degradado: cada pixel recibe color según proyección sobre la línea ─
   const ffDest = _edTmp.bucket;
-  if (!ffDest?._canvas) { edToast('Error: no hay capa de relleno activa'); return; }
+  if (!ffDest?._canvas) { edToast(I18n.t('ed_noActiveFillLayer')); return; }
   const imgData = ffDest._ctx.getImageData(0, 0, fw, fh);
   const d = imgData.data;
   const len2 = ldx*ldx + ldy*ldy;
@@ -14336,12 +14336,12 @@ function _edShowGradientDialog() {
     return edColorPalette.map((c,i) =>
       `<button class="egd-pal" data-which="${which}" data-col="${c}" style="width:22px;height:22px;border-radius:50%;background:${c};border:2px solid ${c===cur?'#111':'#ccc'};cursor:pointer;flex-shrink:0;padding:0;margin:1px" title="${c}"></button>`
     ).join('') +
-    `<button class="egd-eye" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:#f0f0f0;border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:12px;margin:1px" title="Cuentagotas">💧</button>` +
-    `<button class="egd-hsl" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:9px;margin:1px" title="Color personalizado">🎨</button>`;
+    `<button class="egd-eye" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:#f0f0f0;border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:12px;margin:1px" title="${I18n.t('ed_eyedropTool')}">💧</button>` +
+    `<button class="egd-hsl" data-which="${which}" style="width:22px;height:22px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid #ccc;cursor:pointer;flex-shrink:0;padding:0;font-size:9px;margin:1px" title="${I18n.t('ed_customColorTitle')}">🎨</button>`;
   }
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:14px;padding:18px 16px;width:min(360px,95vw);box-shadow:0 8px 32px rgba(0,0,0,.3);font-family:inherit;max-height:90vh;overflow-y:auto">
-      <div style="font-weight:900;font-size:1rem;margin-bottom:12px;text-align:center">Degradado</div>
+      <div style="font-weight:900;font-size:1rem;margin-bottom:12px;text-align:center">${I18n.t('ed_gradientTitle')}</div>
       <div id="egd-preview-bar" style="width:100%;height:32px;border-radius:8px;margin-bottom:14px;border:1px solid #ddd;${_edGradType==='radial'?_radG():_linG()}"></div>
       <!-- Color 1 -->
       <div style="margin-bottom:12px">
@@ -14364,16 +14364,16 @@ function _edShowGradientDialog() {
       <!-- Tipo -->
       <div style="display:flex;flex-direction:row;gap:8px;margin-bottom:14px">
         <button id="egd-linear" style="flex:1;padding:8px 4px;border:2px solid ${_edGradType==='linear'?'#111':'#ddd'};border-radius:8px;font-weight:900;font-size:.8rem;cursor:pointer;background:${_edGradType==='linear'?'#111':'#fff'};color:${_edGradType==='linear'?'#fff':'#333'};font-family:inherit">
-          <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_linG()}"></div>Lineal</button>
+          <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_linG()}"></div>${I18n.t('ed_linear')}</button>
         <button id="egd-radial" style="flex:1;padding:8px 4px;border:2px solid ${_edGradType==='radial'?'#111':'#ddd'};border-radius:8px;font-weight:900;font-size:.8rem;cursor:pointer;background:${_edGradType==='radial'?'#111':'#fff'};color:${_edGradType==='radial'?'#fff':'#333'};font-family:inherit">
           <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_radG()}"></div>Circular</button>
       </div>
       <div style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.76rem;color:#555;text-align:center;line-height:1.4">
-        Pulsa <strong>Dibujar →</strong> y arrastra una línea sobre el dibujo.<br>Si no hay relleno, se crea automáticamente.
+        ${I18n.t('ed_gradientHelp')}
       </div>
       <div style="display:flex;gap:10px">
-        <button id="egd-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">Cancelar</button>
-        <button id="egd-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">Dibujar →</button>
+        <button id="egd-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">${I18n.t('cancel')}</button>
+        <button id="egd-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">${I18n.t('ed_drawArrowBtn')}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -14421,7 +14421,7 @@ function _edShowGradientDialog() {
     if (eyeBtn) {
       const which = +eyeBtn.dataset.which;
       overlay.style.display = 'none';
-      edToast('Toca el color a usar…');
+      edToast(I18n.t('ed_tapColorToUse'));
       const ac = new AbortController();
       const sig = { signal: ac.signal };
       function sampleGrad(clientX, clientY) {
@@ -14432,7 +14432,7 @@ function _edShowGradientDialog() {
         const cx = Math.round((clientX - rect.left) * scaleX);
         const cy = Math.round((clientY - rect.top) * scaleY);
         const px = edCanvas.getContext('2d').getImageData(cx, cy, 1, 1).data;
-        if (px[3] < 10) { edToast('Sin color en ese punto'); overlay.style.display = 'flex'; return; }
+        if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); overlay.style.display = 'flex'; return; }
         const hex = '#' + [px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
         _setColor(which, hex);
         overlay.style.display = 'flex';
@@ -14463,7 +14463,7 @@ function _edShowGradientDialog() {
   document.getElementById('egd-ok')?.addEventListener('click', () => {
     overlay.remove();
     _edFillGradActive = true;
-    edToast('Arrastra una línea sobre el dibujo para aplicar el degradado');
+    edToast(I18n.t('ed_dragLineForGradient'));
     edCanvas.style.cursor = 'crosshair';
     edRenderOptionsPanel('fill');
   });
@@ -14647,7 +14647,7 @@ function _edLineAddPoint(nx, ny, isTouch=false){
   _edShapePushHistory(); // guardar estado tras cada nodo para deshacer/rehacer
   edRedraw();
   const info=$('op-line-info');
-  if(info) info.textContent=`${_edLineLayer.points.length} vértice(s). Toca el primero para cerrar.`;
+  if(info) info.textContent=I18n.t('ed_verticesCloseInfo', { n: _edLineLayer.points.length });
 }
 
 // ── Cursor offset: inicia el seguimiento visual sin dibujar ──
@@ -14658,7 +14658,7 @@ function _cofShowHint(show) {
   const h = document.getElementById('edCofHint');
   if (!h) return;
   if (show) {
-    h.innerHTML = '<b style="color:#1a8cff">Guía azul:</b> Posiciona el cursor<br><b style="color:#e02020">Guía roja:</b> Arrastra para dibujar';
+    h.innerHTML = I18n.t('ed_offsetCursorHintHtml');
     // Posicionar debajo del topbar + panel de opciones (si está abierto)
     const topbar = document.getElementById('edTopbar');
     const menu   = document.getElementById('edMenuBar');
@@ -15083,7 +15083,7 @@ function _vcofShowHint(show) {
     (document.getElementById('editorShell') || document.body).appendChild(h);
   }
   if (show) {
-    h.textContent = 'Selecciona nodo a desplazar';
+    h.textContent = I18n.t('ed_selectNodeToMove');
     const topbar = document.getElementById('edTopbar');
     const menu   = document.getElementById('edMenuBar');
     const panel  = document.getElementById('edOptionsPanel');
@@ -15833,7 +15833,7 @@ function edClearDraw(){
   // También eliminar page.drawData legado si existiera
   page.drawData = null;
   edPainting = false;
-  edRedraw(); edToast('Dibujos borrados');
+  edRedraw(); edToast(I18n.t('ed_drawingsErased'));
 }
 function _edSyncFillCursor(){
   if(!edCanvas) return;
@@ -16145,9 +16145,9 @@ function _edActivateShapeTool(isNew, isCreating) {
   <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
   <!-- FILA 1: Tipo + cambiar a Rectas -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-tool-shape" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:rgba(0,0,0,.08);color:var(--black)">Objeto</button>
+    <button id="op-tool-shape" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:rgba(0,0,0,.08);color:var(--black)">${I18n.t('op_tabObject')}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-tool-line" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">Rectas</button>
+    <button id="op-tool-line" style="flex-shrink:0;border:none;border-radius:6px;padding:5px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.85rem);font-weight:900;cursor:pointer;white-space:nowrap;background:transparent;color:var(--gray-600)">${I18n.t('op_tabLines')}</button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: Tipo de forma + color + grosor + opacidad -->
@@ -16156,10 +16156,10 @@ function _edActivateShapeTool(isNew, isCreating) {
     <button id="op-shape-ellipse" style="flex-shrink:0;border:2px solid ${_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-shape-select" style="flex-shrink:0;border:2px solid ${_edShapeType==='select'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='select'?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-shape-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="Color borde"></button>
-    <button id="op-shape-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="Cuentagotas">💧</button>
+    <button id="op-shape-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_borderColor')}"></button>
+    <button id="op-shape-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="${I18n.t('ed_eyedropTool')}">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
+    <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap" style="flex:1;min-width:40px">
         <input type="range" id="op-dsize" min="0" max="20" data-suffix="px" value="${lw}" style="width:100%;accent-color:var(--black)">
@@ -16178,7 +16178,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA RELLENO -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
-    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">Relleno</span>
+    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-shape-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
       <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
@@ -16187,8 +16187,8 @@ function _edActivateShapeTool(isNew, isCreating) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
-    <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">NODOS</button>
-    <div id="op-shape-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">Curvar</span>
+    <button id="op-shape-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_convertToCurve')}">${I18n.t('ed_nodesLabel')}</button>
+    <div id="op-shape-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('op_curveLabel')}</span>
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-shape-curve-rnum" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-shape-curve-r" min="0" max="80" value="${_sel?(_sel.cornerRadius||0):0}" style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>
@@ -16197,8 +16197,8 @@ function _edActivateShapeTool(isNew, isCreating) {
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↩</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
 
-    <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':'Sin objeto'}</span>
-    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
+    <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':I18n.t('op_noObject')}</span>
+    <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
   panel.classList.add('open');
@@ -16227,7 +16227,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   const _updateInfo = () => {
     const s=_curShape();
     const info=$('op-shape-info');
-    if(info) info.textContent = s ? _edShapeType+'·'+s.lineWidth+'px·'+Math.round((s.opacity??1)*100)+'%' : 'Sin objeto';
+    if(info) info.textContent = s ? _edShapeType+'·'+s.lineWidth+'px·'+Math.round((s.opacity??1)*100)+'%' : I18n.t('op_noObject');
   };
 
   // ── Herramientas ──
@@ -16427,7 +16427,7 @@ function _edActivateShapeTool(isNew, isCreating) {
     // ── Eliminar ──
   $('op-shape-del')?.addEventListener('click',()=>{
     const s=_curShape(); if(!s) return;
-    edConfirm('¿Eliminar objeto?', ()=>{
+    edConfirm(I18n.t('ed_confirmDeleteObject'), ()=>{
       const idx=edLayers.indexOf(s);
       if(idx>=0){edLayers.splice(idx,1);}
       edSelectedIdx=-1;
@@ -16502,21 +16502,21 @@ function _edActivateLineTool(isNew, isCreating) {
   <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
   <!-- FILA 1: Tipo de objeto + selección -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
-    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Pol\u00edgono"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg></button>
-    <button id="op-line-segment-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='segment'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 5px;cursor:pointer;background:${_edLineType==='segment'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="Segmento"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg></button>
+    <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="${I18n.t('op_polygonTool')}"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg></button>
+    <button id="op-line-segment-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='segment'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 5px;cursor:pointer;background:${_edLineType==='segment'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="${I18n.t('op_segmentTool')}"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg></button>
     <button id="op-line-rect-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
     <button id="op-line-ellipse-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
-    <div id="op-line-close-sep" style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;display:${_showCloseBtn?'':'none'}"></div><button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:${_showCloseBtn?'':'none'}">Cerrar objeto</button>
+    <div id="op-line-close-sep" style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;display:${_showCloseBtn?'':'none'}"></div><button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:${_showCloseBtn?'':'none'}">${I18n.t('op_closeObjectBtn')}</button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: color + grosor + opacidad -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-line-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="Color línea"></button>
-    <button id="op-line-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="Cuentagotas">💧</button>
+    <button id="op-line-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('op_lineColorTitle')}"></button>
+    <button id="op-line-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="${I18n.t('ed_eyedropTool')}">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
-    <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
+    <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap" style="flex:1;min-width:40px">
         <input type="range" id="op-dsize" min="0" max="20" data-suffix="px" value="${lw}" style="width:100%;accent-color:var(--black)">
@@ -16535,19 +16535,19 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA CERRAR + V/C + INFO VÉRTICES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
-    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="Convertir vértice a curva">NODOS</button>
-    ${window._edIsTouch ? `<div id="op-vcof-wrap" style="display:none;align-items:center;gap:4px"><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="Cursor desplazado para nodos"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Zurda</span><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Diestra</span><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div></div>` : ''}
-    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:none;padding:0;width:28px;height:28px;background:white;border-radius:50%;cursor:pointer;overflow:hidden;line-height:0" title="Fusionar objetos cerrados en uno solo con huecos"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="28" height="28"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg></button>` : ''}
-    <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">Curvar</span>
+    <button id="op-line-curve-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_convertToCurve')}">${I18n.t('ed_nodesLabel')}</button>
+    ${window._edIsTouch ? `<div id="op-vcof-wrap" style="display:none;align-items:center;gap:4px"><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-vcof-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:flex;align-items:center;gap:3px" title="${I18n.t('op_offsetCursorNodes')}"><svg width="14" height="22" viewBox="0 0 14 22" style="flex-shrink:0"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg></button><div id="op-vcof-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_leftHanded')}</span><button id="op-vcof-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltLeft')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_rightHanded')}</span><button id="op-vcof-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltRight')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div></div>` : ''}
+    ${(isClosed || canFuse) ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div><button id="op-line-fuse-btn" style="flex-shrink:0;border:none;padding:0;width:28px;height:28px;background:white;border-radius:50%;cursor:pointer;overflow:hidden;line-height:0" title="${I18n.t('ed_fuseObjects')}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="28" height="28"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg></button>` : ''}
+    <div id="op-line-curve-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0"><span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('op_curveLabel')}</span>
       <input type="number" inputmode="numeric" enterkeyhint="done" id="op-line-curve-rnum" min="0" max="80" value="0" style="width:38px;text-align:right;font-size:.8rem;font-weight:700;border:1px solid var(--gray-300);border-radius:6px;padding:2px 4px;background:transparent;-moz-appearance:textfield;flex-shrink:0">
       <input type="range" id="op-line-curve-r" min="0" max="80" value="0" style="flex:1;min-width:40px;accent-color:var(--black)">
     </div>
-    ${!edLastPointerIsTouch ? `<span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?nPoints+' vért.':'Toca para añadir vértices'}</span>` : ''}
+    ${!edLastPointerIsTouch ? `<span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?I18n.t('op_vertCount',{n:nPoints}):I18n.t('op_tapToAddVertices')}</span>` : ''}
   </div>
   ${isClosed?`
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
-    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">Relleno</span>
+    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-line-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
       <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
@@ -16561,7 +16561,7 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
 
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
-    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
+    <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
   // Capturar ANTES de abrir el panel si ya estaba abierto en modo 'line'
@@ -16598,7 +16598,7 @@ function _edActivateLineTool(isNew, isCreating) {
   const _updateInfo = () => {
     const info=$('op-line-info');
     const l=_curLine();
-    if(info) info.textContent = l ? (l.points.length+' vért.') : 'Toca para añadir vértices';
+    if(info) info.textContent = l ? I18n.t('op_vertCount', { n: l.points.length }) : I18n.t('op_tapToAddVertices');
     const status=$('op-line-status');
     if(status){ const ll=_curLine(); if(ll) status.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
     // Actualizar visibilidad dinámica del botón "Cerrar objeto"
@@ -16772,13 +16772,13 @@ function _edActivateLineTool(isNew, isCreating) {
       _edShapePushHistory();
       edRedraw();
       _edActivateLineTool(false, true);
-      edToast('Objetos fusionados ✓');
+      edToast(I18n.t('ed_objectsMerged'));
       return;
     }
     // Caso B: ≥2 layers line cerrados DE LA SESIÓN ACTUAL (nunca objetos pre-sesión/ajenos)
     const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l));
     if (_closedLayers.length < 2) {
-      edToast('Necesitas al menos 2 objetos cerrados de esta sesión para fusionar');
+      edToast(I18n.t('ed_needTwoClosedObjects'));
       return;
     }
     // Fusionar — crea un LineLayer NUEVO independiente (no modifica los originales)
@@ -16831,7 +16831,7 @@ function _edActivateLineTool(isNew, isCreating) {
     _edShapePushHistory(); // registrar en historial vectorial (reversible con ↩)
     edRedraw();
     _edActivateLineTool(false, true);
-    edToast('Objetos fusionados ✓');
+    edToast(I18n.t('ed_objectsMerged'));
   });
 
   $('op-line-curve-btn')?.addEventListener('click',()=>{
@@ -16946,7 +16946,7 @@ function _edActivateLineTool(isNew, isCreating) {
     // ── Eliminar ──
   $('op-line-del')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l) return;
-    edConfirm('¿Eliminar?', ()=>{
+    edConfirm(I18n.t('ed_confirmDeleteGeneric'), ()=>{
       _edLineLayer=null;
       const idx=edLayers.indexOf(l);
       if(idx>=0){edLayers.splice(idx,1);}
@@ -17053,7 +17053,7 @@ function _edTextToDrawing(idx) {
 
   // ── 2. Calcular bbox del contenido renderizado ────────────────────────────
   const bb = StrokeLayer._boundingBox(wsCanvas);
-  if (!bb) { edToast('El texto está vacío'); return; } // nada que convertir
+  if (!bb) { edToast(I18n.t('ed_textIsEmpty')); return; } // nada que convertir
 
   const uX0 = bb.x, uY0 = bb.y, uW = Math.max(1, bb.w), uH = Math.max(1, bb.h);
   const uCx = (uX0 + uW / 2 - mx) / pw;
@@ -17738,19 +17738,19 @@ function edRenderOptionsPanel(mode){
     };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Tinta</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Lápiz</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Acuarela</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">Relleno</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
+  <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_inkTool')}</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_pencilTool')}</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_watercolorTool')}</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('ed_fillTool')}</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
   <div style="display:flex;flex-direction:row;align-items:center;width:100%;min-height:32px;padding:3px 0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     ${!_actIsWc ? `<button id="op-tool-layer-icon"
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isPen||isFill?'rgba(0,0,0,.12)':'transparent'};opacity:${isPen||isFill?1:0.5}">${_edTmp.active==='pen'?`<svg xmlns="http://www.w3.org/2000/svg" width="28" height="30" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`:_edTmp.active==='pencil'?`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="16" height="26" style="image-rendering:pixelated;vertical-align:middle"/>`:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="24" height="23" style="image-rendering:pixelated;vertical-align:middle"/>`}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
-    ${_actIsWc ? `<button id="op-fill-watercolor" title="Acuarela" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${!_edDodgeBurnActive?1:0.4}"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNyIgaGVpZ2h0PSIyOSIgdmlld0JveD0iMCAwIDY2IDcwIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNy43MzggNTcuOTUzKSI+PHBhdGggZD0iTSAtNy44ODkgOS44MjkgTCAtMS4yMjMgOC43ODggTCAzLjQ2NSA2LjE4MyBMIDYuOTAyIDIuMjI1IEwgNy44ODkgLTMuMjA4IEwgNy40ODcgLTguNjczIEwgMi4yNjMgLTkuODI5IEwgLTQuMzY3IC01Ljc4MyBMIC02LjM3NiAtMi40MjAgTCAtNi4zNzYgMy4yNTYgTCAtNy44ODkgOS44MjkgWiIgZmlsbD0iI2FhNmU2ZSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjcuMjA1IDU3LjQ2NykiPjxwYXRoIGQ9Ik0gLTYuNDcwIDkuNDk4IEwgLTQuMjgyIDcuNjIzIFEgLTIuMDk1IDUuNzQ4IC0xLjk4NCAyLjg2OSBMIC0xLjc2OCAtMi43NzAgTCAtNS42MzcgNC4zOTQgTCAtNi4xMDIgMS4xOTcgTCAtNS40MzUgLTMuMzYwIEwgLTIuMTkwIC02LjU2NiBMIDMuMjE3IC05LjM5NCBMIDYuMTAyIC04LjQ1MSBMIDIuNDk2IC0yLjYwNSBMIDEuMDMwIDguMTQ0IEwgLTYuNDcwIDkuNDk4IFoiIGZpbGw9IiNmOWNkY2QiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ2LjkxMiAyNC41ODYpIj48cGF0aCBkPSJNIC0xNS4yNjcgMjAuMTMxIEwgLTEwLjE3OCAyMS4xMzAgTCAtMi44NjMgMTAuNjQ4IEwgMy4xODEgMS44MzAgTCAxMC40OTYgLTguNjUyIEwgMTQuNjMxIC0xNS4xNDAgTCAxNS4yNjcgLTE5LjEzMyBMIDE0LjMxMyAtMjEuMTMwIEwgMTAuMTc4IC0xOS45NjUgTCAzLjgxNyAtMTUuMzA3IEwgLTEuMjcyIC03LjE1NCBMIC02Ljk5NyAzLjMyNyBMIC0xMS4xMzIgMTIuMzEyIEwgLTE1LjI2NyAyMC4xMzEgWiIgZmlsbD0iI2YyZGViYSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDYuMTA3IDI0LjIzOSkiPjxwYXRoIGQ9Ik0gLTE0LjQyMSAxOS45ODkgTCAtMTAuODE2IDIwLjc0NCBMIC0wLjAwMCAtMy41ODMgTCA1Ljc2OCAtMTEuNTAzIEwgMTQuMDYwIC0yMC43NDQgTCAxLjgwMyAtMTEuMzE1IEwgLTMuMjQ1IC0xLjY5NyBMIC04LjI5MiA5LjQyOSBMIC0xNC40MjEgMTkuOTg5IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ5LjM2MSAyNC41OTgpIj48cGF0aCBkPSJNIC0xMS43MTAgMjEuMzEyIEwgLTUuOTAwIDEwLjcxNCBMIDAuNjU1IDIuNzY2IEwgNi45MTIgLTYuMjc0IEwgMTMuNzk1IC0xNi40MzcgTCAxMi42MDEgLTIxLjMxMiBMIDEwLjQ1MCAtMTYuNzQ5IFEgOC4yOTkgLTEyLjE4NyA1LjQxMiAtOC4wNTEgTCA1LjE0OCAtNy42NzIgUSAxLjk5NiAtMy4xNTcgLTEuMjk1IDEuMjU4IEwgLTIuMTQ1IDIuMzk5IFEgLTQuODU3IDYuMDM5IC03LjUzOSA5LjcwMSBMIC03Ljg5NSAxMC4xODggUSAtMTAuMjIwIDEzLjM2NCAtMTIuMDA4IDE2Ljg3MCBMIC0xMy43OTUgMjAuMzc3IEwgLTExLjcxMCAyMS4zMTIgWiIgZmlsbD0iIzlmODQ4NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzMuODk4IDQ2LjkyOSkiPjxwYXRoIGQ9Ik0gLTEuODEyIC0yLjM5NyBMIDMuNzMwIC0xLjA1OSBMIDEuNDI4IDIuNzAwIEwgLTMuODQ0IDEuNjY2IEwgLTEuODEyIC0yLjM5NyBaIiBmaWxsPSIjZmZlMTM1IiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQwLjk1OSAzNC45NDkpIj48cGF0aCBkPSJNIC0yMC4yMTQgMzAuOTUyIEwgLTE5LjgxMiAyOS45NTQgUSAtMTkuNDEwIDI4Ljk1NSAtMTkuNTM0IDI3Ljg4NiBMIC0xOS42MTEgMjcuMjIxIFEgLTE5LjgxMiAyNS40ODcgLTE5LjY3NyAyMy43NDYgTCAtMTkuNTg3IDIyLjYwNCBRIC0xOS40MTAgMjAuMzM3IC0xOC4wMDQgMTguNTUwIEwgLTE4LjAwNCAxOC41NTAgUSAtMTYuNTk4IDE2Ljc2NCAtMTQuNjQzIDE1LjYwMSBMIC0xMC41MjYgMTMuMTUyIEwgLTcuMDEwIDYuMTY4IFEgLTMuNDk1IC0wLjgxNSAtMC4zNTcgLTcuOTc2IEwgMC44MTkgLTEwLjY1OSBRIDMuNDk1IC0xNi43NjYgNy40NjYgLTIyLjEyMSBMIDguMTY0IC0yMy4wNjMgUSAxMS40MzcgLTI3LjQ3NyAxNi4yMDMgLTMwLjIxMyBMIDE3Ljk4NyAtMzEuMjM3IFEgMjAuOTY5IC0zMi45NDkgMjEuMTI3IC0yOS41MTUgTCAyMS4xMjcgLTI5LjUxNSBRIDIxLjI4NiAtMjYuMDgwIDE5LjUxOCAtMjMuMTMxIEwgMTguMTA5IC0yMC43ODIgUSAxNC45MzIgLTE1LjQ4NSAxMS4xNTIgLTEwLjYwMCBMIDcuNzI3IC02LjE3NCBRIDIuODU5IDAuMTE2IC0xLjA2NyA3LjAzNCBMIC01LjQwMSAxNC42NzAgTCAtNS4xOTUgMTkuOTYzIFEgLTUuMDgzIDIyLjgyMCAtNi4zNTQgMjUuMzgxIEwgLTYuMzU0IDI1LjM4MSBRIC03LjYyNSAyNy45NDMgLTEwLjA5NiAyOS4zODEgTCAtMTAuMzI1IDI5LjUxNSBRIC0xMy4wMjYgMzEuMDg2IC0xNi4wNzQgMzEuNzc0IEwgLTIwLjE4MSAzMi43MDAgUSAtMjEuMjg2IDMyLjk0OSAtMjAuNzUwIDMxLjk1MSBMIC0yMC4yMTQgMzAuOTUyIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDAwMCIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTkuOTk2IDE4LjMxMykiPjxwYXRoIGQ9Ik0gLTE1LjMxMyAtMS41NzEgTCAtMTUuMDAwIDEuNDQ5IEwgMTMuNTA1IDEuNjc2IEwgMTQuMDYyIC0xLjg4NCBMIC0xNS4zMTMgLTEuNTcxIFoiIGZpbGw9IiNkNGQ0ZDQiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5LjI4MyAyOS43MzYpIj48cGF0aCBkPSJNIC0xNC41ODMgLTExLjY3NiBMIC05LjkwMyAtMTAuNjA2IFEgLTUuMjIyIC05LjUzNiAtMC41NDcgLTEwLjYzMCBMIDQuMDc5IC0xMS43MTMgUSA3LjU4MyAtMTIuNTMzIDExLjEyNSAtMTEuODkyIEwgMTQuNjY3IC0xMS4yNTEgTCAxMS41NzIgOS44ODUgUSAxMS4yMzIgMTIuMjA0IDguODg5IDEyLjI2OCBMIC04LjU5NSAxMi43NDAgUSAtMTAuOTM4IDEyLjgwNCAtMTEuMjgzIDEwLjQ4NSBMIC0xNC41ODMgLTExLjY3NiBaIiBmaWxsPSIjNWY5YmQzIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC4wNTMgMjcuODcwKSI+PHBhdGggZD0iTSAwLjk3MyAxNC40MjQgTCAtMy4wNDAgLTE1LjQ3OCBMIDIuNTM3IC0xNS40NzggTCA0LjMzMCAxMy41NzUgUSA0LjQ0MSAxNS4zNjggMi43MDcgMTQuODk2IEwgMC45NzMgMTQuNDI0IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5Ljk5MyAyOS4wODgpIj48cGF0aCBkPSJNIC0xNi40MzggLTE0LjkyOSBRIC0xOC40MzggLTE0LjkwNSAtMTguMTEwIC0xMi45MzIgTCAtMTMuOTI2IDEyLjMwMSBRIC0xMy40MjAgMTUuMzUyIC0xMC4zMjcgMTUuMzUyIEwgOC4yODEgMTUuMzUyIFEgMTIuNTM0IDE1LjM1MiAxMy4yMjAgMTEuMTU1IEwgMTcuMjI2IC0xMy4zNjggUSAxNy41NDkgLTE1LjM0MiAxNS41NDkgLTE1LjMxNyBMIC0xNi40MzggLTE0LjkyOSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjM1MCAyOS43NzIpIj48cGF0aCBkPSJNIC00LjI3MSAxMi4yODMgTCAtMS4zMDIgMTIuMjMxIFEgMS42NjcgMTIuMTc5IDIuMDE1IDkuMjMwIEwgNC40NzkgLTExLjYxNSBMIDIuMDQ3IC0xMi4xMzYgUSAwLjEwNCAtMTIuNTUyIC0xLjg3NSAtMTIuMzc0IEwgLTMuODU0IC0xMi4xOTYgTCAtNC4yNzEgMTIuMjgzIFoiIGZpbGw9IiMzNzYwODYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjwvc3ZnPg==" width="29" height="31" style="image-rendering:pixelated;vertical-align:middle"/></button>
-    <button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:43px;height:33px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="Oscurecer (izq) / Iluminar (der)"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>
+    ${_actIsWc ? `<button id="op-fill-watercolor" title="${I18n.t('op_watercolorTool')}" style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.1rem;cursor:pointer;background:${!_edDodgeBurnActive?'rgba(0,0,0,.12)':'transparent'};opacity:${!_edDodgeBurnActive?1:0.4}"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNyIgaGVpZ2h0PSIyOSIgdmlld0JveD0iMCAwIDY2IDcwIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNy43MzggNTcuOTUzKSI+PHBhdGggZD0iTSAtNy44ODkgOS44MjkgTCAtMS4yMjMgOC43ODggTCAzLjQ2NSA2LjE4MyBMIDYuOTAyIDIuMjI1IEwgNy44ODkgLTMuMjA4IEwgNy40ODcgLTguNjczIEwgMi4yNjMgLTkuODI5IEwgLTQuMzY3IC01Ljc4MyBMIC02LjM3NiAtMi40MjAgTCAtNi4zNzYgMy4yNTYgTCAtNy44ODkgOS44MjkgWiIgZmlsbD0iI2FhNmU2ZSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjcuMjA1IDU3LjQ2NykiPjxwYXRoIGQ9Ik0gLTYuNDcwIDkuNDk4IEwgLTQuMjgyIDcuNjIzIFEgLTIuMDk1IDUuNzQ4IC0xLjk4NCAyLjg2OSBMIC0xLjc2OCAtMi43NzAgTCAtNS42MzcgNC4zOTQgTCAtNi4xMDIgMS4xOTcgTCAtNS40MzUgLTMuMzYwIEwgLTIuMTkwIC02LjU2NiBMIDMuMjE3IC05LjM5NCBMIDYuMTAyIC04LjQ1MSBMIDIuNDk2IC0yLjYwNSBMIDEuMDMwIDguMTQ0IEwgLTYuNDcwIDkuNDk4IFoiIGZpbGw9IiNmOWNkY2QiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ2LjkxMiAyNC41ODYpIj48cGF0aCBkPSJNIC0xNS4yNjcgMjAuMTMxIEwgLTEwLjE3OCAyMS4xMzAgTCAtMi44NjMgMTAuNjQ4IEwgMy4xODEgMS44MzAgTCAxMC40OTYgLTguNjUyIEwgMTQuNjMxIC0xNS4xNDAgTCAxNS4yNjcgLTE5LjEzMyBMIDE0LjMxMyAtMjEuMTMwIEwgMTAuMTc4IC0xOS45NjUgTCAzLjgxNyAtMTUuMzA3IEwgLTEuMjcyIC03LjE1NCBMIC02Ljk5NyAzLjMyNyBMIC0xMS4xMzIgMTIuMzEyIEwgLTE1LjI2NyAyMC4xMzEgWiIgZmlsbD0iI2YyZGViYSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDYuMTA3IDI0LjIzOSkiPjxwYXRoIGQ9Ik0gLTE0LjQyMSAxOS45ODkgTCAtMTAuODE2IDIwLjc0NCBMIC0wLjAwMCAtMy41ODMgTCA1Ljc2OCAtMTEuNTAzIEwgMTQuMDYwIC0yMC43NDQgTCAxLjgwMyAtMTEuMzE1IEwgLTMuMjQ1IC0xLjY5NyBMIC04LjI5MiA5LjQyOSBMIC0xNC40MjEgMTkuOTg5IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ5LjM2MSAyNC41OTgpIj48cGF0aCBkPSJNIC0xMS43MTAgMjEuMzEyIEwgLTUuOTAwIDEwLjcxNCBMIDAuNjU1IDIuNzY2IEwgNi45MTIgLTYuMjc0IEwgMTMuNzk1IC0xNi40MzcgTCAxMi42MDEgLTIxLjMxMiBMIDEwLjQ1MCAtMTYuNzQ5IFEgOC4yOTkgLTEyLjE4NyA1LjQxMiAtOC4wNTEgTCA1LjE0OCAtNy42NzIgUSAxLjk5NiAtMy4xNTcgLTEuMjk1IDEuMjU4IEwgLTIuMTQ1IDIuMzk5IFEgLTQuODU3IDYuMDM5IC03LjUzOSA5LjcwMSBMIC03Ljg5NSAxMC4xODggUSAtMTAuMjIwIDEzLjM2NCAtMTIuMDA4IDE2Ljg3MCBMIC0xMy43OTUgMjAuMzc3IEwgLTExLjcxMCAyMS4zMTIgWiIgZmlsbD0iIzlmODQ4NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzMuODk4IDQ2LjkyOSkiPjxwYXRoIGQ9Ik0gLTEuODEyIC0yLjM5NyBMIDMuNzMwIC0xLjA1OSBMIDEuNDI4IDIuNzAwIEwgLTMuODQ0IDEuNjY2IEwgLTEuODEyIC0yLjM5NyBaIiBmaWxsPSIjZmZlMTM1IiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQwLjk1OSAzNC45NDkpIj48cGF0aCBkPSJNIC0yMC4yMTQgMzAuOTUyIEwgLTE5LjgxMiAyOS45NTQgUSAtMTkuNDEwIDI4Ljk1NSAtMTkuNTM0IDI3Ljg4NiBMIC0xOS42MTEgMjcuMjIxIFEgLTE5LjgxMiAyNS40ODcgLTE5LjY3NyAyMy43NDYgTCAtMTkuNTg3IDIyLjYwNCBRIC0xOS40MTAgMjAuMzM3IC0xOC4wMDQgMTguNTUwIEwgLTE4LjAwNCAxOC41NTAgUSAtMTYuNTk4IDE2Ljc2NCAtMTQuNjQzIDE1LjYwMSBMIC0xMC41MjYgMTMuMTUyIEwgLTcuMDEwIDYuMTY4IFEgLTMuNDk1IC0wLjgxNSAtMC4zNTcgLTcuOTc2IEwgMC44MTkgLTEwLjY1OSBRIDMuNDk1IC0xNi43NjYgNy40NjYgLTIyLjEyMSBMIDguMTY0IC0yMy4wNjMgUSAxMS40MzcgLTI3LjQ3NyAxNi4yMDMgLTMwLjIxMyBMIDE3Ljk4NyAtMzEuMjM3IFEgMjAuOTY5IC0zMi45NDkgMjEuMTI3IC0yOS41MTUgTCAyMS4xMjcgLTI5LjUxNSBRIDIxLjI4NiAtMjYuMDgwIDE5LjUxOCAtMjMuMTMxIEwgMTguMTA5IC0yMC43ODIgUSAxNC45MzIgLTE1LjQ4NSAxMS4xNTIgLTEwLjYwMCBMIDcuNzI3IC02LjE3NCBRIDIuODU5IDAuMTE2IC0xLjA2NyA3LjAzNCBMIC01LjQwMSAxNC42NzAgTCAtNS4xOTUgMTkuOTYzIFEgLTUuMDgzIDIyLjgyMCAtNi4zNTQgMjUuMzgxIEwgLTYuMzU0IDI1LjM4MSBRIC03LjYyNSAyNy45NDMgLTEwLjA5NiAyOS4zODEgTCAtMTAuMzI1IDI5LjUxNSBRIC0xMy4wMjYgMzEuMDg2IC0xNi4wNzQgMzEuNzc0IEwgLTIwLjE4MSAzMi43MDAgUSAtMjEuMjg2IDMyLjk0OSAtMjAuNzUwIDMxLjk1MSBMIC0yMC4yMTQgMzAuOTUyIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDAwMCIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTkuOTk2IDE4LjMxMykiPjxwYXRoIGQ9Ik0gLTE1LjMxMyAtMS41NzEgTCAtMTUuMDAwIDEuNDQ5IEwgMTMuNTA1IDEuNjc2IEwgMTQuMDYyIC0xLjg4NCBMIC0xNS4zMTMgLTEuNTcxIFoiIGZpbGw9IiNkNGQ0ZDQiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5LjI4MyAyOS43MzYpIj48cGF0aCBkPSJNIC0xNC41ODMgLTExLjY3NiBMIC05LjkwMyAtMTAuNjA2IFEgLTUuMjIyIC05LjUzNiAtMC41NDcgLTEwLjYzMCBMIDQuMDc5IC0xMS43MTMgUSA3LjU4MyAtMTIuNTMzIDExLjEyNSAtMTEuODkyIEwgMTQuNjY3IC0xMS4yNTEgTCAxMS41NzIgOS44ODUgUSAxMS4yMzIgMTIuMjA0IDguODg5IDEyLjI2OCBMIC04LjU5NSAxMi43NDAgUSAtMTAuOTM4IDEyLjgwNCAtMTEuMjgzIDEwLjQ4NSBMIC0xNC41ODMgLTExLjY3NiBaIiBmaWxsPSIjNWY5YmQzIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC4wNTMgMjcuODcwKSI+PHBhdGggZD0iTSAwLjk3MyAxNC40MjQgTCAtMy4wNDAgLTE1LjQ3OCBMIDIuNTM3IC0xNS40NzggTCA0LjMzMCAxMy41NzUgUSA0LjQ0MSAxNS4zNjggMi43MDcgMTQuODk2IEwgMC45NzMgMTQuNDI0IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5Ljk5MyAyOS4wODgpIj48cGF0aCBkPSJNIC0xNi40MzggLTE0LjkyOSBRIC0xOC40MzggLTE0LjkwNSAtMTguMTEwIC0xMi45MzIgTCAtMTMuOTI2IDEyLjMwMSBRIC0xMy40MjAgMTUuMzUyIC0xMC4zMjcgMTUuMzUyIEwgOC4yODEgMTUuMzUyIFEgMTIuNTM0IDE1LjM1MiAxMy4yMjAgMTEuMTU1IEwgMTcuMjI2IC0xMy4zNjggUSAxNy41NDkgLTE1LjM0MiAxNS41NDkgLTE1LjMxNyBMIC0xNi40MzggLTE0LjkyOSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjM1MCAyOS43NzIpIj48cGF0aCBkPSJNIC00LjI3MSAxMi4yODMgTCAtMS4zMDIgMTIuMjMxIFEgMS42NjcgMTIuMTc5IDIuMDE1IDkuMjMwIEwgNC40NzkgLTExLjYxNSBMIDIuMDQ3IC0xMi4xMzYgUSAwLjEwNCAtMTIuNTUyIC0xLjg3NSAtMTIuMzc0IEwgLTMuODU0IC0xMi4xOTYgTCAtNC4yNzEgMTIuMjgzIFoiIGZpbGw9IiMzNzYwODYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjwvc3ZnPg==" width="29" height="31" style="image-rendering:pixelated;vertical-align:middle"/></button>
+    <button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:43px;height:33px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="${I18n.t('op_dodgeBurnTitle')}"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     <button id="op-tool-eraser"
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isEr?'rgba(0,0,0,.12)':'transparent'};opacity:${isEr?1:0.5}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIyMSIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDIxIDIwIj4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCVUFBQUFVQ0FZQUFBQmlTM1l6QUFBRUZVbEVRVlI0QWJTU2YweVVkUnpIUDkvbkYyZUFRQndKaG9hRnpybXhydkZqSWJVd0NZMVowOHdMYTVXTmlVNjNhblBKeWorNldFd2JZTG1BbEJoSktjZWdXb1dMTUptaXN3NEZzZFdKRUwrRy9EZzhQZTdoemp1T2U1N24yK2Q1NEc0bVRQL1I3ejd2NzgvUDkvVjlQOS92dzhBREtQY0xxbkxDQXY3VVFhQi8xN2ErSGxpckZRUktZYjQ5Q202V1VGck1sNkF0ekZiazlEZmJkTC9YRjBTOGtMb3gzT3ZOangwZmYxUC9WM04ycU1rMEJ6NDF1MmZPUW1BZU1nMlJrWjJkMnlJKy85NlNVMXgxcWlObDdZWFJyS3phZjFOVG12czM1RjA4VmwwZHR0dHFYU1VFTjl6V21jOHBhVy9QNSt0KzJ5ZHMzblNpNGcvTDJBOFpxdzJQSC8vdUU2R3o0eWd4bXd2NXJWdGZYQ2ZMUWtGYVd1L1BPZzR5NFk1eUo1UlFDdXoyN1QrK3VtTEZ4NTBaejZUa1hteXJwZ1VmdkVVTWhrUW1SaC9KR1o1Y3poY1Y3aEI2dWhvV3ZQM0crZ1NmVEtxUTJZcGFpTkxpZGlpVG1RbHNlQ2o3NVVDL3A3S2liRTljVmVWSHNIaXhucWlaRklCZ0FZWVF3SU1aUVFpTEtDa3RXbXF4RkI0QmdDZFFjU2d0Z3REdzhKQU41ODZScnVUVXBKeXVLM1U2NDVZc29LQVFoQUVnbGlVTTVUZ09XSTRIeW9TRFFxTVl4MFRQQXAxQTlnTkFMNjQ5aXEwV0twVG5lYWJNNTVNT0YzMjZ3LzlyWTBsb2RGUUVTeFdLbHJTY21Rb2RFcUpENkRKMEdnWDJHMVlReFI1MEx1T1JNQ3BKVXV4TUlvQUtyWStMMVNkZEd6eXRmLy9kM0NVY3h6K003b2pxTHBDazlVa0lBaDhEV2RhQi9mb2xFSjFYaWFKTWc5MCtPWUo1eWFpbEtDMVVxS0htNkh0SlFFUUVSZkU0UzdCUXdoQVU2eUhNd2dGQzlFRFlKZUNibG1IYzFncWkySTJmTDlIMjltRzZOcnZVaVh0T29BNmd0RkNoTGxHOEh1RndkTE1UNGhDbmdCNFlMZ0ZZUGhFNElaSGgrV1VQRWVZUmNMdWN4R1pySmE3SmJnQkZocnE2RHVtZHZLK244ZEhLa2JRSEZRd1Y2bTVwK2VlTUludXA0K2Jmek9CQU16aWRJMERJSWxSTWlDUXhNUTY4dnh2MlA0SHQ3c09OTWhRZlBLa2MrT3lYY1J6a3hNZkhmNHV0eXNGbUp0VEI1YktLbHFpZVhwdGRsdjNFTDdueG5pNFF1OTFDRkVVaEhxK05jVGc2WWNvM1JtWEpUL04zMWpqckd5em5FeEpDVmlQaS9QRHdzQmRiQlJVTUZib2JQK0hZcGxmSzlXWnptNkkrdVNTSklEcXQ0UEdNd0sxYi9mZzRMdHJkUFVvem55L3U2N295L0ZOTnpjYjFmWDNlYTBpWlJzMEpGWXFQRFFkNUh0S0tTNXJhc3RlVjJxOTJqZUhKVTVUUVVhcElOK254MmpZd3Z2YVZIMys5eXNPVkwrMDBHaHRVZDNOZ2dRa1Zxdlg5ZnJoVVcwdWZGU2M5aDNKZlB6THhkUG8rMTFQSlJ2dktWWG4waTBNbnorcjF3c3ZwNlN2TEVUaXZPdzB5V3dXaDZ0aG9CSG52WG1tLzJieDVrY3ZsZm01d2NHUkxkSFRJOHFhbWpLeGR1ejQ4MWRqWTRWSHo3cVgvUWRWa2t3a1VkQ09qODh1U0JHZUhoc1QrTld2T1NDYVRDYTlFemJpMy9nTUFBUC8vREM3b1R3QUFBQVpKUkVGVUF3QlRnYWc0d2ZFMDZnQUFBQUJKUlU1RXJrSmdnZz09IiB4PSIwIiB5PSIwIiB3aWR0aD0iMjEiIGhlaWdodD0iMjAiLz4KPC9zdmc+" width="21" height="20" style="image-rendering:pixelated;vertical-align:middle"/></button>
     <button id="op-color-erase-btn"
-      style="flex-shrink:0;border:1.5px solid ${window._edColorEraseReady?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${window._edColorEraseReady?'var(--black)':'transparent'};color:${window._edColorEraseReady?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="Tocar aquí y luego tocar un color del canvas para borrarlo">Borrar color</button>
-    ${_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-fill-gradient" style="flex-shrink:0;border:1.5px solid ${_edFillGradActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edFillGradActive?'var(--black)':'transparent'};color:${_edFillGradActive?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="Aplicar degradado al relleno dibujando una línea">Degradado</button><button id="op-fill-smooth" style="flex-shrink:0;border:1.5px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:var(--gray-600);white-space:nowrap" title="Suavizar bordes del relleno con antialiasing">Suavizar</button>` : ''}
+      style="flex-shrink:0;border:1.5px solid ${window._edColorEraseReady?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${window._edColorEraseReady?'var(--black)':'transparent'};color:${window._edColorEraseReady?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="${I18n.t('op_eraseColorTitle')}">${I18n.t('op_eraseColorBtn')}</button>
+    ${_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-fill-gradient" style="flex-shrink:0;border:1.5px solid ${_edFillGradActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edFillGradActive?'var(--black)':'transparent'};color:${_edFillGradActive?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="${I18n.t('op_applyGradientTitle')}">${I18n.t('ed_gradientTitle')}</button><button id="op-fill-smooth" style="flex-shrink:0;border:1.5px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:var(--gray-600);white-space:nowrap" title="${I18n.t('op_smoothFillTitle')}">${I18n.t('op_smoothBtn')}</button>` : ''}
 
   </div>
   <!-- SEP H -->
@@ -17761,7 +17761,7 @@ function edRenderOptionsPanel(mode){
     ${(!isFill || edFillBrushType === 'watercolor') ? `
 
     <button id="op-size-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">Grosor</button>
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider"
       style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap">
@@ -17783,14 +17783,14 @@ function edRenderOptionsPanel(mode){
     </div>
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="Color personalizado">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="Cuentagotas">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => '<button class="op-pal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:'+(i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+c+'"></button>'+(i===0&&_edTmp.active==='pencil'?'<button id="op-pencil-sanguina" style="width:22px;height:22px;border-radius:50%;background:#7A2E20;border:'+(edDrawColor==='#7A2E20'?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="Sanguina oscura"></button>':'')).join('')}\n    ${window._edIsTouch && !_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="38" height="14" style="image-rendering:pixelated;vertical-align:middle"/></button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Zurda</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Diestra</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch ? `
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="${I18n.t('ed_customColorTitle')}">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => '<button class="op-pal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:'+(i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+c+'"></button>'+(i===0&&_edTmp.active==='pencil'?'<button id="op-pencil-sanguina" style="width:22px;height:22px;border-radius:50%;background:#7A2E20;border:'+(edDrawColor==='#7A2E20'?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+I18n.t('op_darkSanguineTitle')+'"></button>':'')).join('')}\n    ${window._edIsTouch && !_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="38" height="14" style="image-rendering:pixelated;vertical-align:middle"/></button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_leftHanded')}</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltLeft')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_rightHanded')}</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltRight')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch ? `
   <!-- SEP H --><div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA CURSOR BORRADOR -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%;position:relative">
     <button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="38" height="14" style="image-rendering:pixelated;vertical-align:middle"/></button>
     <div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;">
-      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Zurda</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado izquierda"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
-      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">Diestra</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="Inclinado derecha"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_leftHanded')}</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltLeft')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_rightHanded')}</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltRight')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
     </div>
   </div>
 ` : ''}
@@ -17803,10 +17803,10 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-redo"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>↪</button>
     <button id="op-zoom-btn"
-      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" title="Herramienta zoom">🔍</button>
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" title="${I18n.t('op_zoomToolTitle')}">🔍</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
-    <button id="op-panel-collapse" title="Minimizar panel">▲</button>
+    <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
     const _drawPanelAlreadyOpen = panel.classList.contains('open') && panel.dataset.mode === 'draw';
@@ -17904,9 +17904,9 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
     });
     $('op-layer-clear')?.addEventListener('click',()=>{
-      const _names = {pen:'Tinta',pencil:'Lápiz',watercolor:'Acuarela',bucket:'Relleno'};
+      const _names = {pen:I18n.t('op_inkTool'),pencil:I18n.t('op_pencilTool'),watercolor:I18n.t('op_watercolorTool'),bucket:I18n.t('ed_fillTool')};
       const _name = _names[_edTmp.active] || _edTmp.active;
-      edConfirm('¿Borrar todo el contenido de la capa de ' + _name + '?', () => {
+      edConfirm(I18n.t('ed_confirmClearLayer', { name: _name }), () => {
         _edDrawPushHistory();
         const _dlCl = _edTmp[_edTmp.active];
         if(_dlCl?._canvas) _dlCl._ctx.clearRect(0,0,_dlCl._canvas.width,_dlCl._canvas.height);
@@ -17924,7 +17924,7 @@ function edRenderOptionsPanel(mode){
           }
         }
         _edDrawPushHistory(); edRedraw();
-      }, 'Borrar');
+      }, I18n.t('ed_clearBtn'));
     });
     $('op-tool-pen')?.addEventListener('click',()=>{
       _edDodgeBurnActive = false;
@@ -18037,7 +18037,7 @@ function edRenderOptionsPanel(mode){
     // lo que cancela el evento click en Android Chrome.
     $('op-custom-color-btn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
-      if(edSelectedPaletteIdx <= 1){ edToast('Este color no es editable'); return; }
+      if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); return; }
       if(window._edIsTouch){
         _edShowColorPicker((hex, final)=>{
           edDrawColor = hex;
@@ -18075,7 +18075,7 @@ function edRenderOptionsPanel(mode){
         edSelectedPaletteIdx = idx;
         edDrawColor = edColorPalette[idx];
         _edUpdatePaletteDots();
-        if (idx <= 1) { edToast('Este color no es editable'); return; }
+        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           edDrawColor = hex;
           if (final) { edColorPalette[idx] = hex; }
@@ -18091,7 +18091,7 @@ function edRenderOptionsPanel(mode){
         edSelectedPaletteIdx = idx;
         edDrawColor = edColorPalette[idx];
         _edUpdatePaletteDots();
-        if (idx <= 1) { edToast('Este color no es editable'); return; }
+        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           edDrawColor = hex;
           if (final) { edColorPalette[idx] = hex; }
@@ -18249,7 +18249,7 @@ function edRenderOptionsPanel(mode){
 
     // ── Eliminar ──
     $('op-draw-del')?.addEventListener('click',()=>{
-      edConfirm('¿Eliminar el dibujo?', ()=>{
+      edConfirm(I18n.t('ed_confirmDeleteDrawing'), ()=>{
         const page=edPages[edCurrentPage];if(!page)return;
         const _dlDel=page.layers.find(l=>l.type==='draw');
         // Eliminar capas del grupo vinculadas (fill, pencil, watercolor)
@@ -18275,7 +18275,7 @@ function edRenderOptionsPanel(mode){
         edCloseOptionsPanel();
         edPushHistory(); // guardar eliminación en historial global
         edRedraw();
-        edToast('Dibujo eliminado');
+        edToast(I18n.t('ed_drawingDeleted'));
       });
     });
 
@@ -18297,10 +18297,10 @@ function edRenderOptionsPanel(mode){
     if(la.groupId){ edRenderOptionsPanel('props'); return; }
     _edFocusDone = false;
     const isBubble = la.type==='bubble';
-    const editLabel = isBubble ? '💬 Editar bocadillo' : '✏️ Editar texto';
+    const editLabel = isBubble ? I18n.t('op_editBubbleBtn') : I18n.t('op_editTextBtn');
     panel.innerHTML=`
       <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
-      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
@@ -18309,17 +18309,17 @@ function edRenderOptionsPanel(mode){
       </div>
       ${_edPathRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-text-to-draw" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🖼️ Convertir en imagen</button>
+        <button id="pp-text-to-draw" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_convertToImageBtn')}</button>
       </div>
       <div class="op-prop-row">
-        <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>
+        <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>
       </div>
       <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
-        <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
+        <button class="op-btn danger" id="pp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
         ${la.groupId
-          ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
-          : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`}
-        <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?'Desbloquear':'Bloquear'}">🔒</button>
+          ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>`
+          : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>`}
+        <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">🔒</button>
         <button id="pp-ok-bottom" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>`;
     panel.classList.add('open');
@@ -18335,7 +18335,7 @@ function edRenderOptionsPanel(mode){
     $('pp-text-to-draw')?.addEventListener('click',()=>{ if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx); });
     $('pp-btn-action')?.addEventListener('click',()=>{ const _la=edLayers[edSelectedIdx]; if(_la) _edOpenBtnModal(_la); });
     $('pp-del')?.addEventListener('click',()=>{
-      edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -18353,7 +18353,7 @@ function edRenderOptionsPanel(mode){
       }
       edPushHistory();
       const _btn3=$('pp-lock');
-      if(_btn3){ _btn3.style.opacity=_la3.locked?'1':'0.4'; _btn3.title=_la3.locked?'Desbloquear':'Bloquear'; }
+      if(_btn3){ _btn3.style.opacity=_la3.locked?'1':'0.4'; _btn3.title=_la3.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn'); }
     });
     $('pp-path-btn')?.addEventListener('click',()=>{
       const _pidx=edSelectedIdx; if(_pidx<0) return;
@@ -18415,19 +18415,19 @@ function edRenderOptionsPanel(mode){
       const _grpOpacities = _grpLockIdxs0.map(i => edLayers[i]?.opacity ?? 1);
       const _grpAvgOpacity = _grpOpacities.length ? _grpOpacities.reduce((a,b)=>a+b,0)/_grpOpacities.length : 1;
       panel.innerHTML=`
-        <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
+        <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_rotationLabel')}</span>
           <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-grp-rot" value="0" min="-360" max="360"> °
-          <span class="op-prop-label" style="min-width:auto;margin-left:8px">Opacidad</span>
+          <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_opacityLabel')}</span>
           <span id="pp-grp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round(_grpAvgOpacity*100)}%</span>
           <input type="range" id="pp-grp-opacity" min="0" max="100" value="${Math.round(_grpAvgOpacity*100)}" style="flex:1;accent-color:var(--black)">
         </div>
         <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
 
         ${_edGrpPathRowHtml(la)}
-          <button class="op-btn danger" id="pp-grp-del" style="flex:1">✕ Eliminar</button>
-          <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>
-          <button class="op-btn" id="pp-grp-mirror" title="Simetría" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
-          <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?'Desbloquear grupo':'Bloquear grupo'}" style="flex-shrink:0;background:var(--gray-100);opacity:${_grpAllLocked?'1':'0.4'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">🔒</button>
+          <button class="op-btn danger" id="pp-grp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
+          <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>
+          <button class="op-btn" id="pp-grp-mirror" title="${I18n.t('op_mirrorTitle')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
+          <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?I18n.t('ly_unlockGroup'):I18n.t('ly_lockGroup')}" style="flex-shrink:0;background:var(--gray-100);opacity:${_grpAllLocked?'1':'0.4'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">🔒</button>
           <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
@@ -18487,7 +18487,7 @@ function edRenderOptionsPanel(mode){
       $('pp-grp-opacity')?.addEventListener('change', () => { edPushHistory(); });
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
-        edConfirm('¿Eliminar el grupo completo?', ()=>{
+        edConfirm(I18n.t('ed_confirmDeleteWholeGroup'), ()=>{
           const _delMainIdxs = _edGroupMemberIdxs(gid);
           // Incluir sub-capas vinculadas (fill/pencil/watercolor) de los StrokeLayers
           // del grupo — no llevan groupId, así que _edGroupMemberIdxs no las recoge
@@ -18651,9 +18651,9 @@ function edRenderOptionsPanel(mode){
         const btn = $('pp-grp-lock');
         if(btn){
           btn.style.opacity = newLocked ? '1' : '0.4';
-          btn.title = newLocked ? 'Desbloquear grupo' : 'Bloquear grupo';
+          btn.title = newLocked ? I18n.t('ly_unlockGroup') : I18n.t('ly_lockGroup');
         }
-        edToast(newLocked ? 'Grupo bloqueado 🔒' : 'Grupo desbloqueado 🔓');
+        edToast(newLocked ? I18n.t('ed_groupLocked') : I18n.t('ed_groupUnlocked'));
       });
       // ── Recorrido del grupo ──
       $('pp-grp-path-btn')?.addEventListener('click', () => {
@@ -18704,35 +18704,35 @@ function edRenderOptionsPanel(mode){
         html+=`
         <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
         <div class="op-prop-row">
-          <button id="pp-td-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✏️ Editar texto</button>
+          <button id="pp-td-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editTextBtn')}</button>
         </div>
         <div class="op-prop-row"><span class="op-prop-label">Color</span>
           <input type="color" id="pp-color" value="${la.color}">
-          <span class="op-prop-label" style="min-width:auto;margin-left:8px">Fondo</span>
+          <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_bgLabel')}</span>
           <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
         </div>
-        <div class="op-prop-row"><span class="op-prop-label">Marco</span>
+        <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_frameLabel')}</span>
           <select id="pp-bw">
-            ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?'Sin borde':n+'px'}</option>`).join('')}
+            ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?I18n.t('ed_noBorder'):n+'px'}</option>`).join('')}
           </select>
           <input type="color" id="pp-bc" value="${la.borderColor}">
-          <span class="op-prop-label" style="min-width:auto;margin-left:8px">Fondo</span>
+          <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_bgLabel')}</span>
           <span id="pp-bgop-val" style="font-size:.75rem;font-weight:900;min-width:28px;text-align:left">${Math.round((la.bgOpacity??1)*100)}%</span>
           <input type="range" id="pp-bgop" min="0" max="100" value="${Math.round((la.bgOpacity??1)*100)}" style="flex:1;min-width:40px;accent-color:var(--black)">
         </div>
-        <div class="op-prop-row"><span class="op-prop-label">Márgenes</span>
+        <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_marginsLabel')}</span>
           <select id="pp-td-margin">
-            <option value="0.02" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.02)<0.005?'selected':''}>Estrecho</option>
+            <option value="0.02" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.02)<0.005?'selected':''}>${I18n.t('op_marginNarrow')}</option>
             <option value="0.045" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.045)<0.005?'selected':''}>Normal</option>
-            <option value="0.08" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.08)<0.005?'selected':''}>Ancho</option>
+            <option value="0.08" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.08)<0.005?'selected':''}>${I18n.t('op_marginWide')}</option>
           </select>
         </div>`;
       } else {
       html+=`
       <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
-      <div class="op-prop-row"><span class="op-prop-label">Texto</span>
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_textLabel')}</span>
         <textarea id="pp-text" style="border-radius:8px;resize:vertical;min-height:40px;flex:1;border:2px solid var(--gray-300);padding:4px 8px;font-family:var(--font-body);font-size:.84rem;">${la.text.replace(/</g,'&lt;')}</textarea></div>
-      <div class="op-prop-row"><span class="op-prop-label">Fuente</span>
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_fontLabel')}</span>
         <select id="pp-font">
           <option value="Patrick Hand" ${la.fontFamily==='Patrick Hand'?'selected':''}>Patrick Hand</option>
           <option value="Bangers" ${la.fontFamily==='Bangers'?'selected':''}>Bangers</option>
@@ -18745,62 +18745,62 @@ function edRenderOptionsPanel(mode){
           <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
           <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
         </select>
-        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="Negrita">
+        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="${I18n.t('td_boldTitle')}">
           <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
         </label>
-        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-style:italic;margin-left:4px;cursor:pointer" title="Cursiva">
+        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-style:italic;margin-left:4px;cursor:pointer" title="${I18n.t('td_italicTitle')}">
           <input type="checkbox" id="pp-italic" ${la.fontItalic?'checked':''}><i>I</i>
         </label>
-        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Tamaño</span>
+        <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_sizeLabel')}</span>
         <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-fs" value="${la.fontSize}" min="8" max="120">
         <input type="color" id="pp-color" value="${la.color}">
         <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
       </div>
-      <div class="op-prop-row"><span class="op-prop-label">Marco</span>
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_frameLabel')}</span>
         <select id="pp-bw">
-          ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?'Sin borde':n+'px'}</option>`).join('')}
+          ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${la.borderWidth===n?'selected':''}>${n===0?I18n.t('ed_noBorder'):n+'px'}</option>`).join('')}
         </select>
         <input type="color" id="pp-bc" value="${la.borderColor}">
-        <span class="op-prop-label" style="min-width:auto;margin-left:8px">Fondo</span>
+        <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_bgLabel')}</span>
         <span id="pp-bgop-val" style="font-size:.75rem;font-weight:900;min-width:28px;text-align:left">${Math.round((la.bgOpacity??1)*100)}%</span>
         <input type="range" id="pp-bgop" min="0" max="100" value="${Math.round((la.bgOpacity??1)*100)}" style="flex:1;min-width:40px;accent-color:var(--black)">
       </div>`;
       }
       if(la.type==='bubble'){
         html+=`
-        <div class="op-prop-row"><span class="op-prop-label">Estilo</span>
+        <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_styleLabel')}</span>
           <select id="pp-style">
-            <option value="conventional" ${la.style==='conventional'?'selected':''}>Convencional</option>
-            <option value="lowvoice" ${la.style==='lowvoice'?'selected':''}>Voz baja</option>
-            <option value="thought" ${la.style==='thought'?'selected':''}>Pensamiento</option>
-            <option value="explosion" ${la.style==='explosion'?'selected':''}>Explosión/Grito</option>
+            <option value="conventional" ${la.style==='conventional'?'selected':''}>${I18n.t('op_bubbleConventional')}</option>
+            <option value="lowvoice" ${la.style==='lowvoice'?'selected':''}>${I18n.t('op_bubbleLowVoice')}</option>
+            <option value="thought" ${la.style==='thought'?'selected':''}>${I18n.t('op_bubbleThought')}</option>
+            <option value="explosion" ${la.style==='explosion'?'selected':''}>${I18n.t('op_bubbleExplosion')}</option>
           </select>
         </div>
         <div class="op-prop-row">
-          <span class="op-prop-label">Nº voces</span>
+          <span class="op-prop-label">${I18n.t('op_voiceCountLabel')}</span>
           <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
           <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:12px">
-            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  Cola
+            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  ${I18n.t('op_tailLabel')}
           </label>
         </div>`;
       }
     } else if(la.type==='draw'){
       html+=`
-      <div class="op-prop-row"><span class="op-prop-label">Opacidad</span>
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>
       <div class="op-prop-row">
-        <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> Editar dibujo</button>
-        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
+        <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_editDrawingBtn')}</button>
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_cropBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='stroke'){
       html+=`
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> Editar dibujo</button>
-        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
+        <button id="pp-edit-stroke" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_editDrawingBtn')}</button>
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_cropBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='gif' || (la.type==='image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames))) {
@@ -18808,48 +18808,48 @@ function edRenderOptionsPanel(mode){
       html+=`
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎬 Editar animación</button>
+        <button id="pp-edit-anim" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editAnimationBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='image'){
       html+=`
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✂ Recortar</button>
+        <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_cropBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='shape'){
       html+=`
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-edit-shape" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> Edición vectorial</button>
-        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎨 Editar relleno</button>
+        <button id="pp-edit-shape" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_vectorEditBtn')}</button>
+        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editFillBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='line'){
       html+=`
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
-        <button id="pp-edit-line" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> Edición vectorial</button>
-        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">🎨 Editar relleno</button>
+        <button id="pp-edit-line" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_vectorEditBtn')}</button>
+        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editFillBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     }
     const _isTextBubble = (la.type==='text'||la.type==='bubble');
     const _isRichText = !!(la.richLines && la.richLines.length);
     html+=`${(_isRichText || !_isTextBubble) ? '' : `<div class="op-prop-row" style="margin-top:4px">
-      <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?'🔗 Botón activo ✓':'🔗 Como botón'}</button>
+      <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>
     </div>`}
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
-      <button class="op-btn danger" id="pp-del" style="flex:1">✕ Eliminar</button>
-      ${_isRichText ? `<button class="op-btn" id="pp-td-except" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.7rem;cursor:pointer" title="Esta hoja se queda sin texto; su contenido pasa a la siguiente">🚫 Exceptuar en esta hoja</button>` : ''}
+      <button class="op-btn danger" id="pp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
+      ${_isRichText ? `<button class="op-btn" id="pp-td-except" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.7rem;cursor:pointer" title="${I18n.t('op_exceptPageTitle')}">${I18n.t('op_exceptPageBtn')}</button>` : ''}
       ${_isRichText ? '' : (la.groupId
-        ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>`
-        : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⧉ Duplicar</button>`)}
-      ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="Reflejar" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
-      <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?'Desbloquear':'Bloquear'}">🔒</button>
+        ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>`
+        : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>`)}
+      ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="${I18n.t('op_mirrorBtnTitle')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
+      <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">🔒</button>
       ${_isTextBubble
-        ? `<button id="op-panel-collapse" title="Minimizar panel" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>`
+        ? `<button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>`
         : `<button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>`}
     </div>`;
 
@@ -18892,8 +18892,8 @@ function edRenderOptionsPanel(mode){
         const la=edLayers[edSelectedIdx],id=e.target.id;
         if(id==='pp-text'){
           // Borrar placeholder al empezar a escribir
-          if(la.text==='Escribe aquí' && e.target.value.length > 'Escribe aquí'.length){
-            la.text = e.target.value.replace('Escribe aquí','');
+          if(la.text===I18n.t('ed_writeHerePlaceholder') && e.target.value.length > I18n.t('ed_writeHerePlaceholder').length){
+            la.text = e.target.value.replace(I18n.t('ed_writeHerePlaceholder'),'');
             e.target.value = la.text;
           } else {
             la.text=e.target.value;
@@ -18927,7 +18927,7 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('pp-del')?.addEventListener('click',()=>{
-      edConfirm('¿Eliminar este objeto?', ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
     });
     $('pp-td-except')?.addEventListener('click',()=>{
       if(typeof _tdExceptCurrentPage==='function') _tdExceptCurrentPage();
@@ -19060,9 +19060,9 @@ function edRenderOptionsPanel(mode){
         const _okBtn      = $('edConfirmOk');
         const _cancelBtn  = $('edConfirmCancel');
         // Texto del diálogo
-        if (_msgEl)     _msgEl.textContent  = 'Al editar el relleno, el objeto perderá su información vectorial. ¿Guardarlo en la biblioteca antes?';
-        if (_okBtn)     _okBtn.textContent   = 'Sí, guardar';
-        if (_cancelBtn) _cancelBtn.textContent = 'No';
+        if (_msgEl)     _msgEl.textContent  = I18n.t('ed_editFillLoseVectorMsg');
+        if (_okBtn)     _okBtn.textContent   = I18n.t('ed_yesSaveBtn');
+        if (_cancelBtn) _cancelBtn.textContent = I18n.t('ed_noBtn');
         // Función que realmente inicia la edición (llamada en ambas opciones)
         const _startFillEdit = () => {
           edPushHistory();
@@ -19111,7 +19111,7 @@ function edRenderOptionsPanel(mode){
         };
         if (!_overlay) {
           // Fallback nativo
-          if (window.confirm('Al editar el relleno, el objeto perderá su información vectorial. ¿Guardarlo en la biblioteca antes?')) edBibGuardar();
+          if (window.confirm(I18n.t('ed_editFillLoseVectorMsg'))) edBibGuardar();
           _startFillEdit();
           return;
         }
@@ -19121,8 +19121,8 @@ function edRenderOptionsPanel(mode){
         const _close = () => {
           _overlay.classList.remove('open');
           _overlay.removeEventListener('pointerdown', _stopEv, { capture: true });
-          if (_okBtn)     { _okBtn.removeEventListener('click', _onYes); _okBtn.textContent = 'Eliminar'; }
-          if (_cancelBtn) { _cancelBtn.removeEventListener('click', _onNo); _cancelBtn.textContent = 'Cancelar'; }
+          if (_okBtn)     { _okBtn.removeEventListener('click', _onYes); _okBtn.textContent = I18n.t('delete'); }
+          if (_cancelBtn) { _cancelBtn.removeEventListener('click', _onNo); _cancelBtn.textContent = I18n.t('cancel'); }
         };
         const _onYes = () => { _close(); edBibGuardar(); _startFillEdit(); };
         const _onNo  = () => { _close(); _startFillEdit(); };
@@ -19254,7 +19254,7 @@ function edRenderOptionsPanel(mode){
     $('pp-opacity')?.addEventListener('change',()=>{ edPushHistory(); });
     // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
     const ppText = $('pp-text');
-    if(ppText && (edLayers[edSelectedIdx]?.text === 'Escribe aquí')){
+    if(ppText && (edLayers[edSelectedIdx]?.text === I18n.t('ed_writeHerePlaceholder'))){
       requestAnimationFrame(()=>{ ppText.select(); });
     }
     requestAnimationFrame(edFitCanvas);return;
@@ -19515,12 +19515,12 @@ function _edRuleAdd() {
 
 function _edRuleClear() {
   if(!edRules.length) return;
-  edConfirm('¿Borrar todas las guías de esta hoja?', ()=>{
+  edConfirm(I18n.t('ed_confirmClearAllGuides'), ()=>{
     edRules = [];
     edRuleNodes = [];
     _edRulesPanelClose();
     edRedraw();
-  }, 'Borrar');
+  }, I18n.t('ed_clearBtn'));
 }
 
 function _edRuleDelete(id) {
@@ -19565,7 +19565,7 @@ function _edRulesNodePanel(n) {
   pop.style.cssText = 'position:fixed;z-index:10000;background:rgba(28,28,28,0.96);border-radius:10px;padding:6px 8px;display:flex;flex-direction:row;align-items:center;gap:6px;box-shadow:0 4px 18px rgba(0,0,0,0.55);';
   const _bs = 'background:rgba(255,255,255,0.12);border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;';
   const _bsLock = `background:${n.locked ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'};border:none;border-radius:7px;padding:7px 9px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;`;
-  pop.innerHTML = `<button id="enp-lock" title="${n.locked ? 'Desbloquear punto' : 'Bloquear punto'}" style="${_bsLock}">${n.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="enp-del" title="Borrar punto de fuga" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+  pop.innerHTML = `<button id="enp-lock" title="${n.locked ? I18n.t('ed_unlockPointTitle') : I18n.t('ed_lockPointTitle')}" style="${_bsLock}">${n.locked ? '🔒' : '🔓'}</button><div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div><button id="enp-del" title="${I18n.t('ed_deleteVanishPointTitle')}" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   document.body.appendChild(pop);
   const PW = pop.offsetWidth || 100, PH = pop.offsetHeight || 44;
   let px = sc.x + 22, py = sc.y - PH / 2;
@@ -19638,9 +19638,9 @@ function _edRulesOpenPanel(id, part, wx, wy) {
   // Si la regla pertenece a un grupo (algún extremo vinculado a nodo), mostrar solo dup + lock + hide + delete
   const _inGroup = !!(r.nodeA || r.nodeB);
   if(_inGroup) {
-    pop.innerHTML = `<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="erp-dup" title="${I18n.t('ed_dupGuideTitle')}" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? I18n.t('ed_unlockGuideTitle') : I18n.t('ed_lockGuideTitle')}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="${I18n.t('ed_hideGuideTitle')}" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="${I18n.t('ed_deleteGuideTitle')}" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   } else {
-    pop.innerHTML = `<button id="erp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="erp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? 'Desbloquear regla' : 'Bloquear regla'}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="Ocultar esta guía" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="Borrar regla" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="erp-horiz" title="${I18n.t('ed_makeHorizontalTitle')}" style="${_bs}">${_svgH}</button><button id="erp-vert" title="${I18n.t('ed_makeVerticalTitle')}" style="${_bs}">${_svgV}</button>${_sep}<button id="erp-dup" title="${I18n.t('ed_dupGuideTitle')}" style="${_bs}">${_svgDup}</button>${_sep}<button id="erp-lock" title="${r.locked ? I18n.t('ed_unlockGuideTitle') : I18n.t('ed_lockGuideTitle')}" style="${_bsLock}">${r.locked ? '🔒' : '🔓'}</button>${_sep}<button id="erp-hide" title="${I18n.t('ed_hideGuideTitle')}" style="${_bsHide}">${_svgEye}</button>${_sep}<button id="erp-del" title="${I18n.t('ed_deleteGuideTitle')}" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   }
   document.body.appendChild(pop);
   _edClampPop(pop, sc.x, sc.y);
@@ -19790,7 +19790,7 @@ function _edRulesHit(wx, wy, isTouch) {
 function _edRuleToggleSync() {
   const _txt = $('dd-rule-toggle-txt'); if(!_txt) return;
   const _anyHidden = edRulesHidden || edRules.some(r => r.hidden);
-  _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
+  _txt.textContent = _anyHidden ? I18n.t('ed_showGuides') : I18n.t('ed_hideGuides');
 }
 
 function edInitSelectMenu(){
@@ -19845,7 +19845,7 @@ function edInitSelectMenu(){
   $('_sel-delete')?.addEventListener('click', ()=>{
     document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
     const _n = edMultiSel.length;
-    edConfirm(`¿Eliminar ${_n} objeto${_n===1?'':'s'}?`, ()=>{
+    edConfirm(I18n.t(_n === 1 ? 'ed_confirmDeleteObjSingular' : 'ed_confirmDeleteObjPlural', { n: _n }), ()=>{
       edPushHistory();
       const page = edPages[edCurrentPage]; if(!page) return;
       const _toDelete = [...edMultiSel].sort((a,b)=>b-a);
@@ -19855,7 +19855,7 @@ function edInitSelectMenu(){
       edSelectedIdx = -1;
       edActiveTool = 'select'; edCanvas.className = '';
       edRedraw();
-    }, 'Eliminar');
+    }, I18n.t('delete'));
   });
 }
 
@@ -20069,14 +20069,14 @@ function _edZoomPick(anchorEl) {
     'background:rgba(25,25,25,0.97);border-radius:12px;padding:6px;' +
     'box-shadow:0 4px 20px rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.13);z-index:1071;';
   const _opts = [
-    { label:'🔍+', title:'Zoom in (arrastrar rectángulo)', action: () => {
+    { label:'🔍+', title:I18n.t('ed_zoomInDragTitle'), action: () => {
         overlay.remove();
         _edZoomPrevTool = edActiveTool;
         _edZoomRectActive = true;
         edCanvas.style.cursor = 'crosshair';
       }
     },
-    { label:'🔍−', title:'Restablecer zoom', action: () => {
+    { label:'🔍−', title:I18n.t('ed_resetZoomTitle'), action: () => {
         overlay.remove();
         _edResetCameraToFit();
       }
@@ -20119,10 +20119,10 @@ function _edEraserPick(anchorEl) {
   if (_old) { _old.remove(); return; }
 
   const _opts = [
-    { key:'pen',        icon:`<svg xmlns="http://www.w3.org/2000/svg" width="38" height="41" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`, label:'Tinta' },
-    { key:'pencil',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="16" height="26" style="image-rendering:pixelated;vertical-align:middle"/>`, label:'Lápiz' },
-    { key:'watercolor', icon:'💧', label:'Acuarela' },
-    { key:'bucket',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="27" height="25" style="image-rendering:pixelated;vertical-align:middle"/>`, label:'Relleno' },
+    { key:'pen',        icon:`<svg xmlns="http://www.w3.org/2000/svg" width="38" height="41" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`, label:I18n.t('op_inkTool') },
+    { key:'pencil',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="16" height="26" style="image-rendering:pixelated;vertical-align:middle"/>`, label:I18n.t('op_pencilTool') },
+    { key:'watercolor', icon:'💧', label:I18n.t('op_watercolorTool') },
+    { key:'bucket',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="27" height="25" style="image-rendering:pixelated;vertical-align:middle"/>`, label:I18n.t('ed_fillTool') },
   ];
 
   // Capa transparente para cerrar al pulsar fuera
@@ -20571,7 +20571,7 @@ function edInitDrawBar() {
       (()=>{
         const _wrap = document.createElement('div');
         _wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:5px;box-sizing:border-box;border-radius:8px;cursor:pointer;' + (_edDodgeBurnActive ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;' : '');
-        _wrap.title = 'Oscurecer / Iluminar';
+        _wrap.title = I18n.t('ed_dodgeBurnSimpleTitle');
         const _inner = document.createElement('div');
         _inner.style.cssText = 'display:flex;width:100%;height:100%;border-radius:5px;overflow:hidden;';
         const _makeHalf = (sign, bg, fg, txt) => {
@@ -20909,7 +20909,7 @@ function _edbBuildPalette() {
       e.stopPropagation();
       if (btn.dataset.custom) {
         // Slots 0 y 1 son negro/blanco fijos — no editables
-        if(edSelectedPaletteIdx <= 1){ edToast('Este color no es editable'); _edbClosePalette(); return; }
+        if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); _edbClosePalette(); return; }
         _edbClosePalette();
         if(window._edIsTouch){
           // Android: picker HSL propio (sin cuentagotas)
@@ -20943,7 +20943,7 @@ function _edbBuildPalette() {
       if (_edbDblTapIdx === idx && _edbDblTapTimer !== null) {
         clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; _edbDblTapIdx = -1;
         _edbClosePalette();
-        if (idx <= 1) { edToast('Este color no es editable'); return; }
+        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           edDrawColor = hex;
           if (final) { edColorPalette[idx] = hex; }
@@ -20969,7 +20969,7 @@ function _edbBuildPalette() {
       const idx = +btn.dataset.colidx;
       clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; _edbDblTapIdx = -1;
       _edbClosePalette();
-      if (idx <= 1) { edToast('Este color no es editable'); return; }
+      if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
       edSelectedPaletteIdx = idx;
       edDrawColor = edColorPalette[idx];
       _edShowColorPicker((hex, final) => {
@@ -21712,13 +21712,13 @@ function edInitShapeBar() {
       _edShapePushHistory();
       edRedraw();
       window._esbCheckFuse();
-      edToast('Objetos fusionados ✓');
+      edToast(I18n.t('ed_objectsMerged'));
       return;
     }
     // Caso B: ≥2 layers line cerrados DE LA SESIÓN ACTUAL (nunca objetos pre-sesión/ajenos)
     const _closedLayers = edLayers.filter(l => l.type === 'line' && l.closed && !_vsPreSessionLayers.has(l));
     if (_closedLayers.length < 2) {
-      edToast('Necesitas al menos 2 objetos cerrados de esta sesión para fusionar');
+      edToast(I18n.t('ed_needTwoClosedObjects'));
       return;
     }
     const _origin = _closedLayers[0];
@@ -21768,7 +21768,7 @@ function edInitShapeBar() {
     _vsClear(); edPushHistory();
     window._esbCheckFuse();
     edRedraw();
-    edToast('Objetos fusionados ✓');
+    edToast(I18n.t('ed_objectsMerged'));
   });
 
   // OK
@@ -21812,7 +21812,7 @@ function _edShowIncognitoWarning(msg) {
       <span style="font-size:20px;flex-shrink:0">⚠️</span>
       <span>${msg}</span>
     </div>
-    <button id="_edIncognitoWarnClose" style="align-self:flex-end;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
+    <button id="_edIncognitoWarnClose" style="align-self:flex-end;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">${I18n.t('mc_storageFullOk')}</button>
   `;
   document.body.appendChild(box);
   document.getElementById('_edIncognitoWarnClose').addEventListener('click', () => box.remove());
@@ -21831,18 +21831,18 @@ function _cxStorageHelpText() {
   const isChrome  = !isEdge && !isFirefox && /Chrome/.test(ua);
   const isSafari  = !isEdge && !isFirefox && !isChrome && /Safari/.test(ua);
   if (isFirefox) {
-    return 'En Firefox: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" no esté bloqueado para esta página. Revisa también Ajustes → Privacidad y seguridad → que no tengas activado "Eliminar cookies y datos del sitio al cerrar Firefox", ni la navegación privada.';
+    return I18n.t('ed_storageHelpFirefox');
   }
   if (isEdge) {
-    return 'En Edge: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" esté permitido para esta página. Revisa también Ajustes → Cookies y permisos del sitio → que esta página no esté bloqueada ni se borre al cerrar el navegador.';
+    return I18n.t('ed_storageHelpEdge');
   }
   if (isSafari) {
-    return 'En Safari: ve a Ajustes → Privacidad y comprueba que "Bloquear todas las cookies" esté desactivado (en Safari, bloquear cookies también bloquea el guardado local de esta app). Evita también la Navegación privada.';
+    return I18n.t('ed_storageHelpSafari');
   }
   if (isChrome) {
-    return 'En Chrome: toca el icono del candado junto a la dirección y comprueba que "Cookies y datos del sitio" esté permitido para esta página. Revisa también Ajustes → Privacidad y seguridad → Cookies y otros datos de sitios → que esta página no esté bloqueada ni se borre al cerrar el navegador.';
+    return I18n.t('ed_storageHelpChrome');
   }
-  return 'Revisa la configuración de cookies/datos de sitio de este navegador (que no estén bloqueados para esta página ni se borren al cerrarla) o prueba con otro navegador.';
+  return I18n.t('ed_storageHelpGeneric');
 }
 window._cxStorageHelpText = _cxStorageHelpText;
 
@@ -21866,7 +21866,7 @@ function _edShowStorageWarning(msg) {
       <span style="font-size:20px;flex-shrink:0">🚫</span>
       <span>${msg}</span>
     </div>
-    <button id="_edStorageWarnClose" style="align-self:flex-end;background:#ef4444;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">Entendido</button>
+    <button id="_edStorageWarnClose" style="align-self:flex-end;background:#ef4444;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-weight:700;cursor:pointer;font-size:13px">${I18n.t('mc_storageFullOk')}</button>
   `;
   document.body.appendChild(box);
   document.getElementById('_edStorageWarnClose').addEventListener('click', () => box.remove());
@@ -21934,7 +21934,7 @@ function _edCloudSavingUpdateBadge() {
   if (!_edCloudSaving) return;
   const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
   const badge = document.getElementById('_edCloudSavingBadge');
-  if (badge) badge.textContent = `☁️ Guardando en nube... ${elapsed}s`;
+  if (badge) badge.textContent = I18n.t('ed_cloudSavingBadge', { n: elapsed });
   _edCloudSavingTimer = setTimeout(_edCloudSavingUpdateBadge, 1000);
 }
 function _edCloudSavingStop() {
@@ -21971,17 +21971,16 @@ function _edSaveOverlayShow(title) {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.65" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.65" alt="${I18n.t('mc_savingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_edSaveOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:10px"></div>
       <div id="_edSaveOvMsg" style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
-        No salgas de la aplicación hasta finalizado el guardado.<br>
-        Interrumpir el proceso creará una obra defectuosa.
+        ${I18n.t('mc_savingCloudWarn')}
       </div>
       <span id="_edSaveOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;
     document.body.appendChild(ov);
   }
-  document.getElementById('_edSaveOvTitle').textContent = title || 'Guardando…';
+  document.getElementById('_edSaveOvTitle').textContent = title || I18n.t('ed_savingEllipsis');
   _edSaveOverlaySecs = 0;
   document.getElementById('_edSaveOvSecs').textContent = '0s';
   clearInterval(_edSaveOverlayTimer);
@@ -22020,9 +22019,9 @@ function _edSaveOverlayError(msg) {
   // Mostrar en overlay antes de cerrar
   const title = document.getElementById('_edSaveOvTitle');
   const msgEl = document.getElementById('_edSaveOvMsg');
-  if (title) title.textContent = '⚠️ Error de guardado';
+  if (title) title.textContent = I18n.t('ed_saveErrorTitle');
   if (title) title.style.color = '#e74c3c';
-  if (msgEl) msgEl.innerHTML = msg + '<br><br>Pulsa en cualquier lugar para cerrar.';
+  if (msgEl) msgEl.innerHTML = msg + '<br><br>' + I18n.t('ed_tapAnywhereToClose');
   // Cambiar spinner por ✕
   const spin = document.querySelector('#_edSaveOverlay div[style*="border-radius:50%"]');
   if (spin) spin.style.cssText = 'font-size:1.5rem';
@@ -22077,7 +22076,7 @@ function _edSaveOverlayError(msg) {
 //    seguridad se añade también ahí.
 const _edHelpContent = {
   'draw-tools': {
-    title: 'Herramientas de dibujo',
+    title: I18n.t('ed_drawTools'),
     body: (() => {
     // Cursor COF: mismo asset (base64) exacto que usa op-offset-btn en el
     // panel de dibujo (el de "posición desplazada" para pintar sin tapar el
@@ -22095,22 +22094,26 @@ const _edHelpContent = {
     const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
     return `
       <div style="margin-bottom:14px">
-        <b>1.</b> Si estás usando táctil, utiliza la herramienta cursor
-        ${withIco('<b>COF</b>', icoCOF)} para no cubrir con el dedo los trazos.
+        <b>1.</b> ${I18n.t('ed_helpDrawP1', { cof: withIco('<b>COF</b>', icoCOF) })}
       </div>
       <div style="margin-bottom:14px">
-        <b>2.</b> Todos los dibujos incluyen cuatro capas:
-        ${withIco('<b>Tinta</b>', icoInk)}, ${withIco('<b>Lápiz</b>', icoPencil)},
-        ${withIco('<b>Acuarela</b>', icoWatercolor)} y ${withIco('<b>Relleno</b>', icoBucket)}.
-        La ${withIco('<b>goma</b>', icoEraser)} solo borrará la herramienta activa,
-        conservando el resto de capas.
+        <b>2.</b> ${I18n.t('ed_helpDrawP2', {
+          ink: withIco('<b>' + I18n.t('op_inkTool') + '</b>', icoInk),
+          pencil: withIco('<b>' + I18n.t('op_pencilTool') + '</b>', icoPencil),
+          watercolor: withIco('<b>' + I18n.t('op_watercolorTool') + '</b>', icoWatercolor),
+          fill: withIco('<b>' + I18n.t('ed_fillTool') + '</b>', icoBucket),
+          eraser: withIco('<b>' + I18n.t('ed_eraserWord') + '</b>', icoEraser),
+        }) }
       </div>
       <div>
-        <b>3.</b> Usa la herramienta ${withIco('<b>tinta</b>', icoInk)} o
-        ${withIco('<b>lápiz</b>', icoPencil)} para limitar la extensión de la
-        herramienta ${withIco('<b>relleno</b>', icoBucket)} y la de
-        ${withIco('<b>tinta</b>', icoInk)} además, como máscara para las herramientas
-        ${withIco('<b>acuarela</b>', icoWatercolor)} e ${withIco('<b>iluminación</b>', icoDodge)}.
+        <b>3.</b> ${I18n.t('ed_helpDrawP3', {
+          ink2: withIco('<b>' + I18n.t('op_inkTool') + '</b>', icoInk),
+          pencil2: withIco('<b>' + I18n.t('op_pencilTool') + '</b>', icoPencil),
+          fill2: withIco('<b>' + I18n.t('ed_fillTool') + '</b>', icoBucket),
+          ink3: withIco('<b>' + I18n.t('op_inkTool') + '</b>', icoInk),
+          watercolor2: withIco('<b>' + I18n.t('op_watercolorTool') + '</b>', icoWatercolor),
+          dodge: withIco('<b>' + I18n.t('ed_dodgeWord') + '</b>', icoDodge),
+        }) }
       </div>
     `;
     })()
@@ -22148,7 +22151,7 @@ function _edHelpOpenWindow(id, showDismiss) {
   if (!entry) return; // sin contenido registrado para este id — no mostrar nada
   const titleEl = $('edHelpRefTitle');
   const bodyEl  = $('edHelpRefBody');
-  if (titleEl) titleEl.textContent = entry.title || 'Ayuda';
+  if (titleEl) titleEl.textContent = entry.title || I18n.t('ed_helpTitle');
   if (bodyEl) {
     bodyEl.innerHTML = entry.body || '';
     let dismissBtn = document.getElementById('edHelpRefDismiss');
@@ -22157,7 +22160,7 @@ function _edHelpOpenWindow(id, showDismiss) {
         dismissBtn = document.createElement('button');
         dismissBtn.id = 'edHelpRefDismiss';
         dismissBtn.className = 'ed-help-dismiss-btn';
-        dismissBtn.textContent = 'No volver a mostrar esta ayuda';
+        dismissBtn.textContent = I18n.t('ed_dontShowHelpAgain');
       }
       bodyEl.appendChild(dismissBtn); // al final del cuerpo, tras el contenido
       dismissBtn.onclick = () => {
@@ -22185,8 +22188,8 @@ function _edHelpShowRef(id) {
 }
 
 async function edCloudSave() {
-  if (!edProjectId) { edToast('Sin proyecto activo'); return; }
-  if (typeof SupabaseClient === 'undefined') { edToast('Sin conexión al servidor'); return; }
+  if (!edProjectId) { edToast(I18n.t('ed_noActiveProject')); return; }
+  if (typeof SupabaseClient === 'undefined') { edToast(I18n.t('mc_noServerConn')); return; }
   // GUARD DE REENTRADA — fijado SÍNCRONAMENTE aquí, antes de cualquier await.
   // _edCloudSaving existía pero nunca se comprobaba al entrar (solo se usaba
   // para el aviso "guardando en nube..." al intentar salir) — así que un
@@ -22196,7 +22199,7 @@ async function edCloudSave() {
   // resube todos) dejaban panel_order duplicados o un recuento incorrecto en
   // el 80% de los casos — coincide exactamente con "hojas duplicadas" al
   // recargar la obra. Con el guard, 0% de fallos en la misma simulación.
-  if (_edCloudSaving) { edToast('Ya se está guardando en la nube…'); return; }
+  if (_edCloudSaving) { edToast(I18n.t('ed_alreadySavingCloud')); return; }
   _edCloudSaving = true;
   try {
     await _edCloudSaveInner();
@@ -22208,7 +22211,7 @@ async function edCloudSave() {
     // el guard se habría quedado atascado en true para siempre (bloqueando
     // cualquier guardado en nube futuro en esta sesión).
     console.error('edCloudSave (excepción no controlada):', _e);
-    edToast('⚠️ Error inesperado al guardar en nube');
+    edToast(I18n.t('ed_unexpectedSaveErr'));
   } finally {
     _edCloudSaving = false;
     _edSaveOverlayHide();
@@ -22224,7 +22227,7 @@ async function _edCloudSaveInner() {
   // "no respondía". Cualquier salida temprana de aquí en adelante debe
   // ocultar el overlay explícitamente Y liberar _edCloudSaving (no hay
   // guardado real que lo sustituya).
-  _edSaveOverlayShow('Comprobando tamaño…');
+  _edSaveOverlayShow(I18n.t('ed_checkingSize'));
   // Mientras esta función siga en marcha (cualquiera de sus fases), el overlay
   // no debe cerrarse solo por el cierre automático de seguridad — solo cuando
   // esta misma función llame explícitamente a _edSaveOverlayHide() (éxito,
@@ -22234,14 +22237,14 @@ async function _edCloudSaveInner() {
   // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
   const _preSz = await _edCalcProjectBytes(true);
   if (_preSz >= _ED_MAX_BYTES) {
-    edToast('⚠️ La obra supera los 60 MB. Elimina contenido antes de guardar en la nube.', 5000);
+    edToast(I18n.t('ed_workTooLarge'), 5000);
     return;
   }
   if (!Auth?.currentUser?.()) {
     // Sin sesión: ofrecer login en lugar de rechazar
-    edToast('Inicia sesión para guardar en la nube');
+    edToast(I18n.t('ed_loginToSaveCloud'));
     setTimeout(() => {
-      if (confirm('¿Quieres iniciar sesión para guardar en la nube?')) {
+      if (confirm(I18n.t('ed_confirmLoginCloud'))) {
         // Guardar localmente antes de salir al login
         edSaveProject();
         Router.go('login');
@@ -22251,14 +22254,14 @@ async function _edCloudSaveInner() {
   }
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  _edSaveOverlayUpdate('Guardando…');
+  _edSaveOverlayUpdate(I18n.t('ed_savingEllipsis'));
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
-  _edSaveOverlayUpdate('Subiendo a la nube…');
+  _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloud'));
 
   let comic = ComicStore.getByIdFull
     ? (await ComicStore.getByIdFull(edProjectId))
     : ComicStore.getById(edProjectId);
-  if (!comic) { edToast('Error: obra no encontrada'); return; }
+  if (!comic) { edToast(I18n.t('ed_workNotFound')); return; }
   // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
   // construir editorData en línea para poder subirlo a la nube correctamente.
   if ((!comic.editorData || !comic.editorData.pages || !comic.editorData.pages.length) && edPages && edPages.length) {
@@ -22358,7 +22361,7 @@ async function _edCloudSaveInner() {
 
   try {
     await SupabaseClient.saveDraft(comic, _dirtyPageIndices);
-    edToast('☁️ Guardado en nube');
+    edToast(I18n.t('ed_savedToCloud'));
     // Confirmar limpieza de guardado incremental en la nube SOLO ahora que se
     // sabe que la subida tuvo éxito de verdad — igual que en edSaveProject.
     // Restar la instantánea capturada arriba (no asignar 0 a ciegas): si el
@@ -22421,14 +22424,14 @@ async function _edCloudSaveInner() {
 
           // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
           if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
-            _edShowIncognitoWarning('Biblioteca sincronizada con la nube: ' + _bibItems + ' item(s). Al abrir en modo normal se cargará desde la nube.');
+            _edShowIncognitoWarning(I18n.t('ed_bibSyncedCloud', { n: _bibItems }));
           }
         }
       } catch(e) { console.warn('bibSync error:', e); }
     }
   } catch(err) {
     _edSaveOverlayHide();
-    edToast('⚠️ ' + (err.message || 'Error al guardar en nube'));
+    edToast('⚠️ ' + (err.message || I18n.t('ed_errSaveCloudGeneric')));
     console.error('edCloudSave:', err);
   } finally {
     _edSaveOverlayHide();
@@ -22584,14 +22587,14 @@ function _edSizeMonitorStop() {
 
 let _edLocalSaving = false; // true mientras edSaveProject() está en curso — guard de reentrada
 async function edSaveProject(_keepOverlay){
-  if(!edProjectId){edToast('Sin proyecto activo');return;}
+  if(!edProjectId){edToast(I18n.t('ed_noActiveProject'));return;}
   // GUARD DE REENTRADA — mismo problema que se encontró en edCloudSave: sin
   // esto, dos guardados locales concurrentes (doble-tap en "Guardar", o un
   // guardado local disparado desde otro sitio mientras edCloudSave ya está
   // en su propio edSaveProject interno) podían competir escribiendo en OPFS
   // a la vez. try/finally garantiza que el guard se libera pase lo que pase,
   // incluso si algo dentro lanza una excepción no controlada.
-  if (_edLocalSaving) { edToast('Ya se está guardando…'); return; }
+  if (_edLocalSaving) { edToast(I18n.t('ed_alreadySaving')); return; }
   _edLocalSaving = true;
   try {
     return await _edSaveProjectInner(_keepOverlay);
@@ -22602,7 +22605,7 @@ async function edSaveProject(_keepOverlay){
 async function _edSaveProjectInner(_keepOverlay){
   // Capturar historyIdx ahora — puede cambiar durante los awaits posteriores
   const _saveHistoryIdx = edHistoryIdx;
-  if(!_keepOverlay) { _edSaveOverlayShow('Guardando en dispositivo…'); _edSaveOverlayForceOpen = true; }
+  if(!_keepOverlay) { _edSaveOverlayShow(I18n.t('ed_savingToDevice')); _edSaveOverlayForceOpen = true; }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=ComicStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
@@ -22648,7 +22651,7 @@ async function _edSaveProjectInner(_keepOverlay){
     let seqOrder = 0;
     p.layers.forEach(l => {
       const rawText = (l.type === 'text' || l.type === 'bubble') ? l.text : null;
-      if(!rawText || rawText === 'Escribe aquí') return;
+      if(!rawText || rawText === I18n.t('ed_writeHerePlaceholder')) return;
 
       const xPct = Math.round((l.x - l.width/2)  * 100 * 10) / 10;
       const yPct = Math.round((l.y - l.height/2) * 100 * 10) / 10;
@@ -22811,11 +22814,11 @@ async function _edSaveProjectInner(_keepOverlay){
     // localEditorData NO se toca aquí — es el backup de la versión previa de la nube
   });
   // Verificar que OPFS guardó correctamente
-  _edSaveOverlayUpdate('Verificando integridad…');
+  _edSaveOverlayUpdate(I18n.t('ed_verifyingIntegrity'));
   const _verify = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
   if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
     if(!_keepOverlay) _edSaveOverlayHide();
-    edToast('Guardado ✓');
+    edToast(I18n.t('ed_savedOk'));
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
     await _edAutosaveClear(); // guardado local exitoso → borrar autosave temporal
     // Confirmar limpieza de guardado incremental SOLO ahora que se sabe que el
@@ -22837,10 +22840,10 @@ async function _edSaveProjectInner(_keepOverlay){
     // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
     const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
     const _err = _isIncognito
-      ? 'Modo incógnito: el guardado local no está disponible. Usa ☁️ Guardar en nube para conservar la obra.'
-      : 'Guardado en dispositivo incompleto (OPFS falló). Los datos están en la nube si guardaste en nube.';
+      ? I18n.t('ed_incognitoNoLocalSave')
+      : I18n.t('ed_incompleteLocalSave');
     _edSaveOverlayError(_err);
-    edToast(_isIncognito ? '⚠️ Modo incógnito: usa Guardar en nube' : '⚠️ Guardado parcial');
+    edToast(_isIncognito ? I18n.t('ed_incognitoUseCloud') : I18n.t('ed_partialSave'));
     // No confirmar nada: las páginas reserializadas en esta pasada siguen
     // marcadas sucias (o sin flag, que se trata igual) — el próximo intento
     // las volverá a serializar en vez de dar por bueno un guardado que falló.
@@ -23080,7 +23083,7 @@ function edGroupSelected(){
   // Volver a herramienta select tras agrupar
   _edDeactivateMultiSel();
   edPushHistory(); edRedraw();
-  edToast('Agrupados ✓');
+  edToast(I18n.t('ed_grouped'));
 }
 
 /* ── Desagrupar: elimina groupId de todos los miembros del grupo activo ── */
@@ -23109,7 +23112,7 @@ function edUngroupSelected(){
   // Cerrar panel de opciones si estaba abierto
   edCloseOptionsPanel();
   edPushHistory(); edRedraw();
-  edToast('Desagrupados ✓');
+  edToast(I18n.t('ed_ungrouped'));
 }
 
 
@@ -23201,7 +23204,7 @@ function edMergeSelected(){
     if(edCanvas) edCanvas.className = '';
     $('edMultiSelBtn')?.classList.remove('active');
     edPushHistory(); edRedraw();
-    edToast('Objetos unidos ✓');
+    edToast(I18n.t('ed_objectsUnited'));
   }
 
   if(mtype === 'vector'){
@@ -23549,7 +23552,7 @@ function edSerLayer(l){
     return _r;
   }
   if(l.type==='text'){const _o={type:'text',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
-    _hasText:!!(l.text&&l.text!=='Escribe aquí'),
+    _hasText:!!(l.text&&l.text!==I18n.t('ed_writeHerePlaceholder')),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
     padding:l.padding||10,...op};
@@ -23576,7 +23579,7 @@ function edSerLayer(l){
     return _o;}
   if(l.type==='bubble'){
     const _bobj={type:'bubble',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,
-      _hasText:!!(l.text&&l.text!=='Escribe aquí'),
+      _hasText:!!(l.text&&l.text!==I18n.t('ed_writeHerePlaceholder')),
       text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
       backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
       tail:l.tail,style:l.style,tailStart:{...l.tailStart},tailEnd:{...l.tailEnd},voiceCount:l.voiceCount||1,
@@ -24429,13 +24432,13 @@ async function edLoadProject(id){
       _asDlg.innerHTML = `
         <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
           <div style="font-size:1.8rem;margin-bottom:12px">🔄</div>
-          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">Cambios sin guardar</p>
-          <p style="font-size:.85rem;color:#666;margin-bottom:6px">Los últimos cambios no se guardaron.</p>
+          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_unsavedChangesTitle')}</p>
+          <p style="font-size:.85rem;color:#666;margin-bottom:6px">${I18n.t('ed_lastChangesNotSaved')}</p>
           <p style="font-size:.75rem;color:#999;margin-bottom:20px">${_asDate}</p>
-          <p style="font-weight:700;font-size:.9rem;margin-bottom:20px">¿Quieres recuperarlos?</p>
+          <p style="font-weight:700;font-size:.9rem;margin-bottom:20px">${I18n.t('ed_wantToRecover')}</p>
           <div style="display:flex;gap:10px;justify-content:center">
-            <button id="_asNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">No</button>
-            <button id="_asYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Sí, recuperar</button>
+            <button id="_asNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_noBtn')}</button>
+            <button id="_asYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_yesRecoverBtn')}</button>
           </div>
         </div>`;
       document.body.appendChild(_asDlg);
@@ -24445,7 +24448,7 @@ async function edLoadProject(id){
     // El usuario ya ha elegido qué versión cargar — reanudar el contador
     // bloqueante para el resto de la carga (se ocultará solo cuando la obra
     // esté completamente cargada, igual que si no hubiera habido conflicto).
-    if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow('Abriendo obra…');
+    if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
     if (_asRecovered) {
       // Cargar el autosave en lugar de los datos del disco
       comic.editorData = comic.editorData || {};
@@ -24462,7 +24465,7 @@ async function edLoadProject(id){
     }
     } // cierre del else (autosave más nuevo que el comic guardado)
   }
-  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||I18n.t('noWork');
   _edUpdateTitlePill();
   // Al abrir la obra el título se mide con lo que haya en pantalla en ese
   // instante — si la fuente del título aún no ha terminado de cargar (fuente
@@ -24662,7 +24665,7 @@ async function edLoadProject(id){
   window._edLoadingProject = false;
   } catch(_le) {
     console.error('edLoadProject error:', _le);
-    edToast('⚠️ Error al cargar la obra');
+    edToast(I18n.t('ed_errLoadWork'));
     _edLoadProjectInProgress = false; // liberar solo en error
     _edResolveFullyLoaded(); // nunca dejar el contador bloqueante colgado por un error
   }
@@ -25629,7 +25632,7 @@ function edOpenProjectModal(){
   $('edMNavMode').value=edProjectMeta.navMode;
   const edMSocial=$('edMSocial'); if(edMSocial) edMSocial.value=edProjectMeta.social||'';
   const _titleEl = document.querySelector('#edProjectModal .ed-modal-title');
-  if(_titleEl) _titleEl.textContent = 'Editar datos de la obra';
+  if(_titleEl) _titleEl.textContent = I18n.t('ed_projectDataTitle');
   $('edProjectModal')?.classList.add('open');
 }
 function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
@@ -25656,7 +25659,7 @@ function _edStartEyedrop() {
 
   // Indicador visual: cambiar cursor y mostrar toast
   canvas.style.cursor = 'crosshair';
-  edToast('Toca el color a copiar…');
+  edToast(I18n.t('ed_tapColorToCopy'));
 
   // Usar AbortController para limpiar tras el primer sample
   const ac = new AbortController();
@@ -25679,14 +25682,14 @@ function _edStartEyedrop() {
     window._edEyedropActive = false;
     edRedraw();
 
-    if (px[3] < 10) { edToast('Sin color en ese punto'); return; }
+    if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); return; }
 
     const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2, '0')).join('');
     edDrawColor = hex;
     if(edSelectedPaletteIdx > 1) edColorPalette[edSelectedPaletteIdx] = hex;
     _edUpdatePaletteDots();
     _edbSyncColor();
-    edToast('Color copiado ✓');
+    edToast(I18n.t('ed_colorCopied'));
   }
 
   canvas.addEventListener('pointerup', e => {
@@ -25699,7 +25702,7 @@ function _edStartEyedrop() {
     if (e.key === 'Escape') {
       ac.abort(); canvas.style.cursor = '';
       window._edEyedropActive = false; edRedraw();
-      edToast('Cuentagotas cancelado');
+      edToast(I18n.t('ed_eyedropCanceled'));
     }
   }, { ...sig, once: true });
 }
@@ -25714,7 +25717,7 @@ function edOpenCamera() {
   if (!overlay || !video) return;
 
   if (!navigator.mediaDevices?.getUserMedia) {
-    edToast('Cámara no disponible en este dispositivo');
+    edToast(I18n.t('ed_cameraNotAvailable'));
     return;
   }
 
@@ -26015,15 +26018,15 @@ async function edImportLayers(file) {
       }
     }
   } catch(err) {
-    edToast('Error al importar: ' + (err.message || err));
+    edToast(I18n.t('ed_errImport') + (err.message || err));
     return;
   }
 
-  if(!rawLayers.length) { edToast('No se encontraron capas'); return; }
+  if(!rawLayers.length) { edToast(I18n.t('ed_noLayersFound')); return; }
 
   // Filtrar invisibles
   const visible = rawLayers.filter(l => l.visible);
-  if(!visible.length) { edToast('Todas las capas están ocultas'); return; }
+  if(!visible.length) { edToast(I18n.t('ed_allLayersHidden')); return; }
 
   // ── Indicador de progreso ──
   let _progEl = document.getElementById('_edImportProgress');
@@ -26179,10 +26182,7 @@ async function edSaveProjectModal(){
     if (_edDup) {
       // Mostrar confirmación: sobrescribir (abrir la existente) o volver al modal
       edConfirm(
-        `Ya tienes una obra llamada "${_newTitle.replace(/"/g,'\"')}".
-
-` +
-        '¿Abrir la obra existente o quedarte aquí para cambiar el nombre?',
+        I18n.t('ed_dupWorkTitleMsg', { title: _newTitle.replace(/"/g,'\\"') }),
         function(confirmed) {
           if (confirmed) {
             edCloseProjectModal();
@@ -26191,7 +26191,7 @@ async function edSaveProjectModal(){
           }
           // Si cancela: el modal queda abierto para que edite el título
         },
-        { confirmText: 'Abrir obra existente', cancelText: 'Cambiar nombre' }
+        { confirmText: I18n.t('ed_openExistingWork'), cancelText: I18n.t('ed_changeNameBtn') }
       );
       return;
     }
@@ -26202,7 +26202,7 @@ async function edSaveProjectModal(){
   edProjectMeta.genre   = _newGenre;
   edProjectMeta.navMode = _newNavMode;
   edProjectMeta.social  = _newSocial;
-  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||'Sin título';
+  const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||I18n.t('noWork');
   _edUpdateTitlePill();
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
   setTimeout(_edUpdateTitlePill, 200);
@@ -26308,7 +26308,7 @@ function _edOpenBtnModal(la) {
       const btn = document.createElement('button');
       btn.dataset.pi = pi;
       btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;border:none;border-bottom:1px solid var(--gray-200);background:transparent;cursor:pointer;font-family:var(--font-body);font-size:.85rem;font-weight:700';
-      btn.textContent = 'Hoja ' + (pi + 1) + (pg.name ? ' — ' + pg.name : '');
+      btn.textContent = I18n.t('ed_pageTitleNum', { n: pi+1 }) + (pg.name ? ' — ' + pg.name : '');
       // Usar pointerdown+pointerup para respuesta inmediata en táctil (click tiene 300ms delay)
       let _btnPdX = 0, _btnPdY = 0;
       btn.addEventListener('pointerdown', e => { _btnPdX = e.clientX; _btnPdY = e.clientY; }, { passive: true });
@@ -26367,7 +26367,7 @@ function _edOpenBtnModal(la) {
     }
     edPushHistory();
     const ppBtn = document.getElementById('pp-btn-action');
-    if (ppBtn) { ppBtn.textContent = la._buttonAction ? '🔗 Botón activo ✓' : '🔗 Como botón'; ppBtn.style.background = la._buttonAction ? 'var(--yellow)' : 'var(--gray-100)'; }
+    if (ppBtn) { ppBtn.textContent = la._buttonAction ? I18n.t('ed_btnActiveOn') : I18n.t('ed_btnActiveOff'); ppBtn.style.background = la._buttonAction ? 'var(--yellow)' : 'var(--gray-100)'; }
   };
   document.getElementById('bam-ok')?.addEventListener('click', () => close(true), { once: true });
   document.getElementById('bam-cancel')?.addEventListener('click', () => close(false), { once: true });
@@ -26432,14 +26432,14 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   return null;
 }
 
-function edConfirm(msg, onOk, okLabel='Eliminar'){
+function edConfirm(msg, onOk, okLabel){
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
   const okBtn   = $('edConfirmOk');
   const cancelBtn = $('edConfirmCancel');
   if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
   msgEl.textContent = msg;
-  okBtn.textContent = okLabel;
+  okBtn.textContent = okLabel || I18n.t('delete');
   _edConfirmCb = onOk;
   overlay.classList.add('open');
   // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
@@ -26656,12 +26656,12 @@ function EditorView_init(){
       dlgCloud.innerHTML = `
         <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
           <div style="font-size:1.8rem;margin-bottom:12px">⚠️</div>
-          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">Guardado en nube en curso</p>
-          <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">☁️ Guardando en nube... ${elapsed}s</p>
-          <p style="font-size:.85rem;color:#666;margin-bottom:24px">Salir del editor antes de que termine de guardarse en la nube guardará una copia defectuosa.</p>
+          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_cloudSaveInProgress')}</p>
+          <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">${I18n.t('ed_cloudSavingBadge', { n: elapsed })}</p>
+          <p style="font-size:.85rem;color:#666;margin-bottom:24px">${I18n.t('ed_exitBeforeCloudSaveWarn')}</p>
           <div style="display:flex;gap:10px;justify-content:center">
-            <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">Salir igualmente</button>
-            <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Esperar</button>
+            <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">${I18n.t('ed_exitAnywayBtn')}</button>
+            <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_waitBtn')}</button>
           </div>
         </div>`;
       document.body.appendChild(dlgCloud);
@@ -26670,7 +26670,7 @@ function EditorView_init(){
         const b = document.getElementById('_edCloudSavingBadge');
         if (b && _edCloudSaving) {
           const s = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-          b.textContent = `☁️ Guardando en nube... ${s}s`;
+          b.textContent = I18n.t('ed_cloudSavingBadge', { n: s });
         } else if (!_edCloudSaving) {
           clearInterval(_dlgTimer);
           dlgCloud.remove();
@@ -26706,11 +26706,11 @@ function EditorView_init(){
     dlg.innerHTML = `
       <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
         <div style="font-size:1.5rem;margin-bottom:12px">💾</div>
-        <p style="font-weight:700;font-size:1rem;margin-bottom:8px">¿Guardar cambios?</p>
-        <p style="font-size:.88rem;color:#666;margin-bottom:24px">Tienes cambios sin guardar en esta obra.</p>
+        <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_saveChangesQuestion')}</p>
+        <p style="font-size:.88rem;color:#666;margin-bottom:24px">${I18n.t('ed_unsavedChangesInWork')}</p>
         <div style="display:flex;gap:10px;justify-content:center">
-          <button id="_edExitNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">No guardar</button>
-          <button id="_edExitYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">Guardar</button>
+          <button id="_edExitNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_dontSaveBtn')}</button>
+          <button id="_edExitYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_saveModalTitle')}</button>
         </div>
       </div>`;
     document.body.appendChild(dlg);
@@ -26882,7 +26882,7 @@ function EditorView_init(){
     const _isGif  = _f.type === 'image/gif'  || _animExt === 'gif';
     const _isApng = _f.type === 'image/apng' || _f.type === 'image/vnd.mozilla.apng' || _animExt === 'apng';
     if (!_isGif && !_isApng) {
-      edToast('Selecciona un GIF o APNG animado');
+      edToast(I18n.t('ed_selectGifOrApng'));
       window._edWasFullscreen = false;
       return;
     }
@@ -26908,7 +26908,7 @@ function EditorView_init(){
   $('dd-paste')?.addEventListener('click', async ()=>{
     edCloseMenus();
     if(!navigator.clipboard || !navigator.clipboard.read){
-      edToast('Tu navegador no permite pegar imágenes así — prueba Ctrl+V');
+      edToast(I18n.t('ed_clipboardNotSupported'));
       return;
     }
     try{
@@ -26918,10 +26918,10 @@ function EditorView_init(){
         const _imgType = _it.types.find(t => t.startsWith('image/'));
         if(_imgType){ _imgBlob = await _it.getType(_imgType); break; }
       }
-      if(!_imgBlob){ edToast('No hay ninguna imagen en el portapapeles'); return; }
+      if(!_imgBlob){ edToast(I18n.t('ed_noImageInClipboard')); return; }
       edAddImage(_imgBlob);
     } catch(_err){
-      edToast('No se pudo leer el portapapeles — comprueba los permisos');
+      edToast(I18n.t('ed_clipboardReadFailed'));
     }
   });
   $('dd-shortcuts')?.addEventListener('click', () => {
@@ -26991,7 +26991,7 @@ function EditorView_init(){
                     _f.type === 'image/vnd.mozilla.apng' ||
                     _ext === 'gif' || _ext === 'apng';
     if (_isAnim) {
-      edToast('Para animaciones usa Insertar → Animación 🎬');
+      edToast(I18n.t('ed_useInsertAnimation'));
       window._edWasFullscreen = false;
       return;
     }
@@ -27087,11 +27087,11 @@ function EditorView_init(){
     document.body.appendChild(_esbPopEl);
   }
   _esbPopEl.innerHTML = `
-    <button class="edb-shape-btn" id="esb-shape-rect"    title="Rectángulo" style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">▭</button>
-    <button class="edb-shape-btn" id="esb-shape-ellipse" title="Elipse"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">◯</button>
-    <button class="edb-shape-btn" id="esb-shape-line"    title="Pol&#237;gono"    style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg></button>
-    <button class="edb-shape-btn" id="esb-shape-segment" title="Segmento"    style="min-width:32px;padding:4px 6px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg></button>
-    <button class="edb-shape-btn" id="esb-shape-select"  title="Selección"   style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">↖</button>`;
+    <button class="edb-shape-btn" id="esb-shape-rect"    title="${I18n.t('ed_rectangleTitle')}" style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">▭</button>
+    <button class="edb-shape-btn" id="esb-shape-ellipse" title="${I18n.t('ed_ellipseTitle')}"      style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">◯</button>
+    <button class="edb-shape-btn" id="esb-shape-line"    title="${I18n.t('op_polygonTool')}"    style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg></button>
+    <button class="edb-shape-btn" id="esb-shape-segment" title="${I18n.t('op_segmentTool')}"    style="min-width:32px;padding:4px 6px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg></button>
+    <button class="edb-shape-btn" id="esb-shape-select"  title="${I18n.t('ed_selectionTitle')}"   style="font-size:1.1rem;min-width:32px;padding:4px 8px;background:transparent;border:none;color:#fff;cursor:pointer;border-radius:6px;">↖</button>`;
 
   function _esbMarkActivePop(){
     _esbPopEl.querySelectorAll('.edb-shape-btn').forEach(b => b.style.background='transparent');
@@ -27476,27 +27476,27 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId) return;
     const comic = ComicStore.getById(edProjectId);
-    if(!comic?.localEditorData?.pages?.length) { edToast('No hay versión local guardada'); return; }
-    if(!confirm('¿Restaurar la versión guardada en este dispositivo? Se perderán los cambios de la nube no guardados localmente.')) return;
+    if(!comic?.localEditorData?.pages?.length) { edToast(I18n.t('ed_noLocalVersion')); return; }
+    if(!confirm(I18n.t('ed_confirmRestoreLocal'))) return;
     comic.editorData      = comic.localEditorData;
     comic.localEditorData = null;
     comic.cloudNewer      = false;
     comic.cloudOnly       = false;
     ComicStore.save(comic);
     edLoadProject(edProjectId);
-    edToast('Versión del dispositivo restaurada ✓');
+    edToast(I18n.t('ed_deviceVersionRestored'));
   });
 
   $('dd-deleteproject')?.addEventListener('click',()=>{
     edCloseMenus();
-    if(!edProjectId){edToast('Sin proyecto activo');return;}
-    edConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+    if(!edProjectId){edToast(I18n.t('ed_noActiveProject'));return;}
+    edConfirm(I18n.t('mc_confirmDeleteWork'), ()=>{
       const _comic = ComicStore.getById(edProjectId);
       ComicStore.remove(edProjectId);
       if (_comic?.supabaseId && typeof SupabaseClient !== 'undefined') {
         SupabaseClient.deleteWork(_comic.supabaseId).catch(() => {});
       }
-      edToast('Obra eliminada');
+      edToast(I18n.t('workDeleted'));
       setTimeout(()=>Router.go('my-comics'),600);
     });
   });
@@ -27532,7 +27532,7 @@ function EditorView_init(){
   edInitRules();
   edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
-  window._edQuotaFn = () => edToast('⚠️ Sin espacio: reduce el tamaño de las imágenes o elimina páginas', 5000);
+  window._edQuotaFn = () => edToast(I18n.t('ed_noSpaceWarn'), 5000);
   window.addEventListener('cx:storage:quota', window._edQuotaFn);
   sessionStorage.setItem('cx_editing', '1'); // bloquear actualizaciones del SW
   _edSizeMonitorStart();
@@ -27784,7 +27784,7 @@ function EditorView_init(){
               if(_goUp) layers.push(...blockLayers); else if(_goDown) layers.unshift(...blockLayers);
               edLayers = layers;
               edSelectedIdx = layers.indexOf(_la);
-              edPushHistory(); edRedraw(); edToast(_goUp ? 'Grupo al frente ⬆' : 'Grupo al fondo ⬇');
+              edPushHistory(); edRedraw(); edToast(_goUp ? I18n.t('ed_groupToFront') : I18n.t('ed_groupToBack'));
             } else if(_goUp && idxs[idxs.length-1] < layers.length-1){
               let target = idxs[idxs.length-1] + 1;
               while(target < layers.length && ['fill','pencil','watercolor'].includes(layers[target].type)) target++;
@@ -27795,7 +27795,7 @@ function EditorView_init(){
                 layers.splice(idxs[0], 0, targetLayer, ...blockLayers);
                 edLayers = layers;
                 edSelectedIdx = layers.indexOf(_la);
-                edPushHistory(); edRedraw(); edToast('Grupo subido ▲');
+                edPushHistory(); edRedraw(); edToast(I18n.t('ed_groupMovedUp'));
               }
             } else if(_goDown && idxs[0] > 0){
               let target = idxs[0] - 1;
@@ -27807,7 +27807,7 @@ function EditorView_init(){
                 layers.splice(target, 0, ...blockLayers, targetLayer);
                 edLayers = layers;
                 edSelectedIdx = layers.indexOf(_la);
-                edPushHistory(); edRedraw(); edToast('Grupo bajado ▼');
+                edPushHistory(); edRedraw(); edToast(I18n.t('ed_groupMovedDown'));
               }
             }
           }
@@ -27834,13 +27834,13 @@ function EditorView_init(){
             layers.push(moved);
             _reinsertCompanions(moved);
             edSelectedIdx = layers.indexOf(moved);
-            edPushHistory(); edRedraw(); edToast('Al frente ⬆');
+            edPushHistory(); edRedraw(); edToast(I18n.t('ed_toFront'));
           } else if(_goDown && idx > 0){
             const [moved] = layers.splice(idx, 1);
             layers.unshift(moved);
             _reinsertCompanions(moved);
             edSelectedIdx = layers.indexOf(moved);
-            edPushHistory(); edRedraw(); edToast('Al fondo ⬇');
+            edPushHistory(); edRedraw(); edToast(I18n.t('ed_toBack'));
           }
         } else {
           if(_goUp && idx < layers.length - 1){
@@ -27852,7 +27852,7 @@ function EditorView_init(){
               layers.splice(target, 0, moved);
               _reinsertCompanions(moved);
               edSelectedIdx = layers.indexOf(moved);
-              edPushHistory(); edRedraw(); edToast('Capa subida ▲');
+              edPushHistory(); edRedraw(); edToast(I18n.t('ed_layerMovedUp'));
             }
           } else if(_goDown && idx > 0){
             let target = idx - 1;
@@ -27862,7 +27862,7 @@ function EditorView_init(){
               layers.splice(target, 0, moved);
               _reinsertCompanions(moved);
               edSelectedIdx = layers.indexOf(moved);
-              edPushHistory(); edRedraw(); edToast('Capa bajada ▼');
+              edPushHistory(); edRedraw(); edToast(I18n.t('ed_layerMovedDown'));
             }
           }
         }
@@ -27897,7 +27897,7 @@ function EditorView_init(){
             edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
             edLayers = layers;
             _msRecalcBbox(); _edUpdateMultiSelPanel();
-            edPushHistory(); edRedraw(); edToast(_goUp ? 'Grupo al frente ⬆' : 'Grupo al fondo ⬇');
+            edPushHistory(); edRedraw(); edToast(_goUp ? I18n.t('ed_groupToFront') : I18n.t('ed_groupToBack'));
           } else if(_goUp && idxs[idxs.length-1] < layers.length-1){
             let target = idxs[idxs.length-1] + 1;
             while(target < layers.length && ['fill','pencil','watercolor'].includes(layers[target].type)) target++;
@@ -27909,7 +27909,7 @@ function EditorView_init(){
               edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
               edLayers = layers;
               _msRecalcBbox(); _edUpdateMultiSelPanel();
-              edPushHistory(); edRedraw(); edToast('Grupo subido ▲');
+              edPushHistory(); edRedraw(); edToast(I18n.t('ed_groupMovedUp'));
             }
           } else if(_goDown && idxs[0] > 0){
             let target = idxs[0] - 1;
@@ -27922,7 +27922,7 @@ function EditorView_init(){
               edMultiSel = _selObjs.map(o => layers.indexOf(o)).filter(i=>i>=0);
               edLayers = layers;
               _msRecalcBbox(); _edUpdateMultiSelPanel();
-              edPushHistory(); edRedraw(); edToast('Grupo bajado ▼');
+              edPushHistory(); edRedraw(); edToast(I18n.t('ed_groupMovedDown'));
             }
           }
         }
@@ -28351,16 +28351,16 @@ async function _edSaveBlob(blob, suggestedName, mimeType) {
   if (_supportsFilePicker) {
     const ext = suggestedName.split('.').pop().toLowerCase();
     const _typeMap = {
-      png:  [{description:'Imagen PNG', accept:{'image/png':['.png']}}],
-      jpg:  [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
-      jpeg: [{description:'Imagen JPEG', accept:{'image/jpeg':['.jpg','.jpeg']}}],
-      gif:  [{description:'GIF animado', accept:{'image/gif':['.gif']}}],
-      mp4:  [{description:'Vídeo MP4', accept:{'video/mp4':['.mp4']}}],
+      png:  [{description:I18n.t('ed_pngImageDesc'), accept:{'image/png':['.png']}}],
+      jpg:  [{description:I18n.t('ed_jpegImageDesc'), accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      jpeg: [{description:I18n.t('ed_jpegImageDesc'), accept:{'image/jpeg':['.jpg','.jpeg']}}],
+      gif:  [{description:I18n.t('ed_animatedGifDesc'), accept:{'image/gif':['.gif']}}],
+      mp4:  [{description:I18n.t('ed_mp4VideoDesc'), accept:{'video/mp4':['.mp4']}}],
     };
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName,
-        types: _typeMap[ext] || [{description:'Archivo', accept:{[mimeType]:['.'+ext]}}],
+        types: _typeMap[ext] || [{description:I18n.t('ed_fileDesc'), accept:{[mimeType]:['.'+ext]}}],
       });
       const writable = await handle.createWritable();
       await writable.write(blob);
@@ -28440,11 +28440,11 @@ function edExportPagePNG(format){
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format === 'jpg' ? 0.92 : undefined;
   off.toBlob(async blob => {
-    if(!blob){ edToast('Error al exportar'); return; }
+    if(!blob){ edToast(I18n.t('ed_errExport')); return; }
     const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
     const pg    = edCurrentPage + 1;
     await _edSaveBlob(blob, `${title}_hoja${pg}.${format}`, mimeType);
-    edToast(`Hoja ${pg} exportada ✓`);
+    edToast(I18n.t('ed_pageExported', { n: pg }));
   }, mimeType, quality);
 }
 
@@ -28471,7 +28471,7 @@ function edExportSelectionPNG(format, insertMode) {
       bb = {x0,y0,x1,y1,w:x1-x0,h:y1-y0,cx:(x0+x1)/2,cy:(y0+y1)/2};
     }
   }
-  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast('Selecciona objetos primero'); return; }
+  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast(I18n.t('ed_selectObjectsFirst')); return; }
 
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
@@ -28552,17 +28552,17 @@ function edExportSelectionPNG(format, insertMode) {
       edMultiSel = []; edMultiBbox = null;
       edSelectedIdx = edLayers.length - 1;
       edPushHistory(); edRedraw();
-      edToast('Objeto insertado en el canvas ✓');
+      edToast(I18n.t('ed_objectInsertedCanvas'));
     };
     img.src = dataUrl;
     return;
   }
 
   off.toBlob(async blob => {
-    if(!blob){ edToast('Error al exportar'); return; }
+    if(!blob){ edToast(I18n.t('ed_errExport')); return; }
     const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
     await _edSaveBlob(blob, _selName, mimeType);
-    edToast('Selección exportada ✓');
+    edToast(I18n.t('ed_selectionExported'));
   }, mimeType, quality);
 }
 
@@ -28775,7 +28775,7 @@ async function edExportSelectionSVG() {
       bb = {x0,y0,x1,y1,w:x1-x0,h:y1-y0};
     }
   }
-  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast('Selecciona objetos primero'); return; }
+  if(!bb || bb.w < 0.001 || bb.h < 0.001) { edToast(I18n.t('ed_selectObjectsFirst')); return; }
 
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
@@ -28830,7 +28830,7 @@ async function edExportSelectionSVG() {
     ].join('\n');
     const blob = new Blob([svgStr], { type: 'image/svg+xml' });
     await _edSaveBlob(blob, _selName, 'image/svg+xml');
-    edToast('SVG vectorial exportado ✓');
+    edToast(I18n.t('ed_svgVectorExported'));
     return;
   }
 
@@ -28861,7 +28861,7 @@ async function edExportSelectionSVG() {
   ].join('\n');
   const blob = new Blob([svgStr], { type: 'image/svg+xml' });
   await _edSaveBlob(blob, _selName, 'image/svg+xml');
-  edToast('SVG exportado ✓');
+  edToast(I18n.t('ed_svgExported'));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -28921,7 +28921,7 @@ async function _bibInitIdb(supabaseWorkId) {
       let data = req.result;
       if (data && Array.isArray(data.folders)) {
         if (!data.folders.find(f => f.id === '__anim__' || f.name === 'Animaciones'))
-          data.folders.push({ id: '__anim__', name: 'Animaciones', items: [] });
+          data.folders.push({ id: '__anim__', name: I18n.t('bib_animFolder'), items: [] });
         _bibCache = data;
         resolve();
       } else {
@@ -28933,8 +28933,8 @@ async function _bibInitIdb(supabaseWorkId) {
             const d = JSON.parse(raw);
             if (d && Array.isArray(d.folders)) migrated = d;
             else if (Array.isArray(d)) migrated = { folders: [
-              { id: '__root__', name: 'General', items: d },
-              { id: '__anim__', name: 'Animaciones', items: [] }
+              { id: '__root__', name: I18n.t('bib_generalFolder'), items: d },
+              { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
             ]};
           }
         } catch(_) {}
@@ -28946,8 +28946,8 @@ async function _bibInitIdb(supabaseWorkId) {
           // IDB vacía y sin localStorage: intentar descargar de Supabase
           // (caso habitual en modo incógnito o dispositivo nuevo)
           _bibCache = { folders: [
-            { id: '__root__', name: 'General', items: [] },
-            { id: '__anim__', name: 'Animaciones', items: [] }
+            { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+            { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
           ]};
           const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
           if (_user && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
@@ -28967,8 +28967,8 @@ async function _bibInitIdb(supabaseWorkId) {
     };
     req.onerror = () => {
       _bibCache = { folders: [
-        { id: '__root__', name: 'General', items: [] },
-        { id: '__anim__', name: 'Animaciones', items: [] }
+        { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+        { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
       ]};
       resolve();
     };
@@ -28979,8 +28979,8 @@ async function _bibInitIdb(supabaseWorkId) {
     const _realIncognito = !navigator.storage || typeof navigator.storage.getDirectory !== 'function';
     _bibIdbUnavailable = _realIncognito; // solo true si es incógnito real
     _bibCache = { folders: [
-      { id: '__root__', name: 'General', items: [] },
-      { id: '__anim__', name: 'Animaciones', items: [] }
+      { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+      { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
     ]};
     // Intentar cargar de Supabase en memoria
     const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
@@ -28996,18 +28996,18 @@ async function _bibInitIdb(supabaseWorkId) {
         }
         // Solo mostrar aviso si es incógnito real
         if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Modo incógnito: la biblioteca y animaciones se cargan en memoria y no se guardarán entre sesiones. Para guardar cambios, abre la app en modo normal.');
+          _edShowIncognitoWarning(I18n.t('ed_incognitoLibMemOnly'));
         }
         resolve();
       }).catch(() => {
         if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
-          _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible en este modo. Abre la app en modo normal para acceder a ella.');
+          _edShowIncognitoWarning(I18n.t('ed_incognitoLibUnavailable'));
         }
         resolve();
       });
     } else {
       if (_realIncognito && typeof _edShowIncognitoWarning === 'function') {
-        setTimeout(() => _edShowIncognitoWarning('Modo incógnito: la biblioteca no está disponible. Abre la app en modo normal para acceder a ella.'), 1500);
+        setTimeout(() => _edShowIncognitoWarning(I18n.t('ed_incognitoLibUnavailable')), 1500);
       }
       resolve();
     }
@@ -29022,8 +29022,8 @@ function _bibLoad() {
     let d = null;
     try { d = JSON.parse(localStorage.getItem(_bibKey()) || 'null'); } catch(_) {}
     if (!d || !Array.isArray(d.folders)) d = { folders: [
-      { id: '__root__', name: 'General', items: [] },
-      { id: '__anim__', name: 'Animaciones', items: [] }
+      { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+      { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
     ]};
     return d;
   }
@@ -29099,7 +29099,7 @@ function _bibSave(data) {
   if (_bibIdbUnavailable) {
     _bibIncognitoChanged = true;
     if (typeof _edShowIncognitoWarning === 'function') {
-      _edShowIncognitoWarning('Los cambios en la biblioteca solo se guardarán si subes la obra a la nube. Pulsa el botón ☁️ para guardar.');
+      _edShowIncognitoWarning(I18n.t('ed_incognitoLibCloudOnly'));
     }
     return Promise.resolve();
   }
@@ -29136,9 +29136,7 @@ function _bibSave(data) {
         if (_realIncognito2) _bibIdbUnavailable = true;
         if (typeof _edShowStorageWarning === 'function') {
           _edShowStorageWarning(
-            'No se ha podido guardar tu último cambio en la biblioteca en este dispositivo. ' +
-            'Si cierras la app ahora, ese cambio podría perderse. Sube la obra a la nube (☁️) ' +
-            'para conservarlo. ' +
+            I18n.t('ed_libSaveFailedWarn') +
             (typeof _cxStorageHelpText === 'function' ? _cxStorageHelpText() : '')
           );
         }
@@ -29283,12 +29281,12 @@ async function _cxCheckStorageReliability() {
   // se distingue "biblioteca = menor" frente a "obras = crítico".
   if (!lsOk || !opfsOk || !idbOk) {
     const _partes = [];
-    if (!lsOk)   _partes.push('el índice de tus obras');
-    if (!opfsOk) _partes.push('el contenido de tus obras (páginas y capas)');
-    if (!idbOk)  _partes.push('tu biblioteca de recursos reutilizables');
+    if (!lsOk)   _partes.push(I18n.t('ed_storagePartIndex'));
+    if (!opfsOk) _partes.push(I18n.t('ed_storagePartContent'));
+    if (!idbOk)  _partes.push(I18n.t('ed_storagePartLibrary'));
     _edShowStorageWarning(
-      'Este navegador no está guardando correctamente ' + _partes.join(' ni ') + '. ' +
-      'Los cambios podrían no persistir al cerrar o reabrir la app. ' +
+      I18n.t('ed_storageNotSavingCorrectly') + _partes.join(I18n.t('ed_storageJoinWord')) +
+      I18n.t('ed_storageChangesMayNotPersist') +
       _cxStorageHelpText()
     );
   }
@@ -29408,7 +29406,7 @@ function _bibThumb(la) {
 function _bibGetAnimFolder(data) {
   let folder = data.folders.find(f => f.name === 'Animaciones');
   if (!folder) {
-    folder = { id: '__anim__', name: 'Animaciones', items: [] };
+    folder = { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] };
     data.folders.push(folder);
   }
   return folder;
@@ -29419,18 +29417,18 @@ function edBibGuardar() {
   // Asegurar que _bibCache y carpeta General existen (obra nueva sin IDB inicializada)
   if (!_bibLoad()) {
     _bibCache = { folders: [
-      { id: '__root__', name: 'General', items: [] },
-      { id: '__anim__', name: 'Animaciones', items: [] }
+      { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+      { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
     ]};
   }
   const data = _bibLoad();
-  if (!data || !Array.isArray(data.folders)) { edToast('Error al acceder a la biblioteca'); return; }
+  if (!data || !Array.isArray(data.folders)) { edToast(I18n.t('ed_errAccessLibrary')); return; }
   if (!data.folders.find(f => f.id === '__root__')) {
-    data.folders.unshift({ id: '__root__', name: 'General', items: [] });
+    data.folders.unshift({ id: '__root__', name: I18n.t('bib_generalFolder'), items: [] });
     _bibSave(data);
   }
   if (_BIB_MAX_BYTES > 0 && _bibUsedBytes(data) >= _BIB_MAX_BYTES) {
-    edToast(`Biblioteca llena (${_bibFormatSize(_bibUsedBytes(data))} / ${_bibFormatSize(_BIB_MAX_BYTES)}). Elimina algún objeto para añadir más.`, 3500);
+    edToast(I18n.t('ed_libraryFull', { used: _bibFormatSize(_bibUsedBytes(data)), max: _bibFormatSize(_BIB_MAX_BYTES) }), 3500);
     return;
   }
 
@@ -29444,7 +29442,7 @@ function edBibGuardar() {
   if (isGroupActive || isMultiGroup) {
     // Guardar grupo completo
     const idxs = edMultiSel.slice();
-    if (!idxs.length) { edToast('Selecciona un objeto primero'); return; }
+    if (!idxs.length) { edToast(I18n.t('ed_selectObjectFirst')); return; }
     // Incluir sub-capas (fill, pencil, watercolor) vinculadas a StrokeLayers del grupo.
     // edGroupSelected no asigna groupId a sub-capas, por eso no están en edMultiSel.
     const _bibSubSet = new Set(idxs);
@@ -29461,7 +29459,7 @@ function edBibGuardar() {
     // Mantener orden de edLayers (inferior → superior) para composición correcta
     const _bibAllIdxs = [..._bibSubSet].sort((a, b) => a - b);
     const layers = _bibAllIdxs.map(i => edSerLayer(edLayers[i])).filter(Boolean);
-    if (!layers.length) { edToast('Error al serializar el grupo'); return; }
+    if (!layers.length) { edToast(I18n.t('ed_errSerializeGroup')); return; }
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);
     entry = {
@@ -29475,13 +29473,13 @@ function edBibGuardar() {
   } else {
     // Objeto individual
     const la = edLayers[edSelectedIdx];
-    if (!la) { edToast('Selecciona un objeto primero'); return; }
+    if (!la) { edToast(I18n.t('ed_selectObjectFirst')); return; }
     // GIF: guardar directamente en carpeta Animaciones con su dataUrl
     if (la.type === 'gif') {
       const gifThumb = _bibThumb(la);
       // Necesitamos el dataUrl del gif — está en IndexedDB
       _gifIdbLoad(la.gifKey).then(gifDataUrl => {
-        if (!gifDataUrl) { edToast('No se pudo cargar el GIF'); return; }
+        if (!gifDataUrl) { edToast(I18n.t('ed_gifLoadFailed')); return; }
         const gifEntry = {
           id: Date.now() + '_gif', timestamp: Date.now(),
           isGroup: false, isGifAnim: true,
@@ -29490,8 +29488,8 @@ function edBibGuardar() {
         const d2 = _bibLoad();
         _bibGetAnimFolder(d2).items.push(gifEntry);
         _bibSave(d2);
-        edToast('GIF guardado en Biblioteca → Animaciones ✓');
-      }).catch(() => edToast('Error al leer el GIF'));
+        edToast(I18n.t('ed_gifSavedToLibrary'));
+      }).catch(() => edToast(I18n.t('ed_errReadGif')));
       return;
     }
     // Buscar capas vinculadas (fill, watercolor, pencil)
@@ -29565,7 +29563,7 @@ function edBibGuardar() {
     entry.gifDataUrl = (_la2._pngFrames && _la2._pngFrames[0]) || _la2.src || '';
     _bibGetAnimFolder(data).items.push(entry);
     _bibSave(data);
-    edToast('Animación guardada en Biblioteca → Animaciones ✓');
+    edToast(I18n.t('ed_animSavedToLibrary'));
     return;
   }
 
@@ -29576,7 +29574,7 @@ function edBibGuardar() {
   } else {
     realFolders[0].items.push(entry);
     _bibSave(data);
-    edToast('Guardado en la biblioteca ✓');
+    edToast(I18n.t('ed_savedToLibrary'));
   }
 }
 
@@ -29664,7 +29662,7 @@ function _bibShowFolderPicker(entry, data) {
 
   const title = document.createElement('div');
   title.style.cssText = 'padding:6px 14px 8px;font-size:.8rem;font-weight:700;color:var(--gray-600,#555);border-bottom:1px solid var(--gray-200,#eee);margin-bottom:4px';
-  title.textContent = '¿En qué carpeta?';
+  title.textContent = I18n.t('ed_whichFolder');
   pop.appendChild(title);
 
   data.folders.filter(f => f.name !== 'Animaciones').forEach(folder => {
@@ -29676,7 +29674,7 @@ function _bibShowFolderPicker(entry, data) {
       pop.remove();
       folder.items.push(entry);
       _bibSave(data);
-      edToast('Guardado en "' + folder.name + '" ✓');
+      edToast(I18n.t('ed_savedInFolder', { folder: folder.name }));
     });
     pop.appendChild(btn);
   });
@@ -29866,20 +29864,20 @@ function _bibRenderPanel(panel) {
       const d = _bibLoad();
       const folder = d.folders[fi];
       if (folder.items.length > 0) {
-        edConfirm(`¿Eliminar la carpeta "${folder.name}" y sus ${folder.items.length} objetos?`, ()=>{
+        edConfirm(I18n.t('ed_confirmDeleteFolderWithItems', { name: folder.name, n: folder.items.length }), ()=>{
           const d2 = _bibLoad();
           d2.folders.splice(fi, 1);
           _bibSave(d2);
-          edToast('Carpeta eliminada');
+          edToast(I18n.t('ed_folderDeleted'));
           _bibRenderPanel(panel);
         });
         return;
       }
-      edConfirm(`¿Eliminar la carpeta "${folder.name}"?`, ()=>{
+      edConfirm(I18n.t('ed_confirmDeleteFolder', { name: folder.name }), ()=>{
         const d2 = _bibLoad();
         d2.folders.splice(fi, 1);
         _bibSave(d2);
-        edToast('Carpeta eliminada');
+        edToast(I18n.t('ed_folderDeleted'));
         _bibRenderPanel(panel);
       });
     });
@@ -29891,12 +29889,12 @@ function _bibRenderPanel(panel) {
       e.stopPropagation();
       const fi = parseInt(btn.dataset.fi), ii = parseInt(btn.dataset.ii);
       const d = _bibLoad();
-      const _itemName = d.folders[fi]?.items[ii]?.name || 'este objeto';
-      edConfirm(`¿Eliminar "${_itemName}" de la biblioteca?`, ()=>{
+      const _itemName = d.folders[fi]?.items[ii]?.name || I18n.t('ed_thisObjectDefault');
+      edConfirm(I18n.t('ed_confirmDeleteFromLibrary', { name: _itemName }), ()=>{
         const d2 = _bibLoad();
         d2.folders[fi].items.splice(ii, 1);
         _bibSave(d2);
-        edToast('Eliminado de la biblioteca');
+        edToast(I18n.t('ed_deletedFromLibrary'));
         _bibRenderPanel(panel);
       });
     });
@@ -29981,7 +29979,7 @@ function _bibRenderPanel(panel) {
               };
               _img2.src=_src2;
             });
-          edToast('Animación insertada ✓'); return;
+          edToast(I18n.t('ed_animationInserted')); return;
         }
         // apngSrc: APNG completo descargado de nube — usar directamente con decodeApng
         // pngFrames: array de frames individuales (sistema local o GIF antiguo)
@@ -30051,7 +30049,7 @@ function _bibRenderPanel(panel) {
           });
         };
         img.src = _srcForImg;
-        edToast('Animación insertada ✓');
+        edToast(I18n.t('ed_animationInserted'));
         return;
       }
 
@@ -30166,7 +30164,7 @@ function _bibRenderPanel(panel) {
         // Paso 4: insertar en edLayers respetando el orden (inferior → superior)
         let inserted = 0;
         _grpLas.forEach(la => { edLayers.push(la); inserted++; });
-        if (!inserted) { edToast('Error al insertar el grupo'); return; }
+        if (!inserted) { edToast(I18n.t('ed_errInsertGroup')); return; }
       } else {
         // Objeto individual — clonar profundamente antes de deserializar (misma
         // razón que en el bloque de grupo: entry viene de _bibCache por referencia).
@@ -30175,7 +30173,7 @@ function _bibRenderPanel(panel) {
         const _wcDataClone         = entry.watercolorLayerData ? JSON.parse(JSON.stringify(entry.watercolorLayerData)) : null;
         const _pencilDataClone     = entry.pencilLayerData     ? JSON.parse(JSON.stringify(entry.pencilLayerData))     : null;
         const newLayer = edDeserLayer(_layerDataClone, edOrientation);
-        if (!newLayer) { edToast('Error al insertar el objeto'); return; }
+        if (!newLayer) { edToast(I18n.t('ed_errInsertObject')); return; }
         _adaptLayerOrientation(newLayer);
         delete newLayer._fusionId;
         // Helper: restaurar una sub-capa del grupo desde el entry de biblioteca
@@ -30221,7 +30219,7 @@ function _bibRenderPanel(panel) {
 
       edSelectedIdx = -1;
       edPushHistory(); edRedraw();
-      edToast('Objeto insertado en el canvas ✓');
+      edToast(I18n.t('ed_objectInsertedCanvas'));
     });
   });
 
@@ -31062,13 +31060,13 @@ function _gcpOpenPropsPanel(la, laIdx) {
 
   // Etiqueta del tipo de objeto
   const typeLabel = la.type === 'gif' ? '🎞️ GIF'
-    : la.type === 'image' ? '🖼️ Imagen'
-    : la.type === 'text' ? '💬 Texto'
-    : la.type === 'bubble' ? '💭 Bocadillo'
-    : la.type === 'shape' ? '⬛ Forma'
-    : la.type === 'stroke' ? `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> Dibujo`
-    : la.type === 'line' ? '📐 Recta'
-    : '📦 Objeto';
+    : la.type === 'image' ? I18n.t('gcp_typeImage')
+    : la.type === 'text' ? I18n.t('gcp_typeText')
+    : la.type === 'bubble' ? I18n.t('gcp_typeBubble')
+    : la.type === 'shape' ? I18n.t('gcp_typeShape')
+    : la.type === 'stroke' ? `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('gcp_typeDrawWord')}`
+    : la.type === 'line' ? I18n.t('gcp_typeLine')
+    : I18n.t('gcp_typeObject');
 
   // Posición en px del canvas (para mostrar al usuario)
   const xPx = Math.round(la.x * pw);
@@ -31085,32 +31083,32 @@ function _gcpOpenPropsPanel(la, laIdx) {
       <span style="font-size:.7rem;color:var(--gray-400);font-weight:700;font-family:var(--font-body);flex-shrink:0">Frame ${fi + 1}</span>
     </div>
     <div class="op-prop-row">
-      <span class="op-prop-label">Opacidad</span>
+      <span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
       <span id="gcppp-op-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${opPct}%</span>
       <input type="range" id="gcppp-op" min="0" max="100" value="${opPct}">
     </div>
     <div class="op-prop-row">
-      <span class="op-prop-label">Rotación</span>
+      <span class="op-prop-label">${I18n.t('op_rotationLabel')}</span>
       <input type="number" id="gcppp-rot" value="${rot}" min="-180" max="180" inputmode="numeric"> °
     </div>
     <div class="op-prop-row">
-      <span class="op-prop-label">Posición</span>
+      <span class="op-prop-label">${I18n.t('gcp_positionLabel')}</span>
       <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">X</span>
       <input type="number" id="gcppp-x" value="${xPx}" inputmode="numeric">
       <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">Y</span>
       <input type="number" id="gcppp-y" value="${yPx}" inputmode="numeric">
     </div>
     <div class="op-prop-row">
-      <span class="op-prop-label">Tamaño</span>
+      <span class="op-prop-label">${I18n.t('op_sizeLabel')}</span>
       <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">W</span>
       <input type="number" id="gcppp-w" value="${wPx}" inputmode="numeric" min="4">
       <span style="font-size:.72rem;font-weight:900;color:var(--gray-500)">H</span>
       <input type="number" id="gcppp-h" value="${hPx}" inputmode="numeric" min="4">
     </div>
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
-      <button class="op-btn danger" id="gcppp-del" style="flex:1">✕ Eliminar</button>
-      <button class="op-btn" id="gcppp-dup" style="flex:1">⧉ Duplicar</button>
-      <button class="op-btn" id="gcppp-mirror" title="Reflejar horizontalmente" style="flex-shrink:0">${_ED_MIRROR_ICON}</button>
+      <button class="op-btn danger" id="gcppp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
+      <button class="op-btn" id="gcppp-dup" style="flex:1">${I18n.t('op_duplicateBtn')}</button>
+      <button class="op-btn" id="gcppp-mirror" title="${I18n.t('gcp_mirrorHorizTitle')}" style="flex-shrink:0">${_ED_MIRROR_ICON}</button>
       <button id="gcppp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:18px;padding:6px 14px;font-family:var(--font-body);font-weight:900;font-size:.78rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
@@ -31175,7 +31173,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
     _gcpClosePropsPanel();
     _gcpUpdateFramesBar();
     _gcpRedraw();
-    edToast('Objeto duplicado');
+    edToast(I18n.t('ed_objectDuplicated'));
   });
 
   // Reflejar — crea objeto nuevo reflejado, el original no cambia
@@ -31238,12 +31236,12 @@ function _gcpOpenPropsPanel(la, laIdx) {
     _gcpClosePropsPanel();
     _gcpUpdateFramesBar();
     _gcpRedraw();
-    edToast('Objeto reflejado en nueva capa');
+    edToast(I18n.t('ed_objectMirroredNewLayer'));
   });
 
   // Eliminar
   document.getElementById('gcppp-del')?.addEventListener('click', () => {
-    edConfirm('¿Eliminar este objeto de la animación?', () => {
+    edConfirm(I18n.t('ed_confirmDeleteAnimObject'), () => {
       window._gcpLayers.splice(laIdx, 1);
       if (window._gcpSelIdx >= window._gcpLayers.length)
         window._gcpSelIdx = window._gcpLayers.length - 1;
@@ -31882,7 +31880,7 @@ function _gcpApplyTempToLayers() {
 
 // _gcpSaveFrame: guarda el estado actual de todos los layers en el frame activo.
 function _gcpSaveFrame() {
-  if (!window._gcpLayers.length) { edToast('Añade objetos primero'); return; }
+  if (!window._gcpLayers.length) { edToast(I18n.t('gcp_addObjectsFirst')); return; }
   const fi = window._gcpGlobalFrameIdx;
   window._gcpLayers.forEach(la => {
     // Objeto insertado/duplicado/reflejado pendiente de confirmar: esta es su
@@ -31911,7 +31909,7 @@ function _gcpSaveFrame() {
   // Reinterpolación automática si hay frames interpolados adyacentes
   _gcpReinterpolateAround(fi);
   window._gcpDirty = true;
-  edToast('Fotograma clave ' + _gcpGetKeyFrameNumber(fi) + ' guardado ✓');
+  edToast(I18n.t('gcp_keyframeSaved', { n: _gcpGetKeyFrameNumber(fi) }));
   _gcpHintSet('addFrame');
 }
 
@@ -31919,7 +31917,7 @@ function _gcpSaveFrame() {
 // insertado justo después, avanza a él.
 // Si algún layer no existe en fi, el nuevo frame tampoco existe (se propaga null).
 function _gcpCaptureFrame() {
-  if (!window._gcpLayers.length) { edToast('Añade objetos antes de crear un frame'); return; }
+  if (!window._gcpLayers.length) { edToast(I18n.t('gcp_addObjectsBeforeFrame')); return; }
   // Al añadir un nuevo frame, borrar la interpolación circular automática
   _gcpRemoveCircularInterp();
   const fi = window._gcpGlobalFrameIdx;
@@ -32140,7 +32138,7 @@ function _gcpDuplicateFrameColumn(fi) {
 // Elimina la COLUMNA fi físicamente de todas las capas (con confirmación,
 // operación destructiva). window._gcpFrameHolds se recorta en el mismo punto.
 function _gcpDeleteFrameColumn(fi, keyNum) {
-  edConfirm('¿Eliminar el fotograma clave ' + keyNum + ' de todas las capas?', () => {
+  edConfirm(I18n.t('gcp_confirmDeleteKeyframe', { n: keyNum }), () => {
     _gcpPushHistory(); // guardar antes de la operación destructiva
     window._gcpLayers.forEach(otherLa => {
       if (otherLa._frames && fi < otherLa._frames.length)
@@ -32185,12 +32183,12 @@ function _gcpShowFrameHoldModal(fi) {
 
   const title = document.createElement('div');
   title.style.cssText = 'font-weight:900;font-size:15px;margin-bottom:4px;';
-  title.textContent = 'Pausa en este fotograma';
+  title.textContent = I18n.t('gcp_framePauseTitle');
   box.appendChild(title);
 
   const sub = document.createElement('div');
   sub.style.cssText = 'font-size:12px;color:var(--gray-500);margin-bottom:12px;';
-  sub.textContent = 'Segundos que la animación se queda detenida aquí antes de continuar. 0 = velocidad normal.';
+  sub.textContent = I18n.t('gcp_framePauseSubtitle');
   box.appendChild(sub);
 
   const row = document.createElement('div');
@@ -32207,14 +32205,14 @@ function _gcpShowFrameHoldModal(fi) {
   btnRow.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancelar';
+  cancelBtn.textContent = I18n.t('cancel');
   cancelBtn.style.cssText = 'padding:8px 14px;border-radius:8px;border:1.5px solid var(--gray-300);' +
     'background:var(--white);cursor:pointer;font-weight:700;';
   cancelBtn.addEventListener('click', () => overlay.remove());
   btnRow.appendChild(cancelBtn);
 
   const saveBtn = document.createElement('button');
-  saveBtn.textContent = 'Guardar';
+  saveBtn.textContent = I18n.t('ed_saveModalTitle');
   saveBtn.style.cssText = 'padding:8px 14px;border-radius:8px;border:none;' +
     'background:#1d6fe0;color:var(--white);cursor:pointer;font-weight:700;';
   saveBtn.addEventListener('click', () => {
@@ -32287,7 +32285,7 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
     return btn;
   };
 
-  menu.appendChild(mkItem('✎', 'Cambiar nº de fotogramas', null, () => {
+  menu.appendChild(mkItem('✎', I18n.t('gcp_changeFrameCount'), null, () => {
     _gcpShowInterpModal(fi, layerIdx);
   }));
 
@@ -32298,7 +32296,7 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
     'background:none;border:none;cursor:pointer;font-family:var(--font-body);' +
     'font-size:0.85rem;font-weight:700;color:var(--black);transition:background .12s;text-align:left;';
   blurItem.innerHTML = '<span style="font-size:1rem">◎</span>' +
-    'Blur de movimiento' +
+    I18n.t('gcp_motionBlur') +
     '<span id="_gcpBlurTogglePill" style="margin-left:auto;font-size:0.7rem;font-weight:900;padding:2px 8px;border-radius:20px;' +
     'background:' + (_hasBluNow ? '#cc2200' : 'var(--gray-200)') + ';' +
     'color:' + (_hasBluNow ? '#fff' : 'var(--gray-500)') + '">' +
@@ -32312,7 +32310,7 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
   });
   menu.appendChild(blurItem);
 
-  const _delBtn = mkItem('✕', 'Eliminar interpolación', '#cc2200', () => {
+  const _delBtn = mkItem('✕', I18n.t('gcp_deleteInterpolation'), '#cc2200', () => {
     _gcpDeleteInterp(fi);
   });
   _delBtn.style.borderRadius = '0 0 8px 8px';
@@ -32375,7 +32373,7 @@ function _gcpDeleteInterp(fi) {
   _gcpRedraw();
   _gcpUpdateFramesBar();
   window._gcpDirty = true;
-  edToast('Interpolación eliminada ✓');
+  edToast(I18n.t('gcp_interpolationDeleted'));
 }
 
 let _gcpInterpPendingFi    = -1;
@@ -32470,14 +32468,14 @@ function _gcpDoInterpolate(fi, n) {
   _gcpRedraw();
   _gcpUpdateFramesBar();
   window._gcpDirty = true;
-  edToast(n + ' frame' + (n > 1 ? 's' : '') + ' interpolado' + (n > 1 ? 's' : '') + ' añadido' + (n > 1 ? 's' : '') + ' ✓');
+  edToast(I18n.t(n > 1 ? 'gcp_frameInterpAddedPlural' : 'gcp_frameInterpAddedSingular', { n }));
   delete _gcpDoInterpolate._blur;
 }
 
 // Modal para ajustar la interpolación circular automática
 function _gcpShowCircularInterpModal(fi) {
   const _n = window._gcpCircularInterpN || 3;
-  const _msg = 'Interpolación circular: ' + _n + ' frame' + (_n !== 1 ? 's' : '') + ' entre el último y el primero. ¿Cambiar?';
+  const _msg = I18n.t(_n !== 1 ? 'gcp_circularInterpMsgPlural' : 'gcp_circularInterpMsgSingular', { n: _n });
   // Usar el modal existente de interpolación reutilizando _gcpShowInterpModal
   _gcpInterpPendingFi = fi;
   _gcpInterpN = _n;
@@ -32508,7 +32506,7 @@ function _gcpShowCircularInterpModal(fi) {
     _gcpUpdateFrameNav();
     _gcpUpdateFramesBar();
     _gcpRedraw();
-    edToast(_gcpInterpN + ' frame' + (_gcpInterpN > 1 ? 's' : '') + ' circular' + (_gcpInterpN > 1 ? 'es' : '') + ' añadido' + (_gcpInterpN > 1 ? 's' : '') + ' ✓');
+    edToast(I18n.t(_gcpInterpN > 1 ? 'gcp_frameCircularAddedPlural' : 'gcp_frameCircularAddedSingular', { n: _gcpInterpN }));
   };
 }
 
@@ -32843,7 +32841,7 @@ function _gcpCloseFramesBar() {
   const btn = document.getElementById('gcpFramesToggleBtn');
   if (!bar) return;
   bar.style.display = 'none';
-  if (btn) { btn.textContent = 'Matriz ▾'; btn.classList.remove('active'); }
+  if (btn) { btn.textContent = I18n.t('gcp_matrixBtn'); btn.classList.remove('active'); }
   window._gcpUiClosedAt = Date.now();
   if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
@@ -32858,7 +32856,7 @@ function _gcpToggleFramesBar() {
     _gcpCloseFramesBar();
   } else {
     bar.style.display = 'flex';
-    if (btn) { btn.textContent = 'Matriz ▴'; btn.classList.add('active'); }
+    if (btn) { btn.textContent = I18n.t('gcp_matrixOpenLabel'); btn.classList.add('active'); }
     _gcpUpdateFramesBar();
     // Refrescar de inmediato las barras generales de paneo (se ocultan/muestran
     // según si la Matriz está abierta — ver _edScrollbarsDraw)
@@ -32889,7 +32887,7 @@ function _gcpPreviewStop() {
 
 function _gcpPreview() {
   const total = _gcpGetTotalFrames();
-  if (!total) { edToast('Sin frames para previsualizar'); return; }
+  if (!total) { edToast(I18n.t('gcp_noFramesToPreview')); return; }
   // Detener si ya está en marcha → snap al frame clave anterior
   if (_gcpPreviewTimer) {
     _gcpPreviewStop();
@@ -33565,7 +33563,7 @@ function _gcpUpdateFramesBar() {
       'border-radius:4px;font-size:15px;line-height:1;color:var(--gray-500);transition:background .12s;';
 
     const upBtn = document.createElement('button');
-    upBtn.title = 'Subir capa';
+    upBtn.title = I18n.t('gcp_moveLayerUpTitle');
     upBtn.textContent = '▲';
     upBtn.style.cssText = _arrowBtnStyle;
     upBtn.disabled = layerIdx >= window._gcpLayers.length - 1; // visualmente arriba = mayor índice
@@ -33587,7 +33585,7 @@ function _gcpUpdateFramesBar() {
     // ▼ bajar capa — fijo abajo del todo, centrado, más grande. Se añade al
     // final de leftCol más abajo (después del grupo intermedio).
     const dnBtn = document.createElement('button');
-    dnBtn.title = 'Bajar capa';
+    dnBtn.title = I18n.t('gcp_moveLayerDownTitle');
     dnBtn.textContent = '▼';
     dnBtn.style.cssText = _arrowBtnStyle;
     dnBtn.disabled = layerIdx <= 0;
@@ -33601,7 +33599,7 @@ function _gcpUpdateFramesBar() {
 
     // Botón eliminar capa (con confirmación)
     const delLayerBtn = document.createElement('button');
-    delLayerBtn.title = 'Eliminar ' + layerName;
+    delLayerBtn.title = I18n.t('gcp_deleteLayerWithName', { name: layerName });
     delLayerBtn.innerHTML = '<span style="color:#e63030;font-size:15px;font-weight:900;line-height:1">✕</span>';
     delLayerBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:6px 10px;' +
       'border-radius:6px;transition:background .15s;flex-shrink:0;';
@@ -33609,7 +33607,7 @@ function _gcpUpdateFramesBar() {
     delLayerBtn.addEventListener('pointerleave', () => { delLayerBtn.style.background = 'none'; });
     delLayerBtn.addEventListener('click', e => {
       e.stopPropagation();
-      edConfirm('¿Eliminar el objeto "' + layerName + '" de la animación?', () => {
+      edConfirm(I18n.t('gcp_confirmDeleteAnimLayer', { name: layerName }), () => {
         window._gcpLayers.splice(layerIdx, 1);
         _gcpInvalidateAllThumbs();
         if (window._gcpSelIdx >= window._gcpLayers.length)
@@ -33633,7 +33631,7 @@ function _gcpUpdateFramesBar() {
     const _allHidden = la._frames && la._frames.length > 0 &&
       la._frames.every(f => !f);
     const eyeBtn = document.createElement('button');
-    eyeBtn.title = 'Mostrar/ocultar todos los frames';
+    eyeBtn.title = I18n.t('gcp_toggleAllFramesTitle');
     eyeBtn.textContent = '👁';
     eyeBtn.style.cssText = 'background:none;border:none;cursor:pointer;padding:6px 10px;' +
       'border-radius:6px;font-size:16px;line-height:1;transition:background .15s;flex-shrink:0;' +
@@ -33761,7 +33759,7 @@ function _gcpUpdateFramesBar() {
         emptyActions.className = 'ed-page-actions';
         const showBtn = document.createElement('button');
         showBtn.className = 'ed-page-action-btn';
-        showBtn.title = 'Añadir el objeto en este fotograma';
+        showBtn.title = I18n.t('gcp_addObjectHereTitle');
         // El objeto NO existe en este frame = estado "invisible" → 50% (mismo
         // criterio que el resto de ojos de la app). Color negro explícito, no
         // el gris de .ed-page-action-btn: con solo opacity, el ojo "visible"
@@ -33816,7 +33814,7 @@ function _gcpUpdateFramesBar() {
         // porque afectan a TODAS las capas, no solo a esta.)
         const eyeBtn = document.createElement('button');
         eyeBtn.className = 'ed-page-action-btn';
-        eyeBtn.title = 'Quitar el objeto de este fotograma';
+        eyeBtn.title = I18n.t('gcp_removeObjectHereTitle');
         // El objeto SÍ existe en este frame = estado "visible" → 100%, con
         // color negro explícito (no el gris de .ed-page-action-btn, que sin
         // esto hacía que el ojo se viera atenuado aunque su opacidad ya
@@ -33983,18 +33981,18 @@ function _gcpBuildColActions(colActionsContent) {
       return btn;
     };
 
-    const dupBtn = mk('⧉', 'Duplicar columna (todas las capas)', 'var(--gray-600)');
+    const dupBtn = mk('⧉', I18n.t('gcp_duplicateColumnTitle'), 'var(--gray-600)');
     dupBtn.addEventListener('click', e => { e.stopPropagation(); _gcpDuplicateFrameColumn(b.fi); });
     cluster.appendChild(dupBtn);
 
-    const delBtn = mk('✕', 'Eliminar columna (todas las capas)', '#e63030');
+    const delBtn = mk('✕', I18n.t('gcp_deleteColumnTitle'), '#e63030');
     delBtn.addEventListener('click', e => { e.stopPropagation(); _gcpDeleteFrameColumn(b.fi, i + 1); });
     cluster.appendChild(delBtn);
 
     const holdMs = (window._gcpFrameHolds && window._gcpFrameHolds[b.fi]) || 0;
     const holdBtn = mk('T', holdMs > 0
-      ? ('Pausa: ' + (holdMs / 1000) + 's — toca para cambiar')
-      : 'Añadir pausa en este fotograma', holdMs > 0 ? '#cc2200' : 'var(--gray-600)');
+      ? I18n.t('gcp_pauseWithSeconds', { sec: holdMs / 1000 })
+      : I18n.t('gcp_addPauseHere'), holdMs > 0 ? '#cc2200' : 'var(--gray-600)');
     if (holdMs > 0) {
       holdBtn.style.background = '#ffeeeb';
       holdBtn.style.border = '1px solid #cc2200';
@@ -34029,9 +34027,8 @@ function _gcpBuildColActions(colActionsContent) {
 
     const interpBtn = document.createElement('button');
     interpBtn.title = _hasInterp
-      ? _interpCount + ' frame' + (_interpCount > 1 ? 's' : '') + ' interpolado' + (_interpCount > 1 ? 's' : '') +
-        (_hasBlur ? ' + blur' : '') + ' — pulsa para opciones'
-      : 'Añadir interpolación (todas las capas)';
+      ? I18n.t(_interpCount > 1 ? 'gcp_interpTitlePlural' : 'gcp_interpTitleSingular', { n: _interpCount, blur: _hasBlur ? ' + blur' : '' })
+      : I18n.t('gcp_addInterpolation');
     interpBtn.style.cssText = [
       'position:absolute', 'top:2px', 'left:' + Math.round(gapAnchor) + 'px',
       'transform:translateX(-50%)',
@@ -34644,7 +34641,7 @@ function _gcpRenderLayersDropdown(dd) {
     const d = document.createElement('div');
     d.className = 'ed-dropdown-item';
     d.style.color = 'var(--gray-400)'; d.style.fontSize = '0.78rem'; d.style.cursor = 'default';
-    d.textContent = 'Sin capas — inserta desde Biblioteca';
+    d.textContent = I18n.t('gcp_noLayersInsertFromLibrary');
     dd.appendChild(d); return;
   }
   const tipos = { image:'🖼', shape:'⬛', line:'╱', stroke:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0">`, draw:`<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDY2IDcwIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyNy43MzggNTcuOTUzKSI+PHBhdGggZD0iTSAtNy44ODkgOS44MjkgTCAtMS4yMjMgOC43ODggTCAzLjQ2NSA2LjE4MyBMIDYuOTAyIDIuMjI1IEwgNy44ODkgLTMuMjA4IEwgNy40ODcgLTguNjczIEwgMi4yNjMgLTkuODI5IEwgLTQuMzY3IC01Ljc4MyBMIC02LjM3NiAtMi40MjAgTCAtNi4zNzYgMy4yNTYgTCAtNy44ODkgOS44MjkgWiIgZmlsbD0iI2FhNmU2ZSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjcuMjA1IDU3LjQ2NykiPjxwYXRoIGQ9Ik0gLTYuNDcwIDkuNDk4IEwgLTQuMjgyIDcuNjIzIFEgLTIuMDk1IDUuNzQ4IC0xLjk4NCAyLjg2OSBMIC0xLjc2OCAtMi43NzAgTCAtNS42MzcgNC4zOTQgTCAtNi4xMDIgMS4xOTcgTCAtNS40MzUgLTMuMzYwIEwgLTIuMTkwIC02LjU2NiBMIDMuMjE3IC05LjM5NCBMIDYuMTAyIC04LjQ1MSBMIDIuNDk2IC0yLjYwNSBMIDEuMDMwIDguMTQ0IEwgLTYuNDcwIDkuNDk4IFoiIGZpbGw9IiNmOWNkY2QiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ2LjkxMiAyNC41ODYpIj48cGF0aCBkPSJNIC0xNS4yNjcgMjAuMTMxIEwgLTEwLjE3OCAyMS4xMzAgTCAtMi44NjMgMTAuNjQ4IEwgMy4xODEgMS44MzAgTCAxMC40OTYgLTguNjUyIEwgMTQuNjMxIC0xNS4xNDAgTCAxNS4yNjcgLTE5LjEzMyBMIDE0LjMxMyAtMjEuMTMwIEwgMTAuMTc4IC0xOS45NjUgTCAzLjgxNyAtMTUuMzA3IEwgLTEuMjcyIC03LjE1NCBMIC02Ljk5NyAzLjMyNyBMIC0xMS4xMzIgMTIuMzEyIEwgLTE1LjI2NyAyMC4xMzEgWiIgZmlsbD0iI2YyZGViYSIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDYuMTA3IDI0LjIzOSkiPjxwYXRoIGQ9Ik0gLTE0LjQyMSAxOS45ODkgTCAtMTAuODE2IDIwLjc0NCBMIC0wLjAwMCAtMy41ODMgTCA1Ljc2OCAtMTEuNTAzIEwgMTQuMDYwIC0yMC43NDQgTCAxLjgwMyAtMTEuMzE1IEwgLTMuMjQ1IC0xLjY5NyBMIC04LjI5MiA5LjQyOSBMIC0xNC40MjEgMTkuOTg5IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ5LjM2MSAyNC41OTgpIj48cGF0aCBkPSJNIC0xMS43MTAgMjEuMzEyIEwgLTUuOTAwIDEwLjcxNCBMIDAuNjU1IDIuNzY2IEwgNi45MTIgLTYuMjc0IEwgMTMuNzk1IC0xNi40MzcgTCAxMi42MDEgLTIxLjMxMiBMIDEwLjQ1MCAtMTYuNzQ5IFEgOC4yOTkgLTEyLjE4NyA1LjQxMiAtOC4wNTEgTCA1LjE0OCAtNy42NzIgUSAxLjk5NiAtMy4xNTcgLTEuMjk1IDEuMjU4IEwgLTIuMTQ1IDIuMzk5IFEgLTQuODU3IDYuMDM5IC03LjUzOSA5LjcwMSBMIC03Ljg5NSAxMC4xODggUSAtMTAuMjIwIDEzLjM2NCAtMTIuMDA4IDE2Ljg3MCBMIC0xMy43OTUgMjAuMzc3IEwgLTExLjcxMCAyMS4zMTIgWiIgZmlsbD0iIzlmODQ4NCIgc3Ryb2tlPSJub25lIiBzdHJva2Utd2lkdGg9IjAiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMzMuODk4IDQ2LjkyOSkiPjxwYXRoIGQ9Ik0gLTEuODEyIC0yLjM5NyBMIDMuNzMwIC0xLjA1OSBMIDEuNDI4IDIuNzAwIEwgLTMuODQ0IDEuNjY2IEwgLTEuODEyIC0yLjM5NyBaIiBmaWxsPSIjZmZlMTM1IiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQwLjk1OSAzNC45NDkpIj48cGF0aCBkPSJNIC0yMC4yMTQgMzAuOTUyIEwgLTE5LjgxMiAyOS45NTQgUSAtMTkuNDEwIDI4Ljk1NSAtMTkuNTM0IDI3Ljg4NiBMIC0xOS42MTEgMjcuMjIxIFEgLTE5LjgxMiAyNS40ODcgLTE5LjY3NyAyMy43NDYgTCAtMTkuNTg3IDIyLjYwNCBRIC0xOS40MTAgMjAuMzM3IC0xOC4wMDQgMTguNTUwIEwgLTE4LjAwNCAxOC41NTAgUSAtMTYuNTk4IDE2Ljc2NCAtMTQuNjQzIDE1LjYwMSBMIC0xMC41MjYgMTMuMTUyIEwgLTcuMDEwIDYuMTY4IFEgLTMuNDk1IC0wLjgxNSAtMC4zNTcgLTcuOTc2IEwgMC44MTkgLTEwLjY1OSBRIDMuNDk1IC0xNi43NjYgNy40NjYgLTIyLjEyMSBMIDguMTY0IC0yMy4wNjMgUSAxMS40MzcgLTI3LjQ3NyAxNi4yMDMgLTMwLjIxMyBMIDE3Ljk4NyAtMzEuMjM3IFEgMjAuOTY5IC0zMi45NDkgMjEuMTI3IC0yOS41MTUgTCAyMS4xMjcgLTI5LjUxNSBRIDIxLjI4NiAtMjYuMDgwIDE5LjUxOCAtMjMuMTMxIEwgMTguMTA5IC0yMC43ODIgUSAxNC45MzIgLTE1LjQ4NSAxMS4xNTIgLTEwLjYwMCBMIDcuNzI3IC02LjE3NCBRIDIuODU5IDAuMTE2IC0xLjA2NyA3LjAzNCBMIC01LjQwMSAxNC42NzAgTCAtNS4xOTUgMTkuOTYzIFEgLTUuMDgzIDIyLjgyMCAtNi4zNTQgMjUuMzgxIEwgLTYuMzU0IDI1LjM4MSBRIC03LjYyNSAyNy45NDMgLTEwLjA5NiAyOS4zODEgTCAtMTAuMzI1IDI5LjUxNSBRIC0xMy4wMjYgMzEuMDg2IC0xNi4wNzQgMzEuNzc0IEwgLTIwLjE4MSAzMi43MDAgUSAtMjEuMjg2IDMyLjk0OSAtMjAuNzUwIDMxLjk1MSBMIC0yMC4yMTQgMzAuOTUyIFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzAwMDAwMCIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L2c+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTkuOTk2IDE4LjMxMykiPjxwYXRoIGQ9Ik0gLTE1LjMxMyAtMS41NzEgTCAtMTUuMDAwIDEuNDQ5IEwgMTMuNTA1IDEuNjc2IEwgMTQuMDYyIC0xLjg4NCBMIC0xNS4zMTMgLTEuNTcxIFoiIGZpbGw9IiNkNGQ0ZDQiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5LjI4MyAyOS43MzYpIj48cGF0aCBkPSJNIC0xNC41ODMgLTExLjY3NiBMIC05LjkwMyAtMTAuNjA2IFEgLTUuMjIyIC05LjUzNiAtMC41NDcgLTEwLjYzMCBMIDQuMDc5IC0xMS43MTMgUSA3LjU4MyAtMTIuNTMzIDExLjEyNSAtMTEuODkyIEwgMTQuNjY3IC0xMS4yNTEgTCAxMS41NzIgOS44ODUgUSAxMS4yMzIgMTIuMjA0IDguODg5IDEyLjI2OCBMIC04LjU5NSAxMi43NDAgUSAtMTAuOTM4IDEyLjgwNCAtMTEuMjgzIDEwLjQ4NSBMIC0xNC41ODMgLTExLjY3NiBaIiBmaWxsPSIjNWY5YmQzIiBzdHJva2U9Im5vbmUiIHN0cm9rZS13aWR0aD0iMCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC4wNTMgMjcuODcwKSI+PHBhdGggZD0iTSAwLjk3MyAxNC40MjQgTCAtMy4wNDAgLTE1LjQ3OCBMIDIuNTM3IC0xNS40NzggTCA0LjMzMCAxMy41NzUgUSA0LjQ0MSAxNS4zNjggMi43MDcgMTQuODk2IEwgMC45NzMgMTQuNDI0IFoiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5Ljk5MyAyOS4wODgpIj48cGF0aCBkPSJNIC0xNi40MzggLTE0LjkyOSBRIC0xOC40MzggLTE0LjkwNSAtMTguMTEwIC0xMi45MzIgTCAtMTMuOTI2IDEyLjMwMSBRIC0xMy40MjAgMTUuMzUyIC0xMC4zMjcgMTUuMzUyIEwgOC4yODEgMTUuMzUyIFEgMTIuNTM0IDE1LjM1MiAxMy4yMjAgMTEuMTU1IEwgMTcuMjI2IC0xMy4zNjggUSAxNy41NDkgLTE1LjM0MiAxNS41NDkgLTE1LjMxNyBMIC0xNi40MzggLTE0LjkyOSBaIiBmaWxsPSJub25lIiBzdHJva2U9IiMwMDAwMDAiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjM1MCAyOS43NzIpIj48cGF0aCBkPSJNIC00LjI3MSAxMi4yODMgTCAtMS4zMDIgMTIuMjMxIFEgMS42NjcgMTIuMTc5IDIuMDE1IDkuMjMwIEwgNC40NzkgLTExLjYxNSBMIDIuMDQ3IC0xMi4xMzYgUSAwLjEwNCAtMTIuNTUyIC0xLjg3NSAtMTIuMzc0IEwgLTMuODU0IC0xMi4xOTYgTCAtNC4yNzEgMTIuMjgzIFoiIGZpbGw9IiMzNzYwODYiIHN0cm9rZT0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIwIi8+PC9nPjwvc3ZnPg==" width="38" height="41" style="image-rendering:pixelated;vertical-align:middle"/>`, text:'T', bubble:'💬', gif:'🎬' };
@@ -34654,7 +34651,7 @@ function _gcpRenderLayersDropdown(dd) {
     const btn = document.createElement('button');
     btn.className = 'ed-dropdown-item' + (idx === window._gcpSelIdx ? ' active' : '');
     btn.style.cssText = 'flex:1;text-align:left';
-    btn.innerHTML = (tipos[la.type] || '•') + ' Capa ' + (idx + 1);
+    btn.innerHTML = (tipos[la.type] || '•') + I18n.t('gcp_layerDefaultName', { n: idx + 1 });
     btn.addEventListener('click', () => { window._gcpSelIdx = idx; _gcpRenderLayersDropdown(dd); _gcpRedraw(); });
     const del = document.createElement('button');
     del.textContent = '✕';
@@ -34863,7 +34860,7 @@ function gcpInsertFromBib(entry) {
     if (_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
     _gcpRedraw();
     _gcpHintSet('saveFrame');
-    edToast('Objeto insertado en el canvas ✓');
+    edToast(I18n.t('ed_objectInsertedCanvas'));
   };
 
   const insertLayer = (la) => {
@@ -35192,7 +35189,7 @@ function gcpOpen(edLayerIdx) {
       // _lyStartNameEdit en editor-layers.js — la misma capa "Imagen"/APNG
       // ya guarda .name, ver edSerLayer), reflejarlo aquí; si no, el texto
       // genérico de siempre.
-      if (titleEl) titleEl.textContent = gifLayer.name || 'Editar animación';
+      if (titleEl) titleEl.textContent = gifLayer.name || I18n.t('gcp_editAnimationTitle');
     }
   }
   // Si es nueva animación (sin capas previas), calcular título con contador de bib
@@ -35202,7 +35199,7 @@ function gcpOpen(edLayerIdx) {
       const _bib2 = _bibLoad();
       const _af2 = _bib2.folders.find(f => f.id === '__anim__');
       const _ac2 = (_af2?.items?.length || 0) + 1;
-      _tEl.textContent = 'Animación ' + _ac2;
+      _tEl.textContent = I18n.t('gcp_newAnimationTitle', { n: _ac2 });
     }
     setTimeout(() => _gcpHintSet('bib'), 300);
   } else {
@@ -35373,7 +35370,7 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpSaveAppBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
       _gcpCloseAllDropdowns();
-      edToast('Procesando…');
+      edToast(I18n.t('gcp_processing'));
       _gcpSaveToLib(() => _gcpDoClose()); // inserta y sale inmediatamente
     });
     document.getElementById('gcpDownloadApngBtn')?.addEventListener('pointerup', e => {
@@ -35683,12 +35680,12 @@ function gcpClose() {
   pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
   const _isReEdit = (window._gcpEdLayerIdx >= 0) &&
     (edLayers[window._gcpEdLayerIdx]?._isGcpImage || edLayers[window._gcpEdLayerIdx]?._gcpLayersData);
-  const _actionLabel = _isReEdit ? 'Actualizar animación' : 'Insertar en el canvas';
+  const _actionLabel = _isReEdit ? I18n.t('gcp_updateAnimation') : I18n.t('ed_insertInCanvas');
   pop.innerHTML = `<div id="_gcpSaveBox" style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
-    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">Tienes cambios sin guardar</p>
+    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">${I18n.t('td_unsavedChanges')}</p>
     <div style="display:flex;flex-direction:column;gap:10px">
       <button id="_gcpPopSi" style="padding:12px;border:none;border-radius:8px;background:#ffe066;font-size:.95rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
-      <button id="_gcpPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">Salir sin guardar</button>
+      <button id="_gcpPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">${I18n.t('td_exitWithoutSaving')}</button>
     </div>
   </div>`;
   document.body.appendChild(pop);
@@ -35708,7 +35705,7 @@ function gcpClose() {
   pop.querySelector('#_gcpPopSi').addEventListener('pointerup', e => {
     e.stopPropagation();
     pop.remove();
-    edToast('Procesando...');
+    edToast(I18n.t('gcp_processing'));
     _gcpSaveToLib(() => _gcpDoClose());
   });
 }
@@ -35928,7 +35925,7 @@ function _gcpSaveToLib(onDone) {
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
     };
     img.src=pngFrames[0];
-    edToast('Animación actualizada ✓');
+    edToast(I18n.t('gcp_animationUpdated'));
     onDone && onDone();
   } else {
     // Animación nueva: insertar directamente en el canvas del editor (no en biblioteca)
@@ -35976,7 +35973,7 @@ function _gcpSaveToLib(onDone) {
         la._applyFrame(0);
         edRedraw();
       });
-      edToast('Animación insertada en el canvas ✓');
+      edToast(I18n.t('gcp_animationInsertedCanvas'));
     };
     img.src = pngFrames[0];
     onDone && onDone();
@@ -36009,10 +36006,10 @@ function _gcpRuleAdd() {
 
 function _gcpRuleClear() {
   if (!_gcpRules.length) return;
-  edConfirm('¿Borrar todas las guías de esta hoja?', () => {
+  edConfirm(I18n.t('ed_confirmClearAllGuides'), () => {
     _gcpRules = []; _gcpRuleNodes = [];
     _gcpRulesPanelClose(); _gcpRedraw();
-  }, 'Borrar');
+  }, I18n.t('ed_clearBtn'));
 }
 
 function _gcpRuleDelete(id) {
@@ -36148,9 +36145,9 @@ function _gcpRulesOpenPanel(id, part, wx, wy) {
   const _sep = '<div style="width:1px;height:26px;background:rgba(255,255,255,0.18);flex-shrink:0"></div>';
   const _inGroup = !!(r.nodeA || r.nodeB);
   if (_inGroup) {
-    pop.innerHTML = `<button id="grp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?'Desbloquear':'Bloquear'}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="Ocultar esta guía" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="grp-dup" title="${I18n.t('ed_dupGuideTitle')}" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?I18n.t('ed_unlockGuideTitle'):I18n.t('ed_lockGuideTitle')}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="${I18n.t('ed_hideGuideTitle')}" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   } else {
-    pop.innerHTML = `<button id="grp-horiz" title="Hacer horizontal" style="${_bs}">${_svgH}</button><button id="grp-vert" title="Hacer vertical" style="${_bs}">${_svgV}</button>${_sep}<button id="grp-dup" title="Duplicar guía" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?'Desbloquear':'Bloquear'}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="Ocultar esta guía" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
+    pop.innerHTML = `<button id="grp-horiz" title="${I18n.t('ed_makeHorizontalTitle')}" style="${_bs}">${_svgH}</button><button id="grp-vert" title="${I18n.t('ed_makeVerticalTitle')}" style="${_bs}">${_svgV}</button>${_sep}<button id="grp-dup" title="${I18n.t('ed_dupGuideTitle')}" style="${_bs}">${_svgDup}</button>${_sep}<button id="grp-lock" title="${r.locked?I18n.t('ed_unlockGuideTitle'):I18n.t('ed_lockGuideTitle')}" style="${_bsLock}">${r.locked?'🔒':'🔓'}</button>${_sep}<button id="grp-hide" title="${I18n.t('ed_hideGuideTitle')}" style="${_bs}">${_svgEye}</button>${_sep}<button id="grp-del" style="${_bs}font-size:.9rem;font-weight:900;color:#ff6b6b;">✕</button>`;
   }
   document.body.appendChild(pop);
   _edClampPop(pop, sc.x, sc.y);
@@ -36212,7 +36209,7 @@ function _gcpRulesNodePanel(n) {
 function _gcpRuleToggleSync() {
   const _txt = document.getElementById('gcp-rule-toggle-txt'); if (!_txt) return;
   const _anyHidden = _gcpRulesHidden || _gcpRules.some(r => r.hidden);
-  _txt.textContent = _anyHidden ? 'Mostrar guías' : 'Ocultar guías';
+  _txt.textContent = _anyHidden ? I18n.t('ed_showGuides') : I18n.t('ed_hideGuides');
 }
 
 function _gcpSnapToRules(la) {
@@ -36291,11 +36288,11 @@ function _gcpInitRules() {
 // Motor: UPNG.js (photopea) + pako — mismo stack que Squoosh (Google).
 async function _gcpDownloadApng() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
-    edToast('No hay contenido para descargar'); return;
+    edToast(I18n.t('gcp_noContentToDownload')); return;
   }
-  if (typeof UPNG === 'undefined') { edToast('Error interno: UPNG no cargado'); return; }
+  if (typeof UPNG === 'undefined') { edToast(I18n.t('gcp_errUpngNotLoaded')); return; }
 
-  edToast('Generando PNG animado...');
+  edToast(I18n.t('gcp_generatingApng'));
 
   const layers      = window._gcpLayers.slice();
   const pageW       = Math.round(edPageW()),  pageH   = Math.round(edPageH());
@@ -36412,9 +36409,9 @@ async function _gcpDownloadApng() {
     const blob = new Blob([apngBuf], { type: 'image/png' });
     const _animTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.png';
     await _edSaveBlob(blob, _animTitle, 'image/png');
-    edToast('PNG animado descargado');
+    edToast(I18n.t('gcp_apngDownloaded'));
   } catch (err) {
-    edToast('Error al generar PNG: ' + err.message);
+    edToast(I18n.t('gcp_errGeneratePng') + err.message);
   }
 }
 
@@ -36435,15 +36432,15 @@ function _gcpCrc32Table() {
 // Para transparencia real usar _gcpDownloadApng (APNG).
 async function _gcpDownloadGif() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
-    edToast('No hay contenido para descargar'); return;
+    edToast(I18n.t('gcp_noContentToDownload')); return;
   }
   if (typeof exports === 'undefined' || typeof exports.GifWriter === 'undefined') {
     // omggif expone GifWriter en exports — en browser queda en window scope via try/catch
-    if (typeof GifWriter === 'undefined') { edToast('Error: GifWriter no disponible'); return; }
+    if (typeof GifWriter === 'undefined') { edToast(I18n.t('gcp_errGifWriterNotAvailable')); return; }
   }
   const GW = (typeof GifWriter !== 'undefined') ? GifWriter : exports.GifWriter;
 
-  edToast('Generando GIF...');
+  edToast(I18n.t('gcp_generatingGif'));
 
   const layers      = window._gcpLayers.slice();
   const pageW       = Math.round(edPageW()),  pageH   = Math.round(edPageH());
@@ -36637,9 +36634,9 @@ async function _gcpDownloadGif() {
     const blob = new Blob([gifBytes], {type: 'image/gif'});
     const _gifTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.gif';
     await _edSaveBlob(blob, _gifTitle, 'image/gif');
-    edToast('GIF descargado');
+    edToast(I18n.t('gcp_gifDownloaded'));
   } catch(err) {
-    edToast('Error al generar GIF: ' + err.message);
+    edToast(I18n.t('gcp_errGenerateGif') + err.message);
   }
 }
 
@@ -36649,22 +36646,22 @@ async function _gcpDownloadGif() {
 // WhatsApp acepta MP4 H.264 + reproduce en bucle si la duración es ≤ 6 segundos.
 async function _gcpDownloadMp4() {
   if (!window._gcpLayers || !window._gcpLayers.length || !gcpCanvas || !gcpCtx) {
-    edToast('No hay contenido para exportar'); return;
+    edToast(I18n.t('gcp_noContentToExport')); return;
   }
 
   // Verificar soporte WebCodecs (Chrome Android 94+, Chrome Desktop 94+)
   if (typeof VideoEncoder === 'undefined') {
-    edToast('Tu navegador no soporta exportación MP4. Usa Chrome actualizado.');
+    edToast(I18n.t('gcp_mp4NotSupported'));
     return;
   }
 
   // Verificar que mp4-muxer está cargado
   if (typeof Mp4Muxer === 'undefined') {
-    edToast('Error: librería MP4 no cargada. Recarga la página.');
+    edToast(I18n.t('gcp_errMp4LibNotLoaded'));
     return;
   }
 
-  edToast('Generando MP4…');
+  edToast(I18n.t('gcp_generatingMp4'));
 
   const layers      = window._gcpLayers.slice();
   const pageW       = Math.round(edPageW());
@@ -36748,7 +36745,7 @@ async function _gcpDownloadMp4() {
       framerate: Math.round(1000 / frameDelay)
     });
     if (!support.supported) {
-      edToast('H.264 no soportado en este dispositivo. Usa GIF o APNG.');
+      edToast(I18n.t('gcp_h264NotSupported'));
       return;
     }
 
@@ -36806,9 +36803,9 @@ async function _gcpDownloadMp4() {
     const _mp4Title = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.mp4';
     await _edSaveBlob(blob, _mp4Title, 'video/mp4');
     const kb = Math.round(blob.size / 1024);
-    edToast('MP4 descargado (' + kb + ' KB) ✓');
+    edToast(I18n.t('gcp_mp4Downloaded', { kb }));
   } catch (err) {
-    edToast('Error MP4: ' + err.message);
+    edToast(I18n.t('gcp_errMp4Generic') + err.message);
   }
 }
 

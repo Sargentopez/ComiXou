@@ -282,45 +282,40 @@ function _closeChangePasswordModal() {
    texto nuevo.
    ══════════════════════════════════════════ */
 const _CREDITS_LIBS = [
-  { name: 'omggif',            desc: 'GIF encoder/decoder',                            meta: 'Autor: Dean McNamee · Licencia: MIT', url: 'https://github.com/deanm/omggif' },
-  { name: 'pako',               desc: 'compresión zlib/gzip',                           meta: 'Autores: Andrei Tuputcyn, Vitaly Puzrin y colaboradores (Nodeca project) · Licencia: MIT', url: 'https://github.com/nodeca/pako' },
-  { name: 'UPNG.js',            desc: 'codificador/decodificador PNG',                  meta: 'Autor: Ivan Kutskir · Licencia: MIT', url: 'https://github.com/photopea/UPNG.js' },
-  { name: 'LZW decompression',  desc: 'puerto JavaScript de implementación Java',       meta: 'Licencia: dominio público / uso libre', url: 'https://gist.github.com/devunwired/4479231' },
-  { name: 'Trix',                desc: 'editor de texto enriquecido',                    meta: 'Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson · Licencia: MIT', url: 'https://trix-editor.org/' }
+  { name: 'omggif',            descKey: 'credits_omggifDesc', metaKey: 'credits_omggifMeta', url: 'https://github.com/deanm/omggif' },
+  { name: 'pako',               descKey: 'credits_pakoDesc',   metaKey: 'credits_pakoMeta',   url: 'https://github.com/nodeca/pako' },
+  { name: 'UPNG.js',            descKey: 'credits_upngDesc',   metaKey: 'credits_upngMeta',   url: 'https://github.com/photopea/UPNG.js' },
+  { name: 'LZW decompression',  descKey: 'credits_lzwDesc',    metaKey: 'credits_lzwMeta',    url: 'https://gist.github.com/devunwired/4479231' },
+  { name: 'Trix',                descKey: 'credits_trixDesc',  metaKey: 'credits_trixMeta',   url: 'https://trix-editor.org/' }
 ];
 
 function _creditsModalHtml() {
   const rows = _CREDITS_LIBS.map(lib => `
     <div class="cr-row">
-      <div class="cr-name">${lib.name} <span class="cr-desc">— ${lib.desc}</span></div>
-      <div class="cr-meta">${lib.meta}</div>
+      <div class="cr-name">${lib.name} <span class="cr-desc">— ${I18n.t(lib.descKey)}</span></div>
+      <div class="cr-meta">${I18n.t(lib.metaKey)}</div>
       <div class="cr-meta"><a href="${lib.url}" target="_blank" rel="noopener">${lib.url}</a></div>
     </div>`).join('');
 
   // Mismo texto que el fichero LICENSE de la raíz del proyecto (sin repetir
   // aquí la lista de bibliotecas de terceros, que el propio LICENSE también
   // incluye — ya se muestra arriba con sus enlaces).
-  const licenseParagraphs = [
-    'Copyright © 2026 Alberto Gavina Costero. Todos los derechos reservados.',
-    'Este repositorio contiene el código fuente de Comxow (en adelante, "la Aplicación"), incluyendo pero no limitado a sus archivos HTML, CSS, JavaScript, activos gráficos y cualquier otro material contenido en él.',
-    'Salvo por las bibliotecas de terceros listadas arriba, todo el código y los contenidos de este repositorio son propiedad exclusiva de Alberto Gavina Costero.',
-    'Queda expresamente prohibido, sin autorización previa y por escrito del titular de los derechos: copiar, reproducir o redistribuir este código (en todo o en parte); modificarlo o crear obras derivadas; utilizarlo con fines comerciales; publicarlo en otro repositorio, sitio web o plataforma.',
-    'El hecho de que este repositorio sea (o haya sido) accesible públicamente no constituye una licencia de uso, copia, modificación o redistribución de ningún tipo. El acceso al código no implica cesión de derechos de ninguna clase.'
-  ].map(p => `<p class="cr-license">${p}</p>`).join('');
+  const licenseParagraphs = ['credits_license1', 'credits_license2', 'credits_license3', 'credits_license4', 'credits_license5']
+    .map(k => `<p class="cr-license">${I18n.t(k)}</p>`).join('');
 
   return `
     <div class="sc-box">
       <div class="sc-header">
-        <span class="sc-title">Créditos</span>
+        <span class="sc-title">${I18n.t('credits_title')}</span>
         <button class="sc-close" id="creditsClose">✕</button>
       </div>
       <div class="sc-body">
-        <p class="cr-app">Comxow/COMXOW, creada por A. Gavina Costero (2026) — <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a></p>
-        <div class="sc-section">Librerías de terceros</div>
+        <p class="cr-app">${I18n.t('credits_appInfo')} <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a></p>
+        <div class="sc-section">${I18n.t('credits_thirdPartyLibs')}</div>
         ${rows}
-        <div class="sc-section">Licencia</div>
+        <div class="sc-section">${I18n.t('credits_license')}</div>
         ${licenseParagraphs}
-        <p class="cr-license">Para solicitar autorización de uso, contactar con <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a>.</p>
+        <p class="cr-license">${I18n.t('credits_contactAuth', { email: '<a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a>' })}</p>
       </div>
     </div>`;
 }
@@ -359,10 +354,76 @@ function _closeCreditsModal() {
   document.getElementById('creditsModal')?.classList.remove('open');
 }
 
+/* ══════════════════════════════════════════
+   MODAL IDIOMA (menú ⋮ → Idioma)
+   Mismo patrón/estilo que el modal de Créditos (.sc-box).
+   Decisión de diseño: cambiar de idioma recarga la app — el editor y el
+   resto de vistas reconstruyen su interfaz dinámicamente con JS y no hay
+   (todavía) un sistema de "redibujado" que vuelva a ejecutar esas funciones
+   de render al vuelo. Recargar es el patrón estándar más simple y sin
+   riesgo de dejar texto a medio traducir en medio de una sesión de edición.
+   ══════════════════════════════════════════ */
+function _langModalHtml() {
+  const current = I18n.getLang();
+  const opt = (code, label) => {
+    const active = current === code;
+    return '<button type="button" class="btn ' + (active ? 'btn-primary' : 'btn-outline')
+      + ' lang-opt-btn" data-lang="' + code + '" style="width:100%;margin-bottom:8px;">'
+      + label + (active ? ' ✓' : '') + '</button>';
+  };
+  return `
+    <div class="sc-box">
+      <div class="sc-header">
+        <span class="sc-title">${I18n.t('menuLanguage')}</span>
+        <button class="sc-close" id="langModalClose">✕</button>
+      </div>
+      <div class="sc-body">
+        ${opt('es', 'Español')}
+        ${opt('en', 'English')}
+      </div>
+    </div>`;
+}
+
+function openLanguageModal() {
+  const MODAL_ID = 'langModal';
+  let overlay = document.getElementById(MODAL_ID);
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = MODAL_ID;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('pointerdown', e => { if (e.target === overlay) _closeLanguageModal(); });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const ov = document.getElementById(MODAL_ID);
+        if (ov && ov.classList.contains('open')) _closeLanguageModal();
+      }
+    });
+  }
+  overlay.innerHTML = _langModalHtml();
+  overlay.querySelector('#langModalClose').addEventListener('click', _closeLanguageModal);
+  overlay.querySelectorAll('.lang-opt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const chosen = btn.dataset.lang;
+      if (chosen === I18n.getLang()) { _closeLanguageModal(); return; }
+      I18n.setLang(chosen);
+      window.location.reload();
+    });
+  });
+  overlay.classList.add('open');
+  if (typeof _winFitTitlePill === 'function') {
+    _winFitTitlePill();
+    requestAnimationFrame(_winFitTitlePill);
+  }
+}
+
+function _closeLanguageModal() {
+  document.getElementById('langModal')?.classList.remove('open');
+}
+
 function openShareModal(comic) {
 
   if (!comic.supabaseId) {
-    appAlert('Esta obra no está en la nube. Súbela primero para poder compartirla.');
+    appAlert(I18n.t('share_notInCloud'));
     return;
   }
 
@@ -370,12 +431,12 @@ function openShareModal(comic) {
   const isDraft = !comic.published;
   const param = isDraft ? 'draft=' + comic.supabaseId : 'id=' + comic.supabaseId;
   const url   = base + '/reader/index.html?' + param;
-  const title = comic.title || 'Una creación en Comxow';
+  const title = comic.title || I18n.t('share_defaultTitle');
   // Texto del mensaje: el título va entre asteriscos porque WhatsApp lo
   // interpreta como negrita al enviarlo (convención propia de WhatsApp,
   // no HTML). En apps sin ese formato (SMS, email) se verán los asteriscos
   // literalmente, pero el texto sigue siendo perfectamente legible.
-  const shareText = `Mira *${title}* en este enlace`;
+  const shareText = I18n.t('share_text', { title });
 
   if ('share' in navigator) {
     navigator.share({ title, text: shareText, url }).catch(e => {
@@ -383,11 +444,11 @@ function openShareModal(comic) {
     });
   } else {
     // Fallback: copiar enlace al portapapeles
-    const _nota = isDraft ? '\n\n⚠️ Es un borrador — cualquier persona con el enlace podrá verlo.' : '';
+    const _nota = isDraft ? I18n.t('share_draftNote') : '';
     navigator.clipboard.writeText(shareText + '\n' + url).then(() => {
-      appAlert('✅ Enlace copiado al portapapeles:\n' + shareText + '\n' + url + _nota);
+      appAlert(I18n.t('share_copiedPrefix') + shareText + '\n' + url + _nota);
     }).catch(() => {
-      appAlert('Copia este enlace para compartirlo:\n' + url + _nota);
+      appAlert(I18n.t('share_copyManualPrefix') + url + _nota);
     });
   }
 }
@@ -418,11 +479,11 @@ function _appConfirmGetEl() {
           <button id="${_APP_CONFIRM_ID}_cancel"
                   style="flex:1;padding:12px;border:2px solid #000;border-radius:10px;
                          font-weight:900;font-size:.9rem;cursor:pointer;
-                         background:#fff;box-shadow:2px 2px 0 #000">Cancelar</button>
+                         background:#fff;box-shadow:2px 2px 0 #000">${I18n.t('cancel')}</button>
           <button id="${_APP_CONFIRM_ID}_ok"
                   style="flex:1;padding:12px;border:2px solid #000;border-radius:10px;
                          font-weight:900;font-size:.9rem;cursor:pointer;
-                         background:#ffe566;box-shadow:2px 2px 0 #000">Aceptar</button>
+                         background:#ffe566;box-shadow:2px 2px 0 #000">${I18n.t('accept')}</button>
         </div>
       </div>`;
     document.body.appendChild(el);
@@ -436,7 +497,7 @@ function appConfirm(msg, onOk, okLabel) {
   const okBtn    = document.getElementById(`${_APP_CONFIRM_ID}_ok`);
   const cancelBtn= document.getElementById(`${_APP_CONFIRM_ID}_cancel`);
   msgEl.textContent = msg;
-  if (okLabel) okBtn.textContent = okLabel;
+  okBtn.textContent = okLabel || I18n.t('accept');
   overlay.style.opacity = '1';
   overlay.style.pointerEvents = 'all';
   const close = (exec) => {
@@ -479,7 +540,7 @@ function _cxLoadOverlayShow(title) {
       'touch-action:none'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.65" alt="Cargando" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=34.65" alt="${I18n.t('loadingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_cxLoadOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:16px"></div>
       <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;
@@ -488,7 +549,7 @@ function _cxLoadOverlayShow(title) {
     document.body.appendChild(ov);
   }
   const titleEl = document.getElementById('_cxLoadOvTitle');
-  if (titleEl) titleEl.textContent = title || 'Abriendo obra…';
+  if (titleEl) titleEl.textContent = title || I18n.t('mc_openingWork');
   _cxLoadOverlaySecs = 0;
   const secsEl = document.getElementById('_cxLoadOvSecs');
   if (secsEl) secsEl.textContent = '0s';
@@ -503,7 +564,7 @@ function _cxLoadOverlayShow(title) {
   clearTimeout(_cxLoadOverlaySafety);
   _cxLoadOverlaySafety = setTimeout(() => {
     _cxLoadOverlayHide();
-    if (typeof showToast === 'function') showToast('⚠️ La carga está tardando más de lo normal');
+    if (typeof showToast === 'function') showToast(I18n.t('loadingSlowWarn'));
   }, 25000);
   ov.style.display = 'flex';
 }
@@ -526,7 +587,7 @@ function appAlert(msg) {
   const okBtn    = document.getElementById(`${_APP_CONFIRM_ID}_ok`);
   const cancelBtn= document.getElementById(`${_APP_CONFIRM_ID}_cancel`);
   msgEl.textContent = msg;
-  okBtn.textContent = 'Aceptar';
+  okBtn.textContent = I18n.t('accept');
   cancelBtn.style.display = 'none';
   overlay.style.opacity = '1';
   overlay.style.pointerEvents = 'all';

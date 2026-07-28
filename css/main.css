@@ -834,13 +834,15 @@ body.editor-page { padding-top: 0; }
 }
 .pwd-btn-full { width: 100%; margin-top: 6px; }
 
-/* ── MODAL DE CRÉDITOS (menú ⋮ → Info) ──
+/* ── MODAL DE CRÉDITOS (menú ⋮ → Info) Y MODAL DE IDIOMA (menú ⋮ → Idioma) ──
    Mismos valores que .sc-box/.sc-header/.sc-title/.sc-close/.sc-body/
    .sc-section en editor.css (ventanas de ayuda del editor: Atajos de
    teclado, Crear animaciones...) — duplicado aquí porque editor.css solo
-   se carga en la vista del editor y este modal se abre desde la cabecera,
-   presente en todas las vistas. Ver openCreditsModal() en utils.js. */
-#creditsModal {
+   se carga en la vista del editor y estos modales se abren desde la
+   cabecera, presente en todas las vistas. Selectores compartidos entre
+   #creditsModal y #langModal porque son el mismo marco visual reutilizado.
+   Ver openCreditsModal() / openLanguageModal() en utils.js. */
+#creditsModal, #langModal {
   display: none;
   position: fixed;
   inset: 0;
@@ -849,8 +851,8 @@ body.editor-page { padding-top: 0; }
   align-items: center;
   justify-content: center;
 }
-#creditsModal.open { display: flex; }
-#creditsModal .sc-box {
+#creditsModal.open, #langModal.open { display: flex; }
+#creditsModal .sc-box, #langModal .sc-box {
   background: var(--white);
   border-radius: 14px;
   box-shadow: 0 8px 36px rgba(0,0,0,.28);
@@ -860,7 +862,7 @@ body.editor-page { padding-top: 0; }
   flex-direction: column;
   overflow: hidden;
 }
-#creditsModal .sc-header {
+#creditsModal .sc-header, #langModal .sc-header {
   position: relative;
   display: flex;
   align-items: center;
@@ -869,7 +871,7 @@ body.editor-page { padding-top: 0; }
   border-bottom: 2.5px solid var(--black);
   gap: 8px;
 }
-#creditsModal .sc-title {
+#creditsModal .sc-title, #langModal .sc-title {
   position: relative; z-index: 1;
   font-family: var(--font-display);
   font-size: 1rem;
@@ -877,7 +879,7 @@ body.editor-page { padding-top: 0; }
   letter-spacing: .3px;
   flex: 1;
 }
-#creditsModal .sc-close {
+#creditsModal .sc-close, #langModal .sc-close {
   background: none;
   border: none;
   font-size: 1.3rem;
@@ -887,8 +889,8 @@ body.editor-page { padding-top: 0; }
   padding: 2px 6px;
   border-radius: 6px;
 }
-#creditsModal .sc-close:hover { background: var(--gray-100); }
-#creditsModal .sc-body {
+#creditsModal .sc-close:hover, #langModal .sc-close:hover { background: var(--gray-100); }
+#creditsModal .sc-body, #langModal .sc-body {
   overflow-y: auto;
   padding: 12px 18px 18px;
 }

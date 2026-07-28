@@ -178,30 +178,30 @@ function _mcInjectModal() {
   modal.id = 'mcNewModal';
   modal.innerHTML = `
     <div class="mc-modal-box">
-      <h3 class="mc-modal-title"><span class="mc-modal-title-text">Nuevo proyecto</span></h3>
+      <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('newProject')}</span></h3>
       <div class="mc-field">
-        <label>Título</label>
-        <input type="text" id="mcTitle" placeholder="El nombre de tu obra" autocomplete="off" inputmode="text" enterkeyhint="next">
+        <label>${I18n.t('comicTitle')}</label>
+        <input type="text" id="mcTitle" placeholder="${I18n.t('mc_titlePlaceholder')}" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Género</label>
-        <input type="text" id="mcGenre" placeholder="Aventura, humor, drama…" autocomplete="off" inputmode="text" enterkeyhint="next">
+        <label>${I18n.t('comicGenre')}</label>
+        <input type="text" id="mcGenre" placeholder="${I18n.t('mc_genrePlaceholder')}" autocomplete="off" inputmode="text" enterkeyhint="next">
       </div>
       <div class="mc-field">
-        <label>Modo de lectura</label>
+        <label>${I18n.t('mc_navModeLabel')}</label>
         <select id="mcNavMode">
-          <option value="fixed">Viñeta fija (botones)</option>
-          <option value="horizontal">Deslizamiento horizontal</option>
-          <option value="vertical">Deslizamiento vertical</option>
+          <option value="fixed">${I18n.t('mc_navModeFixed')}</option>
+          <option value="horizontal">${I18n.t('mc_navModeHorizontal')}</option>
+          <option value="vertical">${I18n.t('mc_navModeVertical')}</option>
         </select>
       </div>
       <div class="mc-field">
-        <label>Redes y comentarios <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">(aparecen en la hoja final)</span></label>
-        <textarea id="mcSocial" placeholder="Instagram: @miperfil · Web: misite.com · ¡Gracias por leer!" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5"></textarea>
+        <label>${I18n.t('mc_socialLabel')} <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">${I18n.t('mc_socialHint')}</span></label>
+        <textarea id="mcSocial" placeholder="${I18n.t('mc_socialPlaceholder')}" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5"></textarea>
       </div>
       <div class="mc-modal-actions">
-        <button class="btn" id="mcNewCancel" style="flex:1">Cancelar</button>
-        <button class="btn btn-primary" id="mcNewCreate" style="flex:1">Crear ✓</button>
+        <button class="btn" id="mcNewCancel" style="flex:1">${I18n.t('cancel')}</button>
+        <button class="btn btn-primary" id="mcNewCreate" style="flex:1">${I18n.t('mc_createBtn')}</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -445,7 +445,7 @@ async function _mcCheckOrphanData() {
   // ── Aviso al usuario — solo si el usuario sigue en my-comics ───────
   if (!document.getElementById('mcContent')) return;
   appConfirm(
-    'Se han encontrado datos en el almacenamiento local de ComXow que no pertenecen a ninguna de tus obras. ¿Borrarlos?',
+    I18n.t('mc_orphanConfirm'),
     async () => {
       // OPFS
       for (const { dir, name } of _orphans.opfs) {
@@ -505,9 +505,9 @@ async function _mcCheckOrphanData() {
       // localStorage
       _orphans.ls.forEach(k => { try { localStorage.removeItem(k); } catch(_e) {} });
 
-      _mcToast('Datos no utilizados eliminados ✓');
+      _mcToast(I18n.t('mc_orphanDone'));
     },
-    'Sí, borrar'
+    I18n.t('mc_orphanConfirmBtn')
   );
 }
 
@@ -532,14 +532,13 @@ function _mcCheckStorage() {
           ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.72);display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box';
           ov.innerHTML = '<div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:380px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,0.28);text-align:center;font-family:sans-serif">'
             + '<div style="font-size:2.4rem;margin-bottom:12px">⚠️</div>'
-            + '<div style="font-weight:700;font-size:1.1rem;margin-bottom:10px;color:#c0392b">Almacenamiento casi lleno</div>'
+            + '<div style="font-weight:700;font-size:1.1rem;margin-bottom:10px;color:#c0392b">' + I18n.t('mc_storageFullTitle') + '</div>'
             + '<div style="font-size:.95rem;color:#444;margin-bottom:18px;line-height:1.5">'
-            + 'El navegador tiene <b>' + usedMB + ' MB</b> usados de <b>' + quotaMB + ' MB</b> disponibles (<b>' + pctStr + '</b>).<br><br>'
-            + 'Guarda tus obras en la nube y elimina las locales que ya no necesites. '
-            + 'Si el almacenamiento se llena, las obras podrían perderse.</div>'
+            + I18n.t('mc_storageFullBody', { usedMB: usedMB, quotaMB: quotaMB, pctStr: pctStr })
+            + '</div>'
             + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'
-            + '<button id="_cxSwDismiss" style="padding:10px 22px;border-radius:8px;border:1.5px solid #ccc;background:#f5f5f5;font-size:.95rem;cursor:pointer;font-weight:500">Entendido</button>'
-            + '<button id="_cxSwPurge" style="padding:10px 22px;border-radius:8px;border:none;background:#e74c3c;color:#fff;font-size:.95rem;cursor:pointer;font-weight:600">Limpiar huérfanos</button>'
+            + '<button id="_cxSwDismiss" style="padding:10px 22px;border-radius:8px;border:1.5px solid #ccc;background:#f5f5f5;font-size:.95rem;cursor:pointer;font-weight:500">' + I18n.t('mc_storageFullOk') + '</button>'
+            + '<button id="_cxSwPurge" style="padding:10px 22px;border-radius:8px;border:none;background:#e74c3c;color:#fff;font-size:.95rem;cursor:pointer;font-weight:600">' + I18n.t('mc_storageFullPurge') + '</button>'
             + '</div></div>';
           document.body.appendChild(ov);
           document.getElementById('_cxSwDismiss').onclick = function() { ov.remove(); };
@@ -818,16 +817,16 @@ function _mcRenderList() {
   // Banner de login para usuarios no autenticados
   const _loginBanner = user ? '' : `
     <div id="mcAnonBanner" style="background:var(--blue);color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:.85rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="flex:1">Modo invitado — las obras se guardan solo en este dispositivo.</span>
-      <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">Iniciar sesión</button>
+      <span style="flex:1">${I18n.t('mc_guestBanner')}</span>
+      <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">${I18n.t('pageLogin')}</button>
     </div>`;
 
   if (!comics.length) {
     wrap.innerHTML = `
       <div style="text-align:center;padding:60px 20px;color:var(--gray-500)">
         <span style="font-size:3rem;display:block;margin-bottom:12px">📝</span>
-        <p style="font-weight:700;font-size:1rem">Aún no has creado ninguna obra.</p>
-        <p style="font-size:.88rem;margin-top:6px">Pulsa <strong>Crear nuevo</strong> para empezar.</p>
+        <p style="font-weight:700;font-size:1rem">${I18n.t('mc_emptyTitle')}</p>
+        <p style="font-size:.88rem;margin-top:6px">${I18n.t('mc_emptyHint', { btn: I18n.t('mc_createNewBtn') })}</p>
       </div>`;
     return;
   }
@@ -836,8 +835,8 @@ function _mcRenderList() {
     wrap.innerHTML = _loginBanner + `
       <div style="text-align:center;padding:40px 20px;color:var(--gray-500)">
         <span style="font-size:3rem;display:block;margin-bottom:12px">📝</span>
-        <p style="font-weight:700;font-size:1rem">Aún no has creado ninguna obra.</p>
-        <p style="font-size:.88rem;margin-top:6px">Pulsa <strong>Crear nuevo</strong> para empezar.</p>
+        <p style="font-weight:700;font-size:1rem">${I18n.t('mc_emptyTitle')}</p>
+        <p style="font-size:.88rem;margin-top:6px">${I18n.t('mc_emptyHint', { btn: I18n.t('mc_createNewBtn') })}</p>
       </div>`;
     return;
   }
@@ -853,8 +852,8 @@ function _mcRenderList() {
     const needsThumb = needsCloudThumb || needsLocalThumb;
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
-      ? '✅ Publicada'
-      : (comic.pendingReview ? '⏳ En revisión' : '📝 Borrador');
+      ? I18n.t('mc_pubApproved')
+      : (comic.pendingReview ? I18n.t('mc_pubPending') : I18n.t('mc_pubDraft'));
 
     return `
     <div class="comic-row" data-id="${comic.id}">
@@ -867,24 +866,24 @@ function _mcRenderList() {
         }
       </div>
       <div class="comic-row-info">
-        <div class="comic-row-title">${comic.title || 'Sin título'}</div>
+        <div class="comic-row-title">${comic.title || I18n.t('noWork')}</div>
         <div class="comic-row-author" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span>${comic.author || comic.username || ''}</span>
           ${comic.genre ? `<span style="color:var(--gray-400)">·</span><span style="color:var(--blue);font-size:.75rem;font-weight:700">${comic.genre}</span>` : ''}
           <span style="color:var(--gray-400)">·</span>
-          <span style="font-size:.75rem;font-weight:700">${Math.max(1, pages)} hojas</span>
+          <span style="font-size:.75rem;font-weight:700">${I18n.t('mc_pagesCount', { n: Math.max(1, pages) })}</span>
 
         </div>
         <div class="comic-row-actions">
-          ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">Leer</button>` : ''}
-          <button class="comic-row-btn edit" data-action="edit" data-id="${comic.id}">Editar</button>
+          ${pages > 0 ? `<button class="comic-row-btn" data-action="read" data-id="${comic.id}">${I18n.t('read')}</button>` : ''}
+          <button class="comic-row-btn edit" data-action="edit" data-id="${comic.id}">${I18n.t('edit')}</button>
           ${comic.approved
-            ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">Publicada · Retirar</button>`
+            ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">${I18n.t('mc_unpubPublished')}</button>`
             : (comic.pendingReview
-                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">En revisión · Retirar</button>`
-                : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">Publicar</button>`)
+                ? `<button class="comic-row-btn unpub" data-action="unpublish" data-id="${comic.id}">${I18n.t('mc_unpubPending')}</button>`
+                : `<button class="comic-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">${I18n.t('mc_publishBtn')}</button>`)
           }
-          <button class="comic-row-btn" data-action="share" data-id="${comic.id}">Enviar</button>
+          <button class="comic-row-btn" data-action="share" data-id="${comic.id}">${I18n.t('home_share')}</button>
           <button class="comic-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>
@@ -956,7 +955,7 @@ function _mcRenderList() {
       // (ver _cxLoadOverlayHide en EditorView_init, editor.js). Sustituye al toast
       // que antes solo avisaba de la descarga de la nube — ahora cubre TODA la
       // apertura, incluidas las obras que no necesitan descargarse.
-      if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow('Abriendo obra…');
+      if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
       const _comicMeta = ComicStore.getById(id);
       if (!_comicMeta || !_mcOwns(_comicMeta)) {
         window._mcEditLock = false;
@@ -1014,7 +1013,7 @@ function _mcRenderList() {
         bib: null, // se completa más abajo, en la rama de biblioteca que corresponda
       };
       if (comicToEdit && _needsDownload) {
-        if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate('Descargando obra de la nube…');
+        if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_downloadingCloud'));
         try {
           const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
           // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
@@ -1122,7 +1121,7 @@ function _mcRenderList() {
         } catch(err) {
           window._mcEditLock = false;
           if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-          _mcToast('\u26a0\ufe0f Error al descargar de la nube: ' + err.message);
+          _mcToast(I18n.t('mc_errDownloadCloud') + err.message);
           return;
         }
       }
@@ -1171,12 +1170,12 @@ function _mcRenderList() {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
-        appAlert('No tienes permiso para publicar esta obra.');
+        appAlert(I18n.t('mc_noPermPublish'));
         return;
       }
       // 1. Nunca subida a la nube → bloquear
       if (!comic.supabaseId) {
-        appAlert('La obra debe estar guardada en la nube antes de publicarse.\nÁbrela en el editor y pulsa el botón ☁️ Guardar en nube.');
+        appAlert(I18n.t('mc_needCloudFirst'));
         return;
       }
       // 2. Comparar fechas: localSavedAt vs cloudSavedAt
@@ -1208,26 +1207,24 @@ function _mcRenderList() {
             });
             await SupabaseClient.submitForReviewOnly(comic.supabaseId);
             _mcSubmitOverlayHide();
-            _mcToast('Enviada a revisión ✓');
+            _mcToast(I18n.t('mc_sentForReview'));
           } catch(err) {
             _mcSubmitOverlayHide();
             ComicStore.save({ ...comic, pendingReview: false });
             _mcRenderList();
-            _mcToast('⚠️ Error al enviar: ' + err.message);
+            _mcToast(I18n.t('mc_errSubmit') + err.message);
           }
         } else {
-          _mcToast('Enviada a revisión ✓');
+          _mcToast(I18n.t('mc_sentForReview'));
         }
       };
 
       // 3. Versión local más nueva que la nube → advertir pero permitir continuar
       if (_localNewer) {
         appConfirm(
-          '⚠️ La versión guardada en tu dispositivo es más reciente que la versión en la nube.\n\n' +
-          'Si continúas, se enviará a revisión la versión de la nube, que puede no tener los últimos cambios.\n\n' +
-          'Para enviar la versión más reciente, cancela y guarda en la nube primero (botón ☁️ en el editor).',
+          I18n.t('mc_localNewerPublish'),
           _doSubmit,
-          'Continuar de todas formas'
+          I18n.t('mc_continueAnyway')
         );
         return;
       }
@@ -1238,18 +1235,18 @@ function _mcRenderList() {
       const comic = ComicStore.getById(id);
       if (!comic) return;
       if (typeof Auth !== 'undefined' && !Auth.canManage(comic)) {
-        appAlert('No tienes permiso para retirar esta obra.');
+        appAlert(I18n.t('mc_noPermUnpublish'));
         return;
       }
       ComicStore.save({ ...comic, published: false, approved: false, pendingReview: false });
       if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
         SupabaseClient.unpublishWork(comic.id, comic.supabaseId)
-          .catch(err => { _mcToast('⚠️ Error al retirar en la nube: ' + err.message); });
+          .catch(err => { _mcToast(I18n.t('mc_errUnpublishCloud') + err.message); });
       }
       // Invalidar cache de portada para que desaparezca del índice
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
       _mcRenderList();
-      _mcToast('Obra retirada de la portada');
+      _mcToast(I18n.t('mc_unpublishedFromHome'));
     } else if (action === 'delete') {
       const comic = ComicStore.getById(id);
       if (!comic || !_mcOwns(comic)) return;
@@ -1257,20 +1254,20 @@ function _mcRenderList() {
       const _canDel = !comic.supabaseId ||
         (typeof Auth !== 'undefined' && Auth.canManage(comic));
       if (!_canDel) {
-        appAlert('No tienes permiso para eliminar esta obra.');
+        appAlert(I18n.t('mc_noPermDelete'));
         return;
       }
-      appConfirm('¿Eliminar esta obra? Esta acción no se puede deshacer.', ()=>{
+      appConfirm(I18n.t('mc_confirmDeleteWork'), ()=>{
         ComicStore.remove(id);
         _mcRenderList();
         // Invalidar cache de portada
         if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
         if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
           SupabaseClient.deleteWork(comic.supabaseId)
-            .then(() => _mcToast('Obra eliminada ✓'))
-            .catch(err => _mcToast('⚠️ Eliminada localmente, error en nube: ' + err.message));
+            .then(() => _mcToast(I18n.t('mc_deletedOkCheck')))
+            .catch(err => _mcToast(I18n.t('mc_errDeleteCloudPartial') + err.message));
         } else {
-          _mcToast('Obra eliminada');
+          _mcToast(I18n.t('deleteOk'));
         }
       });
     } else if (action === 'share') {
@@ -1278,7 +1275,7 @@ function _mcRenderList() {
       if (!comic || !_mcOwns(comic)) return;
       // 1. Verificar que la obra ha sido subida a la nube al menos una vez
       if (!comic.supabaseId) {
-        appAlert('Esta obra no está guardada en la nube.\nÁbrela en el editor y pulsa ☁️ Guardar en nube para poder compartirla.');
+        appAlert(I18n.t('mc_notInCloudShare'));
         return;
       }
       // 2. Comparar localSavedAt vs cloudSavedAt para detectar cambios sin subir.
@@ -1290,11 +1287,9 @@ function _mcRenderList() {
       // 2. Versión local más nueva que la nube → advertir pero dar opción de continuar
       if (_localAt && _cloudAt && _localAt > _cloudAt) {
         appConfirm(
-          '⚠️ La versión guardada en tu dispositivo es más reciente que la versión en la nube.\n\n' +
-          'Si continúas, se compartirá la versión de la nube, que puede no tener los últimos cambios.\n\n' +
-          'Para compartir la versión más reciente, cancela y guarda en la nube primero (botón ☁️ en el editor).',
+          I18n.t('mc_localNewerShare'),
           () => { if (typeof openShareModal !== 'undefined') openShareModal(comic); },
-          'Continuar de todas formas'
+          I18n.t('mc_continueAnyway')
         );
         return;
       }
@@ -1357,10 +1352,10 @@ function _mcDoCreateProject(title, genre, social, navMode, user) {
   const comic = {
     id:       'comic_' + Date.now(),
     userId:   user ? user.id : '_anon_',
-    username: user ? user.username : 'Anónimo',
+    username: user ? user.username : I18n.t('mc_anonymous'),
     anonymous: !user,
     title,
-    author:   user ? user.username : 'Anónimo',
+    author:   user ? user.username : I18n.t('mc_anonymous'),
     genre,
     social:   social || '',
     navMode,
@@ -1398,14 +1393,13 @@ function _mcConfirmDuplicate(title, existingComic, callback) {
   ov.id = 'mcDupModal';
   ov.innerHTML = `
     <div class="mc-modal-box" style="gap:14px">
-      <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">Título duplicado</span></h3>
+      <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">${I18n.t('mc_dupTitle')}</span></h3>
       <p style="margin:0;color:var(--gray-600);font-size:.9rem;line-height:1.5">
-        Ya tienes una obra llamada <strong style="color:var(--blue)">${title.replace(/</g,'&lt;')}</strong>.<br>
-        ¿Qué deseas hacer?
+        ${I18n.t('mc_dupMsg', { title: title.replace(/</g,'&lt;') })}
       </p>
       <div class="mc-modal-actions" style="flex-direction:column;gap:8px">
-        <button class="btn btn-primary" id="mcDupOverwrite" style="width:100%">Abrir la obra existente</button>
-        <button class="btn" id="mcDupBack" style="width:100%">Cambiar el nombre</button>
+        <button class="btn btn-primary" id="mcDupOverwrite" style="width:100%">${I18n.t('mc_dupOpenExisting')}</button>
+        <button class="btn" id="mcDupBack" style="width:100%">${I18n.t('mc_dupRename')}</button>
       </div>
     </div>`;
   document.body.appendChild(ov);
@@ -1450,12 +1444,12 @@ function MyComicsView_destroy() {
 
 /* ── CARGAR BORRADORES DESDE NUBE ── */
 async function _mcCloudLoad() {
-  if (typeof SupabaseClient === 'undefined') { _mcToast('Sin conexión al servidor'); return; }
+  if (typeof SupabaseClient === 'undefined') { _mcToast(I18n.t('mc_noServerConn')); return; }
   const user = Auth.currentUser();
-  if (!user) { _mcToast('Inicia sesión para cargar desde la nube'); return; }
+  if (!user) { _mcToast(I18n.t('mc_loginToLoadCloud')); return; }
 
   const btn = document.getElementById('mcCloudLoadBtn');
-  if (btn) { btn.textContent = '⏳ Cargando...'; btn.disabled = true; }
+  if (btn) { btn.textContent = '⏳ ' + I18n.t('admin_loading'); btn.disabled = true; }
 
   try {
     // Buscar en Supabase todas las obras donde author_name coincide con este usuario
@@ -1470,7 +1464,7 @@ async function _mcCloudLoad() {
       .then(r => r.json());
 
     if (!works || !works.length) {
-      _mcToast('No hay obras en la nube para este usuario');
+      _mcToast(I18n.t('mc_noCloudWorks'));
       return;
     }
 
@@ -1539,7 +1533,7 @@ async function _mcCloudLoad() {
         userId:       user.id,
         username:     user.username,
         supabaseId:   w.id,
-        title:        w.title       || 'Sin título',
+        title:        w.title       || I18n.t('noWork'),
         author:       w.author_name || user.username,
         genre:        w.genre       || '',
         navMode:      w.nav_mode    || 'fixed',
@@ -1558,14 +1552,14 @@ async function _mcCloudLoad() {
     }
 
     _mcRenderList();
-    if (imported > 0)      _mcToast(`☁️ ${imported} obra${imported>1?'s':''} actualizada${imported>1?'s':''} desde la nube`);
-    else if (skipped > 0)  _mcToast('✓ Todo al día — no hay versiones más recientes en la nube');
+    if (imported > 0)      _mcToast(I18n.t(imported > 1 ? 'mc_cloudUpdatedMany' : 'mc_cloudUpdatedOne', { n: imported }));
+    else if (skipped > 0)  _mcToast(I18n.t('mc_allUpToDate'));
 
   } catch(err) {
     console.error('_mcCloudLoad:', err);
-    _mcToast('⚠️ Error al conectar con la nube');
+    _mcToast(I18n.t('mc_errCloudConnect'));
   } finally {
-    if (btn) { btn.textContent = '☁️ Cargar de nube'; btn.disabled = false; }
+    if (btn) { btn.textContent = I18n.t('mc_cloudLoadBtnLabel'); btn.disabled = false; }
   }
 }
 
@@ -1578,7 +1572,7 @@ function _mcOpenReaderModal(url) {
     overlay.className = 'reader-modal';
     overlay.innerHTML = `
       <div class="reader-modal-inner">
-        <button class="reader-modal-close" aria-label="Cerrar">✕</button>
+        <button class="reader-modal-close" aria-label="${I18n.t('mc_closeAria')}">✕</button>
         <iframe class="reader-modal-frame" allowfullscreen></iframe>
       </div>`;
     document.body.appendChild(overlay);
@@ -1809,11 +1803,10 @@ function _mcSubmitOverlayShow() {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.65" alt="Guardando" style="width:48px;height:auto;margin-bottom:16px">
-      <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">Guardando en la nube…</div>
+      <img src="loading-icon.png?v=34.65" alt="${I18n.t('mc_savingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
+      <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">${I18n.t('mc_savingCloudTitle')}</div>
       <div style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
-        No salgas de la aplicación hasta finalizado el guardado.<br>
-        Interrumpir el proceso creará una obra defectuosa.
+        ${I18n.t('mc_savingCloudWarn')}
       </div>
       <span id="_mcSubmitOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
     `;

@@ -63,28 +63,28 @@ function renderTab(tab) {
 
 // ── PENDIENTES ──
 async function renderPending(panel) {
-  panel.innerHTML = `<p class="admin-empty">Cargando...</p>`;
+  panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_loading')}</p>`;
   try {
     const comics = await SupabaseClient.fetchPendingWorks();
     panel.innerHTML = '';
     if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPending')}</p>`; return; }
     comics.forEach(c => panel.appendChild(buildAdminRow(c, 'pending')));
   } catch(e) {
-    panel.innerHTML = `<p class="admin-empty">Error al cargar obras pendientes.</p>`;
+    panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_errLoadPending')}</p>`;
     console.error(e);
   }
 }
 
 // ── PUBLICADOS ──
 async function renderPublished(panel) {
-  panel.innerHTML = `<p class="admin-empty">Cargando...</p>`;
+  panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_loading')}</p>`;
   try {
     const comics = await SupabaseClient.fetchPublishedWorks();
     panel.innerHTML = '';
     if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noPublished')}</p>`; return; }
     comics.forEach(c => panel.appendChild(buildAdminRow(c, 'published')));
   } catch(e) {
-    panel.innerHTML = `<p class="admin-empty">Error al cargar obras publicadas.</p>`;
+    panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_errLoadPublished')}</p>`;
     console.error(e);
   }
 }
@@ -92,13 +92,13 @@ async function renderPublished(panel) {
 // ── TODAS (incluye no publicadas con supabaseId — en BD pero no visibles) ──
 function renderAll(panel) {
   const comics = ComicStore.getAll().filter(c => c.supabaseId);
-  if (!comics.length) { panel.innerHTML = `<p class="admin-empty">No hay obras en la base de datos.</p>`; return; }
+  if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_noAll')}</p>`; return; }
   comics.forEach(c => panel.appendChild(buildAdminRow(c, 'all')));
 }
 
 // ── USUARIOS ──
 async function renderUsers(panel) {
-  panel.innerHTML = `<p class="admin-empty">Cargando usuarios…</p>`;
+  panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_loadingUsers')}</p>`;
   let list = [];
   try {
     // SupabaseClient.fetchAllUsers() usa el token real de la sesión (no la
@@ -120,15 +120,15 @@ async function renderUsers(panel) {
     row.innerHTML = `
       <div class="admin-row-info">
         <span class="admin-row-title">${escHtml(user.username || '')}</span>
-        <span class="admin-row-meta">${escHtml(user.email || '')} · ${user.role || 'user'}</span>
+        <span class="admin-row-meta">${escHtml(user.email || '')} · ${user.role === 'admin' ? 'admin' : I18n.t('admin_roleUser')}</span>
       </div>
       <div class="admin-row-actions">
         ${isAdminUser
           ? (isSelf
-              ? '<span class="admin-badge">Admin (tú)</span>'
-              : `<button class="admin-btn admin-btn-warn" data-role-uid="${user.id}" data-new-role="user">Quitar admin</button>`)
-          : `<button class="admin-btn admin-btn-ok" data-role-uid="${user.id}" data-new-role="admin">Hacer admin</button>
-             <button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">Eliminar</button>`}
+              ? `<span class="admin-badge">${I18n.t('admin_selfBadge')}</span>`
+              : `<button class="admin-btn admin-btn-warn" data-role-uid="${user.id}" data-new-role="user">${I18n.t('admin_removeAdmin')}</button>`)
+          : `<button class="admin-btn admin-btn-ok" data-role-uid="${user.id}" data-new-role="admin">${I18n.t('admin_makeAdmin')}</button>
+             <button class="admin-btn admin-btn-del" data-uid="${user.id}" data-email="${escHtml(user.email)}">${I18n.t('delete')}</button>`}
       </div>`;
 
     // Dar/quitar el rol de admin — no aparece sobre tu propia fila (evita
@@ -139,18 +139,18 @@ async function renderUsers(panel) {
       const uname   = user.username;
       const btn     = this;
       const msg = newRole === 'admin'
-        ? `¿Dar permisos de administrador a ${uname}? Podrá aprobar/eliminar obras de cualquier autor y gestionar usuarios, igual que tú.`
-        : `¿Quitar permisos de administrador a ${uname}?`;
+        ? I18n.t('admin_confirmGrantAdmin', { uname })
+        : I18n.t('admin_confirmRevokeAdmin', { uname });
       appConfirm(msg, async () => {
         btn.disabled = true; btn.textContent = '…';
         try {
           await SupabaseClient.setUserRole(uid, newRole);
-          showToast(newRole === 'admin' ? `${uname} ya es administrador` : `${uname} ya no es administrador`);
+          showToast(newRole === 'admin' ? I18n.t('admin_nowAdmin', { uname }) : I18n.t('admin_noLongerAdmin', { uname }));
         } catch(e) {
           console.warn('setUserRole error:', e);
-          showToast('Error al cambiar el rol: ' + e.message);
+          showToast(I18n.t('admin_errChangeRole') + e.message);
           btn.disabled = false;
-          btn.textContent = newRole === 'admin' ? 'Hacer admin' : 'Quitar admin';
+          btn.textContent = newRole === 'admin' ? I18n.t('admin_makeAdmin') : I18n.t('admin_removeAdmin');
           return;
         }
         renderTab('users');
@@ -161,7 +161,7 @@ async function renderUsers(panel) {
       const uid   = this.dataset.uid;
       const uname = user.username;
       const btn = this;
-      appConfirm(`¿Eliminar usuario ${uname}? Se eliminarán también todas sus obras.`, async ()=>{
+      appConfirm(I18n.t('admin_confirmDeleteUser', { uname }), async ()=>{
         btn.disabled = true; btn.textContent = '…';
         try {
           // Borrar obras y perfil de Supabase
@@ -170,11 +170,11 @@ async function renderUsers(panel) {
           }
           // Borrar obras locales
           ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
-          showToast(I18n.t('userDeleted') + ' — Recuerda borrar también el usuario en Supabase Auth');
+          showToast(I18n.t('userDeleted') + I18n.t('admin_deleteUserReminder'));
         } catch(e) {
           console.warn('deleteAuthorData error:', e);
-          showToast('Error al eliminar: ' + e.message);
-          btn.disabled = false; btn.textContent = 'Eliminar';
+          showToast(I18n.t('admin_errDeleteUser') + e.message);
+          btn.disabled = false; btn.textContent = I18n.t('delete');
           return;
         }
         renderTab('users');
@@ -194,24 +194,24 @@ function buildAdminRow(comic, mode) {
     : `<div class="admin-thumb admin-thumb-empty">🖼️</div>`;
 
   const sbBadge = comic.supabaseId
-    ? `<span class="admin-badge-sb" title="ID Supabase: ${comic.supabaseId}">☁️ BD</span>`
-    : `<span class="admin-badge-sb admin-badge-nosb" title="Sin ID Supabase">⚠️ Sin BD</span>`;
+    ? `<span class="admin-badge-sb" title="${I18n.t('admin_titleSbId', { id: comic.supabaseId })}">${I18n.t('admin_badgeDb')}</span>`
+    : `<span class="admin-badge-sb admin-badge-nosb" title="${I18n.t('admin_titleNoSbId')}">${I18n.t('admin_badgeNoDb')}</span>`;
 
   row.innerHTML = `
     <div class="admin-row-thumb">${thumb}</div>
     <div class="admin-row-info">
-      <span class="admin-row-title">${escHtml(comic.title || 'Sin título')} ${sbBadge}</span>
-      <span class="admin-row-meta">${I18n.t('by')} ${escHtml(comic.username || '')} · ${comic.panels?.length || 0} págs.</span>
+      <span class="admin-row-title">${escHtml(comic.title || I18n.t('noWork'))} ${sbBadge}</span>
+      <span class="admin-row-meta">${I18n.t('by')} ${escHtml(comic.username || '')} · ${I18n.t('admin_pagesCount', { n: comic.panels?.length || 0 })}</span>
       <span class="admin-row-meta">${new Date(comic.createdAt || Date.now()).toLocaleDateString('es')}</span>
     </div>
     <div class="admin-row-actions">
-      ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 Leer</button>` : ''}
+      ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 ${I18n.t('read')}</button>` : ''}
       <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
            para volver a mostrarlo, descomentar la línea de abajo. -->
       <!-- ${comic.supabaseId ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''} -->
-      ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">✓ Aprobar</button>`  : ''}
-      ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">Retirar</button>`      : ''}
-      <button class="admin-btn admin-btn-del" id="del_${comic.id}">Eliminar</button>
+      ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">${I18n.t('approve')}</button>`  : ''}
+      ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">${I18n.t('unpublishAdmin')}</button>`      : ''}
+      <button class="admin-btn admin-btn-del" id="del_${comic.id}">${I18n.t('deleteAdmin')}</button>
     </div>`;
 
   // Leer (embed reader en modal)
@@ -287,7 +287,7 @@ function buildAdminRow(comic, mode) {
     const c = ComicStore.getById(comic.id) || comic;
 
     if (!c.supabaseId) {
-      showToast('⚠️ Esta obra no tiene ID en la base de datos. Pide al autor que la vuelva a publicar.');
+      showToast(I18n.t('admin_noDbIdErr'));
       return;
     }
 
@@ -296,7 +296,7 @@ function buildAdminRow(comic, mode) {
         await SupabaseClient.approveWork(c);
       } catch(err) {
         console.error('Supabase approveWork:', err);
-        showToast('⚠️ Error al aprobar en la base de datos: ' + err.message);
+        showToast(I18n.t('admin_errApprove') + err.message);
         return;
       }
     }
@@ -329,8 +329,8 @@ function buildAdminRow(comic, mode) {
 
   // Eliminar (de localStorage Y de Supabase)
   row.querySelector(`#del_${comic.id}`)?.addEventListener('click', () => {
-    const title = comic.title || 'Sin título';
-    appConfirm(`¿Eliminar "${title}" permanentemente?\nSe eliminará de la base de datos y no podrá recuperarse.`, async ()=>{
+    const title = comic.title || I18n.t('noWork');
+    appConfirm(I18n.t('admin_confirmDeleteWork', { title }), async ()=>{
       if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
         try {
           await SupabaseClient.deleteWork(comic.supabaseId);

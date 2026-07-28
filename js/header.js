@@ -88,7 +88,7 @@ const Header = (() => {
                       || document.documentElement.webkitRequestFullscreen);
     /* Botón "Abrir app" — solo si instalada y en browser */
     var openAppBtn = (!inApp && _appInstalled())
-      ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="Abrir app">App</button>'
+      ? '<button class="hdr-sys-btn hdr-open-app-btn" id="hdrOpenAppBtn" title="' + T('header_openAppTitle') + '">App</button>'
       : '';
 
     var sysBtns = openAppBtn
@@ -97,9 +97,9 @@ const Header = (() => {
 
     /* Botón pantalla completa — ahora en row1, a la derecha del logo, con texto adaptativo */
     var fsBtnHtml = fsSupported
-      ? '<button class="hdr-fs-row2-btn" id="hdrFsBtn" title="Pantalla completa" aria-pressed="false">'
-        + '<span class="hdr-fs-label-long">mejor en pantalla completa</span>'
-        + '<span class="hdr-fs-label-short">pantalla completa</span>'
+      ? '<button class="hdr-fs-row2-btn" id="hdrFsBtn" title="' + T('header_fullscreenTitle') + '" aria-pressed="false">'
+        + '<span class="hdr-fs-label-long">' + T('header_fullscreenLong') + '</span>'
+        + '<span class="hdr-fs-label-short">' + T('header_fullscreenShort') + '</span>'
         + ' ⛶</button>'
       : '';
 
@@ -132,8 +132,9 @@ const Header = (() => {
                 + dotsItems
                 + installItem
                 + '<div class="dropdown-divider"></div>'
+                + '<a href="#" class="dropdown-item" id="dotsLanguage">🌐 ' + T('menuLanguage') + '</a>'
                 + '<a href="#" class="dropdown-item" id="dotsInfo">ℹ️ Info</a>'
-                + '<span class="dropdown-item disabled-item">✉️ Contacto</span>'
+                + '<span class="dropdown-item disabled-item">✉️ ' + T('home_contact') + '</span>'
               + '</div>'
             + '</div>'
           + '</div>'
@@ -204,6 +205,16 @@ const Header = (() => {
       });
     }
 
+    /* ── Idioma ── */
+    var langBtn = document.getElementById('dotsLanguage');
+    if (langBtn) {
+      langBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+        if (typeof openLanguageModal === 'function') openLanguageModal();
+      });
+    }
+
     /* ── Info / Créditos ── */
     var infoBtn = document.getElementById('dotsInfo');
     if (infoBtn) {
@@ -224,10 +235,7 @@ const Header = (() => {
           window.__pwaPrompt.prompt();
           window.__pwaPrompt.userChoice.then(() => { window.__pwaPrompt = null; });
         } else {
-          var lang = localStorage.getItem('cs_lang') || (navigator.language || 'es').slice(0, 2);
-          var msg = lang === 'en'
-            ? 'Tap Share ↑ then "Add to Home Screen"'
-            : 'Pulsa Compartir ↑ y luego "Añadir a inicio"';
+          var msg = I18n.t('header_installTip');
           if (typeof appAlert === 'function') appAlert(msg); else alert(msg);
         }
       });

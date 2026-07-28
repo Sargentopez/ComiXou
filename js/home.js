@@ -205,7 +205,7 @@ function showFiltrosLevel2(type) {
   lupa.style.cssText = 'font-size:.85rem;flex-shrink:0';
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = type === 'genre' ? 'Género…' : 'Autor…';
+  input.placeholder = type === 'genre' ? I18n.t('home_searchGenre') : I18n.t('home_searchAuthor');
   input.style.cssText = 'border:none;outline:none;font-family:var(--font-body);font-size:.85rem;font-weight:700;width:100%;background:transparent;color:var(--ink)';
   searchWrap.appendChild(lupa);
   searchWrap.appendChild(input);
@@ -343,7 +343,7 @@ function buildRow(comic, currentUser) {
   const genreBadge = comic.genre
     ? ` · <span class="genre-badge">${escHtml(genreLabel(comic.genre))}</span>` : '';
   if (comic.contactUrl) {
-    meta.innerHTML = `${escHtml(comic.username || '')}${genreBadge} · <a href="${escHtml(comic.contactUrl)}" target="_blank">Contacto</a>`;
+    meta.innerHTML = `${escHtml(comic.username || '')}${genreBadge} · <a href="${escHtml(comic.contactUrl)}" target="_blank">${I18n.t('home_contact')}</a>`;
   } else {
     meta.innerHTML = escHtml(comic.username || '') + genreBadge;
   }
@@ -375,7 +375,7 @@ function buildRow(comic, currentUser) {
     const shareBtn = document.createElement('a');
     shareBtn.className = 'comic-row-btn';
     shareBtn.href = '#';
-    shareBtn.textContent = '📤 Enviar';
+    shareBtn.textContent = '📤 ' + I18n.t('home_share');
     shareBtn.onclick = (e) => { e.preventDefault(); openShareModal(comic); };
     actions.appendChild(shareBtn);
   }

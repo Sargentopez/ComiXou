@@ -103,7 +103,7 @@ function edOpenTextDoc(editLayer){
   // más abajo, para que midan el título definitivo y no el que hubiera
   // quedado puesto de una reedición anterior en esta misma sesión.
   const _tdTitleEl = document.getElementById('tdProjectTitle');
-  if(_tdTitleEl) _tdTitleEl.textContent = (editLayer && editLayer.name) || 'Editor de textos';
+  if(_tdTitleEl) _tdTitleEl.textContent = (editLayer && editLayer.name) || I18n.t('td_docTitle');
   // Botón/gesto atrás (PC y Android): cerrar el shell en vez de salir del editor.
   // Empuja una entrada de historial solo si no estaba ya abierto (evita duplicar
   // entradas si se reabre en modo edición sobre el mismo shell ya visible).
@@ -123,11 +123,11 @@ function edOpenTextDoc(editLayer){
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
-    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Guardar cambios'; }
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_saveChanges'); }
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
   } else {
     _tdEditingFlowId = null;
-    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Aplicar al lienzo'; }
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
     _tdLineHeightMult = TD_LINE_MULT;
     // Siempre en blanco al abrir desde el menú — no se restaura nada de
     // sesiones anteriores (el único texto editable es el que ya está
@@ -213,12 +213,12 @@ function _tdShowSavePrompt(){
   const pop = document.createElement('div');
   pop.id = '_tdSavePop';
   pop.style.cssText = 'position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;touch-action:none';
-  const _actionLabel = _tdEditingFlowId ? 'Guardar cambios' : 'Aplicar al lienzo';
+  const _actionLabel = _tdEditingFlowId ? I18n.t('td_saveChanges') : I18n.t('td_applyToCanvas');
   pop.innerHTML = `<div id="_tdSaveBox" style="background:#fff;border-radius:12px;padding:24px 20px;max-width:300px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.3)">
-    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">Tienes cambios sin guardar</p>
+    <p style="margin:0 0 20px;font-size:1rem;font-weight:600;color:#222">${I18n.t('td_unsavedChanges')}</p>
     <div style="display:flex;flex-direction:column;gap:10px">
       <button id="_tdPopSi" style="padding:12px;border:none;border-radius:8px;background:#ffe066;font-size:.95rem;font-weight:700;cursor:pointer">${_actionLabel}</button>
-      <button id="_tdPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">Salir sin guardar</button>
+      <button id="_tdPopDiscard" style="padding:10px;border:1.5px solid #e88;border-radius:8px;background:#fff0f0;font-size:.9rem;color:#c00;cursor:pointer">${I18n.t('td_exitWithoutSaving')}</button>
     </div>
   </div>`;
   document.body.appendChild(pop);
@@ -260,7 +260,7 @@ function edCloseTextDoc(fromPopstate){
     if(shell) shell.style.display = 'none';
     _tdEditingFlowId = null;
     const applyBtn = document.getElementById('tdApplyBtn');
-    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = 'Aplicar al lienzo'; }
+    if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
     // Si se cierra por la X o por "Aplicar" (no por el botón atrás), hay que
     // consumir la entrada de historial añadida al abrir — si no, el
     // siguiente "atrás" del usuario se quedaría "vacío" (solo cerraría un
@@ -1944,7 +1944,7 @@ function _tdScrollToViewPage(n, announce){
   _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, true);
   _tdViewCurPage = target; // _tdSetScrollOffset ya lo habría puesto bien, pero por si acaso
   _tdUpdateViewPageNav();
-  if(changed && announce) edToast('→ Página ' + (_tdViewCurPage + 1));
+  if(changed && announce) edToast(I18n.t('td_pageToast', { n: _tdViewCurPage + 1 }));
 }
 
 // Mientras se escribe (o se mueve el cursor): la línea activa se mantiene
@@ -2622,7 +2622,7 @@ function _tdExceptCurrentPage(){
   // panel ya no la restauraba. Hace falta este segundo ajuste, ya con el
   // panel cerrado, para recuperar el tamaño completo de la cámara.
   if(typeof edFitCanvas === 'function') edFitCanvas();
-  edToast('Hoja exceptuada — el texto ha pasado a la hoja siguiente');
+  edToast(I18n.t('td_exceptedToast'));
 }
 
 // ── Aplicar al lienzo ────────────────────────────────────────────────────
@@ -2642,7 +2642,7 @@ function _tdApplyToCanvas(){
     blocks = _tdParseBlocks(html);
   }catch(err){
     _tdLogApply('EXCEPCIÓN en _tdParseBlocks', (err && err.message) || String(err));
-    edToast('Error al leer el texto — no se ha perdido nada, sigue en el editor (' + ((err && err.message) || err) + ')');
+    edToast(I18n.t('td_errReadText', { msg: (err && err.message) || err }));
     return;
   }
   const hasContent = blocks.some(b => (b.runs || []).some(r => r.text && r.text.trim()));
@@ -2651,7 +2651,7 @@ function _tdApplyToCanvas(){
     + ' hasContent=' + hasContent);
   if(!hasContent){
     _tdLogApply('SALIDA: sin contenido', 'blocks=' + JSON.stringify(blocks).slice(0, 500));
-    edToast('Escribe algo de texto antes de aplicar');
+    edToast(I18n.t('td_writeSomethingFirst'));
     return;
   }
 
@@ -2672,7 +2672,7 @@ function _tdApplyToCanvas(){
   try{
     if(_tdEditingFlowId){
       const existingLayer = _tdFindFlowLayer(_tdEditingFlowId);
-      if(!existingLayer){ _tdLogApply('SALIDA: flujo no encontrado', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se encuentra el texto a actualizar'); return; }
+      if(!existingLayer){ _tdLogApply('SALIDA: flujo no encontrado', '_tdEditingFlowId=' + _tdEditingFlowId); edToast(I18n.t('td_flowNotFound')); return; }
       // Se reutiliza el mismo motor que el redimensionado con los handlers:
       // conserva color/fondo/marco que ya tuviera cada hoja del flujo — el
       // contenido y el interlineado siempre se actualizan. El TAMAÑO de
@@ -2695,7 +2695,7 @@ function _tdApplyToCanvas(){
       // lienzo se queda con el tamaño encogido que tiene mientras el panel
       // está abierto, aunque el panel en sí ya no se vea.
       const r = _tdReflowFlowInPlace(existingLayer, false, true);
-      if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast('No se pudo actualizar el texto'); return; }
+      if(!r){ _tdLogApply('SALIDA: reflujo falló', '_tdEditingFlowId=' + _tdEditingFlowId); edToast(I18n.t('td_reflowFailed')); return; }
       // El nombre SÍ se actualiza también al reeditar (petición explícita):
       // si se añade un título o cambia el inicio del texto, el nombre debe
       // reflejarlo. Puede abarcar varias páginas tras el reflujo, así que no
@@ -2704,7 +2704,7 @@ function _tdApplyToCanvas(){
       if(!_wasPanelOpenBefore) edLoadPage(r.firstIdx); // mismo respaldo que había, por si no hubiera panel que cerrar
       if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
       if(typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
-      edToast(r.count === 1 ? 'Texto actualizado (1 hoja)' : `Texto actualizado (${r.count} hojas)`);
+      edToast(r.count === 1 ? I18n.t('td_textUpdatedOne') : I18n.t('td_textUpdatedMany', { n: r.count }));
     } else {
       const flowId = _tdNewFlowId();
       const startIdx = Math.max(0, Math.min(edCurrentPage, edPages.length - 1));
@@ -2747,14 +2747,16 @@ function _tdApplyToCanvas(){
       edLoadPage(startIdx);
       edPushHistory();
       edToast(
-        pages.length === 1 ? 'Texto añadido a la hoja actual' :
-        !newPages.length ? `Texto añadido en ${pages.length} hojas ya existentes` :
-        `Texto añadido: ${pages.length} hojas (${newPages.length} nueva${newPages.length===1?'':'s'})`
+        pages.length === 1 ? I18n.t('td_textAddedCurrent') :
+        !newPages.length ? I18n.t('td_textAddedExisting', { n: pages.length }) :
+        (newPages.length === 1
+          ? I18n.t('td_textAddedNewSingle', { n: pages.length })
+          : I18n.t('td_textAddedNewPlural', { n: pages.length, m: newPages.length }))
       );
     }
   }catch(err){
     _tdLogApply('EXCEPCIÓN capturada', (err && err.message) || String(err));
-    edToast('Error al aplicar el texto — no se ha perdido nada, sigue en el editor (' + (err && err.message || err) + ')');
+    edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
     return;
   }
   _tdLogApply('OK', 'texto aplicado y editor cerrado');
@@ -2782,7 +2784,7 @@ function _tdReflowAfterResize(layerIdx, panelWasOpen){
   if(!la || !la.richLines || !la.richLines.length) return;
   const r = _tdReflowFlowInPlace(la, panelWasOpen);
   if(r && r.count !== r.oldCount){
-    edToast(r.count > r.oldCount ? 'El texto ya no cabía: se ha creado una hoja nueva' : 'Sobraba hueco: se ha quitado una hoja');
+    edToast(r.count > r.oldCount ? I18n.t('td_grewNewPage') : I18n.t('td_shrunkRemovedPage'));
   }
 }
 
@@ -2794,7 +2796,7 @@ function _tdReflowAfterMarginChange(la){
   if(!la || !la.richLines || !la.richLines.length) return;
   const r = _tdReflowFlowInPlace(la, true);
   if(r && r.count !== r.oldCount){
-    edToast(r.count > r.oldCount ? 'El texto ya no cabía: se ha creado una hoja nueva' : 'Sobraba hueco: se ha quitado una hoja');
+    edToast(r.count > r.oldCount ? I18n.t('td_grewNewPage') : I18n.t('td_shrunkRemovedPage'));
   }
 }
 
