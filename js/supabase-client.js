@@ -156,6 +156,13 @@ const SupabaseClient = (() => {
   const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
   const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
   const KEY     = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
+  // Cache-Control (segundos) para objetos subidos a Storage (gifs/anims). Por
+  // defecto Supabase sirve con solo 1h si no se especifica, lo que provoca
+  // descargas repetidas (egress "uncached") cada vez que se reabre una obra
+  // pasada esa hora. El CDN de Supabase invalida el caché automáticamente en
+  // cuanto un archivo se sobrescribe (x-upsert) o se borra, así que un valor
+  // largo aquí no arriesga servir contenido desactualizado.
+  const STORAGE_CACHE_SECONDS = '2592000'; // 30 días
 
   const hdrs = {
     'apikey':        KEY,
@@ -316,7 +323,7 @@ const SupabaseClient = (() => {
     const path = animKey + '.png';
     const r = await fetch(`${STORAGE}/object/anims/${path}`, {
       method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
       body:    blob,
     });
     if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
@@ -344,7 +351,7 @@ const SupabaseClient = (() => {
     const path = gifKey + '.gif';
     const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
       method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'image/gif', 'x-upsert': 'true' },
+      headers: { ..._hdrsUser(), 'Content-Type': 'image/gif', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
       body:    blob,
     });
     if (!r.ok) throw new Error(`GIF upload: ${r.status} ${await r.text()}`);
@@ -376,7 +383,7 @@ const SupabaseClient = (() => {
       const path = 'thumb_' + supabaseId + '.jpg';
       const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
         method:  'POST',
-        headers: { ..._hdrsUser(), 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+        headers: { ..._hdrsUser(), 'Content-Type': 'image/jpeg', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
         body:    blob,
       });
       if (!r.ok) return null;
