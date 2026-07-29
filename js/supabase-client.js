@@ -395,7 +395,7 @@ const SupabaseClient = (() => {
     return `${WORKER}/gifs/${path}`;
   }
 
-  // Sube el thumbnail de la primera hoja al Worker de Storage (bucket R2, prefijo 'gifs/') como JPEG
+  // Sube el thumbnail de la primera hoja al Worker de Storage (bucket R2, prefijo 'covers/') como JPEG
   // Devuelve la URL pública o null si falla
   async function _thumbUpload(supabaseId, dataUrl) {
     if (!dataUrl || !supabaseId) return null;
@@ -418,14 +418,27 @@ const SupabaseClient = (() => {
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       const blob = new Blob([u8], { type: 'image/jpeg' });
       const path = 'thumb_' + supabaseId + '.jpg';
-      const r = await fetch(`${WORKER}/gifs/${path}`, {
+      const r = await fetch(`${WORKER}/covers/${path}`, {
         method:  'PUT',
         headers: { ..._hdrsWorker(), 'Content-Type': 'image/jpeg' },
         body:    blob,
       });
       if (!r.ok) return null;
-      return `${WORKER}/gifs/${path}`;
+      return `${WORKER}/covers/${path}`;
     } catch(_e) { return null; }
+  }
+
+  // Borra la miniatura de portada de una obra por su URL pública. No hay ruta
+  // antigua de Supabase que soportar aquí: works.cover_url nunca llegó a
+  // apuntar a Supabase (se comprobó explícitamente antes de borrar sus
+  // buckets). Sirve tanto para portadas nuevas (prefijo 'covers/') como para
+  // las creadas antes de separar el prefijo (aún bajo 'gifs/thumb_*').
+  async function _coverDelete(coverUrl) {
+    if (!coverUrl || !coverUrl.startsWith(`${WORKER}/`)) return;
+    const key = coverUrl.replace(`${WORKER}/`, '');
+    await _deleteWithRetry(coverUrl, () => fetch(`${WORKER}/${key}`, {
+      method: 'DELETE', headers: _hdrsWorker(),
+    }));
   }
 
   // Borra un GIF por su URL pública. Soporta tanto URLs nuevas (Worker/R2)
@@ -817,6 +830,13 @@ const SupabaseClient = (() => {
   }
 
   async function deleteWork(supabaseId) {
+    // Borrar la portada del bucket antes que nada — huérfano detectado y
+    // corregido: hasta ahora nunca se limpiaba este archivo al borrar la obra.
+    try {
+      const _workRow = await _get(`works?id=eq.${supabaseId}&select=cover_url`);
+      const _coverUrl = _workRow && _workRow[0] && _workRow[0].cover_url;
+      if (_coverUrl) await _coverDelete(_coverUrl);
+    } catch(_e) {}
     // Borrar en orden FK: panel_layers → panel_texts → panels → works
     const panels = await _get(`panels?work_id=eq.${supabaseId}&select=id`);
     for (const p of (panels || [])) {
