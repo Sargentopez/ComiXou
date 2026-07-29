@@ -1951,6 +1951,19 @@ class GifLayer extends BaseLayer {
   contains(px, py) { return super.contains(px, py); }
 }
 
+// Contexto 2D reutilizable solo para ctx.measureText() — no necesita tamaño
+// real (no se pinta ni se lee ningún píxel), así que un canvas mínimo basta.
+// Se cachea una sola vez para no crear un canvas nuevo en cada toque/selección.
+let _edTextMeasureCtxCache = null;
+function _edTextMeasureCtx() {
+  if (!_edTextMeasureCtxCache) {
+    const c = document.createElement('canvas');
+    c.width = 10; c.height = 10;
+    _edTextMeasureCtxCache = c.getContext('2d');
+  }
+  return _edTextMeasureCtxCache;
+}
+
 class TextLayer extends BaseLayer {
   constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
@@ -2092,6 +2105,63 @@ class TextLayer extends BaseLayer {
         for (const r of (line.runs || [])) {
           if (lx >= r.x - PAD && lx <= r.x + r.width + PAD) return true;
         }
+      }
+      return false;
+    }
+    // Mismo criterio que el flujo de texto paginado de arriba, para el texto
+    // simple ("Escribe aquí", sin richLines — la caja de texto básica del
+    // editor general): con fondo transparente, comprobar solo las bandas
+    // reales de cada línea (medidas con measureText), no el marco completo.
+    // El marco de una caja de texto simple suele tener mucho margen vacío
+    // alrededor del propio texto — sin este criterio, ese margen bloqueaba el
+    // toque sobre cualquier objeto de una capa inferior.
+    if (!(this.richLines && this.richLines.length) && (this.bgOpacity ?? 1) === 0) {
+      if (!super.contains(px, py)) return false; // bbox rápido primero
+      const pw = edPageW(), ph = edPageH();
+      // Mismo cambio de espacio que draw(): centro → rotación (sin desplazar a
+      // -w/2,-h/2 — el texto simple se dibuja ya centrado en (0,0) local).
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      const mctx = _edTextMeasureCtx();
+      mctx.font = this._fontStr();
+      const lines = this.getLines();
+      const lh = this.fontSize * 1.2, totalH = lines.length * lh;
+      // Margen cómodo fijo — a diferencia del flujo de texto paginado (marco
+      // siempre de página completa), la caja de texto simple se autoajusta a
+      // texto+2×padding, así que aquí basta con un valor pequeño y fijo.
+      const PAD = 2;
+      for (let i = 0; i < lines.length; i++) {
+        // textBaseline='middle' en draw(): banda vertical centrada en yc. El
+        // margen solo se añade en los bordes EXTERIORES (arriba de la primera
+        // línea, abajo de la última) — entre líneas consecutivas NO se añade,
+        // o el propio margen cierra el hueco natural entre ellas (bug
+        // reportado por Alberto: "sigue detectando toda el área").
+        const yc = -totalH / 2 + lh / 2 + i * lh;
+        const topPad = (i === 0) ? PAD : 0;
+        const botPad = (i === lines.length - 1) ? PAD : 0;
+        if (ly < yc - this.fontSize * 0.5 - topPad || ly > yc + this.fontSize * 0.5 + botPad) continue;
+        // textAlign='center' en draw(): línea centrada en x=0 local. Igual que
+        // el flujo de texto paginado (que mide por RUN, no por línea entera):
+        // medir cada PALABRA por separado, para que el hueco ENTRE palabras
+        // (p.ej. entre "hola" y "mundo") también deje pasar el toque — el
+        // margen, aquí también, solo se añade en los bordes exteriores de la
+        // línea (antes de la primera palabra, después de la última).
+        const line = lines[i];
+        const totalW = mctx.measureText(line).width;
+        const spaceW = mctx.measureText(' ').width;
+        const words = line.split(' ');
+        let cursorX = -totalW / 2;
+        let hitWord = false;
+        for (let w = 0; w < words.length; w++) {
+          const wordW = mctx.measureText(words[w]).width;
+          const leftPad  = (w === 0) ? PAD : 0;
+          const rightPad = (w === words.length - 1) ? PAD : 0;
+          if (lx >= cursorX - leftPad && lx <= cursorX + wordW + rightPad) { hitWord = true; break; }
+          cursorX += wordW + spaceW;
+        }
+        if (hitWord) return true;
       }
       return false;
     }
@@ -28183,8 +28253,17 @@ function EditorView_init(){
         window._gcpUiClosedAt = Date.now();
         if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
       }
-      // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen
-      const _gcpUiEl = e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
+      // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen.
+      // _insideFloating (menú/modal de interpolación) va incluido aquí: esos
+      // elementos se insertan en <body>, fuera de #gcpFramesBar, así que ningún
+      // selector de esta lista los detectaba — un toque dentro del menú de
+      // interpolación caía siempre en el "else" de abajo y se trataba como un
+      // toque en el lienzo GCP (_gcpHandleDown podía iniciar una selección/
+      // arrastre/handle si esas coordenadas coincidían con el objeto
+      // seleccionado, robándose el evento antes de llegar al botón del menú —
+      // bug reportado por Alberto: el submenú de una interpolación concreta
+      // dejaba de responder a los toques).
+      const _gcpUiEl = _insideFloating || e.target?.closest?.('#gcpFramesBar, #gcpMenuBar, #gcpTopbar, #edOptionsPanel, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"], #gcp-rule-pop, #ed-hscroll, #ed-vscroll, #ed-hscroll-thumb, #ed-vscroll-thumb');
       if (_gcpUiEl) {
         return; // Es UI del GIF o scrollbar — dejar que sus propios listeners actúen
       } else {
@@ -31288,12 +31367,14 @@ function _gcpAutoSaveFrame() {
       x: la.x, y: la.y, width: la.width, height: la.height,
       rotation: la.rotation || 0, opacity: la.opacity ?? 1
     };
-    // Invalidar solo esta celda concreta (capa, frame) y la muestra de esta
-    // fila — no la caché entera. Esta función se llama en cada autoguardado
-    // durante un arrastre; invalidarlo todo aquí era lo que obligaba a
-    // recalcular las miniaturas de TODOS los frames en cada fotograma del gesto.
+    // Invalidar solo esta celda concreta (capa, frame) — no la caché entera.
+    // La MUESTRA (miniatura identificadora de la fila) NO se toca aquí: debe
+    // quedar fija con el aspecto que tenía al insertarse el objeto, no con el
+    // que tiene en el frame que se está autoguardando ahora (p.ej. si aquí se
+    // cambia la opacidad al 50%, la miniatura de ESTE frame sí debe reflejarlo,
+    // pero la muestra de la fila no). Esta función se llama en cada
+    // autoguardado durante un arrastre/edición.
     _gcpInvalidateThumb(la, fi);
-    _gcpInvalidateSampleThumb(la);
   });
   // Recalcular interpolaciones adyacentes si existen (preservando _blur)
   _gcpReinterpolateAround(fi);
@@ -31323,17 +31404,24 @@ function _gcpUpdateCircularInterp() {
   // Calcular número de frames de la interpolación circular (igual al número entre otros frames o mínimo 3)
   const _circN = window._gcpCircularInterpN || 3;
 
-  // Crear frames interpolados circulares (del último al primero) en todas las capas
+  // Crear frames interpolados circulares (del último al primero) en todas las capas.
+  // TODAS reciben el MISMO nº de columnas nuevas (_circN), existan o no ambos
+  // extremos para cada una — si no existen, se insertan huecos (null) en vez
+  // de omitir la capa entera. Omitirla la dejaba más corta que el resto y
+  // desincronizaba el índice de frame global (mismo patrón que _gcpDoInterpolate).
   window._gcpLayers.forEach(la => {
-    if (!la._frames) return;
+    if (!la._frames) la._frames = [];
     const a = la._frames[_lastKeyFi];
     const b = la._frames[0];
-    if (!a || !b) return;
     const newFrames = [];
-    for (let k = 1; k <= _circN; k++) {
-      const f = _gcpLerpFrame(a, b, k / (_circN + 1));
-      f._circular = true; // marcar como interpolación circular
-      newFrames.push(f);
+    if (!a || !b) {
+      for (let k = 0; k < _circN; k++) newFrames.push(null);
+    } else {
+      for (let k = 1; k <= _circN; k++) {
+        const f = _gcpLerpFrame(a, b, k / (_circN + 1));
+        f._circular = true; // marcar como interpolación circular
+        newFrames.push(f);
+      }
     }
     la._frames.splice(_lastKeyFi + 1, 0, ...newFrames);
   });
@@ -31343,16 +31431,22 @@ function _gcpUpdateCircularInterp() {
   _gcpInvalidateAllThumbs();
 }
 
-// Elimina la interpolación circular del final si existe
+// Elimina la interpolación circular del final si existe.
+// Quita el nº de columnas guardado en window._gcpCircularInterpN, IGUAL en
+// todas las capas — antes se hacía "pop mientras la última sea _circular",
+// pero los huecos (null) que _gcpUpdateCircularInterp inserta para capas sin
+// ambos extremos no llevan ese flag: el pop se detenía enseguida en esas
+// capas y no se quitaba nada, mientras que las demás sí se recortaban,
+// desincronizando el índice de frame global entre capas.
 function _gcpRemoveCircularInterp() {
   if (!window._gcpLayers || !window._gcpLayers.length) return;
-  window._gcpLayers.forEach(la => {
-    if (!la._frames) return;
-    // Eliminar todos los frames _circular al final del array
-    while (la._frames.length > 0 && la._frames[la._frames.length - 1]?._circular) {
-      la._frames.pop();
-    }
-  });
+  if (window._gcpCircularInterpFi < 0) { window._gcpCircularInterpFi = -1; return; }
+  const _n = window._gcpCircularInterpN || 0;
+  if (_n > 0) {
+    window._gcpLayers.forEach(la => {
+      if (la._frames && la._frames.length >= _n) la._frames.splice(la._frames.length - _n, _n);
+    });
+  }
   window._gcpCircularInterpFi = -1;
 }
 
@@ -31900,8 +31994,9 @@ function _gcpSaveFrame() {
     la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,
                   rotation:la.rotation||0,opacity:la.opacity??1};
     // Solo esta columna cambió — no hace falta invalidar el resto de frames.
+    // La MUESTRA no se toca aquí (ver nota en _gcpAutoSaveFrame): debe quedar
+    // fija con el aspecto de la inserción, no con el de este guardado.
     _gcpInvalidateThumb(la, fi);
-    _gcpInvalidateSampleThumb(la);
   });
   _gcpUpdateFrameNav();
   const _fb = document.getElementById('gcpFramesBar');
@@ -32255,6 +32350,11 @@ function _gcpShowInterpMenu(anchor, fi, interpCount, layerIdx) {
   if (_gcpInterpMenuOpen) { _gcpInterpMenuOpen.remove(); _gcpInterpMenuOpen = null; }
 
   const menu = document.createElement('div');
+  // id necesario para _gcpDoSelectDrag: ya excluye '#gcpInterpMenu' de sus
+  // comprobaciones (no iniciar selección/arrastre si el toque viene de aquí),
+  // pero el elemento nunca llevaba este id — la exclusión nunca se aplicaba
+  // realmente (defensa adicional junto al fix de _edDocDownFn más arriba).
+  menu.id = 'gcpInterpMenu';
   menu.style.cssText = [
     'position:fixed', 'z-index:10000',
     'background:var(--white)',
@@ -32355,15 +32455,19 @@ function _gcpToggleInterpBlur(fi, enable) {
   edToast('Blur de movimiento ' + (enable ? 'activado' : 'desactivado') + ' ✓');
 }
 
-// Eliminar interpolados entre fi y el siguiente frame clave — los elimina del array
+// Eliminar interpolados entre fi y el siguiente frame clave — los elimina del array.
+// El nº a eliminar se mide UNA sola vez (el mayor encontrado en cualquier capa)
+// y se aplica igual a todas — mismo motivo que en _gcpDoInterpolate: si cada
+// capa recalculara su propio recuento, una capa vacía (null) en ese tramo no
+// perdería ninguna columna mientras las demás sí, desincronizando el índice
+// de frame global entre capas.
 function _gcpDeleteInterp(fi) {
-  window._gcpLayers.forEach(la => {
-    if (!la._frames) return;
-    let count = 0;
-    let i = fi + 1;
-    while (i < la._frames.length && la._frames[i]?._interp) { count++; i++; }
-    if (count > 0) la._frames.splice(fi + 1, count);
-  });
+  const _count = Math.max(0, ...window._gcpLayers.map(la => _gcpCountInterpBetween(la, fi)));
+  if (_count > 0) {
+    window._gcpLayers.forEach(la => {
+      if (la._frames) la._frames.splice(fi + 1, _count);
+    });
+  }
   // Eliminar columnas (iniciales y finales) invisibles que pudieran quedar
   _gcpTrimLeadingInvisible();
   _gcpTrimTrailingInvisible();
@@ -32385,12 +32489,12 @@ function _gcpShowInterpModal(fi, layerIdx) {
   _gcpInterpPendingLayer = layerIdx;
   _gcpInterpN            = 1;
 
-  // Pre-rellenar con el nº de interpolados ya existentes entre fi y fi+1 (globales)
-  const _anyLa = window._gcpLayers.find(l => l._frames && l._frames.length > fi + 1);
-  if (_anyLa) {
-    const existing = _gcpCountInterpBetween(_anyLa, fi);
-    if (existing > 0) _gcpInterpN = existing;
-  }
+  // Pre-rellenar con el nº de interpolados ya existentes entre fi y fi+1 (globales).
+  // Usar el mayor recuento entre TODAS las capas, no la primera que tenga datos
+  // ahí: una capa vacía (null) en ese tramo daría 0 aunque otra sí tenga el
+  // bloque real, mostrando al usuario un recuento equivocado.
+  const _existingPrefill = Math.max(0, ...window._gcpLayers.map(l => _gcpCountInterpBetween(l, fi)));
+  if (_existingPrefill > 0) _gcpInterpN = _existingPrefill;
 
   const modal   = document.getElementById('gcpInterpModal');
   const countEl = document.getElementById('gcpInterpCount');
@@ -32431,19 +32535,31 @@ function _gcpDoInterpolate(fi, n) {
   if (!window._gcpLayers.length || n < 1) return;
 
   // Primero eliminar cualquier bloque de interpolados que ya exista en fi+1..nextKey-1
-  // (para poder reinterpolinar con distinto n sin duplicar)
-  window._gcpLayers.forEach(la => {
-    if (!la._frames) return;
-    // Saltar interpolados existentes a partir de fi+1
-    let nextKey = fi + 1;
-    while (nextKey < la._frames.length && la._frames[nextKey]?._interp) nextKey++;
-    const existing = nextKey - (fi + 1);
-    if (existing > 0) la._frames.splice(fi + 1, existing);
-  });
+  // (para poder reinterpolar con distinto n sin duplicar).
+  // El tamaño de ese hueco se mide UNA sola vez — el mayor nº de interpolados
+  // encontrado en CUALQUIER capa — y se elimina esa MISMA cantidad de todas
+  // las capas por igual. Antes cada capa recalculaba su propio nº de
+  // interpolados existentes (la._frames[nextKey]?._interp): una capa vacía
+  // (null) en ese tramo, o con una estructura distinta a la de referencia,
+  // daba 0 y no perdía ninguna columna mientras las demás sí perdían varias —
+  // al insertar después n nuevas en TODAS por igual, esa capa terminaba con
+  // más columnas netas que el resto, desincronizando el índice de frame
+  // global entre capas (el frame clave real de esa capa "se desplazaba",
+  // pareciendo un fotograma clave nuevo o mal colocado).
+  const _existingInterp = Math.max(0, ...window._gcpLayers.map(la => _gcpCountInterpBetween(la, fi)));
+  if (_existingInterp > 0) {
+    window._gcpLayers.forEach(la => {
+      if (!la._frames) la._frames = [];
+      while (la._frames.length <= fi + 1) la._frames.push(null);
+      la._frames.splice(fi + 1, _existingInterp);
+    });
+  }
 
   // Ahora insertar n frames interpolados en todas las capas en la columna fi+1.
   // Si alguno de los dos extremos no existe (null), no hay nada que interpolar:
-  // se insertan huecos (null), igual que en _gcpInterpolateSingleLayer.
+  // se insertan huecos (null), igual que en _gcpInterpolateSingleLayer. n es
+  // el mismo para todas las capas, así que —junto con la eliminación
+  // uniforme de arriba— todas crecen exactamente igual y quedan sincronizadas.
   window._gcpLayers.forEach(la => {
     if (!la._frames) la._frames = [];
     while (la._frames.length <= fi + 1) la._frames.push(null);
@@ -32658,9 +32774,16 @@ function _gcpInvalidateThumb(la, fi) {
     }
   }
 }
+// Invalida SOLO las miniaturas por frame (una celda concreta de la matriz).
+// Deliberadamente NO toca _gcpSampleThumbCache: la MUESTRA (miniatura
+// identificadora de cada fila, junto a los controles de la izquierda) debe
+// quedar fija con el aspecto que tenía el objeto al insertarse, sin verse
+// afectada por cambios estructurales posteriores (duplicar/eliminar columna,
+// deshacer/rehacer, cambios de interpolación...) que sí necesitan invalidar
+// las miniaturas de frame. Solo _gcpSaveFrame/_gcpCaptureFrame la invalidan,
+// y únicamente la primera vez que se confirma la inserción de cada objeto.
 function _gcpInvalidateAllThumbs() {
   _gcpThumbCache.clear();
-  _gcpInvalidateAllSampleThumbs();
 }
 
 function _gcpLayerFrameThumb(la, fi, S) {
@@ -33534,6 +33657,25 @@ function _gcpUpdateFramesBar() {
   const gfi       = window._gcpGlobalFrameIdx;
   if (!window._gcpLayers || !window._gcpLayers.length) return;
 
+  // Columnas que deben quedar OCULTAS (colapsadas bajo el indicador ⟳), para
+  // TODAS las filas por igual — calculado una sola vez aquí, no por fila.
+  // Es un concepto GLOBAL/compartido, igual que duplicar/eliminar/pausar
+  // columna (que ya afectan a todas las capas — ver _gcpDoInterpolate): si
+  // CUALQUIER capa tiene un frame interpolado real en esa columna, se oculta
+  // para todas, exista o no dato en cada capa individual. Antes cada fila
+  // decidía su propia visibilidad mirando solo su propio _interp — si el
+  // fotograma clave que ancla una interpolación se vaciaba con el botón 👁
+  // (que purga a null los interpolados huérfanos de ESA capa concreta, ver
+  // _gcpPurgeInterpAround), esa fila dejaba de tener _interp ahí y sus
+  // columnas pasaban a mostrarse sueltas — rompiendo la estructura
+  // compartida: desaparecía el botón rojo, y si esa era la fila de
+  // referencia de la regla de tiempo (la primera del DOM), la matriz entera
+  // perdía el hueco aunque otras capas siguieran teniendo la interpolación intacta.
+  const _gcpHiddenCols = new Array(total).fill(false);
+  for (let fi = 0; fi < total; fi++) {
+    _gcpHiddenCols[fi] = window._gcpLayers.some(l => l._frames && l._frames[fi]?._interp);
+  }
+
   // Iterar en orden inverso: el último índice (más arriba en canvas) aparece primero en la UI
   const _layersCopy = window._gcpLayers.map((la, i) => ({ la, layerIdx: i })).reverse();
   _layersCopy.forEach(({ la, layerIdx }) => {
@@ -33719,8 +33861,7 @@ function _gcpUpdateFramesBar() {
     // Entre dos frames clave puede haber N interpolados: se representa con el botón ⟳.
     let _visibleFiList = [];
     for (let fi = 0; fi < total; fi++) {
-      const _snap = fi < (la._frames ? la._frames.length : 0) ? la._frames[fi] : null;
-      if (!(_snap?._interp)) _visibleFiList.push(fi);
+      if (!_gcpHiddenCols[fi]) _visibleFiList.push(fi);
     }
 
     for (let _vi = 0; _vi < _visibleFiList.length; _vi++) {

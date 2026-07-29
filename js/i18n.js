@@ -228,7 +228,7 @@ const TRANSLATIONS = {
     mc_cloudLoadBtnTitle:"Cargar borradores guardados en la nube",
     mc_createNewBtn:     "✚ Crear nuevo",
     mc_titlePlaceholder: "El nombre de tu obra",
-    mc_genrePlaceholder: "Aventura, humor, drama…",
+    mc_genrePlaceholder: "Exposición, relato, cómic animado…",
     mc_navModeLabel:     "Modo de lectura",
     mc_navModeFixed:     "Viñeta fija (botones)",
     mc_navModeHorizontal:"Deslizamiento horizontal",
@@ -1120,7 +1120,7 @@ const TRANSLATIONS = {
     mc_cloudLoadBtnTitle:"Load drafts saved in the cloud",
     mc_createNewBtn:     "✚ Create new",
     mc_titlePlaceholder: "Your work's name",
-    mc_genrePlaceholder: "Adventure, comedy, drama…",
+    mc_genrePlaceholder: "Exposition, story, animated comic…",
     mc_navModeLabel:     "Reading mode",
     mc_navModeFixed:     "Fixed panel (buttons)",
     mc_navModeHorizontal:"Horizontal swipe",
@@ -1827,15 +1827,30 @@ const TRANSLATIONS = {
 };
 
 const I18n = (() => {
-  // Detectar idioma del dispositivo, guardar preferencia
+  // Detectar idioma del dispositivo, guardar preferencia.
+  // Política (petición de Alberto): español si el dispositivo está en
+  // español (cualquier variante: es-ES, es-MX, es-AR...), inglés en
+  // cualquier otro caso, mientras no se añadan más idiomas a TRANSLATIONS.
+  // Si en el futuro se añade un idioma nuevo (p.ej. 'fr'), un dispositivo en
+  // ese idioma lo usará automáticamente en vez de caer a inglés — el fallback
+  // a 'en' solo se aplica cuando el idioma detectado no coincide con NINGUNA
+  // de las traducciones disponibles.
   function detectLang() {
     const saved = localStorage.getItem('cs_lang');
     if (saved && TRANSLATIONS[saved]) return saved;
-    const nav = (navigator.language || navigator.userLanguage || 'es').slice(0, 2).toLowerCase();
-    return TRANSLATIONS[nav] ? nav : 'es';
+    const nav = (navigator.language || navigator.userLanguage || '').slice(0, 2).toLowerCase();
+    return TRANSLATIONS[nav] ? nav : 'en';
   }
 
   let lang = detectLang();
+  // El atributo lang del documento debe reflejar el idioma REAL mostrado, no
+  // quedarse fijo en el "es" estático de index.html — si no, el navegador
+  // (y su oferta de traducción automática, tipo Google Translate) puede
+  // pensar que la página está en español cuando en realidad se muestra en
+  // inglés, y no ofrecer traducir cuando el visitante sí la necesitaría.
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.lang = lang;
+  }
 
   function t(key, vars) {
     let str = (TRANSLATIONS[lang]?.[key]) || (TRANSLATIONS['es']?.[key]) || key;
@@ -1868,6 +1883,9 @@ const I18n = (() => {
     if (!TRANSLATIONS[l]) return;
     lang = l;
     localStorage.setItem('cs_lang', l);
+    if (typeof document !== 'undefined' && document.documentElement) {
+      document.documentElement.lang = l;
+    }
     applyAll();
   }
 

@@ -123,7 +123,7 @@
      ══════════════════════════════════════ */
   function showInstallBanner() {
     if (document.getElementById('installBanner')) return;
-    const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
+    const lang = I18n.getLang();
     const msg  = lang === 'en'
       ? 'Install ComXow on your device — works offline and fullscreen'
       : 'Instala ComXow en tu dispositivo — funciona sin conexión y a pantalla completa';
@@ -171,7 +171,7 @@
      TOAST "APP INSTALADA"
      ══════════════════════════════════════ */
   function showInstalledToast() {
-    const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
+    const lang = I18n.getLang();
     const msg  = lang === 'en'
       ? '✓ Installed! You can now open it from your home screen.'
       : '✓ ¡ComXow instalada! Ya puedes abrirla desde tu pantalla de inicio.';
@@ -197,7 +197,7 @@
   if (isIos && isSafari && !inApp() && !localStorage.getItem(DISMISSED_KEY)) {
     setTimeout(() => {
       if (document.getElementById('installBanner')) return;
-      const lang = (localStorage.getItem('cs_lang') || navigator.language || 'es').slice(0, 2);
+      const lang = I18n.getLang();
       const msg  = lang === 'en'
         ? 'Tap <strong>Share ↑</strong> → <strong>"Add to Home Screen"</strong> to install ComXow'
         : 'Pulsa <strong>Compartir ↑</strong> → <strong>"Añadir a inicio"</strong> para instalar ComXow';
