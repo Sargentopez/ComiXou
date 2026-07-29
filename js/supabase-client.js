@@ -187,6 +187,28 @@ const SupabaseClient = (() => {
     return { 'Authorization': _hdrsUser().Authorization };
   }
 
+  // Ejecuta un borrado de storage con refresco de token y un reintento.
+  // Motivo: se detectó que _animDelete/_gifDelete no refrescaban el token de
+  // sesión antes de borrar (a diferencia de las subidas, que sí lo hacen), y
+  // el 401 resultante quedaba tragado en silencio por el catch(()=>{}) — la
+  // causa confirmada de los huérfanos acumulados en Storage. Si tras el
+  // reintento sigue fallando, se deja constancia en consola en vez de
+  // desaparecer sin rastro.
+  async function _deleteWithRetry(label, doDelete) {
+    if (window._authTryRefresh) await window._authTryRefresh();
+    try {
+      let r = await doDelete();
+      if (r && r.ok) return;
+      if (window._authTryRefresh) await window._authTryRefresh();
+      r = await doDelete();
+      if (!r || !r.ok) {
+        console.warn(`[storage] no se pudo borrar: ${label} (HTTP ${r && r.status})`);
+      }
+    } catch (e) {
+      console.warn(`[storage] no se pudo borrar: ${label} (excepción)`, e);
+    }
+  }
+
   async function _get(path) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
@@ -343,15 +365,15 @@ const SupabaseClient = (() => {
     if (!animUrl) return;
     if (animUrl.startsWith(STORAGE)) {
       const path = animUrl.replace(`${STORAGE}/object/public/anims/`, '');
-      await fetch(`${STORAGE}/object/anims/${path}`, {
+      await _deleteWithRetry(animUrl, () => fetch(`${STORAGE}/object/anims/${path}`, {
         method: 'DELETE', headers: _hdrsUser(),
-      }).catch(() => {});
+      }));
       return;
     }
     const path = animUrl.replace(`${WORKER}/anims/`, '');
-    await fetch(`${WORKER}/anims/${path}`, {
+    await _deleteWithRetry(animUrl, () => fetch(`${WORKER}/anims/${path}`, {
       method: 'DELETE', headers: _hdrsWorker(),
-    }).catch(() => {});
+    }));
   }
 
   // Sube un dataUrl GIF al Worker de Storage (bucket R2, prefijo 'gifs/') y devuelve la URL pública
@@ -412,17 +434,17 @@ const SupabaseClient = (() => {
     if (!gifUrl) return;
     if (gifUrl.startsWith(STORAGE)) {
       const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
-      await fetch(`${STORAGE}/object/gifs/${path}`, {
+      await _deleteWithRetry(gifUrl, () => fetch(`${STORAGE}/object/gifs/${path}`, {
         method:  'DELETE',
         headers: _hdrsUser(),
-      }).catch(() => {});
+      }));
       return;
     }
     const path = gifUrl.replace(`${WORKER}/gifs/`, '');
-    await fetch(`${WORKER}/gifs/${path}`, {
+    await _deleteWithRetry(gifUrl, () => fetch(`${WORKER}/gifs/${path}`, {
       method:  'DELETE',
       headers: _hdrsWorker(),
-    }).catch(() => {});
+    }));
   }
 
   // _animUpload antigua eliminada — usar la nueva (blob PNG con .png)
