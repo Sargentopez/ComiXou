@@ -1,0 +1,23 @@
+name: Supabase Keep-Alive
+
+# Evita que el proyecto gratuito de Supabase se pause por inactividad (se
+# pausa solo tras 7 días sin actividad, y hay que restaurarlo a mano desde
+# el dashboard). Este workflow hace una petición ligera cada 3 días —
+# margen de sobra frente al límite de 7, por si algún día se retrasa la
+# ejecución programada.
+
+on:
+  schedule:
+    - cron: '0 4 */3 * *'   # cada 3 días, 04:00 UTC
+  workflow_dispatch:         # permite lanzarlo a mano desde la pestaña "Actions" de GitHub
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping a la API de Supabase
+        run: |
+          curl -sf "https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1/authors?select=id&limit=1" \
+            -H "apikey: sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd" \
+            -H "Authorization: Bearer sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd" \
+            -o /dev/null -w "HTTP %{http_code}\n"
