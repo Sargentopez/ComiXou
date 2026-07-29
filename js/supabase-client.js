@@ -156,13 +156,11 @@ const SupabaseClient = (() => {
   const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
   const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
   const KEY     = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-  // Cache-Control (segundos) para objetos subidos a Storage (gifs/anims). Por
-  // defecto Supabase sirve con solo 1h si no se especifica, lo que provoca
-  // descargas repetidas (egress "uncached") cada vez que se reabre una obra
-  // pasada esa hora. El CDN de Supabase invalida el caché automáticamente en
-  // cuanto un archivo se sobrescribe (x-upsert) o se borra, así que un valor
-  // largo aquí no arriesga servir contenido desactualizado.
-  const STORAGE_CACHE_SECONDS = '2592000'; // 30 días
+  // Worker de Cloudflare que media el acceso al bucket R2 "comxow-storage"
+  // (jurisdicción EU). Migración Storage → R2, Etapa 3. Las subidas nuevas
+  // van siempre aquí; STORAGE se mantiene solo para poder borrar/leer
+  // contenido antiguo que aún no se ha migrado (ver Etapa 4 del plan).
+  const WORKER = 'https://comxow-storage-worker.albertobicho.workers.dev';
 
   const hdrs = {
     'apikey':        KEY,
@@ -179,6 +177,14 @@ const SupabaseClient = (() => {
       }
     } catch(e) {}
     return hdrs; // fallback a anon key
+  }
+
+  // Cabeceras para el Worker de Storage (Etapa 3 migración R2): solo necesita
+  // Authorization con el JWT del usuario, que el propio Worker valida contra
+  // /auth/v1/user de Supabase. Si no hay sesión, cae a la anon key, que el
+  // Worker rechazará correctamente con 401 (comportamiento seguro por defecto).
+  function _hdrsWorker() {
+    return { 'Authorization': _hdrsUser().Authorization };
   }
 
   async function _get(path) {
@@ -312,7 +318,7 @@ const SupabaseClient = (() => {
     } catch(e) { return null; }
   }
 
-  // Sube un dataUrl APNG al bucket 'anims' como blob PNG binario (= patrón GIF)
+  // Sube un dataUrl APNG al Worker de Storage (bucket R2 'comxow-storage', prefijo 'anims/')
   async function _animUpload(animKey, dataUrl) {
     if (window._authTryRefresh) await window._authTryRefresh();
     const b64 = dataUrl.split(',')[1];
@@ -321,25 +327,34 @@ const SupabaseClient = (() => {
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     const blob = new Blob([u8], { type: 'image/png' });
     const path = animKey + '.png';
-    const r = await fetch(`${STORAGE}/object/anims/${path}`, {
-      method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'image/png', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
+    const r = await fetch(`${WORKER}/anims/${path}`, {
+      method:  'PUT',
+      headers: { ..._hdrsWorker(), 'Content-Type': 'image/png' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`animUpload: ${r.status} ${await r.text()}`);
-    return `${STORAGE}/object/public/anims/${path}`;
+    return `${WORKER}/anims/${path}`;
   }
   // _animDownload definida más abajo
-  // Borra un APNG del bucket por su URL pública (= patrón GIF)
+  // Borra un APNG por su URL pública. Soporta tanto URLs nuevas (Worker/R2)
+  // como antiguas (Supabase Storage) mientras quede contenido sin migrar
+  // — ver Etapa 4 del plan de migración a R2.
   async function _animDelete(animUrl) {
     if (!animUrl) return;
-    const path = animUrl.replace(`${STORAGE}/object/public/anims/`, '');
-    await fetch(`${STORAGE}/object/anims/${path}`, {
-      method: 'DELETE', headers: _hdrsUser(),
+    if (animUrl.startsWith(STORAGE)) {
+      const path = animUrl.replace(`${STORAGE}/object/public/anims/`, '');
+      await fetch(`${STORAGE}/object/anims/${path}`, {
+        method: 'DELETE', headers: _hdrsUser(),
+      }).catch(() => {});
+      return;
+    }
+    const path = animUrl.replace(`${WORKER}/anims/`, '');
+    await fetch(`${WORKER}/anims/${path}`, {
+      method: 'DELETE', headers: _hdrsWorker(),
     }).catch(() => {});
   }
 
-  // Sube un dataUrl GIF al bucket y devuelve la URL pública
+  // Sube un dataUrl GIF al Worker de Storage (bucket R2, prefijo 'gifs/') y devuelve la URL pública
   async function _gifUpload(gifKey, dataUrl) {
     if (window._authTryRefresh) await window._authTryRefresh();
     // dataUrl → Blob binario (sin fetch, compatible con todos los navegadores)
@@ -349,16 +364,16 @@ const SupabaseClient = (() => {
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     const blob = new Blob([u8], { type: 'image/gif' });
     const path = gifKey + '.gif';
-    const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
-      method:  'POST',
-      headers: { ..._hdrsUser(), 'Content-Type': 'image/gif', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
+    const r = await fetch(`${WORKER}/gifs/${path}`, {
+      method:  'PUT',
+      headers: { ..._hdrsWorker(), 'Content-Type': 'image/gif' },
       body:    blob,
     });
     if (!r.ok) throw new Error(`GIF upload: ${r.status} ${await r.text()}`);
-    return `${STORAGE}/object/public/gifs/${path}`;
+    return `${WORKER}/gifs/${path}`;
   }
 
-  // Sube el thumbnail de la primera hoja al bucket 'gifs' como JPEG público
+  // Sube el thumbnail de la primera hoja al Worker de Storage (bucket R2, prefijo 'gifs/') como JPEG
   // Devuelve la URL pública o null si falla
   async function _thumbUpload(supabaseId, dataUrl) {
     if (!dataUrl || !supabaseId) return null;
@@ -381,23 +396,32 @@ const SupabaseClient = (() => {
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       const blob = new Blob([u8], { type: 'image/jpeg' });
       const path = 'thumb_' + supabaseId + '.jpg';
-      const r = await fetch(`${STORAGE}/object/gifs/${path}`, {
-        method:  'POST',
-        headers: { ..._hdrsUser(), 'Content-Type': 'image/jpeg', 'x-upsert': 'true', 'cache-control': STORAGE_CACHE_SECONDS },
+      const r = await fetch(`${WORKER}/gifs/${path}`, {
+        method:  'PUT',
+        headers: { ..._hdrsWorker(), 'Content-Type': 'image/jpeg' },
         body:    blob,
       });
       if (!r.ok) return null;
-      return `${STORAGE}/object/public/gifs/${path}`;
+      return `${WORKER}/gifs/${path}`;
     } catch(_e) { return null; }
   }
 
-  // Borra un GIF del bucket por su URL pública
+  // Borra un GIF por su URL pública. Soporta tanto URLs nuevas (Worker/R2)
+  // como antiguas (Supabase Storage) mientras quede contenido sin migrar.
   async function _gifDelete(gifUrl) {
     if (!gifUrl) return;
-    const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
-    await fetch(`${STORAGE}/object/gifs/${path}`, {
+    if (gifUrl.startsWith(STORAGE)) {
+      const path = gifUrl.replace(`${STORAGE}/object/public/gifs/`, '');
+      await fetch(`${STORAGE}/object/gifs/${path}`, {
+        method:  'DELETE',
+        headers: _hdrsUser(),
+      }).catch(() => {});
+      return;
+    }
+    const path = gifUrl.replace(`${WORKER}/gifs/`, '');
+    await fetch(`${WORKER}/gifs/${path}`, {
       method:  'DELETE',
-      headers: _hdrsUser(),
+      headers: _hdrsWorker(),
     }).catch(() => {});
   }
 
