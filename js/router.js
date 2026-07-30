@@ -82,6 +82,15 @@ const Router = (() => {
     // Inicializar vista
     if (def.init) def.init(params);
 
+    // Ventana de bienvenida (ver #cxIntro en index.html): todas las vistas
+    // salvo 'home' avisan aquí mismo de que su init síncrono ya terminó, así
+    // que ya se puede ocultar la ventana (si la persona ya había aceptado las
+    // condiciones — si no, la señal se ignora y la ventana sigue bloqueando).
+    // 'home' avisa por su cuenta desde _loadPublishedWorks() en home.js,
+    // porque su carga real es asíncrona (Supabase) y termina después de este
+    // punto — esperar aquí sería avisar demasiado pronto.
+    if (name !== 'home' && typeof window._cxSplashReady === 'function') window._cxSplashReady();
+
     window.scrollTo(0, 0);
   }
 

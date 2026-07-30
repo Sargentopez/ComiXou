@@ -95,6 +95,9 @@ async function _loadPublishedWorks() {
   if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
     _homeWorks = [];
     renderComics();
+    // Ventana de bienvenida (#cxIntro en index.html): sin Supabase disponible
+    // no hay nada más que esperar, avisar ya.
+    if (typeof window._cxSplashReady === 'function') window._cxSplashReady();
     return;
   }
 
@@ -118,6 +121,11 @@ async function _loadPublishedWorks() {
     if (_homeWorks === null) _homeWorks = [];
   }
   renderComics();
+  // Ventana de bienvenida (#cxIntro en index.html): las obras ya han terminado
+  // de cargar (con éxito o con error) — ya se puede ocultar la ventana si la
+  // persona ya había aceptado las condiciones antes (ver router.js, que hace
+  // lo mismo para el resto de vistas justo tras su init síncrono).
+  if (typeof window._cxSplashReady === 'function') window._cxSplashReady();
 }
 
 // Ajusta la posición de la barra de página según la altura real de la cabecera

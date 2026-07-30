@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.33</footer>
+    <footer class="app-version">v36.40</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -149,6 +149,33 @@ Router.register('register', {
     </main>
   `,
   init: () => AuthView_init(),
+  destroy: () => {}
+});
+
+// ══════════════════════════════════════════════
+// VISTA: CONDICIONES DE USO (placeholder — texto real pendiente)
+// Enlazada desde la ventana de bienvenida (#cxIntro en index.html). Se abre
+// siempre en pestaña nueva para que nunca quede bloqueada por esa misma
+// ventana (si no, sería imposible leer las condiciones para poder aceptarlas).
+// ══════════════════════════════════════════════
+Router.register('terms', {
+  bodyClass: 'auth-page',
+  css: ['css/auth.css'],
+  html: () => `
+    <main class="auth-main">
+      <div class="auth-card">
+        <div class="auth-card-header">
+          <h1 class="auth-title">Condiciones de uso</h1>
+        </div>
+        <p style="line-height:1.6;color:var(--gray-700);margin:0 0 20px;text-align:left">
+          Estamos preparando el texto completo de las condiciones de uso de Comxow.
+          Estarán disponibles aquí en cuanto estén listas.
+        </p>
+        <a href="#" class="btn btn-outline btn-full" onclick="Router.go('home');return false;">Volver</a>
+      </div>
+    </main>
+  `,
+  init: () => {},
   destroy: () => {}
 });
 
