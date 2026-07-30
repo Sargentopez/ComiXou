@@ -32749,6 +32749,28 @@ function _gcpLayerSampleThumb(la, S) {
   const tc = document.createElement('canvas'); tc.width=S; tc.height=S;
   const tctx = tc.getContext('2d');
   tctx.fillStyle='#f0f0f0'; tctx.fillRect(0,0,S,S);
+
+  // La muestra debe reflejar SIEMPRE el mismo instante — el primer frame en el
+  // que el objeto existe — nunca lo que esté activo en el lienzo cuando esta
+  // función se llame por primera vez (bug regresivo: la Matriz arranca oculta
+  // en gcpOpen, así que _gcpUpdateFramesBar no llega a ejecutarse de verdad al
+  // reabrir una animación — ver su `if (bar.style.display !== 'flex') return;`
+  // — y la primera vez que de verdad se construye puede ocurrir después de que
+  // el usuario ya haya navegado a otro frame y cambiado, p.ej., la opacidad ahí;
+  // esa opacidad quedaba entonces congelada para siempre en la muestra). Se
+  // aplica aquí un snapshot temporal del primer frame existente, se renderiza,
+  // y se restaura el estado en vivo justo después — mismo patrón ya usado abajo
+  // para window._gcpSelIdx (_savedSel).
+  const _refFrame = (la._frames || []).find(f => f);
+  const _savedLive = _refFrame
+    ? { x: la.x, y: la.y, width: la.width, height: la.height, rotation: la.rotation, opacity: la.opacity }
+    : null;
+  if (_refFrame) {
+    la.x = _refFrame.x; la.y = _refFrame.y;
+    la.width = _refFrame.width; la.height = _refFrame.height;
+    la.rotation = _refFrame.rotation || 0; la.opacity = _refFrame.opacity ?? 1;
+  }
+
   const _savedSel = window._gcpSelIdx;
   window._gcpSelIdx = -1;
   _gcpWithEditorContext(() => {
@@ -32783,6 +32805,11 @@ function _gcpLayerSampleThumb(la, S) {
     tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
   window._gcpSelIdx=_savedSel;
+  if (_savedLive) {
+    la.x = _savedLive.x; la.y = _savedLive.y;
+    la.width = _savedLive.width; la.height = _savedLive.height;
+    la.rotation = _savedLive.rotation; la.opacity = _savedLive.opacity;
+  }
   _gcpSampleThumbCache.set(cacheKey, tc);
   return tc;
 }
