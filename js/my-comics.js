@@ -1803,7 +1803,7 @@ function _mcSubmitOverlayShow() {
       'color:#fff;font-family:sans-serif;text-align:center;padding:24px'
     ].join(';');
     ov.innerHTML = `
-      <img src="loading-icon.png?v=34.65" alt="${I18n.t('mc_savingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
+      <img src="loading-icon.png?v=36.42" alt="${I18n.t('mc_savingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
       <div style="font-size:1.1rem;font-weight:700;margin-bottom:10px">${I18n.t('mc_savingCloudTitle')}</div>
       <div style="font-size:.82rem;opacity:.85;max-width:280px;line-height:1.5;margin-bottom:16px">
         ${I18n.t('mc_savingCloudWarn')}
