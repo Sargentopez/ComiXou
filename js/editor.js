@@ -30647,9 +30647,22 @@ function _gcpDrawMultiSel() {
   const pw = edPageW(), ph = edPageH(), z = edCamera.z;
   const mx = edMarginX(), my = edMarginY();
   const lw = 1/z, hr = 6/z, hrRot = 8/z;
-  // Dimensiones visuales del bbox (durante resize se escalan)
-  const bw = bb.w * pw * (window._gcpMultiTransform?._curSx ?? 1);
-  const bh = bb.h * ph * (window._gcpMultiTransform?._curSy ?? 1);
+  // Dimensiones visuales del bbox (durante resize se escalan) — el factor
+  // _curSx/_curSy SOLO debe aplicarse mientras el gesto de redimensionado
+  // está activo (igual que edDrawMultiSel en el editor general, línea
+  // ~4514: `edMultiResizing && edMultiTransform ? ... : edMultiBbox.w`).
+  // Antes se aplicaba SIEMPRE, sin esta comprobación: al soltar el gesto,
+  // window._gcpMultiTransform nunca se limpia, así que el último factor de
+  // escala (p.ej. 0.75 de un primer achicado) se seguía aplicando en todos
+  // los renders siguientes, encogiendo el recuadro VISUAL cada vez más —
+  // mientras el hit-test de tiradores (que lee window._gcpMultiBbox
+  // directamente, sin este factor) seguía siendo el correcto y más grande.
+  // Resultado: el recuadro se veía más pequeño que los objetos, y cualquier
+  // toque cerca de su borde caía "dentro" del bbox real (más grande) →
+  // siempre arrastraba, nunca redimensionaba.
+  const _gcpLiveScale = window._gcpMultiResizing && window._gcpMultiTransform;
+  const bw = bb.w * pw * (_gcpLiveScale ? (window._gcpMultiTransform._curSx ?? 1) : 1);
+  const bh = bb.h * ph * (_gcpLiveScale ? (window._gcpMultiTransform._curSy ?? 1) : 1);
   const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
   const gcx = mx + bb.cx * pw;
   const gcy = my + bb.cy * ph;
@@ -31692,6 +31705,11 @@ function _gcpHandleUp(e) {
   }
   edIsDragging = false; edIsResizing = false; edIsRotating = false;
   window._gcpMultiDragging = false; window._gcpMultiResizing = false; window._gcpMultiRotating = false;
+  // Limpiar el snapshot del gesto (igual que _msClear() hace con edMultiTransform en
+  // el editor general) — defensa adicional para que ningún factor _curSx/_curSy
+  // quede accesible tras terminar el gesto, aunque el render ya lo comprueba (ver
+  // _gcpDrawMultiSel).
+  window._gcpMultiTransform = null;
   // Los frames guardados son INMUTABLES — solo _gcpCaptureFrame escribe en _gcpFrames.
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
