@@ -10107,7 +10107,11 @@ function edOnStart(e){
         const _offWs = bb.h*ph/2 + 28/edCamera.z;
         const rotHx = bb.cx + Math.sin(grRad)*_offWs/pw;
         const rotHy = bb.cy - Math.cos(grRad)*_offWs/ph;
-        if(Math.hypot((c.nx-rotHx)*pw, (c.ny-rotHy)*ph) < 14){
+        // Distancia en px de PANTALLA (mismo criterio que el objeto individual, ver
+        // _objMinHalfScreen/distScreen más abajo) — antes se comparaba en px de página
+        // sin multiplicar por el zoom, así que al alejar zoom o encoger el grupo el
+        // tirador se volvía casi imposible de tocar y el gesto caía en "arrastrar".
+        if(Math.hypot((c.nx-rotHx)*pw, (c.ny-rotHy)*ph) * edCamera.z < 14){
           // LOCK: solo rotar si hay miembros desbloqueados
           if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
           edMultiRotating=true;
@@ -10124,11 +10128,14 @@ function edOnStart(e){
         const dcxPx=(c.nx-bb.cx)*pw, dcyPx=(c.ny-bb.cy)*ph;
         const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
         const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
-        // Radio proporcional al bbox: min(12, 70% del semidímensión menor en px de página)
-        const _msMinHalfPage = Math.min(bb.w * pw, bb.h * ph) / 2;
-        const _msHitR = Math.min(12, Math.max(4, _msMinHalfPage * 0.7));
+        // Radio en px de PANTALLA: min(12, 70% del semidímensión menor), mismo criterio
+        // que el objeto individual (_objMinHalfScreen) — antes se calculaba en px de
+        // página sin multiplicar por el zoom, así que el radio real en pantalla se
+        // encogía con el grupo Y con el zoom alejado, hasta volverse casi 0.
+        const _msMinHalfScreen = Math.min(bb.w * pw, bb.h * ph) * edCamera.z / 2;
+        const _msHitR = Math.min(12, Math.max(4, _msMinHalfScreen * 0.7));
         for(const p of _msHandles(bb)){
-          if(Math.hypot((lxCur-p.x)*pw, (lyCur-p.y)*ph) < _msHitR){
+          if(Math.hypot((lxCur-p.x)*pw, (lyCur-p.y)*ph) * edCamera.z < _msHitR){
             // LOCK: solo redimensionar si hay miembros desbloqueados
             if(edMultiSel.every(i=>edLayers[i]?.locked)){ edRedraw(); return; }
             edMultiResizing=true;
@@ -30869,16 +30876,20 @@ function _gcpHandleDown(e) {
     const pw = edPageW(), ph = edPageH(), z = edCamera.z;
     const grRad = (window._gcpMultiGroupRot || 0) * Math.PI / 180;
     const _isT = e.pointerType === 'touch';
-    // Radio proporcional al bbox: min(fijo, 70% del semidímensión menor en px página)
-    const _gcpMinHalfPage = Math.min(bb.w * pw, bb.h * ph) / 2;
-    const hitR = Math.min(_isT ? 22 : 14, Math.max(4, _gcpMinHalfPage * 0.7));
+    // Radio en px de PANTALLA: min(fijo, 70% del semidímensión menor), mismo criterio
+    // que el objeto individual (_objMinHalfScreen en edOnStart) — antes se calculaba
+    // en px de página sin multiplicar por z, así que el radio real en pantalla se
+    // encogía con el grupo Y con el zoom alejado, hasta volverse casi imposible de
+    // tocar (el gesto caía siempre en "arrastrar" en vez de "redimensionar").
+    const _gcpMinHalfScreen = Math.min(bb.w * pw, bb.h * ph) * z / 2;
+    const hitR = Math.min(_isT ? 22 : 14, Math.max(4, _gcpMinHalfScreen * 0.7));
     let _gcpHandled = false;
 
     // ── Handle rotación (misma fórmula que edOnStart) ──
     const _offWs = bb.h * ph / 2 + 28 / z;
     const rotHx = bb.cx + Math.sin(grRad) * _offWs / pw;
     const rotHy = bb.cy - Math.cos(grRad) * _offWs / ph;
-    if (Math.hypot((c.nx - rotHx)*pw, (c.ny - rotHy)*ph) < hitR) {
+    if (Math.hypot((c.nx - rotHx)*pw, (c.ny - rotHy)*ph) * z < hitR) {
       _gcpWithEditorContext(() => {
         edMultiRotating = true;
         edMultiTransform = {
@@ -30898,7 +30909,7 @@ function _gcpHandleDown(e) {
       const lxCur = bb.cx + (dcxPx*cg - dcyPx*sg)/pw;
       const lyCur = bb.cy + (dcxPx*sg + dcyPx*cg)/ph;
       for (const p of _msHandles(bb)) {
-        if (Math.hypot((lxCur - p.x)*pw, (lyCur - p.y)*ph) < hitR) {
+        if (Math.hypot((lxCur - p.x)*pw, (lyCur - p.y)*ph) * z < hitR) {
           _gcpWithEditorContext(() => {
             edMultiResizing = true;
             edMultiTransform = {
@@ -31644,7 +31655,7 @@ function _gcpHandleUp(e) {
     const rx1 = Math.max(window._gcpRubberBand.x0, window._gcpRubberBand.x1);
     const ry1 = Math.max(window._gcpRubberBand.y0, window._gcpRubberBand.y1);
     window._gcpRubberBand = null;
-    if ((rx1 - rx0) > 0.01 || (ry1 - ry0) > 0.01) {
+    if ((rx1 - rx0) > 0.005 || (ry1 - ry0) > 0.005) {
       const _found = [];
       window._gcpLayers.forEach((la, i) => {
         if (!la || la._gcpVisible === false) return;
