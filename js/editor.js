@@ -4004,10 +4004,29 @@ function edPushHistory(force, movedLayer){
   // Durante una sesión vectorial activa, bloquear push al historial global.
   // Solo la apertura del panel ("antes") y el OK ("después") deben registrarse.
   // Los estados intermedios solo van al historial vectorial local (_vs*).
-  // Si _vsHistory activo pero no hay shape/line seleccionada, limpiar (sesión vectorial huérfana)
+  // Si _vsHistory queda con contenido pero la herramienta vectorial YA NO está
+  // activa, es una sesión huérfana → limpiar y dejar pasar el push con normalidad.
+  //
+  // BUG CORREGIDO (Alberto, reportado tras crear/duplicar/mover varios objetos
+  // vectoriales: un deshacer los hacía desaparecer y el rehacer no los recuperaba):
+  // antes, "sesión activa" se inferí­a mirando si el objeto SELECCIONADO era de
+  // tipo shape/line — pero un objeto shape/line YA CONFIRMADO puede estar
+  // perfectamente seleccionado para un arrastre o una duplicación normales, FUERA
+  // de la herramienta vectorial. Si _vsHistory quedaba con restos de una sesión
+  // anterior ya cerrada (huérfana) y el objeto seleccionado en ESE momento era de
+  // tipo shape/line por pura coincidencia, el push se bloqueaba igual — así que
+  // esos movimientos/duplicados nunca llegaban al historial global: un solo
+  // deshacer saltaba mucho más atrás de lo esperado (a la última vez que sí se
+  // registró algo) y el rehacer no podía traer de vuelta estados que jamás se
+  // guardaron. Ahora se comprueba directamente si la herramienta vectorial está
+  // genuinamente activa (mismo criterio que usa _editingVectorial en edOnStart:
+  // edActiveTool==='shape'/'line', objeto en construcción, o barra flotante
+  // visible) — nunca el tipo del objeto seleccionado en el editor general.
   if(_vsHistory.length > 0){
-    const _curL = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    if(!_curL || (_curL.type!=='shape' && _curL.type!=='line')){
+    const _vsToolActive = (edActiveTool === 'shape' || edActiveTool === 'line')
+      || !!_edLineLayer
+      || !!document.getElementById('edShapeBar')?.classList.contains('visible');
+    if(!_vsToolActive){
       _vsHistory=[]; _vsHistIdx=-1; // limpiar sesión vectorial huérfana
     } else {
       window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
@@ -4174,6 +4193,11 @@ function edApplyHistory(snapshot){
       l.rotation=o.rotation||0;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.subPaths&&o.subPaths.length) l.subPaths = o.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
+      // Objeto unido (⊕ Unir): faltaba restaurar aquí (sí se guardaba en el snapshot,
+      // ver _edSnapLayerFragment, y sí se restaura para 'shape' más abajo — comparado
+      // campo a campo, era el único tipo al que le faltaba esta restauración).
+      if(o.grouped) l.grouped = true;
+      if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
