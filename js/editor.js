@@ -27672,11 +27672,13 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
-    // Editor GIF activo: flechas mueven objeto seleccionado (si hay) o navegan entre frames
+    // Editor GIF activo: flechas mueven objeto(s) seleccionado(s) (uno o multiselección) o navegan entre frames
     if (window._gcpActive) {
       const _isArrow = e.key==='ArrowRight'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowUp';
       if (_isArrow) {
-        const _gcpSel = window._gcpSelIdx >= 0 ? window._gcpLayers?.[window._gcpSelIdx] : null;
+        const _gcpSel   = window._gcpSelIdx >= 0 ? window._gcpLayers?.[window._gcpSelIdx] : null;
+        const _gcpMulti = (!_gcpSel && window._gcpMultiSel && window._gcpMultiSel.length > 0)
+          ? window._gcpMultiSel : null;
         if (_gcpSel) {
           // Mover objeto seleccionado en el GCP — estándar industria
           e.preventDefault();
@@ -27685,6 +27687,23 @@ function EditorView_init(){
           const _dx = (e.key==='ArrowLeft' ? -_step : e.key==='ArrowRight' ? _step : 0) / _pw;
           const _dy = (e.key==='ArrowUp'   ? -_step : e.key==='ArrowDown'  ? _step : 0) / _ph;
           _gcpSel.x += _dx; _gcpSel.y += _dy;
+          _gcpAutoSaveFrame();
+          _gcpRedraw();
+          return;
+        } else if (_gcpMulti) {
+          // Mover multiselección del GCP — mismo estándar que el objeto individual;
+          // antes esta rama no existía y las flechas caían al cambio de frame de abajo
+          // como si no hubiera nada seleccionado.
+          e.preventDefault();
+          const _step = e.shiftKey ? 10 : 1;
+          const _pw = edPageW(), _ph = edPageH();
+          const _dx = (e.key==='ArrowLeft' ? -_step : e.key==='ArrowRight' ? _step : 0) / _pw;
+          const _dy = (e.key==='ArrowUp'   ? -_step : e.key==='ArrowDown'  ? _step : 0) / _ph;
+          _gcpMulti.forEach(i => {
+            const _la = window._gcpLayers?.[i];
+            if (_la && !_la.locked) { _la.x += _dx; _la.y += _dy; }
+          });
+          _gcpRecalcMultiBbox();
           _gcpAutoSaveFrame();
           _gcpRedraw();
           return;
