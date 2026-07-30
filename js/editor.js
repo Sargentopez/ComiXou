@@ -26960,40 +26960,11 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('dd-animation')?.addEventListener('click',()=>{
-    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    $('edFileAnim').click();
-    edCloseMenus();
-  });
   $('edAnimacionesBtn')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
   $('edFileGif')?.addEventListener('change', async e => {
     const _f = e.target.files[0]; e.target.value = '';
     if (!_f) return;
     edAddGif(_f);
-    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
-      setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
-    }
-    window._edWasFullscreen = false;
-  });
-  $('edFileAnim')?.addEventListener('change', async e => {
-    const _f = e.target.files[0]; e.target.value = '';
-    if (!_f) return;
-    // Validar que sea una animación compatible (GIF o APNG)
-    const _animExt = _f.name.split('.').pop().toLowerCase();
-    const _isGif  = _f.type === 'image/gif'  || _animExt === 'gif';
-    const _isApng = _f.type === 'image/apng' || _f.type === 'image/vnd.mozilla.apng' || _animExt === 'apng';
-    if (!_isGif && !_isApng) {
-      edToast(I18n.t('ed_selectGifOrApng'));
-      window._edWasFullscreen = false;
-      return;
-    }
-    // GIF → edAddGif; APNG → edAddImage (se renderiza como imagen estática en el editor,
-    // el visor/lector reproduce la animación nativamente por ser PNG animado)
-    if (_isGif) {
-      edAddGif(_f);
-    } else {
-      edAddImage(_f); // APNG: el navegador lo reproduce como animación
-    }
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
       setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
     }
@@ -27086,17 +27057,23 @@ function EditorView_init(){
     const _f = e.target.files[0];
     e.target.value = '';
     if(!_f) return;
-    // Rechazar animaciones — para eso existe Insertar → Animación
     const _ext = _f.name.split('.').pop().toLowerCase();
-    const _isAnim = _f.type === 'image/gif' || _f.type === 'image/apng' ||
-                    _f.type === 'image/vnd.mozilla.apng' ||
-                    _ext === 'gif' || _ext === 'apng';
-    if (_isAnim) {
-      edToast(I18n.t('ed_useInsertAnimation'));
-      window._edWasFullscreen = false;
-      return;
-    }
-    if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
+    // GIF: detección fiable por extensión/MIME (el navegador siempre lo
+    // reporta bien) → flujo de animación dedicado (edAddGif). Cualquier otra
+    // cosa —imagen estática o PNG animado (APNG)— pasa por edAddImage, que
+    // YA detecta un APNG de verdad leyendo sus propios chunks
+    // (_edTryLoadApng → UPNG.decode), nunca por extensión ni MIME: un APNG
+    // real casi siempre se guarda como ".png" normal con MIME "image/png",
+    // indistinguible en esos dos datos de un PNG estático. Antes existía un
+    // botón "Insertar → Animación" aparte que exigía extensión ".apng" o MIME
+    // "image/apng" para aceptar el archivo — ninguno de los dos se da nunca
+    // en un APNG real, así que ese botón lo rechazaba siempre. Al fusionar en
+    // una sola entrada ("Imágenes y animaciones"), ya no hace falta que la
+    // persona adivine de antemano si su archivo es una animación.
+    const _isGif = _f.type === 'image/gif' || _ext === 'gif';
+    if (_isGif) {
+      edAddGif(_f);
+    } else if(_ext === 'psd' || _ext === 'xcf' || _ext === 'tif' || _ext === 'tiff'){
       await edImportLayers(_f);
     } else {
       edAddImage(_f);

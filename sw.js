@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v36-45';
+const CACHE = 'comxow-v36-47';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -84,8 +84,10 @@ self.addEventListener('fetch', e => {
   // No interceptar el reproductor externo — tiene su propia lógica
   if (url.includes('/reader/')) return;
 
-  // HTML, JS y CSS: network-first siempre — nunca servir versión antigua
-  if (url.match(/\.(html|js|css)(\?|$)/) || e.request.mode === 'navigate') {
+  // HTML, JS, CSS y textos legales editables (legal/*.md): network-first
+  // siempre — nunca servir versión antigua. Los .md viven en legal/ y Alberto
+  // los edita directamente sin pasar por el proceso de versión de la app.
+  if (url.match(/\.(html|js|css|md)(\?|$)/) || e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request)
         .then(r => {

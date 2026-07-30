@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.45</footer>
+    <footer class="app-version">v36.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -158,26 +158,76 @@ Router.register('register', {
 // siempre en pestaña nueva para que nunca quede bloqueada por esa misma
 // ventana (si no, sería imposible leer las condiciones para poder aceptarlas).
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// VISTA: CONDICIONES DE USO
+// El texto real vive en legal/terms-es.md y legal/terms-en.md — archivos de
+// texto plano (editables con cualquier editor) que Alberto puede actualizar
+// sin tocar el código. Esta vista los carga con fetch() en tiempo de
+// ejecución y los convierte a HTML con un parser mínimo (ver _termsMdToHtml).
+// sw.js trata los .md como network-first (igual que HTML/JS/CSS), y el
+// fetch de aquí usa cache:'no-store' — así una edición del archivo se ve de
+// inmediato, sin depender del número de versión de la app.
+// ══════════════════════════════════════════════
 Router.register('terms', {
   bodyClass: 'auth-page',
   css: ['css/auth.css'],
   html: () => `
     <main class="auth-main">
-      <div class="auth-card">
-        <div class="auth-card-header">
-          <h1 class="auth-title" data-i18n="intro_termsTitle">Condiciones de uso</h1>
-        </div>
-        <p style="line-height:1.6;color:var(--gray-700);margin:0 0 20px;text-align:left" data-i18n="intro_termsPlaceholder">
-          Estamos preparando el texto completo de las condiciones de uso de Comxow.
-          Estarán disponibles aquí en cuanto estén listas.
-        </p>
+      <div class="auth-card" style="max-width:640px;text-align:left">
+        <div id="termsContent"><p style="text-align:center;color:var(--gray-600)">…</p></div>
         <a href="#" class="btn btn-outline btn-full" data-i18n="intro_back" onclick="Router.go('home');return false;">Volver</a>
       </div>
     </main>
   `,
-  init: () => {},
+  init: () => _termsViewInit(),
   destroy: () => {}
 });
+
+// Parser mínimo a propósito para el formato exacto de legal/terms-*.md:
+// "# " título, "## " apartado, líneas "- " consecutivas como lista, una
+// línea sola envuelta en *asteriscos* como nota en cursiva, y el resto en
+// párrafos separados por línea en blanco. Cualquier [placeholder entre
+// corchetes] se resalta en rojo, para que Alberto vea de un vistazo qué
+// datos le faltan por rellenar en el propio archivo.
+function _termsMdToHtml(md) {
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const withPh = s => esc(s).replace(/\[([^\]]+)\]/g, '<span style="color:#B00020;font-style:italic">[$1]</span>');
+  const blocks = md.replace(/\r\n/g,'\n').split(/\n\s*\n/);
+  let html = '';
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) continue;
+    if (lines[0].startsWith('# ')) {
+      html += `<h1 style="font-family:var(--font-comic);margin:0 0 8px;font-size:1.6rem">${withPh(lines[0].slice(2))}</h1>`;
+    } else if (lines[0].startsWith('## ')) {
+      html += `<h2 style="margin:24px 0 8px;font-size:1.1rem">${withPh(lines[0].slice(3))}</h2>`;
+    } else if (lines[0].startsWith('- ')) {
+      html += '<ul style="margin:0 0 16px;padding-left:22px">' +
+        lines.map(l => `<li style="margin-bottom:6px;line-height:1.5">${withPh(l.replace(/^-\s+/, ''))}</li>`).join('') +
+        '</ul>';
+    } else if (lines.length === 1 && lines[0].startsWith('*') && lines[0].endsWith('*')) {
+      html += `<p style="font-style:italic;color:var(--gray-600);margin:0 0 16px">${withPh(lines[0].slice(1, -1))}</p>`;
+    } else {
+      html += `<p style="line-height:1.6;margin:0 0 16px">${withPh(lines.join(' '))}</p>`;
+    }
+  }
+  return html;
+}
+
+async function _termsViewInit() {
+  const el = document.getElementById('termsContent');
+  if (!el) return;
+  const lang = (typeof I18n !== 'undefined' && I18n.getLang && I18n.getLang() === 'en') ? 'en' : 'es';
+  try {
+    const res = await fetch(`legal/terms-${lang}.md`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const md = await res.text();
+    el.innerHTML = _termsMdToHtml(md);
+  } catch (e) {
+    console.error('Error cargando condiciones de uso:', e);
+    el.innerHTML = `<p style="color:var(--red)">${I18n.t('intro_termsLoadError')}</p>`;
+  }
+}
 
 // ══════════════════════════════════════════════
 // VISTA: EDITOR
@@ -353,12 +403,11 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-menu="insert" data-i18n="ed_menuInsert">Insertar ▾</button>
             <div class="ed-dropdown" id="dd-insert">
               <div class="ed-dropdown-submenu">
-                <button class="ed-dropdown-item ed-has-submenu" id="dd-imagen-btn" data-i18n="ed_menuImage">Imagen ▸</button>
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-imagen-btn" data-i18n="ed_menuImage">Imágenes y animaciones ▸</button>
                 <div class="ed-submenu" id="dd-imagen-sub">
                   <button class="ed-dropdown-item" id="dd-gallery" data-i18n="ed_gallery">Galería</button>
                   <button class="ed-dropdown-item" id="dd-camera" data-i18n="ed_camera">Cámara</button>
                 </div>
-                <button class="ed-dropdown-item" id="dd-animation" data-i18n="ed_insertAnimation">Animación</button>
                 <button class="ed-dropdown-item" id="dd-paste" data-i18n="ed_paste">Pegar</button>
               </div>
 
@@ -869,7 +918,6 @@ Router.register('editor', {
     </div>
 
     <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
-    <input type="file" id="edFileAnim" accept="image/*" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">
       <video id="edCameraVideo" autoplay playsinline muted></video>
