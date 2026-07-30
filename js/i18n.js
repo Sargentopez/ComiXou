@@ -931,6 +931,14 @@ const TRANSLATIONS = {
     gcp_typeObject:         "📦 Objeto",
     gcp_positionLabel:      "Posición",
     gcp_mirrorHorizTitle:   "Reflejar horizontalmente",
+    // Ventana de bienvenida / condiciones de uso (index.html, #cxIntro) y
+    // vista placeholder de condiciones de uso (views.js, 'terms').
+    intro_acceptPrefix:     "He leído y acepto las",
+    intro_termsLink:        "condiciones de uso",
+    intro_continue:         "Continuar",
+    intro_termsTitle:       "Condiciones de uso",
+    intro_termsPlaceholder: "Estamos preparando el texto completo de las condiciones de uso de Comxow. Estarán disponibles aquí en cuanto estén listas.",
+    intro_back:             "Volver",
   },
   en: {
     tagline:          "CREATE & SHARE",
@@ -1823,6 +1831,14 @@ const TRANSLATIONS = {
     gcp_typeObject:         "📦 Object",
     gcp_positionLabel:      "Position",
     gcp_mirrorHorizTitle:   "Mirror horizontally",
+    // Welcome / terms-of-use window (index.html, #cxIntro) and placeholder
+    // terms-of-use view (views.js, 'terms').
+    intro_acceptPrefix:     "I have read and accept the",
+    intro_termsLink:        "terms of use",
+    intro_continue:         "Continue",
+    intro_termsTitle:       "Terms of use",
+    intro_termsPlaceholder: "We're preparing the full text of Comxow's terms of use. It will be available here once ready.",
+    intro_back:             "Back",
   }
 };
 

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.42</footer>
+    <footer class="app-version">v36.45</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -165,13 +165,13 @@ Router.register('terms', {
     <main class="auth-main">
       <div class="auth-card">
         <div class="auth-card-header">
-          <h1 class="auth-title">Condiciones de uso</h1>
+          <h1 class="auth-title" data-i18n="intro_termsTitle">Condiciones de uso</h1>
         </div>
-        <p style="line-height:1.6;color:var(--gray-700);margin:0 0 20px;text-align:left">
+        <p style="line-height:1.6;color:var(--gray-700);margin:0 0 20px;text-align:left" data-i18n="intro_termsPlaceholder">
           Estamos preparando el texto completo de las condiciones de uso de Comxow.
           Estarán disponibles aquí en cuanto estén listas.
         </p>
-        <a href="#" class="btn btn-outline btn-full" onclick="Router.go('home');return false;">Volver</a>
+        <a href="#" class="btn btn-outline btn-full" data-i18n="intro_back" onclick="Router.go('home');return false;">Volver</a>
       </div>
     </main>
   `,
