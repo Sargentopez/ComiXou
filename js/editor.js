@@ -32713,12 +32713,28 @@ function _gcpGoToFrame(fi) {
 // botones): cierra la matriz y salta directamente a ese fotograma en el
 // lienzo. Se cierra ANTES de navegar para que _gcpGoToFrame no reconstruya la
 // matriz de forma inútil justo antes de ocultarla.
+// Doble tap (mismo patrón que _lyBindThumbDoubleTap en el panel de capas del
+// editor general: dos toques < 350ms sobre la MISMA celda): además de lo
+// anterior, deja el objeto seleccionado en ESE frame y abre su panel de
+// propiedades — igual que hacer doble tap sobre una capa en el editor general.
+let _gcpFrameThumbLastTapTime = 0;
+let _gcpFrameThumbLastTapKey  = null;
 function _gcpThumbTapGoToFrame(e, la, fi) {
   e.stopPropagation();
   const layerIdx = window._gcpLayers.indexOf(la);
   if (layerIdx >= 0) window._gcpSelIdx = layerIdx;
+
+  const _now = Date.now();
+  const _key = (la._gcpUid ?? layerIdx) + '-' + fi;
+  const _isDbl = _gcpFrameThumbLastTapKey === _key && (_now - _gcpFrameThumbLastTapTime) < 350;
+  _gcpFrameThumbLastTapTime = _isDbl ? 0 : _now; // consumir el doble tap: no encadenar un triple
+  _gcpFrameThumbLastTapKey  = _isDbl ? null : _key;
+
   _gcpCloseFramesBar();
   _gcpGoToFrame(fi);
+  if (_isDbl && layerIdx >= 0) {
+    _gcpOpenPropsPanel(window._gcpLayers[layerIdx], layerIdx);
+  }
 }
 
 // ── Miniatura de "muestra": UNA por objeto (fila), para identificar de un
