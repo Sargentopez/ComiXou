@@ -84,7 +84,9 @@
 
 /* Cabecera amarilla estilo site-header */
 .auth-card-header {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 5;
   padding: 14px 24px 12px;
   background: var(--yellow);
   border-bottom: 2.5px solid var(--black);
