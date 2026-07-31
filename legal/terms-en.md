@@ -1,6 +1,4 @@
-# Comxow Terms of Use
-
-*Last updated: [DATE]*
+*Last updated: July 31, 2026*
 
 ## 1. Purpose and acceptance
 

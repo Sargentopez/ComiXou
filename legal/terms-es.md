@@ -1,6 +1,4 @@
-# Condiciones de Uso de Comxow
-
-*Última actualización: [FECHA]*
+*Última actualización: 31 de julio de 2026*
 
 ## 1. Objeto y aceptación
 

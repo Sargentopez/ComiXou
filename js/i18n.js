@@ -937,6 +937,7 @@ const TRANSLATIONS = {
     intro_termsLink:        "condiciones de uso",
     intro_continue:         "Continuar",
     intro_termsLoadError:   "No se pudieron cargar las condiciones de uso. Inténtalo de nuevo más tarde.",
+    intro_termsTitle:       "Condiciones de uso",
     intro_back:             "Volver",
   },
   en: {
@@ -1836,6 +1837,7 @@ const TRANSLATIONS = {
     intro_termsLink:        "terms of use",
     intro_continue:         "Continue",
     intro_termsLoadError:   "We couldn't load the terms of use. Please try again later.",
+    intro_termsTitle:       "Terms of use",
     intro_back:             "Back",
   }
 };

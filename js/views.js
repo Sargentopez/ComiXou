@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.47</footer>
+    <footer class="app-version">v36.49</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -153,12 +153,6 @@ Router.register('register', {
 });
 
 // ══════════════════════════════════════════════
-// VISTA: CONDICIONES DE USO (placeholder — texto real pendiente)
-// Enlazada desde la ventana de bienvenida (#cxIntro en index.html). Se abre
-// siempre en pestaña nueva para que nunca quede bloqueada por esa misma
-// ventana (si no, sería imposible leer las condiciones para poder aceptarlas).
-// ══════════════════════════════════════════════
-// ══════════════════════════════════════════════
 // VISTA: CONDICIONES DE USO
 // El texto real vive en legal/terms-es.md y legal/terms-en.md — archivos de
 // texto plano (editables con cualquier editor) que Alberto puede actualizar
@@ -173,9 +167,14 @@ Router.register('terms', {
   css: ['css/auth.css'],
   html: () => `
     <main class="auth-main">
-      <div class="auth-card" style="max-width:640px;text-align:left">
-        <div id="termsContent"><p style="text-align:center;color:var(--gray-600)">…</p></div>
-        <a href="#" class="btn btn-outline btn-full" data-i18n="intro_back" onclick="Router.go('home');return false;">Volver</a>
+      <div class="auth-card" style="max-width:640px">
+        <div class="auth-card-header">
+          <h1 class="auth-title" data-i18n="intro_termsTitle">Condiciones de uso</h1>
+        </div>
+        <div style="padding:24px 40px;text-align:left">
+          <div id="termsContent"><p style="text-align:center;color:var(--gray-600)">…</p></div>
+          <a href="#" class="btn btn-outline btn-full" data-i18n="intro_back" id="termsBackBtn">Volver</a>
+        </div>
       </div>
     </main>
   `,
@@ -215,6 +214,27 @@ function _termsMdToHtml(md) {
 }
 
 async function _termsViewInit() {
+  // Franja blanca tras el título — misma función ya usada por login/registro
+  // (ver _winFitTitlePill en auth-pages.js), reutilizada aquí sin cambios.
+  if (typeof _winFitTitlePill === 'function') _winFitTitlePill();
+
+  // Botón "Volver": si las condiciones YA estaban aceptadas (se llegó aquí
+  // desde el menú ⋮ de dentro de la app), vuelve a la app con normalidad.
+  // Si NO estaban aceptadas (se llegó desde el enlace de la ventana de
+  // bienvenida, en pestaña nueva — ver #cxIntro en index.html), no debe
+  // dar acceso directo a la app sin haber marcado el check antes: se limita
+  // a intentar cerrar esta pestaña, dejando la ventana de aceptación
+  // esperando en la pestaña original.
+  const backBtn = document.getElementById('termsBackBtn');
+  if (backBtn) {
+    const alreadyAccepted = !!localStorage.getItem('cx_terms_accepted_v1');
+    backBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (alreadyAccepted) Router.go('home');
+      else window.close();
+    });
+  }
+
   const el = document.getElementById('termsContent');
   if (!el) return;
   const lang = (typeof I18n !== 'undefined' && I18n.getLang && I18n.getLang() === 'en') ? 'en' : 'es';

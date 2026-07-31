@@ -133,6 +133,7 @@ const Header = (() => {
                 + installItem
                 + '<div class="dropdown-divider"></div>'
                 + '<a href="#" class="dropdown-item" id="dotsLanguage">🌐 ' + T('menuLanguage') + '</a>'
+                + '<a href="#" class="dropdown-item" id="dotsTerms">📄 ' + T('intro_termsTitle') + '</a>'
                 + '<a href="#" class="dropdown-item" id="dotsInfo">ℹ️ Info</a>'
                 + '<span class="dropdown-item disabled-item">✉️ ' + T('home_contact') + '</span>'
               + '</div>'
@@ -212,6 +213,18 @@ const Header = (() => {
         e.preventDefault();
         document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
         if (typeof openLanguageModal === 'function') openLanguageModal();
+      });
+    }
+
+    /* ── Condiciones de uso — accedida ya dentro de la app (condiciones
+       necesariamente ya aceptadas), así que "Volver" en esa vista sí debe
+       llevar de vuelta a la app; ver _termsViewInit / botón Volver. ── */
+    var termsBtn = document.getElementById('dotsTerms');
+    if (termsBtn) {
+      termsBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+        Router.go('terms');
       });
     }
 
