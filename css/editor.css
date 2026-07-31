@@ -578,22 +578,6 @@ body.ed-scale-tablet {
 }
 .edb-swatch:active { transform: scale(.88); }
 
-/* Dot de grosor */
-.edb-sizebtn {
-  background: none; border: none;
-  width: calc(30px * var(--edb-scale, 1)); height: calc(30px * var(--edb-scale, 1));
-  display: flex; align-items: center; justify-content: center;
-  cursor: pointer; border-radius: 6px; padding: 0;
-  transition: background .1s;
-}
-.edb-sizebtn:active { background: rgba(255,255,255,.15); }
-#edb-size-dot {
-  display: block;
-  background: rgba(255,255,255,.85);
-  border-radius: 50%;
-  transition: width .15s, height .15s;
-}
-
 /* OK / ocultar barra de dibujo — mismo tamaño que edMinimizeBtn */
 .edb-ok {
   background: none; border: none;

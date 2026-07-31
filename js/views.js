@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.50</footer>
+    <footer class="app-version">v36.61</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -688,7 +688,7 @@ Router.register('editor', {
           <div class="edb-sep"></div>
           <button id="esb-eyedrop"  class="edb-tool"   data-i18n-title="ed_eyedropTool" title="Cuentagotas">💧</button>
           <div class="edb-sep"></div>
-          <button id="esb-size"     class="edb-sizebtn" data-i18n-title="ed_thickness" title="Grosor"><span id="esb-size-dot"></span></button>
+          <button id="esb-size"     class="edb-tool edb-sizebtn-fix" data-i18n-title="ed_thickness" title="Grosor" style="font-size:.7rem;font-weight:900">Ø</button>
           <button id="esb-opacity"  class="edb-tool"    data-i18n-title="ed_opacityTool" title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
           <div class="edb-sep"></div>
           <button id="esb-curve"    class="edb-tool" data-i18n-title="ed_convertToCurve" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900" data-i18n="ed_nodesLabel">NODOS</button>
@@ -898,11 +898,19 @@ Router.register('editor', {
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_switchPageNoSel">Pasar de hoja (sin nada seleccionado)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
 
           <div class="sc-section" data-i18n="sc_gcpSection">Editor de animaciones (GCP)</div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_undo">Deshacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_redo">Rehacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Y</kbd> <small style="opacity:.6" data-i18n="sc_or">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Z</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_moveObjSel1px">Mover objeto seleccionado 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_moveObjSel10px">Mover objeto seleccionado 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="sc_duplicateObj">Duplicar objeto seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="sc_deleteObj">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd data-i18n="sc_del">Supr</kbd><kbd>/</kbd><kbd data-i18n="sc_backspace">Retroceso</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_navFramesNoSel">Navegar entre frames (sin selección)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
 
           <div class="sc-section" data-i18n="td_docTitle">Editor de textos</div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_undo">Deshacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Z</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_redo">Rehacer</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>Y</kbd> <small style="opacity:.6" data-i18n="sc_or">o</small> <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Z</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_boldTitle">Negrita</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>B</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="td_italicTitle">Cursiva</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>I</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_switchPageOutsideText">Pasar de página (cursor fuera del texto)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_scrollText">Desplazar el texto</span><span class="sc-keys"><kbd data-i18n="sc_wheel">Rueda</kbd> <small style="opacity:.6" data-i18n="sc_orDragFinger">o arrastrar con el dedo</small></span></div>
 
@@ -1155,11 +1163,18 @@ Router.register('editor', {
           </div>
           <div class="ed-menu-sep"></div>
           <trix-toolbar id="tdToolbar">
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" data-i18n-title="td_undo" title="Deshacer">↩</button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" data-i18n-title="td_redo" title="Rehacer">↪</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="undo" data-trix-key="z" data-i18n-title="td_undo" title="Deshacer">↩</button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-action="redo" data-trix-key="shift+z" data-i18n-title="td_redo" title="Rehacer">↪</button>
+            <!-- Gemelo invisible del botón "Rehacer": Trix solo permite UN
+                 data-trix-key por elemento, y por defecto solo trae
+                 Ctrl+Shift+Z — este botón oculto registra Ctrl+Y como atajo
+                 alternativo (mismo criterio que el resto de la app) sin
+                 duplicar el botón visible. dispatchEvent no necesita que el
+                 elemento sea visible, así que display:none es seguro aquí. -->
+            <button type="button" data-trix-action="redo" data-trix-key="y" style="display:none" aria-hidden="true" tabindex="-1"></button>
             <div class="ed-menu-sep"></div>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" data-i18n-title="td_boldTitle" title="Negrita"><b data-i18n="td_boldLetter">N</b></button>
-            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" data-i18n-title="td_italicTitle" title="Cursiva"><i data-i18n="td_italicLetter">K</i></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="bold" data-trix-key="b" data-i18n-title="td_boldTitle" title="Negrita"><b data-i18n="td_boldLetter">N</b></button>
+            <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="italic" data-trix-key="i" data-i18n-title="td_italicTitle" title="Cursiva"><i data-i18n="td_italicLetter">K</i></button>
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="strike" data-i18n-title="td_strikeTitle" title="Tachado"><s data-i18n="td_strikeLetter">S</s></button>
             <div class="ed-menu-sep"></div>
             <button type="button" class="ed-menu-btn td-fmt-btn" data-trix-attribute="heading1" data-i18n-title="td_headingBtn" data-i18n="td_headingBtn" title="Título">Título</button>

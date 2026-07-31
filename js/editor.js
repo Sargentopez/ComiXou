@@ -1571,14 +1571,6 @@ function _edSyncSizeDots(){
     // borderColor gestionado por CSS (siempre negro + anillo blanco)
     _bCur.style.background = _isEr ? 'rgba(255,255,255,0.4)' : _isDb ? 'transparent' : (_sc + '33');
   }
-  // Dot barra flotante de objetos
-  const dotS = $('esb-size-dot');
-  if(dotS){
-    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    const lw = la ? (la.lineWidth||0) : 0;
-    const d2 = Math.max(3, Math.min(22, Math.round(lw * z)));
-    dotS.style.width=d2+'px'; dotS.style.height=d2+'px';
-  }
 }
 // ¿Necesita scrollbars? (el lienzo no cabe entero en el viewport)
 function edNeedsScroll(){
@@ -3169,13 +3161,21 @@ class ShapeLayer extends BaseLayer {
         octx.fillStyle = this.fillColor;
         octx.fill();
       }
-      // Sin relleno: zona de hit mínima ampliada en escala real (≥1 px en canvas)
-      // — 12px resultaba muy difícil de seleccionar con ratón en PC (con dedo
-      // en táctil ya compensa por sí solo el área de contacto más ancha, y por
-      // eso ahí no se notaba — bug reportado por Alberto).
+      // Sin relleno: zona de hit ampliada, pero PROPORCIONAL al tamaño del
+      // objeto y con un tope máximo — antes era un valor fijo de 18px real,
+      // que resultaba excesivo: en objetos de tamaño mediano/pequeño ocupaba
+      // buena parte del interior, impidiendo seleccionar otros objetos
+      // colocados dentro (p.ej. un cuadrado sin relleno con objetos dentro —
+      // bug reportado por Alberto). Ahora escala con el tamaño del objeto
+      // (más fina cuanto más pequeño) y nunca supera la mitad del valor
+      // anterior (9px), con un mínimo de 2px para que objetos muy pequeños
+      // sigan siendo seleccionables con ratón en PC.
       if (this.lineWidth > 0) {
         octx.strokeStyle = '#000';
-        octx.lineWidth = Math.max(Math.max(this.lineWidth, _noFill ? 18 : 0) * _sc, 1);
+        const _noFillTol = _noFill
+          ? Math.max(2, Math.min(9, Math.min(w, h) * 0.15))
+          : 0;
+        octx.lineWidth = Math.max(Math.max(this.lineWidth, _noFillTol) * _sc, 1);
         octx.stroke();
       }
       const bx = Math.floor(lx * _sc + cw/2);
@@ -3522,11 +3522,15 @@ class LineLayer extends BaseLayer {
         if (this.closed && this.fillColor && this.fillColor !== 'none') { octx.fillStyle = this.fillColor; octx.fill(); }
       }
       octx.strokeStyle = '#000';
-      // Sin relleno: zona de hit mínima ampliada en escala real (≥1 px en
-      // canvas) — 12px resultaba muy difícil de seleccionar con ratón en PC
-      // (en táctil ya compensa el área de contacto del dedo, por eso ahí no
-      // se notaba — bug reportado por Alberto).
-      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth*_sc, _noFillL ? Math.max(18*_sc, 1) : 1) : 0, 0);
+      // Sin relleno: zona de hit ampliada, pero PROPORCIONAL al tamaño del
+      // objeto y con un tope máximo — mismo criterio que ShapeLayer.contains
+      // (ver ese comentario para el porqué completo). Antes era un valor fijo
+      // de 18px real, que resultaba excesivo: en objetos de tamaño mediano/
+      // pequeño ocupaba buena parte del interior, impidiendo seleccionar
+      // otros objetos colocados dentro (bug reportado por Alberto). Ahora
+      // máximo 9px (mitad del valor anterior), mínimo 2px.
+      const _noFillTolL = _noFillL ? Math.max(2, Math.min(9, Math.min(w, h) * 0.15)) : 0;
+      octx.lineWidth = Math.max(this.lineWidth > 0 ? Math.max(this.lineWidth*_sc, Math.max(_noFillTolL*_sc, 1)) : 0, 0);
       if (this.lineWidth > 0) octx.stroke();
       const bx = Math.floor(lx*_sc + cw/2);
       const by = Math.floor(ly*_sc + ch/2);
@@ -5632,7 +5636,9 @@ function edDrawSel(){
   }
   // Handles vértices de LineLayer seleccionado: SOLO en modo V/C (curveMode activo)
   // En modo selección (select) solo se ven los 8 handles de bbox y el de rotación
-  const _showLineNodes = la.type==='line' && la.points.length>=1 && !la._fromEllipse &&
+  // Las elipses (_fromEllipse) ahora se comportan igual que el resto de objetos —
+  // antes se ocultaban aquí a propósito; decisión revertida a petición de Alberto.
+  const _showLineNodes = la.type==='line' && la.points.length>=1 &&
     ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) &&
     _edCurveModeActive && _edCurveModeActive(); // solo visibles en modo V/C
   if(_showLineNodes){
@@ -10730,7 +10736,8 @@ function edOnStart(e){
       }
     }
     // Nodos: solo interactuables en modo V/C — en modo select solo handles de bbox
-    if(la.points.length>=2 && !la._fromEllipse && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))
+    // (elipses incluidas — mismo criterio que el resto de objetos)
+    if(la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))
        && (_edCurveModeActive && _edCurveModeActive())){
       const rot=(la.rotation||0)*Math.PI/180;
       const cos=Math.cos(rot),sin=Math.sin(rot);
@@ -11125,11 +11132,21 @@ function edOnStart(e){
     }
     if(_hitVec){
       edSelectedIdx = edLayers.indexOf(_hitVec);
-      edDragOffX = c.nx - _hitVec.x;
-      edDragOffY = c.ny - _hitVec.y;
-      edIsDragging = true;
-      window._edMoved = false;
-      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      // En modo V⟺C (edición de nodos) NUNCA se debe poder arrastrar el
+      // objeto completo con el selector — solo los nodos individuales (ver
+      // bloque "MODO V⟺C" más arriba). Sin este guard, un clic sobre el
+      // cuerpo del objeto que no llegaba a tocar ningún nodo caía hasta aquí
+      // y sí iniciaba el arrastre del objeto entero: imperceptible en un
+      // clic/doble clic limpio (sin movimiento real del ratón), pero visible
+      // en un triple clic por el pequeño movimiento incidental entre
+      // pulsaciones rápidas (bug reportado por Alberto).
+      if(!(_edCurveModeActive && _edCurveModeActive())){
+        edDragOffX = c.nx - _hitVec.x;
+        edDragOffY = c.ny - _hitVec.y;
+        edIsDragging = true;
+        window._edMoved = false;
+        if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+      }
       edRedraw();
       return;
     }
@@ -16139,10 +16156,26 @@ function _edPanelTabClick(e) {
   if (!_p) return;
   _edEraserPickClose(); // cerrar picker si estaba abierto
   const _mode = _p.dataset.mode;
+  // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag) si
+  // la edición de nodos (V⟺C) estaba activa en la barra flotante — mismo
+  // criterio que ya usa edMaximize para la restauración completa del panel.
+  const _wasCurveActiveInBar = $('esb-curve')?.dataset.curveActive === '1';
   _p.classList.remove('panel-collapsed'); // quitar ANTES de hide para desbloquear el guard
   _edPanelTabHide();
   if (_mode === 'draw' || _mode === 'eraser' || _mode === 'fill') edDrawBarHide();
-  else if (_mode === 'shape' || _mode === 'line') edShapeBarHide();
+  else if (_mode === 'shape' || _mode === 'line') {
+    edShapeBarHide();
+    // Bug reportado por Alberto ("y viceversa"): el panel nunca se destruye
+    // al colapsar (solo se oculta con CSS), así que al volver por la
+    // pestañita se quedaba con el HTML de ANTES de colapsar — sin reflejar
+    // cambios de herramienta o de edición de nodos hechos desde la barra
+    // flotante mientras el panel estaba colapsado. Mismo mecanismo que ya
+    // usa edMaximize para volver de la barra al panel: reconstruir el panel
+    // leyendo el estado actual y restaurar el modo nodos si estaba activo.
+    if (_mode === 'shape') _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa
+    else _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
+    if (_wasCurveActiveInBar) _edRestoreCurveModeInPanel(_mode);
+  }
   // mode='props' (text/bubble): no hay barra flotante, solo reajustar canvas
   if (_mode === 'props') setTimeout(() => { $('pp-text')?.focus(); }, 50);
   edFitCanvas();
@@ -16332,7 +16365,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   };
 
   // ── Herramientas ──
-  $('op-tool-shape')?.addEventListener('click',()=>{ _edActivateShapeTool(); });
+  $('op-tool-shape')?.addEventListener('click',()=>{ _edActivateShapeTool(false, true); }); // isCreating=true: preservar sesión activa
   $('op-tool-line')?.addEventListener('click',()=>{
     // T1-shapes: convertir shape actual a LineLayer y asignar fusionId
     const _curS = _curShape();
@@ -16352,14 +16385,14 @@ function _edActivateShapeTool(isNew, isCreating) {
     const s=_curShape();
     // Si hay sesión de fusión activa, NO cambiar el shape existente — preparar el siguiente
     if(s && !_edLineFusionId){ _edShapePushHistory(); s.shape='rect'; edRedraw(); }
-    _edActivateShapeTool();
+    _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-shape-ellipse')?.addEventListener('click',()=>{
     _edShapeType='ellipse';
     const s=_curShape();
     // Si hay sesión de fusión activa, NO cambiar el shape existente — preparar el siguiente
     if(s && !_edLineFusionId){ _edShapePushHistory(); s.shape='ellipse'; edRedraw(); }
-    _edActivateShapeTool();
+    _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-shape-select')?.addEventListener('click',()=>{
     // Cerrar modo V⟺C si estaba abierto
@@ -16371,7 +16404,10 @@ function _edActivateShapeTool(isNew, isCreating) {
       window._edCurveVertIdx=-1;
     }
     _edShapeType='select'; edActiveTool='select'; edCanvas.className='';
-    _edActivateShapeTool();
+    _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa — bug reportado por
+    // Alberto: sin esto, activar el selector dentro del panel bloqueaba la
+    // selección de todos los objetos ya creados en la sesión salvo el que
+    // estuviera seleccionado en ese instante.
   });
 
   // ── Color borde ──
@@ -16452,6 +16488,9 @@ function _edActivateShapeTool(isNew, isCreating) {
   });
 
   // ── Minimizar (idéntico a draw) ──
+  // Nota: la sincronización de herramienta/nodos al mostrar la barra ya la
+  // hace edShapeBarShow() internamente (ver esa función) — no hay que
+  // repetirla aquí.
   $('op-panel-collapse')?.addEventListener('click', () => {
     const _p = $('edOptionsPanel'); if (!_p) return;
     const _collapsed = _p.classList.toggle('panel-collapsed');
@@ -16460,8 +16499,6 @@ function _edActivateShapeTool(isNew, isCreating) {
     edFitCanvas();
     _edRefocusAfterCollapse();
   });
-
-  // ── Curva de vértice ──
   $('op-shape-curve-btn')?.addEventListener('click',()=>{
     const sl=$('op-shape-curve-slider');
     const open=sl?.style.display==='none'||sl?.style.display==='';
@@ -17007,6 +17044,8 @@ function _edActivateLineTool(isNew, isCreating) {
   }
   // ── Minimizar (idéntico a draw) ──
   // ── Colapso del panel ──
+  // Nota: la sincronización de herramienta/nodos al mostrar la barra ya la
+  // hace edShapeBarShow() internamente — no hay que repetirla aquí.
   $('op-panel-collapse')?.addEventListener('click', () => {
     const _p = $('edOptionsPanel');
     if (!_p) return;
@@ -19422,9 +19461,6 @@ function edMinimize(){
     btn.style.left=edFloatX+'px';
     btn.style.top=edFloatY+'px';
   }
-  // Capturar ANTES de ocultar el panel si la edición de nodos (V⟺C) estaba
-  // activa — el panel oculto no debe usarse después como fuente de verdad.
-  const _wasCurveActive = _edCurveModeActive();
   // Ocultar panel y lengüeta al minimizar
   const _panel=$('edOptionsPanel');
   if(_panel?.classList.contains('open')){
@@ -19436,25 +19472,14 @@ function edMinimize(){
   // Ocultar también la lengüeta si el panel estaba colapsado
   _edPanelTabHide();
   // Mostrar barra flotante según herramienta activa (independiente de si el panel estaba abierto)
+  // Nota: edDrawBarShow/edShapeBarShow ya sincronizan solas el icono de
+  // herramienta y el estado de nodos (V⟺C) internamente — no hay que
+  // repetirlo aquí.
   const _minMode = window._edMinimizedDrawMode || $('edOptionsPanel')?.dataset.mode || '';
   if(['draw','eraser','fill'].includes(edActiveTool)){
     edDrawBarShow(false);
   } else if(_minMode==='shape' || _minMode==='line' || edActiveTool==='shape' || edActiveTool==='line'){
     edShapeBarShow(false);
-    // Herramienta de creación (recta/polígono/elipse/rectángulo/selección):
-    // sincronizar el icono de la barra con la herramienta que se estaba usando.
-    if(typeof window._esbSyncTool === 'function') window._esbSyncTool();
-    // Edición de nodos (V⟺C): si estaba activa en el panel, mantenerla activa
-    // también en la barra flotante para poder seguir curvando nodos.
-    if(_wasCurveActive){
-      const _cb = $('esb-curve');
-      if(_cb && _cb.dataset.curveActive !== '1'){
-        _cb.dataset.curveActive = '1';
-        _cb.style.background = 'rgba(0,0,0,.7)';
-        _cb.style.color = '#FFE135';
-        _cb.style.outline = '1px solid rgba(255,255,0,.5)';
-      }
-    }
   }
   edFitCanvas();
   requestAnimationFrame(() => {
@@ -19503,11 +19528,16 @@ function edMaximize(keepBar=false){
     });
     if(mode === 'shape'){
       edShapeBarHide();
-      _edActivateShapeTool(false); // false = no resetear cámara al restaurar desde barra
+      // isCreating=true: preservar _vsPreSessionLayers — sin esto, cada vez
+      // que se restaura el panel desde la barra se reinicia la sesión en
+      // modo "reedición" y bloquea la selección de todos los objetos ya
+      // creados salvo el que estuviera seleccionado en ese instante (mismo
+      // bug ya documentado para _edActivateLineTool en la carta v14.90).
+      _edActivateShapeTool(false, true);
       if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('shape');
     } else if(mode === 'line'){
       edShapeBarHide();
-      _edActivateLineTool(false); // false = no resetear cámara al restaurar desde barra
+      _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
       if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('line');
     } else {
       edRenderOptionsPanel(mode);
@@ -19517,10 +19547,10 @@ function edMaximize(keepBar=false){
     edFitCanvas();
     requestAnimationFrame(_edBarClampToScreen);
     if(edActiveTool === 'shape') {
-      _edActivateShapeTool(false);
+      _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa
       if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('shape');
     } else {
-      _edActivateLineTool(false);
+      _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
       if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('line');
     }
   } else {
@@ -20776,65 +20806,38 @@ function edInitDrawBar() {
   });
 
   // ── Grosor: abre panel anclado SIEMPRE AL LADO de la barra flotante ──
-  function _edbOpenSizePop(btn) {
-    const pop = $('edb-size-pop');
-    if (!pop) return;
-    const isOpen = pop.style.display === 'flex';
-    if (isOpen) { pop.style.display = 'none'; return; }
-    _edbSyncSize();
-    pop.style.display = 'flex';
-    pop.style.left = '-9999px'; pop.style.top = '-9999px';
-    _edbSyncSizePreview();
-    // Posicionar al lado de la barra flotante, adaptando según bordes de pantalla
-    const bar = $('edDrawBar');
-    const br  = bar ? bar.getBoundingClientRect() : btn.getBoundingClientRect();
-    const pw  = pop.offsetWidth  || 170;
-    const ph  = pop.offsetHeight || 120;
-    const W   = window.innerWidth;
-    const H   = window.innerHeight;
-    const GAP = 8;
-    // Posicionar siempre AL LADO de la barra (nunca encima/debajo)
-    // Preferir el lado con más espacio: izquierda o derecha
-    const spaceRight = W - br.right - GAP;
-    const spaceLeft  = br.left - GAP;
-    let left, top;
-    if (spaceRight >= pw || spaceRight >= spaceLeft) {
-      // A la derecha de la barra
-      left = br.right + GAP;
-    } else {
-      // A la izquierda de la barra
-      left = br.left - pw - GAP;
-    }
-    // Centrado verticalmente respecto a la barra, ajustado para no salir de pantalla
-    top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
-    // Asegurar que no sale por la derecha (por si la barra está muy a la derecha)
-    left = Math.max(GAP, Math.min(W - pw - GAP, left));
-    pop.style.left = left + 'px';
-    pop.style.top  = top  + 'px';
-  }
+  // (función global _edbOpenSizePop, definida más abajo — la reutiliza
+  // también la barra vectorial para que "funcione igual", pedido por Alberto)
   $('edb-pen-size')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenSizePop($('edb-pen-size')); });
   $('edb-eraser-size')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenSizePop($('edb-eraser-size')); });
   $('edb-size-num')?.addEventListener('change', e => {
     const pop=$('edb-size-pop');
-    if(pop?._esbOpMode){
-      const v=Math.max(0,Math.min(100,parseInt(e.target.value)||0));
-      e.target.value=v;
-      const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-      if(la){ la.opacity=v/100; _edShapePushHistory(); edRedraw(); _esbSync(); }
+    if(pop?._esbMode){
+      // Grosor del objeto vectorial seleccionado (0–20px; el 0 es un valor
+      // válido — línea invisible — a diferencia del lápiz/goma, que nunca
+      // bajan de 1).
+      const v = Math.max(0, Math.min(20, parseInt(e.target.value) || 0));
+      e.target.value = v;
+      const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+      if(l){
+        l.lineWidth = v; edRedraw();
+        // Sincronizar el panel de propiedades si está abierto (mismo efecto
+        // que ya tenía el slider genérico anterior de la barra vectorial)
+        const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
+        const _ss=$('op-size-btn'); if(_ss) _ss.style.background='var(--gray-200)';
+        const _sls=$('op-size-slider'); if(_sls) _sls.style.display='flex';
+        const _st=$('op-line-status'); if(_st){ _st.textContent=l.lineWidth+'px·'+Math.round((l.opacity??1)*100)+'%'; }
+      }
       const sl=$('edb-size-slider'); if(sl) sl.value=v;
+      _edbSyncSizePreview();
+      _edShapePushHistory();
       return;
     }
     const isEr = edActiveTool === 'eraser';
     const max = isEr ? 80 : 48;
     const v = Math.max(0, Math.min(max, parseInt(e.target.value) || 0));
     e.target.value = v;
-    if(pop?._esbMode){
-      const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-      if(la && (la.type==='shape'||la.type==='line')){ la.lineWidth = v; _edShapePushHistory(); edRedraw(); }
-      edDrawSize = v;
-    } else {
-      if (isEr) edEraserSize = v; else edDrawSize = v;
-    }
+    if (isEr) edEraserSize = v; else edDrawSize = v;
     _edbSyncSize();
     const sl = $('op-dsize'); if (sl) { sl.value = v; _edUpdateBubble(sl,'px'); }
   });
@@ -20842,21 +20845,21 @@ function edInitDrawBar() {
   $('edb-size-slider')?.addEventListener('input', e => {
     const pop=$('edb-size-pop');
     const v = parseInt(e.target.value) || 0;
-    if(pop?._esbOpMode){
-      // Modo opacidad: solo actualizar número y aplicar
-      const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-      if(la){ la.opacity=v/100; edRedraw(); _esbSync(); }
-      const num=$('edb-size-num'); if(num) num.value=v;
+    if(pop?._esbMode){
+      const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+      if(l){
+        l.lineWidth = v; edRedraw();
+        const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
+        const _ss=$('op-size-btn'); if(_ss) _ss.style.background='var(--gray-200)';
+        const _sls=$('op-size-slider'); if(_sls) _sls.style.display='flex';
+        const _st=$('op-line-status'); if(_st){ _st.textContent=l.lineWidth+'px·'+Math.round((l.opacity??1)*100)+'%'; }
+      }
+      const num = $('edb-size-num'); if(num) num.value = v;
+      _edbSyncSizePreview();
       return;
     }
     const isEr = edActiveTool === 'eraser';
-    if(pop?._esbMode){
-      const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-      if(la && (la.type==='shape'||la.type==='line')){ la.lineWidth = v; edRedraw(); }
-      edDrawSize = v;
-    } else {
-      if (isEr) edEraserSize = v; else edDrawSize = v;
-    }
+    if (isEr) edEraserSize = v; else edDrawSize = v;
     // Actualizar número y preview inmediatamente
     const num = $('edb-size-num'); if(num) num.value = v;
     const prev = $('edb-size-preview');
@@ -20868,7 +20871,7 @@ function edInitDrawBar() {
   });
   $('edb-size-slider')?.addEventListener('pointerup', e => {
     const pop=$('edb-size-pop');
-    if(pop?._esbOpMode || pop?._esbMode) _edShapePushHistory();
+    if(pop?._esbMode) _edShapePushHistory();
   });
   $('edb-size-slider')?.addEventListener('pointerdown', e => e.stopPropagation());
   $('edb-size-slider')?.addEventListener('touchstart', e => e.stopPropagation(), {passive:true});
@@ -20878,12 +20881,9 @@ function edInitDrawBar() {
   // Cerrar popover de grosor al tocar fuera
   document.addEventListener('pointerdown', e => {
     const pop = $('edb-size-pop');
-    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-pen-size' && e.target.id !== 'edb-eraser-size' && e.target.id !== 'esb-size' && e.target.id !== 'esb-opacity'){
+    if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-pen-size' && e.target.id !== 'edb-eraser-size' && e.target.id !== 'esb-size'){
       pop.style.display = 'none';
-      pop._esbMode = false; pop._esbOpMode = false;
-      // Restaurar preview dot y etiqueta para el modo grosor
-      const prev=$('edb-size-preview'); if(prev) prev.style.display='';
-      const lbl=pop.querySelector('span[style*="color:#ccc"]'); if(lbl) lbl.textContent='px';
+      pop._esbMode = false;
     }
   }, { passive: true });
 
@@ -21222,6 +21222,59 @@ function _edUpdateDrawInfo() {
     : (isEr ? edEraserSize : edDrawSize) + 'px · ' + edDrawOpacity + '%';
 }
 
+// ── Grosor: abre panel anclado SIEMPRE AL LADO de la barra flotante ──
+// Compartida por el lápiz/goma (edDrawBar) y por la barra vectorial
+// (edShapeBar, opts.vector=true) — mismo panel (número + px + preview +
+// slider) para que "funcione igual" en ambas, pedido por Alberto. En modo
+// vectorial el rango baja hasta 0px (grosor invisible es un valor válido
+// para un shape/line), a diferencia del lápiz/goma que nunca bajan de 1.
+function _edbOpenSizePop(btn, opts) {
+  const pop = $('edb-size-pop');
+  if (!pop) return;
+  const isVec = !!(opts && opts.vector);
+  const isOpen = pop.style.display === 'flex';
+  if (isOpen) { pop.style.display = 'none'; pop._esbMode = false; return; }
+  if (isVec) {
+    pop._esbMode = true;
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    const sz = la?.lineWidth ?? 3;
+    const num = $('edb-size-num'); if(num){ num.min=0; num.max=20; num.value=sz; }
+    const sl  = $('edb-size-slider'); if(sl){ sl.min=0; sl.max=20; sl.value=sz; }
+  } else {
+    pop._esbMode = false;
+    _edbSyncSize();
+  }
+  pop.style.display = 'flex';
+  pop.style.left = '-9999px'; pop.style.top = '-9999px';
+  _edbSyncSizePreview();
+  // Posicionar al lado de la barra flotante correspondiente, adaptando según bordes de pantalla
+  const bar = $(isVec ? 'edShapeBar' : 'edDrawBar');
+  const br  = bar ? bar.getBoundingClientRect() : btn.getBoundingClientRect();
+  const pw  = pop.offsetWidth  || 170;
+  const ph  = pop.offsetHeight || 120;
+  const W   = window.innerWidth;
+  const H   = window.innerHeight;
+  const GAP = 8;
+  // Posicionar siempre AL LADO de la barra (nunca encima/debajo)
+  // Preferir el lado con más espacio: izquierda o derecha
+  const spaceRight = W - br.right - GAP;
+  const spaceLeft  = br.left - GAP;
+  let left, top;
+  if (spaceRight >= pw || spaceRight >= spaceLeft) {
+    // A la derecha de la barra
+    left = br.right + GAP;
+  } else {
+    // A la izquierda de la barra
+    left = br.left - pw - GAP;
+  }
+  // Centrado verticalmente respecto a la barra, ajustado para no salir de pantalla
+  top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
+  // Asegurar que no sale por la derecha (por si la barra está muy a la derecha)
+  left = Math.max(GAP, Math.min(W - pw - GAP, left));
+  pop.style.left = left + 'px';
+  pop.style.top  = top  + 'px';
+}
+
 function _edbSyncSize() {
   const isEr = edActiveTool === 'eraser';
   const sz   = isEr ? edEraserSize : edDrawSize;
@@ -21232,9 +21285,9 @@ function _edbSyncSize() {
   if(btnEr)  btnEr.style.display  = isEr ? '' : 'none';
   // Sincronizar slider y número
   const num = $('edb-size-num');
-  if(num){ num.value=sz; num.max=isEr?80:48; }
+  if(num){ num.min=1; num.value=sz; num.max=isEr?80:48; }
   const sl = $('edb-size-slider');
-  if(sl){ sl.value=sz; sl.max=isEr?80:48; }
+  if(sl){ sl.min=1; sl.value=sz; sl.max=isEr?80:48; }
   _edbSyncSizePreview();
   // Refrescar cursor offset si está visible y hay posición guardada
   _edRefreshOffsetCursor();
@@ -21244,13 +21297,27 @@ function _edbSyncSize() {
 function _edbSyncSizePreview() {
   const pop = $('edb-size-pop');
   if(!pop || pop.style.display==='none') return;
-  const isEr = edActiveTool === 'eraser';
-  const sz   = isEr ? edEraserSize : edDrawSize;
   const prev = $('edb-size-preview');
   if(!prev) return;
+  const _dz = typeof edCamera!=='undefined' ? edCamera.z : 1;
+  if(pop._esbMode){
+    // Barra vectorial: previsualizar el grosor y color REALES del objeto
+    // shape/line seleccionado (mismo panel que el lápiz, pedido por Alberto
+    // para que "funcione igual" — incluido el 0px, que aquí sí es válido).
+    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+    const sz = la?.lineWidth ?? 3;
+    const d = Math.max(4, Math.min(80, Math.round(sz * _dz)));
+    prev.style.width  = d+'px';
+    prev.style.height = d+'px';
+    prev.style.background = la?.color || '#000000';
+    prev.style.border = 'none';
+    prev.style.boxShadow = '0 0 0 1.5px rgba(255,255,255,0.25)';
+    return;
+  }
+  const isEr = edActiveTool === 'eraser';
+  const sz   = isEr ? edEraserSize : edDrawSize;
   // Lápiz: círculo del color seleccionado, tamaño escala con zoom
   // Goma: círculo blanco con borde, tamaño fijo
-  const _dz = typeof edCamera!=='undefined' ? edCamera.z : 1;
   let d, color, border;
   // Preview escala con zoom de cámara, límite 80px
   d = Math.max(4, Math.min(80, Math.round(sz * _dz)));
@@ -21400,6 +21467,43 @@ function edDrawBarHide() {
    ══════════════════════════════════════════ */
 let _esbX = 12, _esbY = 120;
 
+// Activa el botón NODOS de la barra flotante Y abre su control de curvatura
+// asociado (mismo popup que abre el clic manual del botón, vía
+// window._esbShowSlider). Compartida entre el clic del botón y
+// edShapeBarShow (restaurar el modo nodos al mostrar la barra) — antes esta
+// segunda vía solo iluminaba el botón sin abrir el control, obligando a
+// desactivar y reactivar NODOS a mano para verlo (bug reportado por Alberto).
+function _esbActivateCurveUI(){
+  const _cb = $('esb-curve');
+  if(_cb){
+    _cb.dataset.curveActive = '1';
+    _cb.style.background = 'rgba(0,0,0,.7)';
+    _cb.style.color = '#FFE135';
+    _cb.style.outline = '1px solid rgba(255,255,0,.5)';
+  }
+  if(typeof window._esbShowSlider !== 'function') return;
+  // Si el control ya está abierto en modo 'curve', no volver a llamarlo:
+  // _esbShowSlider alterna (abre/cierra) el mismo modo, así que llamarlo de
+  // nuevo lo cerraría en vez de dejarlo abierto.
+  const _sp = $('esb-slider-panel');
+  if(_sp && _sp.style.display !== 'none' && _sp._mode === 'curve') return;
+  const curR = window._edCurveRadius || 0;
+  window._esbShowSlider('curve', 0, 200, curR,
+    v=>{
+      // onInput: previsualizar la curva en tiempo real (solo visual, no hornear)
+      window._edCurveRadius=v;
+      const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+      const vi=window._edCurveVertIdx;
+      if(la2&&vi>=0){
+        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; la2._updateBbox(); }
+        else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
+        edRedraw();
+      }
+    },
+    v=>{ _edShapePushHistory(); }
+  );
+}
+
 function edShapeBarShow(snapToCanvas) {
   const bar = $('edShapeBar'); if(!bar) return;
   bar.classList.add('visible');
@@ -21415,6 +21519,20 @@ function edShapeBarShow(snapToCanvas) {
   bar.style.left = _esbX + 'px';
   bar.style.top  = _esbY + 'px';
   _esbSync();
+  // Sincronizar el icono de la barra con la herramienta de creación activa
+  // (recta/polígono/elipse/rectángulo/selección) y con el estado de edición
+  // de nodos (V⟺C) — AUTOCONTENIDO dentro de esta función, igual que ya
+  // hace edDrawBarShow con _edbSyncTool. Bug reportado repetidamente por
+  // Alberto: la sincronización se hacía "a mano" en cada punto de llamada
+  // (minimizar menú, colapsar panel) y siempre se olvidaba alguno. Al
+  // centralizarla aquí, CUALQUIER llamada a edShapeBarShow queda siempre
+  // sincronizada, sin depender de que quien la invoque se acuerde de nada.
+  if(typeof window._esbSyncTool === 'function') window._esbSyncTool();
+  // Si NODOS estaba activo (en el panel o ya en la barra), activar también
+  // su control de curvatura — no basta con iluminar el botón, hace falta
+  // abrir el popup del slider o el usuario tenía que desactivar/reactivar a
+  // mano para verlo (bug reportado por Alberto).
+  if(_edCurveModeActive()) _esbActivateCurveUI();
   // Actualizar visibilidad del botón ⊕ Fusionar
   if(typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
 }
@@ -21450,13 +21568,9 @@ function _esbSync() {
     fillBtn.style.background = hasFill ? la.fillColor : (la._lastFillColor || '#ffffff');
     fillBtn.style.opacity = hasFill ? '1' : '0.4';
   }
-  // Dot de grosor
-  const dot = $('esb-size-dot');
-  if(dot){
-    const _dz2 = typeof edCamera !== 'undefined' ? edCamera.z : 1;
-    const d = Math.max(3, Math.min(22, Math.round((la.lineWidth||0) * _dz2)));
-    dot.style.cssText = `width:${d}px;height:${d}px;border-radius:50%;background:#fff;display:inline-block;`;
-  }
+  // Grosor: si el panel emergente compartido con el lápiz está abierto en modo
+  // vectorial, refrescar su preview (mismo criterio que _edSyncSizeDots)
+  if(typeof _edbSyncSizePreview === 'function') _edbSyncSizePreview();
 }
 
 // Congela un LineLayer con radios en un StrokeLayer, guardando los datos geométricos
@@ -21714,28 +21828,21 @@ function edInitShapeBar() {
     sl._onInput=onInput; sl._onChange=onChange;
   }
   function _esbHideSlider(){ const p=$('esb-slider-panel'); if(p){p.style.display='none';p._mode=null;} }
+  // Expuesta globalmente: _esbActivateCurveUI (fuera de este closure) la
+  // necesita para poder abrir el control de curvatura también al restaurar
+  // el estado de nodos desde el panel (ver edShapeBarShow), no solo al
+  // pulsar el botón NODOS a mano.
+  window._esbShowSlider = _esbShowSlider;
   // Listener único del slider
   $('esb-slider-input')?.addEventListener('input',e=>{ e.target._onInput&&e.target._onInput(+e.target.value); });
   $('esb-slider-input')?.addEventListener('change',e=>{ e.target._onChange&&e.target._onChange(+e.target.value); });
   $('esb-slider-input')?.addEventListener('pointerdown',e=>e.stopPropagation());
 
-  // Grosor — slider adjunto a la barra
+  // Grosor — mismo panel emergente que el lápiz (número + px + preview +
+  // slider), para que "funcione igual" (pedido por Alberto)
   $('esb-size')?.addEventListener('click', e => {
     if(_locked) return; e.stopPropagation();
-    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-    const sz=la?.lineWidth??3;
-    _esbShowSlider('size', 0, 20, sz,
-      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.lineWidth=v; edRedraw();
-        // Sincronizar sliders del panel si está abierto
-        const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
-        const _ss=$('op-size-btn'); if(_ss) _ss.style.background='var(--gray-200)';
-        const _sls=$('op-size-slider'); if(_sls) _sls.style.display='flex';
-        const _st=$('op-line-status'); if(_st){ const ll=l; _st.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
-      } },
-      v=>{
-        _edShapePushHistory();
-      }
-    );
+    _edbOpenSizePop($('esb-size'), { vector: true });
   });
 
   // Opacidad — slider adjunto a la barra
@@ -21758,32 +21865,20 @@ function edInitShapeBar() {
     if(_locked) return; e.stopPropagation();
     const btn=$('esb-curve');
     const active=btn.dataset.curveActive==='1';
-    btn.dataset.curveActive=active?'0':'1';
-    btn.style.background=active?'':'rgba(0,0,0,.7)';
-    btn.style.color=active?'rgba(255,255,255,1)':'#FFE135';
-    btn.style.outline=active?'':'1px solid rgba(255,255,0,.5)';
     if(active){
+      // Desactivar
+      btn.dataset.curveActive='0';
+      btn.style.background=''; btn.style.color='rgba(255,255,255,1)'; btn.style.outline='';
       window._edCurveVertIdx=-1;
       _esbHideSlider();
-      edRedraw(); return;
+      edRedraw();
+      return;
     }
+    // Activar — icono + control de curvatura (función compartida, también
+    // usada al restaurar el estado desde el panel al colapsar; ver
+    // edShapeBarShow y _esbActivateCurveUI).
     edRedraw(); // actualizar vértices a verde inmediatamente al activar V⟺C
-    const _savedSelCurve=edSelectedIdx;
-    const curR=window._edCurveRadius||0;
-    _esbShowSlider('curve', 0, 200, curR,
-      v=>{
-        // onInput: previsualizar la curva en tiempo real (solo visual, no hornear)
-        window._edCurveRadius=v;
-        const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
-        const vi=window._edCurveVertIdx;
-        if(la2&&vi>=0){
-          if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; la2._updateBbox(); }
-          else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
-          edRedraw();
-        }
-      },
-      v=>{ _edShapePushHistory(); }
-    );
+    _esbActivateCurveUI();
     // El slider permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
   });
 
@@ -27148,8 +27243,6 @@ function EditorView_init(){
     const shapesBtn = $('esb-shapes');
     if(shapesBtn) shapesBtn.innerHTML = _esbGetActiveIcon();
     $('esb-fill')?.classList.toggle('active', t === 'fill');
-    const dot = $('esb-size-dot');
-    if(dot){ const sz=edDrawSize; const _dz3=typeof edCamera!=='undefined'?edCamera.z:1; const d=Math.max(3,Math.min(22,Math.round(sz*_dz3))); dot.style.width=d+'px'; dot.style.height=d+'px'; }
     const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
   }
   // Expuesta globalmente: edMinimize necesita re-sincronizar el icono de la
@@ -27656,6 +27749,16 @@ function EditorView_init(){
   // ── Ctrl+Wheel: zoom del canvas ──
   window._edWheelFn = e => {
     if(!document.getElementById('editorShell')) return;
+    // Editor de textos (tdShell) abierto: su vista de página no usa edCamera
+    // en absoluto (paginación propia, independiente) — a diferencia del GCP,
+    // que sí comparte edCamera a propósito (por eso _edRedrawCameraThrottled
+    // también llama a _gcpRedraw). Sin esta comprobación, un Ctrl+rueda o un
+    // scroll normal mientras se escribe modificaba en silencio el zoom/pan
+    // del lienzo principal oculto detrás del overlay, y aparecía desplazado/
+    // ampliado al cerrar el editor de textos sin que el usuario lo hubiera
+    // pedido — mismo tipo de fuga encontrada en la revisión de atajos.
+    const _tdShellW = document.getElementById('tdShell');
+    if(_tdShellW && _tdShellW.style.display !== 'none' && _tdShellW.style.display !== '') return;
     // Si la rueda está sobre un elemento scrollable (overlay de capas, hojas,
     // Editor de textos, etc.) dejarlo hacer scroll nativo — no intervenir
     const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body, #tdPageArea, #gcpFramesBar, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"]');
@@ -27680,6 +27783,22 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
+    // Editor de textos (tdShell) abierto: si el foco no está en el propio
+    // Trix (#tdEditor), ningún atajo del editor general debe alcanzar el
+    // lienzo que queda bloqueado detrás del overlay — mismo criterio que ya
+    // usa el listener de flechas de editor-textdoc.js (comprueba
+    // shell.style.display y si el foco está en el editor). Bug encontrado en
+    // la revisión de atajos pedida por Alberto: tras pulsar un botón normal
+    // del editor de textos que roba el foco de Trix (‹ › de página,
+    // diagnóstico...), la siguiente pulsación de Supr/Ctrl+Z/Ctrl+D se colaba
+    // hasta el lienzo principal oculto detrás del overlay y podía borrar,
+    // deshacer o duplicar el objeto allí seleccionado sin que se viera.
+    const _tdShellEl = document.getElementById('tdShell');
+    if(_tdShellEl && _tdShellEl.style.display !== 'none' && _tdShellEl.style.display !== ''){
+      const _tdActiveEl = document.activeElement;
+      const _tdEditorEl = document.getElementById('tdEditor');
+      if(!(_tdActiveEl && (_tdActiveEl.isContentEditable || _tdActiveEl === _tdEditorEl))) return;
+    }
     // Editor GIF activo: flechas mueven objeto(s) seleccionado(s) (uno o multiselección) o navegan entre frames
     if (window._gcpActive) {
       const _isArrow = e.key==='ArrowRight'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowUp';
@@ -27807,6 +27926,16 @@ function EditorView_init(){
     // Ctrl+D → duplicar objeto seleccionado (o el grupo completo si pertenece a uno)
     if(ctrl && e.key.toLowerCase() === 'd'){
       e.preventDefault();
+      // Editor de animaciones (GCP) activo: duplicar el objeto seleccionado de
+      // la animación (mismo botón "Duplicar" del panel de propiedades). Antes
+      // este atajo no tenía ningún efecto en el GCP, por el mismo motivo que
+      // Ctrl+Z/Supr — comprobaba edSelectedIdx (editor general) en vez de
+      // window._gcpSelIdx (propio del GCP). El GCP no tiene grupos, así que
+      // no hace falta la rama de _edDuplicateGroup de más abajo.
+      if(window._gcpActive){
+        if(window._gcpSelIdx >= 0) _gcpDuplicateSelected();
+        return;
+      }
       // BUG FIX (reportado por Alberto: "sigue sin duplicar grupos"): un grupo
       // YA EXISTENTE seleccionado con UN SOLO toque/clic (sin llegar a abrir su
       // panel con doble toque) NO usa edSelectedIdx — usa edMultiSel +
@@ -28028,6 +28157,15 @@ function EditorView_init(){
     }
     if((e.key === 'Delete' || e.key === 'Backspace') && !ctrl){
       e.preventDefault(); // evita navegación atrás en Firefox (Backspace sin input)
+      // Editor de animaciones (GCP) activo: eliminar el objeto seleccionado de
+      // la animación (mismo botón "Eliminar" del panel de propiedades). Bug
+      // reportado por Alberto ("el botón del teclado no elimina el objeto
+      // seleccionado"): esta tecla solo comprobaba edSelectedIdx/edMultiSel
+      // (editor general), nunca window._gcpSelIdx (propio del GCP).
+      if(window._gcpActive){
+        if(window._gcpSelIdx >= 0) _gcpDeleteSelected();
+        return;
+      }
       if(edActiveTool==='multiselect' && edMultiSel.length){
         e.preventDefault();
         const page=edPages[edCurrentPage]; if(!page) return;
@@ -28198,6 +28336,16 @@ function EditorView_init(){
       return;
     }
     if(!ctrl) return;
+    // Editor de animaciones (GCP) activo: Ctrl+Z/Ctrl+Y deben deshacer/rehacer
+    // su PROPIO historial (_gcpHistory — el mismo que usan los botones ↶/↷ de
+    // su barra), no el del editor general. Bug reportado por Alberto
+    // ("Control+Z no deshace el último cambio, el botón del historial sí lo
+    // hace"): este bloque caía siempre a edUndo()/edRedo() sin comprobar antes
+    // si el GCP estaba activo.
+    if(window._gcpActive){
+      if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); _gcpUndo(); return; }
+      if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); _gcpRedo(); return; }
+    }
     const _vecActive = $('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible');
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){
       e.preventDefault();
@@ -31282,21 +31430,9 @@ function _gcpOpenPropsPanel(la, laIdx) {
   });
 
   // Duplicar — copia independiente visible solo desde el frame actual
+  // (lógica compartida en _gcpDuplicateSelected, reutilizada también por Ctrl+D)
   document.getElementById('gcppp-dup')?.addEventListener('click', () => {
-    const newLa = edDeserLayer(edSerLayer(la), edOrientation);
-    if (!newLa) return;
-    newLa.x += 0.03; newLa.y += 0.03;
-    newLa._gcpName = (la._gcpName || '') + ' copia';
-    // Objeto nuevo pendiente de confirmar: no se propaga a otros frames hasta
-    // que se guarde/capture con su posición definitiva (ver _gcpSaveFrame).
-    newLa._frames = [];
-    newLa._gcpPendingInsert = true;
-    _gcpPushLayer(newLa);
-    window._gcpSelIdx = window._gcpLayers.length - 1;
-    _gcpClosePropsPanel();
-    _gcpUpdateFramesBar();
-    _gcpRedraw();
-    edToast(I18n.t('ed_objectDuplicated'));
+    _gcpDuplicateSelected(laIdx);
   });
 
   // Reflejar — crea objeto nuevo reflejado, el original no cambia
@@ -31363,29 +31499,68 @@ function _gcpOpenPropsPanel(la, laIdx) {
   });
 
   // Eliminar
+  // (lógica compartida en _gcpDeleteSelected, reutilizada también por Supr/Retroceso)
   document.getElementById('gcppp-del')?.addEventListener('click', () => {
-    edConfirm(I18n.t('ed_confirmDeleteAnimObject'), () => {
-      window._gcpLayers.splice(laIdx, 1);
-      if (window._gcpSelIdx >= window._gcpLayers.length)
-        window._gcpSelIdx = window._gcpLayers.length - 1;
-      // Recalcular matriz: recortar columnas vacías y ajustar frame índice
-      _gcpTrimLeadingInvisible();
-      _gcpTrimTrailingInvisible();
-      const _ntDel = _gcpGetTotalFrames();
-      if (_ntDel === 0) window._gcpGlobalFrameIdx = 0;
-      else if (window._gcpGlobalFrameIdx >= _ntDel) window._gcpGlobalFrameIdx = _ntDel - 1;
-      _gcpApplyFrame(window._gcpGlobalFrameIdx);
-      _gcpClosePropsPanel();
-      _gcpUpdateFrameNav();
-      _gcpUpdateFramesBar();
-      _gcpRedraw();
-    });
+    _gcpDeleteSelected(laIdx);
   });
 
   // OK / cerrar
   document.getElementById('gcppp-ok')?.addEventListener('click', () => {
     _gcpAutoSaveFrame();
     _gcpClosePropsPanel();
+  });
+}
+
+// Duplica el objeto indicado (o el seleccionado si no se pasa índice) del GCP.
+// Misma lógica que usaba el botón "Duplicar" del panel de propiedades — ahora
+// compartida también con el atajo de teclado Ctrl+D (ver _edKeyFn), que antes
+// no tenía ningún efecto dentro del editor de animaciones (mismo motivo que
+// el bug de Ctrl+Z/Supr: comprobaba variables del editor general en vez de
+// window._gcpSelIdx, propio del GCP).
+function _gcpDuplicateSelected(laIdx) {
+  const idx = laIdx !== undefined ? laIdx : window._gcpSelIdx;
+  const la = window._gcpLayers[idx];
+  if (!la) return;
+  const newLa = edDeserLayer(edSerLayer(la), edOrientation);
+  if (!newLa) return;
+  newLa.x += 0.03; newLa.y += 0.03;
+  newLa._gcpName = (la._gcpName || '') + ' copia';
+  // Objeto nuevo pendiente de confirmar: no se propaga a otros frames hasta
+  // que se guarde/capture con su posición definitiva (ver _gcpSaveFrame).
+  newLa._frames = [];
+  newLa._gcpPendingInsert = true;
+  _gcpPushLayer(newLa);
+  window._gcpSelIdx = window._gcpLayers.length - 1;
+  _gcpClosePropsPanel();
+  _gcpUpdateFramesBar();
+  _gcpRedraw();
+  edToast(I18n.t('ed_objectDuplicated'));
+}
+
+// Elimina el objeto indicado (o el seleccionado si no se pasa índice) del GCP.
+// Misma lógica que usaba el botón "Eliminar" del panel de propiedades — ahora
+// compartida también con la tecla Supr/Retroceso (ver _edKeyFn). Bug reportado
+// por Alberto: "el botón del teclado no elimina el objeto seleccionado" —
+// antes esa tecla solo comprobaba edSelectedIdx/edMultiSel (editor general),
+// nunca window._gcpSelIdx (propio del GCP), así que no hacía nada.
+function _gcpDeleteSelected(laIdx) {
+  const idx = laIdx !== undefined ? laIdx : window._gcpSelIdx;
+  if (idx < 0 || idx >= window._gcpLayers.length) return;
+  edConfirm(I18n.t('ed_confirmDeleteAnimObject'), () => {
+    window._gcpLayers.splice(idx, 1);
+    if (window._gcpSelIdx >= window._gcpLayers.length)
+      window._gcpSelIdx = window._gcpLayers.length - 1;
+    // Recalcular matriz: recortar columnas vacías y ajustar frame índice
+    _gcpTrimLeadingInvisible();
+    _gcpTrimTrailingInvisible();
+    const _ntDel = _gcpGetTotalFrames();
+    if (_ntDel === 0) window._gcpGlobalFrameIdx = 0;
+    else if (window._gcpGlobalFrameIdx >= _ntDel) window._gcpGlobalFrameIdx = _ntDel - 1;
+    _gcpApplyFrame(window._gcpGlobalFrameIdx);
+    _gcpClosePropsPanel();
+    _gcpUpdateFrameNav();
+    _gcpUpdateFramesBar();
+    _gcpRedraw();
   });
 }
 
