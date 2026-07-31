@@ -21356,14 +21356,17 @@ function _edBarDefaultPos(barEl) {
   const shellR = shell.getBoundingClientRect();
   const canv   = document.getElementById('editorCanvas');
   const canvR  = canv ? canv.getBoundingClientRect() : shellR;
-  // X: justo a la izquierda del borde del canvas; si no cabe, solapar ligeramente
-  const leftSpace = canvR.left - shellR.left;
-  const x = leftSpace >= bw + 6
-    ? Math.round(leftSpace - bw - 6)   // cabe a la izquierda
-    : Math.max(4, Math.round(leftSpace + 6)); // solapar el borde izquierdo
-  // Y: centrado verticalmente respecto al shell
-  const shellH = shellR.height || shell.offsetHeight || window.innerHeight;
-  const y = Math.max(4, Math.round((shellH - bh) / 2));
+  // Centrada en ALTURA y a UN TERCIO desde la izquierda del espacio VISIBLE
+  // del canvas (viewport) — respecto a la CÁMARA, no respecto al lienzo/
+  // página blanca (mismo criterio que _edBarSnapToCanvas y que _edRuleAdd al
+  // insertar una guía nueva). Así la barra siempre aparece dentro de lo
+  // visible, haya o no ampliación aplicada.
+  const visLeft = canvR.left - shellR.left;
+  const visTop  = canvR.top  - shellR.top;
+  const cx = visLeft + canvR.width  / 3;
+  const cy = visTop  + canvR.height / 2;
+  const x = Math.max(4, Math.round(cx - bw / 2));
+  const y = Math.max(4, Math.round(cy - bh / 2));
   return { x, y };
 }
 
@@ -21376,9 +21379,14 @@ function _edRefocusAfterCollapse() {
   setTimeout(() => _edFocusOnLayer(_la), 30); // pequeño delay para que edFitCanvas termine
 }
 
-// Posicionar barra flotante pegada al lienzo según orientación del lienzo
-// - Lienzo vertical  → barra vertical, pegada al lado izquierdo, centrada verticalmente
-// - Lienzo horizontal → barra horizontal, pegada encima, centrada horizontalmente
+// Posicionar barra flotante respecto a la CÁMARA (espacio visible del
+// canvas), no respecto al lienzo/página blanca — centrada en altura y a un
+// tercio desde la izquierda del espacio visible. Antes esta función anclaba
+// la barra a los bordes de la página blanca tal como aparece en pantalla
+// (con edCamera.x/y/z aplicada a su posición), así que con suficiente zoom
+// la página podía quedar fuera de la vista y la barra desaparecía con ella
+// (bug reportado por Alberto). Mismo criterio que ya usa _edRuleAdd al
+// insertar una guía nueva centrada respecto a la cámara.
 function _edBarSnapToCanvas(bar, xVar, yVar) {
   if (!bar) return { x: xVar, y: yVar };
   const shell = document.getElementById('editorShell');
@@ -21387,43 +21395,17 @@ function _edBarSnapToCanvas(bar, xVar, yVar) {
   const shellR = shell.getBoundingClientRect();
   const canvR  = canv.getBoundingClientRect();
   const isVert = (edOrientation || 'vertical') !== 'horizontal';
+  if (isVert) bar.classList.remove('horiz'); else bar.classList.add('horiz');
 
-  // Posición del lienzo blanco en coordenadas de pantalla (relativas al shell)
-  const pageW = edPageW(), pageH = edPageH();
-  const mxW = edMarginX(), myW = edMarginY();
-  // Esquina superior-izquierda del lienzo blanco en pantalla (relativa al shell)
-  const pageLeft   = (canvR.left - shellR.left) + edCamera.x + mxW * edCamera.z;
-  const pageTop    = (canvR.top  - shellR.top)  + edCamera.y + myW * edCamera.z;
-  const pageRight  = pageLeft + pageW * edCamera.z;
-  const pageBottom = pageTop  + pageH * edCamera.z;
-  // Centro del lienzo blanco visible (clampado al viewport del canvas)
-  const visLeft   = Math.max(pageLeft,   0);
-  const visTop    = Math.max(pageTop,    canvR.top - shellR.top);
-  const visRight  = Math.min(pageRight,  canvR.right  - shellR.left);
-  const visBottom = Math.min(pageBottom, canvR.bottom - shellR.top);
-  const visCx = (visLeft + visRight)  / 2;
-  const visCy = (visTop  + visBottom) / 2;
-
-  if (isVert) {
-    bar.classList.remove('horiz');
-    const bw = bar.offsetWidth  || 40;
-    const bh = bar.offsetHeight || 200;
-    // X: pegada a la izquierda del lienzo blanco
-    const x = Math.max(0, Math.round(pageLeft - bw - 6));
-    // Y: centrada verticalmente en la zona visible del lienzo
-    const y = Math.max(0, Math.round(visCy - bh / 2));
-    return { x, y };
-  } else {
-    bar.classList.add('horiz');
-    const bw = bar.offsetWidth  || 200;
-    const bh = bar.offsetHeight || 40;
-    // Y: pegada encima del lienzo blanco, pero por debajo de las barras superiores
-    const canvasTop = canvR.top - shellR.top;
-    const y = Math.max(canvasTop + 4, Math.round(pageTop - bh - 6));
-    // X: centrada horizontalmente en la zona visible del lienzo
-    const x = Math.max(0, Math.round(visCx - bw / 2));
-    return { x, y };
-  }
+  const visLeft = canvR.left - shellR.left;
+  const visTop  = canvR.top  - shellR.top;
+  const cx = visLeft + canvR.width  / 3;
+  const cy = visTop  + canvR.height / 2;
+  const bw = bar.offsetWidth  || (isVert ? 40 : 200);
+  const bh = bar.offsetHeight || (isVert ? 200 : 40);
+  const x = Math.max(0, Math.round(cx - bw / 2));
+  const y = Math.max(0, Math.round(cy - bh / 2));
+  return { x, y };
 }
 function _edPanelIsCollapsed() {
   return !!$('edOptionsPanel')?.classList.contains('panel-collapsed');
