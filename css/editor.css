@@ -2284,6 +2284,17 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   top: auto;
 }
 
+/* edOptionsPanel por encima del editor de textos (tdShell, z-index 600) —
+   mismo mecanismo que gcp-open de arriba, reutilizado tal cual para que la
+   biblioteca (_bibRenderPanel) funcione exactamente igual desde el editor
+   de textos que desde el editor de animaciones — pedido explícito de
+   Alberto tras comprobar que el panel propio no funcionaba en absoluto. */
+#editorShell.td-open #edOptionsPanel {
+  z-index: 650;
+  position: fixed;
+  top: auto;
+}
+
 /* ── Panel de frames del editor GIF ─────────────────────────────────── */
 /* La barra es un contenedor fijo con scroll bidireccional propio.
    - Eje Y (filas/layers): scroll vertical dentro de la barra
@@ -2945,3 +2956,55 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   color: var(--gray-500);
   pointer-events: none;
 }
+
+/* Imágenes insertadas en el flujo de texto (adjuntos de Trix) — ver
+   _tdWireInsertImage/_tdInsertImage en editor-textdoc.js. max-width:100%
+   evita que una imagen más ancha que la columna se salga de la página al
+   redimensionar la ventana; el ancho/alto reales los fija el propio
+   adjunto (width/height, ver _tdWireImageResize) y se respetan tal cual
+   por debajo de ese máximo. */
+.td-editor .attachment--preview img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto; /* siempre centrada, sea cual sea la alineación del párrafo — igual que en el lienzo */
+  cursor: pointer;
+}
+.td-editor .attachment--preview {
+  margin: .5em 0;
+}
+/* Refuerzo de Trix.config.attachments.preview.caption = {name:false,size:false}
+   (ver _tdRegisterCustomTrixAttributes): oculta también el hueco vacío de
+   "añadir leyenda" que Trix deja de forma nativa bajo cada imagen — a
+   petición de Alberto, la imagen no debe llevar ninguna información extra. */
+.td-editor .attachment--preview .attachment__caption {
+  display: none;
+}
+
+/* Caja de redimensionado de imágenes del editor de textos — mismo estilo
+   visual (marco discontinuo azul + tiradores circulares) que los objetos
+   del canvas del editor general (ver edDrawSel en editor.js), para que
+   "funcione igual" tal como se hizo con la barra de dibujo vectorial. */
+#tdImgResizeBox {
+  display: none;
+  position: fixed;
+  box-sizing: border-box;
+  border: 1.5px dashed #1a8cff;
+  z-index: 700;
+  pointer-events: none;
+}
+#tdImgResizeBox.visible { display: block; }
+#tdImgResizeBox .td-rz-handle {
+  position: absolute;
+  width: 16px; height: 16px;
+  margin: -8px;
+  background: #fff;
+  border: 2px solid #1a8cff;
+  border-radius: 50%;
+  pointer-events: auto;
+  touch-action: none;
+}
+#tdImgResizeBox .td-rz-nw { left: 0;   top: 0;   cursor: nwse-resize; }
+#tdImgResizeBox .td-rz-ne { left: 100%; top: 0;   cursor: nesw-resize; }
+#tdImgResizeBox .td-rz-sw { left: 0;   top: 100%; cursor: nesw-resize; }
+#tdImgResizeBox .td-rz-se { left: 100%; top: 100%; cursor: nwse-resize; }

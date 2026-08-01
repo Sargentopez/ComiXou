@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.62</footer>
+    <footer class="app-version">v36.79</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1098,6 +1098,7 @@ Router.register('editor', {
            segunda señal independiente para _tdReadKeyboardH(), ver
            editor-textdoc.js. No ocupa espacio (visibility:hidden). -->
       <div id="tdKbProbe" aria-hidden="true" style="position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;height:env(keyboard-inset-height, 0px);"></div>
+      <input type="file" id="tdFileGallery" accept="image/*" style="display:none">
       <div id="tdTopbar">
         <div id="tdTitlePill" aria-hidden="true"></div>
         <span id="tdProjectTitle" data-i18n="td_docTitle">Editor de textos</span>
@@ -1109,14 +1110,27 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" data-i18n-title="td_nextPage" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn" data-i18n-title="td_applyToCanvas" title="Aplicar al lienzo">💾</button>
-        <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
-             para volver a mostrarlo, descomentar la línea siguiente.
-        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME">🩺</button>
-        -->
+        <!-- Botón de diagnóstico — vuelto a mostrar temporalmente a petición
+             de Alberto para investigar por qué no se ven las imágenes
+             insertadas en el editor de textos. Para volver a ocultarlo,
+             comentar la línea de nuevo (no borrar). -->
+        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button>
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
         <div id="tdMenuScroll">
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn" data-menu="tdInsert" data-i18n="ed_menuInsert">Insertar ▾</button>
+            <div class="ed-dropdown" id="dd-tdInsert">
+              <button type="button" class="ed-dropdown-item" id="tdGalleryBtn" data-i18n="ed_gallery">Galería</button>
+              <button type="button" class="ed-dropdown-item" id="tdCameraBtn" data-i18n="ed_camera">Cámara</button>
+              <button type="button" class="ed-dropdown-item" id="tdPasteBtn" data-i18n="ed_paste">Pegar</button>
+            </div>
+          </div>
+          <div class="ed-menu-item" style="position:relative">
+            <button type="button" class="ed-menu-btn" id="tdLibraryOpenBtn" data-i18n="ed_menuLibrary">Biblioteca ▾</button>
+          </div>
+          <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontFamily" data-i18n-title="td_fontTitle" data-i18n="td_fontBtn" title="Tipo de letra de la selección">Fuente ▾</button>
             <div class="ed-dropdown" id="dd-tdFontFamily">
@@ -1197,6 +1211,15 @@ Router.register('editor', {
           <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" data-i18n-placeholder="td_placeholder" placeholder="Escribe o pega aquí tu texto" virtualkeyboardpolicy="manual"></trix-editor>
           <div id="tdPageBreaks" aria-hidden="true"></div>
         </div>
+      </div>
+      <!-- Caja de redimensionado de imágenes insertadas en el texto — mismo
+           estilo visual (marco discontinuo azul + tiradores circulares) que
+           los objetos del canvas del editor general, ver _tdWireImageResize. -->
+      <div id="tdImgResizeBox" aria-hidden="true">
+        <div class="td-rz-handle td-rz-nw" data-corner="nw"></div>
+        <div class="td-rz-handle td-rz-ne" data-corner="ne"></div>
+        <div class="td-rz-handle td-rz-sw" data-corner="sw"></div>
+        <div class="td-rz-handle td-rz-se" data-corner="se"></div>
       </div>
     </div>
 

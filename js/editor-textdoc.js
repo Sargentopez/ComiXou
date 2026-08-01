@@ -95,7 +95,24 @@ function edOpenTextDoc(editLayer){
   if(!shell) return;
   _tdInitOnce();
   const wasOpen = shell.style.display !== 'none' && shell.style.display !== '';
+  // BUG CORREGIDO (reportado por Alberto): el botón "Editar texto" del panel
+  // de propiedades (pp-td-edit) nunca cerraba ese panel antes de abrir el
+  // editor de textos — antes no se notaba porque edOptionsPanel quedaba
+  // oculto detrás del overlay del editor de textos (z-index más bajo), pero
+  // la nueva regla #editorShell.td-open #edOptionsPanel (necesaria para
+  // reutilizar la biblioteca, ver más abajo) lo eleva por encima de TODO,
+  // así que ese panel abandonado se quedaba visible encima del editor de
+  // textos. Cerrarlo aquí cubre TODAS las vías que abren el editor de
+  // textos (no solo ese botón), no únicamente la que lo provocó.
+  const _panelWasOpen = document.getElementById('edOptionsPanel')?.classList.contains('open');
+  if(_panelWasOpen && typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
   shell.style.display = 'flex';
+  // Mismo mecanismo que 'gcp-open' (ver #editorShell.gcp-open #edOptionsPanel
+  // en editor.css): permite reutilizar edOptionsPanel/_bibRenderPanel tal
+  // cual para la biblioteca, con el panel por encima del overlay del editor
+  // de textos — pedido explícito de Alberto: "reutiliza la biblioteca tal
+  // como está en el editor de animaciones", en vez de un panel propio.
+  document.getElementById('editorShell')?.classList.add('td-open');
   if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
   // Título: "Editor de textos" en creación nueva; el nombre asignado a este
   // texto (ver _tdComputeFlowName/_tdApplyToCanvas) si se está reeditando uno
@@ -258,6 +275,7 @@ function edCloseTextDoc(fromPopstate){
   }
   const finishClose = () => {
     if(shell) shell.style.display = 'none';
+    document.getElementById('editorShell')?.classList.remove('td-open');
     _tdEditingFlowId = null;
     const applyBtn = document.getElementById('tdApplyBtn');
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
@@ -372,9 +390,22 @@ function _tdInitOnce(){
     try { editorEl.virtualKeyboardPolicy = 'manual'; } catch(_e){}
   }
 
-  // Esta hoja es solo texto — las imágenes ya tienen su propio flujo en el editor,
-  // así que no se permiten adjuntos arrastrados/pegados dentro de Trix.
-  document.addEventListener('trix-file-accept', e => e.preventDefault());
+  // CAUSA RAÍZ del bug "no se ven las imágenes" (encontrada con el
+  // diagnóstico 🩺: insertFile() no lanzaba excepción, pero el documento se
+  // quedaba con 0 adjuntos). Esta regla bloqueaba TODOS los archivos sin
+  // excepción — tenía sentido cuando las imágenes solo vivían en el canvas
+  // ("las imágenes ya tienen su propio flujo en el editor"), pero ahora que
+  // SÍ tienen su propio flujo DENTRO del editor de textos (botón
+  // "Insertar", ver _tdInsertImage), esa misma regla bloqueaba también la
+  // función nueva sin dar ningún error visible — compositionShouldAcceptFile
+  // devuelve false y insertFile() simplemente no inserta nada, en silencio.
+  // Se mantiene el rechazo para cualquier adjunto que NO sea imagen (vídeo,
+  // PDF, documentos...), que siguen sin tener sentido en el flujo de texto.
+  document.addEventListener('trix-file-accept', e => {
+    const isImg = !!(e.file && e.file.type && e.file.type.startsWith('image/'));
+    if(typeof _tdLogImg === 'function') _tdLogImg('evento trix-file-accept', (e.file ? (e.file.name + ' ' + e.file.type) : '(sin file)') + ' → ' + (isImg ? 'ACEPTADO' : 'RECHAZADO (no es imagen)'));
+    if(!isImg) e.preventDefault();
+  });
 
   // Pegar texto de fuera (Word, una web, otra app) puede traer tamaños de letra
   // enormes o tipos de letra que no están autoalojados aquí — sin esto, ese
@@ -604,6 +635,7 @@ function _tdInitOnce(){
   document.getElementById('tdPageNext')?.addEventListener('click', () => { _tdAutoFollow = false; _tdScrollToViewPage(_tdViewCurPage + 1); });
   _tdWireFontControls();
   _tdWireParrafoControls();
+  _tdWireInsertImage();
 
   // Flechas del teclado (PC): pasan de página — SOLO cuando el cursor no está
   // escribiendo en el propio texto (si el trix-editor tiene el foco, las
@@ -869,7 +901,7 @@ function _tdLogApply(kind, detail){
 async function _tdRunDiag(){
   const lines = [];
   const L = s => lines.push(s);
-  L('══ DIAGNÓSTICO EDITOR DE TEXTOS — acentos/IME ══');
+  L('══ DIAGNÓSTICO EDITOR DE TEXTOS — acentos/IME/imágenes ══');
   L(new Date().toLocaleString());
 
   // Versión REALMENTE en ejecución ahora mismo (footer) y estado de caché/SW —
@@ -951,6 +983,67 @@ async function _tdRunDiag(){
   L(' un párrafo alineado con más de una línea)');
   if((window._tdApplyLog || []).length) window._tdApplyLog.forEach(l => L(l));
   else L('(vacío — no se ha pulsado "Aplicar al lienzo" todavía en esta carga de página)');
+
+  // Diagnóstico de inserción de imágenes — pedido explícito por Alberto tras
+  // comprobar que ninguna imagen se ve en el editor de textos. Combina el
+  // historial paso a paso (_tdLogImg, ver _tdInsertImage/_tdWireImageResize)
+  // con una foto EN VIVO del estado actual: adjuntos que Trix cree tener,
+  // elementos <img> que de verdad hay en el DOM ahora mismo, y un vistazo al
+  // HTML crudo — para poder comparar los tres y ver en cuál de ellos se
+  // pierde la imagen.
+  L('');
+  L('── Inserción de imágenes: historial paso a paso (' + (window._tdImgLog || []).length + ') ──');
+  if((window._tdImgLog || []).length) window._tdImgLog.forEach(l => L(l));
+  else L('(vacío — no se ha intentado insertar ninguna imagen todavía en esta carga de página)');
+
+  L('');
+  L('── Inserción de imágenes: estado EN VIVO ahora mismo ──');
+  try{
+    const editorImg = document.getElementById('tdEditor');
+    L('tdGalleryBtn existe: ' + !!document.getElementById('tdGalleryBtn'));
+    L('tdCameraBtn existe: ' + !!document.getElementById('tdCameraBtn'));
+    L('tdFileGallery (input file) existe: ' + !!document.getElementById('tdFileGallery'));
+    L('tdImgResizeBox existe: ' + !!document.getElementById('tdImgResizeBox'));
+    L('editorEl.editor existe: ' + !!(editorImg && editorImg.editor));
+    if(editorImg && editorImg.editor){
+      const ed = editorImg.editor;
+      L('typeof editor.insertFile: ' + typeof ed.insertFile);
+      L('typeof editor.getDocument: ' + typeof ed.getDocument);
+      let atts = [];
+      try{ atts = ed.getDocument().getAttachments(); }catch(e){ L('  Error en editor.getDocument().getAttachments(): ' + e.message); }
+      L('Adjuntos que Trix dice tener ahora mismo: ' + atts.length);
+      atts.forEach((a, i) => {
+        let w, h, url, contentType;
+        try{ w = a.getWidth(); }catch(e){ w = 'ERROR:' + e.message; }
+        try{ h = a.getHeight(); }catch(e){ h = 'ERROR:' + e.message; }
+        try{ url = a.getURL(); }catch(e){ url = 'ERROR:' + e.message; }
+        try{ contentType = a.getContentType ? a.getContentType() : a.attributes?.get?.('contentType'); }catch(e){ contentType = 'ERROR:' + e.message; }
+        L(`  adjunto ${i}: id=${a.id} width=${w} height=${h} contentType=${contentType} url=${url ? (url.slice(0,40) + '…(' + url.length + ' car.)') : '(sin url)'}`);
+      });
+    }
+    const imgsInDom = editorImg ? editorImg.querySelectorAll('img') : [];
+    L('Elementos <img> en el DOM del editor ahora mismo: ' + imgsInDom.length);
+    imgsInDom.forEach((im, i) => {
+      const cs = getComputedStyle(im);
+      L(`  img ${i}: width(attr)=${im.getAttribute('width')} height(attr)=${im.getAttribute('height')} naturalWidth=${im.naturalWidth} naturalHeight=${im.naturalHeight} complete=${im.complete} src.length=${im.src.length} src.slice(0,30)=${JSON.stringify(im.src.slice(0,30))}`);
+      L(`    CSS computado: display=${cs.display} visibility=${cs.visibility} width=${cs.width} height=${cs.height} opacity=${cs.opacity}`);
+      const figParent = im.closest('figure');
+      L(`    <figure> ancestro: ${figParent ? ('class="' + figParent.className + '" data-trix-id=' + figParent.dataset.trixId) : '(ninguno — el <img> no está dentro de un <figure>)'}`);
+    });
+    const hiddenImg = document.getElementById('tdHiddenInput');
+    const htmlImg = hiddenImg ? hiddenImg.value : '';
+    const figCount = (htmlImg.match(/<figure/g) || []).length;
+    L('Nº de "<figure" en el HTML serializado (tdHiddenInput.value): ' + figCount);
+    if(figCount){
+      let searchFrom = 0;
+      for(let i = 0; i < figCount; i++){
+        const p = htmlImg.indexOf('<figure', searchFrom);
+        if(p < 0) break;
+        L(`  fragmento ${i}: ` + JSON.stringify(htmlImg.slice(p, p + 260)));
+        searchFrom = p + 1;
+      }
+    }
+  }catch(e){ L('Error en diagnóstico de imágenes: ' + e.message + '\n' + e.stack); }
 
   // Diagnóstico específico del quiebro de página — pedido para localizar
   // EXACTAMENTE dónde diverge el cálculo real en el dispositivo de Alberto,
@@ -1072,7 +1165,7 @@ async function _tdRunDiag(){
     p.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#111;color:#0f0;font:11px monospace;display:flex;flex-direction:column;padding:8px;';
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:6px;flex-shrink:0';
-    hdr.innerHTML = '<b style="color:#fff">DIAGNÓSTICO ACENTOS/IME</b>';
+    hdr.innerHTML = '<b style="color:#fff">DIAGNÓSTICO ACENTOS/IME/IMÁGENES</b>';
     const btns = document.createElement('div');
     const cp = document.createElement('button');
     cp.textContent = '📋 Copiar'; cp.style.cssText = 'padding:2px 8px;cursor:pointer;margin-right:4px;';
@@ -1470,6 +1563,530 @@ function _tdSyncLineHeightMenuActive(){
     btn.classList.toggle('active', btn.dataset.value === active);
   });
 }
+
+// ── Insertar imágenes en el flujo de texto (pedido explícito por Alberto) ──
+// Se apoya en el mecanismo NATIVO de adjuntos de Trix (editor.insertFile) —
+// el mismo que usa cualquier editor basado en Trix (Basecamp, HEY...) para
+// insertar imágenes; no se reinventa nada de la inserción/paginación en sí.
+// Como esta versión vendorizada de Trix no trae redimensionado con
+// tiradores (versiones más recientes de Trix sí lo tienen), se construye una
+// caja de redimensionado propia (_tdWireImageResize) con el mismo estilo
+// visual que los objetos del canvas del editor general.
+// Registro de cada paso de la inserción de imágenes en el flujo de texto
+// (botón 🩺 tdDiagBtn) — pedido explícito de Alberto tras comprobar que
+// ninguna imagen insertada se veía en el editor. Mismo patrón que
+// _tdLogApply para "Aplicar al lienzo": cada paso queda con su hora exacta,
+// así que al reproducir el fallo y abrir el diagnóstico se ve EXACTAMENTE
+// en qué paso se detiene el proceso.
+window._tdImgLog = window._tdImgLog || [];
+function _tdLogImg(kind, detail){
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
+        ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
+  window._tdImgLog.push(`${hh}:${mm}:${ss}.${ms}  ${kind}  ${detail || ''}`);
+  if(window._tdImgLog.length > 100) window._tdImgLog.shift();
+}
+
+function _tdWireInsertImage(){
+  const editorEl = document.getElementById('tdEditor');
+  const fileInput = document.getElementById('tdFileGallery');
+  if(!editorEl || !fileInput){ _tdLogImg('_tdWireInsertImage ABORTA', 'editorEl=' + !!editorEl + ' fileInput=' + !!fileInput); return; }
+
+  document.getElementById('tdGalleryBtn')?.addEventListener('click', () => {
+    _tdLogImg('clic en Galería', '');
+    // El diálogo de archivo cancela el fullscreen en algunos navegadores —
+    // mismo respaldo que ya usa el editor general (dd-gallery).
+    window._edWasFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    fileInput.click();
+    if(typeof edCloseMenus === 'function') edCloseMenus();
+  });
+  document.getElementById('tdCameraBtn')?.addEventListener('click', () => {
+    _tdLogImg('clic en Cámara', '');
+    if(typeof edCloseMenus === 'function') edCloseMenus();
+    if(typeof edOpenCamera === 'function') edOpenCamera(_tdInsertImage);
+  });
+  // Pegar imagen del portapapeles — mismo mecanismo que dd-paste del editor
+  // general (Clipboard API), como respaldo explícito para táctil por si el
+  // gesto nativo de pegar del sistema no trae imágenes de forma fiable en
+  // todos los dispositivos; en PC, Ctrl+V ya funciona de forma nativa en
+  // Trix (ver _tdWatchForPastedImages) y este botón hace exactamente lo
+  // mismo por otra vía.
+  document.getElementById('tdPasteBtn')?.addEventListener('click', async () => {
+    _tdLogImg('clic en Pegar', '');
+    if(typeof edCloseMenus === 'function') edCloseMenus();
+    if(!navigator.clipboard || !navigator.clipboard.read){
+      edToast(I18n.t('ed_clipboardNotSupported'));
+      return;
+    }
+    try{
+      const items = await navigator.clipboard.read();
+      let imgBlob = null;
+      for(const it of items){
+        const imgType = it.types.find(t => t.startsWith('image/'));
+        if(imgType){ imgBlob = await it.getType(imgType); break; }
+      }
+      if(!imgBlob){ edToast(I18n.t('ed_noImageInClipboard')); return; }
+      _tdInsertImage(imgBlob);
+    }catch(_err){
+      _tdLogImg('EXCEPCIÓN pegando desde portapapeles', (_err && _err.message) || String(_err));
+      edToast(I18n.t('ed_clipboardReadFailed'));
+    }
+  });
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files[0]; e.target.value = '';
+    _tdLogImg('input[file] change', f ? (f.name + ' ' + f.type + ' ' + f.size + 'B') : '(sin archivo)');
+    if(!f) return;
+    _tdInsertImage(f);
+    if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
+      setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
+    }
+    window._edWasFullscreen = false;
+  });
+
+  _tdWireImageResize();
+  _tdWatchForPastedImages();
+  _tdWireLibrary();
+  _tdLogImg('_tdWireInsertImage completado', 'tdGalleryBtn=' + !!document.getElementById('tdGalleryBtn') + ' tdCameraBtn=' + !!document.getElementById('tdCameraBtn') + ' tdPasteBtn=' + !!document.getElementById('tdPasteBtn'));
+}
+
+// Inserta un archivo de imagen en la posición actual del cursor, vía el
+// adjunto nativo de Trix. Trix genera de entrada una URL temporal (blob:)
+// válida solo en esta sesión del navegador — no sirve para guardar la obra.
+// En cuanto el archivo termina de leerse se sustituye por una URL de datos
+// (base64) persistente: Trix ya distingue internamente "URL de vista previa"
+// (la que se ve mientras se edita) de "URL real" (la que serializa/guarda,
+// ver data-trix-serialized-attributes en su propio código), así que la
+// vista previa instantánea (blob) no se pierde mientras se sustituye en
+// segundo plano la URL de guardado.
+//
+// BUG CORREGIDO: la primera versión de esta función esperaba el evento
+// "trix-attachment-add" para enganchar el adjunto recién insertado — ese
+// evento existe en versiones más recientes de Trix, pero SE COMPROBÓ
+// DIRECTAMENTE EN EL CÓDIGO que esta versión vendorizada (trix.umd.min.js)
+// no lo dispara en ningún sitio. Al no dispararse nunca, ni el tamaño ni la
+// URL persistente ni la selección para redimensionar llegaban a aplicarse
+// — la imagen se insertaba "en el limbo" (bug reportado por Alberto: "no se
+// ven las imágenes"). insertFile/insertAttachments/insertText son síncronos
+// (sin promesas de por medio, comprobado en el propio código), así que
+// basta con leer editor.getDocument().getAttachments() justo después de
+// llamar a insertFile: el adjunto recién creado ya está ahí, identificable
+// por su propio File (siempre una instancia nueva en cada selección).
+function _tdInsertImage(file){
+  _tdLogImg('_tdInsertImage llamada', file ? (file.name + ' ' + file.type) : '(sin archivo)');
+  if(!file || !file.type || !file.type.startsWith('image/')){ _tdLogImg('_tdInsertImage ABORTA', 'archivo no es imagen'); return; }
+  const editorEl = document.getElementById('tdEditor');
+  const editor = editorEl && editorEl.editor;
+  _tdLogImg('estado editor', 'editorEl=' + !!editorEl + ' editorEl.editor=' + !!editor + ' typeof insertFile=' + (editor && typeof editor.insertFile));
+  if(!editor){ _tdLogImg('_tdInsertImage ABORTA', 'editorEl.editor no existe todavía'); return; }
+  editorEl.focus();
+
+  let att;
+  try{
+    editor.insertFile(file);
+    _tdLogImg('editor.insertFile() ejecutado sin lanzar excepción', '');
+    const atts = editor.getDocument().getAttachments();
+    _tdLogImg('adjuntos en el documento tras insertar', 'total=' + atts.length + ' ids=[' + atts.map(a=>a.id).join(',') + ']');
+    att = atts.find(a => a.file === file);
+    _tdLogImg('búsqueda del adjunto recién insertado (por a.file===file)', att ? ('ENCONTRADO id=' + att.id) : 'NO ENCONTRADO');
+  }catch(err){
+    _tdLogImg('EXCEPCIÓN en editor.insertFile/getAttachments', (err && err.message) || String(err));
+    edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
+    return;
+  }
+  if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); return; }
+  _tdProcessNewImageAttachment(att, file);
+}
+
+// Conjunto de ids de adjuntos ya tratados (URL persistente + tamaño inicial
+// fijados) — evita volver a procesar el mismo adjunto en cada trix-change,
+// que se dispara con CUALQUIER edición del documento, no solo al insertar
+// una imagen (ver _tdWatchForPastedImages).
+window._tdProcessedAttIds = window._tdProcessedAttIds || new Set();
+
+// Aplica a un adjunto de imagen recién creado el mismo tratamiento, venga
+// del botón "Insertar" (galería/cámara, ver _tdInsertImage) o de pegar con
+// Ctrl+V/gesto táctil (ver _tdWatchForPastedImages): sustituir su URL
+// temporal (blob:, solo válida en esta sesión) por una persistente (data:),
+// fijarle un tamaño inicial por defecto, y seleccionarla para poder
+// redimensionarla de inmediato. Trix ya distingue internamente "URL de
+// vista previa" (la que se ve mientras se edita) de "URL real" (la que
+// serializa/guarda, ver data-trix-serialized-attributes en su propio
+// código), así que la vista previa instantánea (blob) no se pierde
+// mientras se sustituye en segundo plano la URL de guardado.
+function _tdProcessNewImageAttachment(att, file){
+  if(!att || !file || window._tdProcessedAttIds.has(att.id)) return;
+  window._tdProcessedAttIds.add(att.id);
+  const editorEl = document.getElementById('tdEditor');
+
+  const reader = new FileReader();
+  reader.onerror = () => { _tdLogImg('FileReader onerror', String(reader.error)); edToast(I18n.t('td_errReadText', { msg: 'FileReader' })); };
+  reader.onload = e => {
+    const dataUrl = e.target.result;
+    _tdLogImg('FileReader onload', 'dataUrl.length=' + (dataUrl ? dataUrl.length : 0));
+    const img = new Image();
+    img.onerror = () => { _tdLogImg('Image onerror (dataUrl no decodifica como imagen)', ''); edToast(I18n.t('td_errReadText', { msg: 'Image' })); };
+    img.onload = () => {
+      const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
+      _tdLogImg('Image onload (dataUrl decodificada)', 'natural=' + natW + '×' + natH);
+      // Ancho por defecto: 70% de la columna de escritura visible (mismo
+      // criterio que edAddImage usa para el canvas: 0.7 del ancho de
+      // página), medido sobre el ancho REAL de #tdEditor en este instante.
+      const colW = (editorEl && editorEl.clientWidth) || 600;
+      let w = Math.round(colW * 0.7);
+      let h = Math.round(w * (natH / natW));
+      // Tope: no más alta que 1.2x el ancho de columna — una imagen muy
+      // vertical no debe dominar la página entera de entrada.
+      const maxH = Math.round(colW * 1.2);
+      if(h > maxH){ h = maxH; w = Math.round(h * (natW / natH)); }
+      _tdLogImg('calculado tamaño destino', 'colW=' + colW + ' → w=' + w + ' h=' + h);
+      try{
+        att.setAttributes({ width: w, height: h, url: dataUrl, href: dataUrl });
+        _tdLogImg('att.setAttributes() ejecutado sin lanzar excepción', 'att.getWidth()=' + att.getWidth() + ' att.getHeight()=' + att.getHeight() + ' att.getURL().length=' + (att.getURL()||'').length);
+      }catch(_e){
+        _tdLogImg('EXCEPCIÓN en att.setAttributes', (_e && _e.message) || String(_e));
+      }
+      // Seleccionar la imagen recién insertada para poder redimensionarla
+      // de inmediato — a petición de Alberto (mismo hábito que el canvas:
+      // un objeto recién insertado queda seleccionado).
+      requestAnimationFrame(() => {
+        const fig = editorEl && editorEl.querySelector(`[data-trix-id="${att.id}"]`);
+        const imgEl = fig && fig.tagName === 'IMG' ? fig : fig?.querySelector('img');
+        _tdLogImg('búsqueda del <img> renderizado (rAF tras setAttributes)', 'fig=' + !!fig + ' imgEl=' + !!imgEl + (imgEl ? (' imgEl.src.length=' + imgEl.src.length + ' imgEl.width=' + imgEl.width + ' imgEl.complete=' + imgEl.complete + ' imgEl.naturalWidth=' + imgEl.naturalWidth) : ''));
+        if(imgEl && typeof _tdSelectImageForResize === 'function') _tdSelectImageForResize(imgEl);
+      });
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Detecta imágenes insertadas por vías NATIVAS de Trix (Ctrl+V, gesto de
+// pegar táctil, arrastrar y soltar) que aún no hayan pasado por
+// _tdProcessNewImageAttachment, y les aplica el mismo tratamiento — pedido
+// explícito de Alberto: "habilitar el Ctrl+V para pegar imágenes". Sin
+// esto, Trix ya insertaba la imagen pegada (mismo filtro trix-file-accept
+// corregido en su momento), pero se quedaba con la URL temporal (blob:) de
+// Trix y un tamaño sin controlar — se vería bien en la sesión actual, pero
+// desaparecería al guardar y volver a abrir la obra (la URL blob: no
+// sobrevive a recargar la página).
+function _tdWatchForPastedImages(){
+  const editorEl = document.getElementById('tdEditor');
+  if(!editorEl) return;
+  editorEl.addEventListener('trix-change', () => {
+    const editor = editorEl.editor;
+    if(!editor) return;
+    let atts;
+    try{ atts = editor.getDocument().getAttachments(); }catch(_e){ return; }
+    atts.forEach(att => {
+      if(att.file && !window._tdProcessedAttIds.has(att.id)){
+        _tdLogImg('imagen detectada por vía nativa (pegar/soltar)', 'att.id=' + att.id + ' file=' + (att.file.name || '?'));
+        _tdProcessNewImageAttachment(att, att.file);
+      }
+    });
+  });
+}
+
+// ── Biblioteca en el editor de textos (pedido explícito de Alberto: "colocar
+// objetos de la biblioteca en el flujo de texto", y tras comprobar que un
+// panel propio "no ha funcionado en absoluto": "reutiliza la biblioteca tal
+// como está en el editor de animaciones") ──
+// Se reutiliza edOptionsPanel + _bibRenderPanel TAL CUAL — el mismo panel y
+// la misma función que usa el editor general, exactamente igual que hace
+// gcpBibBtn en el editor de animaciones (ver su addEventListener('click')
+// más abajo en este mismo archivo, línea ~35778): un solo botón que llama a
+// _bibRenderPanel($('edOptionsPanel')). La clase 'td-open' en #editorShell
+// (añadida/quitada en edOpenTextDoc/edCloseTextDoc) reutiliza el mismo
+// mecanismo CSS que 'gcp-open' para que el panel se vea POR ENCIMA del
+// overlay del editor de textos (ver #editorShell.td-open #edOptionsPanel en
+// editor.css). El destino de la inserción (canvas / GCP / editor de textos)
+// se decide en el propio manejador de toque de _bib-item en editor.js,
+// comprobando esa misma clase 'td-open'.
+function _tdWireLibrary(){
+  document.getElementById('tdLibraryOpenBtn')?.addEventListener('click', () => {
+    const panel = document.getElementById('edOptionsPanel');
+    if(panel && typeof _bibRenderPanel === 'function') _bibRenderPanel(panel);
+  });
+}
+
+// Calcula las esquinas rotadas de un objeto en fracciones de página — misma
+// fórmula que ya usan edExportSelectionPNG (objeto individual) y _msBBox
+// (varios): geometría real (x/y/width/height/rotación), no detección de
+// píxeles por transparencia.
+function _tdLayerCorners(la, pw, ph){
+  const rot = (la.rotation||0) * Math.PI / 180;
+  const hw = (la.width||0)/2, hh = (la.height||0)/2;
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const [cx,cy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+    const wx=cx*pw, wy=cy*ph;
+    const rx=(wx*Math.cos(rot)-wy*Math.sin(rot))/pw;
+    const ry=(wx*Math.sin(rot)+wy*Math.cos(rot))/ph;
+    x0=Math.min(x0,la.x+rx); y0=Math.min(y0,la.y+ry);
+    x1=Math.max(x1,la.x+rx); y1=Math.max(y1,la.y+ry);
+  }
+  return {x0,y0,x1,y1};
+}
+
+// Renderiza uno o varios objetos reconstruidos de la biblioteca a un PNG
+// recortado EXACTAMENTE a su caja — mismo criterio que edExportSelectionPNG
+// (pedido explícito de Alberto: "observa cómo se insertan en el canvas GCP,
+// se calcula el tamaño de su box, ese es el tamaño que debe tener el objeto
+// insertado"). BUG CORREGIDO: _gcpVectorToImage/_gcpMergeLayersToImage
+// recortaban DETECTANDO píxeles con alfa>10 sobre un lienzo enorme con
+// margen de sobra — cualquier imprecisión ahí (antialiasing, sombras,
+// bordes suaves) dejaba un recorte suelto con el objeto pequeño en una
+// esquina de un marco vacío enorme, y peor calidad al no coincidir el
+// tamaño real. Aquí la caja se calcula de forma matemática, exacta, sin
+// escanear un solo píxel.
+//
+// items: [{la, ld}] — la = capa deserializada (x/y/width/height/rotation
+// para la geometría); ld = su versión serializada (con .dataUrl si es una
+// capa basada en canvas — stroke/draw/fill/watercolor/pencil), para no
+// depender de que su _canvas interno esté listo de forma síncrona justo
+// tras deserializar (mismo criterio que ya usa _gcpMergeLayersToImage con
+// los miembros de un grupo).
+function _tdRenderLayersToImage(items, cb){
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  items.forEach(({la}) => {
+    if(la.width == null || la.height == null) return; // sin caja propia — no aporta al recorte
+    const c = _tdLayerCorners(la, pw, ph);
+    x0=Math.min(x0,c.x0); y0=Math.min(y0,c.y0);
+    x1=Math.max(x1,c.x1); y1=Math.max(y1,c.y1);
+  });
+  if(!(x1>x0) || !(y1>y0)){ cb(null); return; }
+  const bxPx = Math.max(1, Math.ceil((x1-x0) * pw));
+  const byPx = Math.max(1, Math.ceil((y1-y0) * ph));
+  const baseX = -(mx + x0*pw), baseY = -(my + y0*ph);
+
+  const promises = items.map(({la, ld}) => {
+    if(!ld || !ld.dataUrl) return Promise.resolve({la, img:null});
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve({la, img});
+      img.onerror = () => resolve({la, img:null});
+      img.src = ld.dataUrl;
+    });
+  });
+  Promise.all(promises).then(results => {
+    const off = document.createElement('canvas');
+    off.width = bxPx; off.height = byPx;
+    const offCtx = off.getContext('2d', { alpha: true });
+    results.forEach(({la, img}) => {
+      offCtx.save();
+      offCtx.setTransform(1, 0, 0, 1, baseX, baseY);
+      offCtx.globalAlpha = la.opacity ?? 1;
+      if(img){
+        // Capa basada en canvas (stroke/draw/fill/watercolor/pencil): usar
+        // el dataUrl ya serializado, posicionado con su propia geometría.
+        const cx = mx + (la.x ?? 0.5) * pw, cy = my + (la.y ?? 0.5) * ph;
+        const w  = (la.width  ?? 1) * pw,   h  = (la.height ?? 1) * ph;
+        offCtx.translate(cx, cy);
+        if(la.rotation) offCtx.rotate(la.rotation * Math.PI / 180);
+        offCtx.drawImage(img, -w/2, -h/2, w, h);
+      } else if(la.type === 'image' || la.type === 'gif' || la.type === 'text' || la.type === 'bubble'){
+        la.draw(offCtx, off);
+      } else {
+        la.draw(offCtx);
+      }
+      offCtx.restore();
+    });
+    cb(off.toDataURL('image/png'));
+  });
+}
+
+// Inserta un elemento de la biblioteca en el flujo de texto como imagen
+// estática, con la caja de recorte calculada igual que edExportSelectionPNG
+// (ver _tdRenderLayersToImage arriba).
+function _tdInsertFromBib(entry){
+  if(!entry) return;
+  _tdLogImg('insertar desde biblioteca', 'id=' + entry.id + ' isGroup=' + !!entry.isGroup + ' isGifAnim=' + !!entry.isGifAnim + ' orientation=' + entry.orientation);
+
+  // El objeto guardó su x/y/width/height como fracción de la página que
+  // tenía en ese momento (entry.orientation) — mismo truco que ya usa
+  // edRenderPage para volcar una página de otra orientación: cambiar
+  // edOrientation TEMPORALMENTE mientras se renderiza (así edPageW/edPageH
+  // devuelven las dimensiones con las que se calibraron sus fracciones), y
+  // restaurarla al terminar — incluida la parte asíncrona, por eso se
+  // restaura dentro de _finish (el único punto de salida) y no antes.
+  const _savedOrientBib = edOrientation;
+  if(entry.orientation) edOrientation = entry.orientation;
+
+  const _finish = (dataUrl) => {
+    edOrientation = _savedOrientBib;
+    if(!dataUrl){ _tdLogImg('insertar desde biblioteca ABORTA', 'sin dataUrl resultante'); return; }
+    try{
+      const blob = _dataUrlToBlob(dataUrl);
+      const file = new File([blob], 'biblioteca.png', { type: blob.type || 'image/png' });
+      _tdInsertImage(file);
+    }catch(err){
+      _tdLogImg('EXCEPCIÓN insertando desde biblioteca', (err && err.message) || String(err));
+      edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
+    }
+  };
+
+  // Animaciones (GIF/GCP): el flujo de texto no reproduce animaciones — se
+  // usa su miniatura ya generada como fotograma fijo, mismo criterio que
+  // gcpInsertFromBib aplica a objetos no animables directamente.
+  if(entry.isGifAnim){ _finish(entry.thumb); return; }
+
+  // Grupos multi-capa: componer TODAS las capas en una sola imagen,
+  // recortada a la caja UNIÓN de todas ellas.
+  if(entry.isGroup && Array.isArray(entry.layers)){
+    const items = entry.layers.map(ld => {
+      const la = edDeserLayer(ld, edOrientation);
+      if(!la) return null;
+      delete la._fusionId;
+      return { la, ld };
+    }).filter(Boolean);
+    if(!items.length){ _finish(entry.thumb); return; }
+    _tdRenderLayersToImage(items, dataUrl => _finish(dataUrl || entry.thumb));
+    return;
+  }
+
+  // Objeto individual
+  const la = entry.layerData ? edDeserLayer(entry.layerData, edOrientation) : null;
+  if(!la){ _finish(entry.thumb); return; }
+  delete la._fusionId;
+  if(la.type === 'image' || la.type === 'gif'){
+    // Ya es una imagen — usar su propio src (más nítido que la miniatura)
+    _finish(la.src || entry.thumb);
+  } else if(la.width != null && la.height != null){
+    // Cualquier otro tipo con caja propia (shape/line/text/bocadillo/
+    // trazo/dibujo a mano): el propio entry.layerData ya trae su .dataUrl
+    // si es una capa basada en canvas (ver edSerLayer), así que esto
+    // funciona igual de bien para todos ellos.
+    _tdRenderLayersToImage([{ la, ld: entry.layerData }], dataUrl => _finish(dataUrl || entry.thumb));
+  } else {
+    _finish(entry.thumb);
+  }
+}
+
+// Expuesta para que _tdInsertImage pueda seleccionar la imagen recién
+// insertada (ver más abajo, _tdWireImageResize la define de verdad).
+let _tdSelectImageForResize = null;
+
+// Caja de redimensionado de imágenes del flujo de texto — mismo estilo
+// visual (marco discontinuo azul + tiradores circulares) que los objetos
+// del canvas del editor general (ver edDrawSel en editor.js). Arrastrar
+// cualquier tirador redimensiona manteniendo la proporción original de la
+// imagen, igual que la mayoría de editores de texto comunes.
+function _tdWireImageResize(){
+  const editorEl = document.getElementById('tdEditor');
+  const box = document.getElementById('tdImgResizeBox');
+  if(!editorEl || !box) return;
+  let _rzImg = null;         // <img> DOM seleccionado actualmente
+  let _rzAttachment = null;  // objeto Attachment de Trix correspondiente
+  let _rzAspect = 1;         // ancho/alto original — mantener proporción
+  let _rzRaf = 0;
+
+  function hideBox(){
+    box.classList.remove('visible');
+    _rzImg = null; _rzAttachment = null;
+    cancelAnimationFrame(_rzRaf); _rzRaf = 0;
+  }
+
+  function syncBoxPosition(){
+    if(!_rzImg || !_rzImg.isConnected){ hideBox(); return; }
+    const r = _rzImg.getBoundingClientRect();
+    box.style.left   = r.left   + 'px';
+    box.style.top    = r.top    + 'px';
+    box.style.width  = r.width  + 'px';
+    box.style.height = r.height + 'px';
+    _rzRaf = requestAnimationFrame(syncBoxPosition);
+  }
+
+  function selectImage(img){
+    const editor = editorEl.editor;
+    const fig = img.closest('[data-trix-id]');
+    if(!fig || !editor){ _tdLogImg('selectImage ABORTA', 'fig=' + !!fig + ' editor=' + !!editor); hideBox(); return; }
+    // BUG CORREGIDO: editor.getAttachments() no existe en la clase Editor de
+    // Trix (comprobado directamente en trix.umd.min.js) — solo existe en
+    // editor.getDocument().getAttachments(). Llamarlo lanzaba una excepción
+    // sin capturar cada vez que se tocaba una imagen ya insertada.
+    let att;
+    try{
+      att = editor.getDocument().getAttachments().find(a => String(a.id) === fig.dataset.trixId);
+    }catch(_e){
+      _tdLogImg('EXCEPCIÓN en selectImage/getAttachments', (_e && _e.message) || String(_e));
+      hideBox(); return;
+    }
+    if(!att){ _tdLogImg('selectImage', 'adjunto no encontrado para data-trix-id=' + fig.dataset.trixId); hideBox(); return; }
+    _tdLogImg('selectImage OK', 'att.id=' + att.id + ' w=' + att.getWidth() + ' h=' + att.getHeight());
+    _rzImg = img; _rzAttachment = att;
+    const w = att.getWidth()  || img.naturalWidth  || img.clientWidth  || 1;
+    const h = att.getHeight() || img.naturalHeight || img.clientHeight || 1;
+    _rzAspect = h > 0 ? (w / h) : 1;
+    box.classList.add('visible');
+    cancelAnimationFrame(_rzRaf);
+    syncBoxPosition();
+  }
+  _tdSelectImageForResize = selectImage;
+
+  editorEl.addEventListener('click', e => {
+    const img = e.target.closest('.attachment--preview img');
+    if(img) selectImage(img); else hideBox();
+  });
+  // Si el texto alrededor cambia (p.ej. se borra la imagen), la caja debe
+  // desaparecer en vez de quedar flotando sobre nada.
+  editorEl.addEventListener('trix-change', () => {
+    if(_rzImg && !_rzImg.isConnected) hideBox();
+  });
+
+  box.querySelectorAll('.td-rz-handle').forEach(handle => {
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      if(!_rzImg || !_rzAttachment) return;
+      const corner = handle.dataset.corner;
+      const startX = e.clientX;
+      const startRect = _rzImg.getBoundingClientRect();
+      const startW = startRect.width;
+      const colEl = editorEl;
+      const maxW = colEl ? colEl.clientWidth : startW * 3;
+      const minW = 40; // por debajo deja de ser una imagen útil
+      cancelAnimationFrame(_rzRaf); _rzRaf = 0;
+      try{ handle.setPointerCapture(e.pointerId); }catch(_e){}
+
+      function applySize(w){
+        const h = Math.round(w / _rzAspect);
+        _rzImg.style.width  = w + 'px';
+        _rzImg.style.height = h + 'px';
+        const r = _rzImg.getBoundingClientRect();
+        box.style.left = r.left + 'px'; box.style.top = r.top + 'px';
+        box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
+      }
+      function onMove(ev){
+        const dx = ev.clientX - startX;
+        // Las esquinas derechas (ne/se) crecen con dx positivo; las
+        // izquierdas (nw/sw) crecen con dx negativo (arrastrar hacia fuera).
+        const sign = (corner === 'ne' || corner === 'se') ? 1 : -1;
+        const newW = Math.max(minW, Math.min(maxW, Math.round(startW + sign * dx)));
+        applySize(newW);
+      }
+      function onUp(){
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        const finalW = Math.round(parseFloat(_rzImg.style.width) || startW);
+        const finalH = Math.round(finalW / _rzAspect);
+        _rzImg.style.width = ''; _rzImg.style.height = ''; // Trix reaplica vía atributos width/height reales
+        _rzAttachment.setAttributes({ width: finalW, height: finalH });
+        requestAnimationFrame(syncBoxPosition);
+      }
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+  });
+
+  // Tocar fuera de la imagen/caja la oculta — para poder seguir escribiendo
+  // en otro punto del texto con normalidad.
+  document.addEventListener('pointerdown', e => {
+    if(!box.classList.contains('visible')) return;
+    if(e.target.closest('#tdImgResizeBox')) return;
+    if(e.target.closest('.attachment--preview img')) return;
+    hideBox();
+  }, {passive:true});
+}
+
 
 // ── Paginación EN VIVO mientras se escribe (hojas A4 reales; la línea activa
 //    se mantiene centrada y visible, incluso por debajo de la cabecera) ─────
@@ -2059,6 +2676,50 @@ function _tdParseBlocks(html){
       } else if(child.nodeType === Node.ELEMENT_NODE){
         const tag = child.tagName.toLowerCase();
         if(tag === 'br'){ runs.push({break:true}); return; }
+        // Imagen insertada en el flujo de texto (ver _tdInsertImage): Trix la
+        // coloca como una PIEZA más dentro del párrafo donde estaba el
+        // cursor (un <figure> hijo directo de ESE párrafo, mezclado con el
+        // texto) — NO como un bloque propio independiente. Se detecta aquí
+        // (donde de verdad aparece) y se emite como run especial "isImage";
+        // _tdLayoutPages corta la línea de texto en este punto al procesar
+        // los runs del bloque. Antes se buscaba (sin éxito nunca) a nivel de
+        // bloque completo, así que esta rama recorría el <figure> como si
+        // fuera un contenedor de texto más y se perdía en silencio — bug
+        // reportado por Alberto: "solo aparece el texto, sin cambio de
+        // línea siquiera" entre el texto de antes y el de después.
+        if(tag === 'figure' && child.classList.contains('attachment--preview')){
+          const imgEl = child.querySelector('img');
+          if(imgEl && imgEl.getAttribute('src')){
+            const natW = parseInt(imgEl.getAttribute('width'), 10)  || imgEl.naturalWidth  || 1;
+            const natH = parseInt(imgEl.getAttribute('height'), 10) || imgEl.naturalHeight || 1;
+            // heightEm: alto de la imagen expresado en "veces el tamaño de
+            // letra" del editor de textos EN VIVO (medido con
+            // getComputedStyle sobre el propio #tdEditor en este instante),
+            // NO una fracción del ancho de columna. BUG CORREGIDO (pedido
+            // explícito de Alberto: "la relación del tamaño de la imagen con
+            // el tamaño del texto... se respete al insertarse en el
+            // canvas"): el tamaño de letra en pantalla del editor de textos
+            // (.td-editor, ≈16.8px) NO es el mismo que el real del lienzo
+            // (TD_BODY_SIZE=22px) — ver comentario de editorCssFontSizePx
+            // más arriba en este archivo. Guardar solo una fracción del
+            // ANCHO de columna ignoraba esa diferencia: una imagen que en el
+            // editor se veía, p.ej., "tan alta como 3 líneas de texto",
+            // podía acabar viéndose más pequeña o más grande que eso en el
+            // lienzo, porque las columnas y los tamaños de letra escalan en
+            // proporciones distintas entre los dos sitios. Expresando el
+            // alto como múltiplo del tamaño de letra (aquí) y aplicando ESE
+            // mismo múltiplo al tamaño de letra real del lienzo (ver
+            // _tdLayoutPages), la imagen conserva su tamaño relativo al
+            // texto en ambos sitios, con independencia del ancho de columna.
+            const liveEditorImg = document.getElementById('tdEditor');
+            let editorFontPx = 16;
+            try{ if(liveEditorImg) editorFontPx = parseFloat(getComputedStyle(liveEditorImg).fontSize) || editorFontPx; }catch(_e){}
+            const heightEm = Math.max(0.5, natH / editorFontPx);
+            const aspect = natH > 0 ? (natW / natH) : 1;
+            runs.push({ isImage: true, src: imgEl.getAttribute('src'), heightEm, aspect });
+          }
+          return;
+        }
         let newState = {...state};
         if(tag === 'strong' || tag === 'b') newState.bold = true;
         if(tag === 'em' || tag === 'i') newState.italic = true;
@@ -2078,6 +2739,19 @@ function _tdParseBlocks(html){
   }
 
   const TD_WRAPPER_TAGS = ['align-center', 'align-right', 'align-justify', 'line-compact', 'line-amplio'];
+  // NOTA: 'figure' NO va aquí. Un <figure> (imagen insertada, ver
+  // _tdInsertImage) es siempre una PIEZA dentro de un párrafo — igual que
+  // <strong>/<em>/<br> — nunca un bloque real independiente (ver el
+  // comentario grande de wrapsRealBlock más abajo, que explica exactamente
+  // este mismo tipo de fallo para negrita/cursiva/saltos de línea). Llegué
+  // a añadirlo aquí al construir la inserción de imágenes, y eso reprodujo
+  // el MISMO bug ya documentado: un párrafo alineado que mezclaba texto e
+  // imagen (Trix envuelve el párrafo ENTERO en una sola etiqueta de
+  // alineación) se recorría como si la envoltura contuviera bloques
+  // separados — y el texto suelto alrededor de la imagen, al ser nodos de
+  // texto (no elementos), es invisible para outer.children y se perdía por
+  // completo. Bug reportado por Alberto: cambiar la alineación de un texto
+  // con imágenes dejaba "Aplicar al lienzo" sin nada que aplicar.
   const TD_BLOCK_TAGS = ['div', 'h1', 'blockquote', 'ul', 'ol', 'pre', 'aside'].concat(TD_WRAPPER_TAGS);
 
   function walkBlockLevel(container, ctxKind, indentLevel, align, lineMult){
@@ -2193,6 +2867,15 @@ function _tdRegisterCustomTrixAttributes(){
   // reportado en su repositorio (issue #864: una etiqueta personalizada
   // sin esto se guardaba bien, pero desaparecía al reabrir el editor).
   Trix.config.dompurify.ADD_TAGS = (Trix.config.dompurify.ADD_TAGS || []).concat(['align-center', 'align-right', 'align-justify', 'line-compact', 'line-amplio']);
+  // Imágenes insertadas en el flujo de texto (ver _tdInsertImage): por
+  // defecto Trix añade una leyenda automática con el nombre de archivo y el
+  // tamaño en bytes bajo cada imagen — sobra aquí (pedido explícito de
+  // Alberto: "incluyen información de la imagen que sobra"). Se desactiva
+  // vía la config oficial (Trix.config.attachments.preview.caption), no
+  // ocultando por CSS: así ni siquiera se genera el texto.
+  if(Trix.config.attachments && Trix.config.attachments.preview){
+    Trix.config.attachments.preview.caption = { name: false, size: false };
+  }
 }
 _tdRegisterCustomTrixAttributes();
 
@@ -2338,7 +3021,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // lo real, el bug reportado ("las rectas un renglón por debajo").
       _tdDoBreak();
     }
-    const baseline = curY + entry.height * 0.78;
+    const baseline = curY + (entry.kind === 'image' ? 0 : entry.height * 0.78);
     const lineObj = {
       y: my + baseline,
       indent: mx + entry.indent,
@@ -2353,6 +3036,10 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // en marco y para cuando se calculan las x ya solo queda el último.
       availW: Math.max(20, textW - entry.indent)
     };
+    // Imagen insertada en el flujo (ver _tdParseBlocks/_tdInsertImage): a
+    // diferencia del texto, "y" aquí es la esquina SUPERIOR (drawImage la
+    // necesita así), no la línea base — de ahí el offset 0 más arriba.
+    if(entry.kind === 'image'){ lineObj.src = entry.src; lineObj.imgW = entry.imgW; lineObj.imgH = entry.imgH; }
     curLines.push(lineObj);
     curY += entry.height;
     lineStartChars.push(endChars);
@@ -2397,6 +3084,10 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     let words = [];
     (block.runs || []).forEach(run => {
       if(run.break){ words.push({break:true}); return; }
+      // Imagen intercalada en mitad del párrafo (ver runsFromInline) — pasa
+      // como una "palabra" especial más; el bucle de más abajo la reconoce
+      // por w.isImage y corta la línea de texto en ese punto.
+      if(run.isImage){ words.push({isImage:true, src:run.src, heightEm:run.heightEm, aspect:run.aspect}); return; }
       const parts = (run.text || '').split(/(\s+)/).filter(s => s.length);
       parts.forEach(p => words.push({
         text:p, bold: isHeading ? true : !!run.bold, italic:!!run.italic, strike:!!run.strike, mono:!!run.mono,
@@ -2444,6 +3135,39 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
 
     words.forEach(w => {
       if(w.break){ flushLine(); return; }
+      if(w.isImage){
+        // Corta la línea de texto pendiente (si la había), inserta la
+        // imagen como línea atómica propia (mismo pushLine que usan las
+        // líneas de texto, con su mismo criterio de salto de página si no
+        // cupiera), y sigue el resto del párrafo después en una línea
+        // nueva — pedido explícito de Alberto: "tener en cuenta las
+        // imágenes insertadas para el cálculo de inserción en el canvas".
+        //
+        // Tamaño: heightEm × tamaño de letra REAL de este bloque en el
+        // lienzo (baseFontSize) — conserva la relación "esta imagen mide
+        // tantas veces el tamaño de letra" tal como se veía en el editor de
+        // textos, en vez de una fracción del ancho de columna que ignoraba
+        // la diferencia entre el tamaño de letra de edición (~16.8px) y el
+        // real del lienzo (22px) — pedido explícito de Alberto: "la
+        // relación del tamaño de la imagen con el tamaño del texto... se
+        // respete". Tope al ancho de columna disponible: si aun así no
+        // cupiera de ancho (imagen muy panorámica), se reduce sin perder la
+        // proporción propia de la imagen.
+        const availImg = Math.max(20, textW - indentPx);
+        let imgH = Math.max(1, Math.round((w.heightEm || 5) * baseFontSize));
+        let imgW = Math.max(1, Math.round(imgH * (w.aspect || 1)));
+        if(imgW > availImg){ imgW = availImg; imgH = Math.max(1, Math.round(imgW / (w.aspect || 1))); }
+        if(lineRuns.length) flushLine();
+        // Las imágenes siempre centradas, sea cual sea la alineación del
+        // párrafo (izquierda/derecha/justificado/centrado) — pedido
+        // explícito de Alberto: "que las imágenes siempre estén centradas
+        // con el texto, sea cual sea la alineación del texto". A diferencia
+        // de las líneas de texto (que sí heredan block.align), la imagen
+        // ignora ese valor a propósito.
+        pushLine({height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH});
+        firstLineOfBlock = false;
+        return;
+      }
       if(w.isSpace && lineRuns.length === 0) return; // no empezar línea con espacio
       // Salto de página ANTICIPADO: si esta es la primera palabra de una
       // línea nueva y, por la altura estimada de esa línea (tamaño base de
@@ -2495,9 +3219,30 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   // cuenta — por eso basta con tocar este único sitio.
   pages.forEach(page => {
     page.forEach(line => {
+      const availW = line.availW || 0;
+
+      if(line.kind === 'image'){
+        // Igual que con el texto: la posición X final se calcula aquí, una
+        // única vez, ANTES de borrar line.availW más abajo — _drawRichLines
+        // (editor.js) usa line.imgX tal cual, sin recalcular nada. BUG
+        // CORREGIDO (reportado por Alberto: "en el canvas se inserta
+        // alineada a la izquierda"): antes _drawRichLines leía
+        // line.availW directamente para centrarla, pero para cuando se
+        // dibuja esa propiedad ya se había borrado aquí mismo (unas líneas
+        // más abajo), así que cualquier alineación caía siempre al valor
+        // por defecto (el propio ancho de la imagen) y el resultado era
+        // "pegada a la izquierda" con independencia de line.align.
+        let imgX = line.indent;
+        if(line.align === 'center') imgX = line.indent + Math.max(0, (availW - line.imgW) / 2);
+        else if(line.align === 'right') imgX = line.indent + Math.max(0, availW - line.imgW);
+        line.imgX = imgX;
+        delete line.availW;
+        delete line.isBlockEnd;
+        return;
+      }
+
       let lineWidth = 0;
       line.runs.forEach(r => { lineWidth += r.width; });
-      const availW = line.availW || 0;
 
       let startX = line.indent; // izquierda: como siempre
       if(line.align === 'center'){

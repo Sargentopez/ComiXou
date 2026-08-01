@@ -1956,6 +1956,25 @@ function _edTextMeasureCtx() {
   return _edTextMeasureCtxCache;
 }
 
+// Caché de imágenes insertadas en el flujo de texto (Editor de textos, ver
+// _tdInsertImage en editor-textdoc.js) — compartida entre todas las
+// TextLayer con richLines, igual que ImageLayer cachea this.img. Solo
+// guarda el <img> ya decodificado en memoria (nunca se serializa); lo que
+// SÍ persiste con la obra es line.src (string, dentro de richLines), así
+// que tras recargar la página esta caché se reconstruye sola, de forma
+// perezosa, en cuanto _drawRichLines pide la primera imagen.
+const _tdImgCache = Object.create(null);
+function _tdGetCachedImage(src){
+  let entry = _tdImgCache[src];
+  if(!entry){
+    entry = { img: new Image(), loaded: false };
+    entry.img.onload = () => { entry.loaded = true; if(typeof edRedraw==='function') edRedraw(); };
+    entry.img.src = src;
+    _tdImgCache[src] = entry;
+  }
+  return entry;
+}
+
 class TextLayer extends BaseLayer {
   constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
@@ -1999,6 +2018,27 @@ class TextLayer extends BaseLayer {
     const _col = this.color || '#000000';
     const _quoteCol = '#4A4540'; // --gray-700 — mismo tono atenuado que .td-editor blockquote
     this.richLines.forEach(line=>{
+      // Imagen insertada en el flujo de texto (ver _tdParseBlocks/_tdLayoutPages
+      // en editor-textdoc.js) — se dibuja con drawImage, no con fillText. La
+      // imagen real (src en base64, ya persistente) se carga de forma perezosa
+      // y cacheada (_tdGetCachedImage), igual que ImageLayer con this.img: si
+      // aún no ha cargado, esta pasada no dibuja nada y el propio onload pide
+      // un redibujado en cuanto esté lista.
+      if(line.kind==='image' && line.src){
+        const _entry = _tdGetCachedImage(line.src);
+        if(_entry.loaded && _entry.img.naturalWidth>0){
+          // BUG CORREGIDO (reportado por Alberto: "en el canvas se inserta
+          // alineada a la izquierda"): line.imgX ya viene calculada por
+          // _tdLayoutPages (editor-textdoc.js), igual que hace con la x de
+          // cada run de texto — antes se recalculaba aquí a partir de
+          // line.availW, pero esa propiedad ya se había borrado para
+          // cuando se llega a dibujar, así que el resultado eran siempre
+          // 0 píxeles de margen (pegada a la izquierda).
+          const ix = line.imgX !== undefined ? line.imgX : line.indent;
+          ctx.drawImage(_entry.img, ix, line.y, line.imgW, line.imgH);
+        }
+        return;
+      }
       const _lineCol = line.kind==='quote' ? _quoteCol : _col;
       if(line.kind==='quote'){
         ctx.save();
@@ -2086,6 +2126,16 @@ class TextLayer extends BaseLayer {
       const ly = (dx * Math.sin(-rot) + dy * Math.cos(-rot)) + h / 2;
       const PAD = 10; // margen de toque ampliado, en píxeles reales de página
       for (const line of this.richLines) {
+        // Imagen: banda vertical/horizontal real de la imagen (no la
+        // aproximación de glifo de texto que usa el resto) — mismo cálculo
+        // de alineación que _drawRichLines, para que el toque coincida con
+        // lo que de verdad se ve dibujado.
+        if(line.kind === 'image'){
+          if(ly < line.y - PAD || ly > line.y + (line.imgH||0) + PAD) continue;
+          const ix = line.imgX !== undefined ? line.imgX : line.indent;
+          if(lx >= ix - PAD && lx <= ix + (line.imgW||0) + PAD) return true;
+          continue;
+        }
         const fs = line.fontSize || 16;
         // Banda vertical aproximada del glifo (ascendente/descendente típicos
         // sobre la línea base) + margen de toque.
@@ -25889,7 +25939,12 @@ function _edStartEyedrop() {
 let _edCameraStream = null;
 let _edCameraFacing = 'environment'; // 'environment' = trasera, 'user' = frontal
 
-function edOpenCamera() {
+// onCapture: callback opcional para la foto capturada (recibe un File). Por
+// defecto edAddImage (inserta en el canvas) — el editor de textos reutiliza
+// esta misma función pasando su propio _tdInsertImage, para no duplicar toda
+// la lógica de cámara (stream, zoom, flip...) solo por tener un destino distinto.
+function edOpenCamera(onCapture) {
+  const _onCapture = typeof onCapture === 'function' ? onCapture : edAddImage;
   const overlay = $('edCameraOverlay');
   const video   = $('edCameraVideo');
   if (!overlay || !video) return;
@@ -26077,7 +26132,7 @@ function edOpenCamera() {
     closeCamera(true);
     // 3. Convertir canvas a blob y añadir imagen (asíncrono, FS ya solicitado)
     canvas.toBlob(blob => {
-      if(blob) edAddImage(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
+      if(blob) _onCapture(new File([blob], 'photo.jpg', { type: 'image/jpeg' }));
     }, 'image/jpeg', 0.92);
   }, sig);
 
@@ -30159,6 +30214,13 @@ function _bibRenderPanel(panel) {
 
       // Si el editor GIF está activo, insertar en el canvas GIF
       if (window._gcpActive) { gcpInsertFromBib(entry); window._gcpBibInsertGuard = Date.now() + 400; return; }
+      // Si el editor de textos está activo, insertar en su flujo de texto
+      // (mismo patrón que la rama de arriba para el editor de animaciones)
+      if (document.getElementById('editorShell')?.classList.contains('td-open') && typeof _tdInsertFromBib === 'function') {
+        _tdInsertFromBib(entry);
+        document.getElementById('edOptionsPanel')?.classList.remove('open');
+        return;
+      }
 
       // GIF animado guardado desde el editor GIF
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
