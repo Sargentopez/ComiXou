@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -174,7 +174,7 @@ const Auth = (() => {
         _saveSession(session);
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
         // Migrar obras locales del ID antiguo al nuevo UUID de Supabase
-        _migrateLocalWorks(key, data.user.id);
+        _migrateLocalWorks(data.user.id);
         return { ok: true, user: session };
       }
       const errMsg = (data.error_description || data.msg || '').toLowerCase();
@@ -296,22 +296,24 @@ const Auth = (() => {
     }
   }
 
-  // Migra obras locales del ID antiguo al nuevo UUID de Supabase
-  // Cubre: IDs legacy conocidos (u_admin, u_macario) y IDs generados localmente (u_TIMESTAMP)
-  function _migrateLocalWorks(email, newId) {
+  // Migra obras locales del ID antiguo al nuevo UUID de Supabase.
+  // Cubre IDs generados localmente (u_TIMESTAMP, incluidos los legacy
+  // u_admin/u_macario del extinto sistema FIXED_USERS — no hace falta un
+  // mapa de correos hardcodeado aparte: al empezar por 'u_' ya caen dentro
+  // del catch-all genérico de abajo). El mapa de correos que había aquí
+  // antes se quitó a propósito (v36.84): exponía en texto plano, en un
+  // archivo JS público, la dirección real de la cuenta admin — información
+  // innecesaria para cualquiera que mirase el código fuente. La migración
+  // ya se completó en todos los dispositivos de Alberto, así que no hacía
+  // falta ni conservarlo ofuscado.
+  function _migrateLocalWorks(newId) {
     try {
       const store = JSON.parse(localStorage.getItem('cs_comics') || '{}');
-      const legacyMap = {
-        'albertobicho+admin@gmail.com':   'u_admin',
-        'albertobicho+macario@gmail.com': 'u_macario',
-      };
-      const legacyId = legacyMap[email];
       // Obtener sesión previa para detectar el ID antiguo de este usuario
       const prevSession = JSON.parse(localStorage.getItem('cs_session_prev') || 'null');
       let changed = false;
       Object.values(store).forEach(comic => {
-        const isLegacy = (legacyId && comic.userId === legacyId) ||
-                         (prevSession && comic.userId === prevSession.id) ||
+        const isLegacy = (prevSession && comic.userId === prevSession.id) ||
                          (comic.userId && comic.userId.startsWith('u_') && comic.userId !== newId);
         if (isLegacy) {
           comic.userId = newId;

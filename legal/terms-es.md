@@ -10,7 +10,7 @@ El acceso y uso de Comxow implica la aceptación plena y sin reservas de las pre
 
 En cumplimiento de la Ley 34/2002, de 11 de julio, de Servicios de la Sociedad de la Información y de Comercio Electrónico (LSSI-CE), se informa de los siguientes datos del titular y responsable de Comxow:
 
-Alberto Gaviña Costero · [NIF/DNI] · [Domicilio a efectos de notificaciones] · albertobicho@gmail.com
+Alberto Gaviña Costero · [NIF/DNI] · [Domicilio a efectos de notificaciones] · contacto@comxow.com
 
 ## 3. Menores de edad
 
@@ -30,7 +30,7 @@ Otros usuarios de Comxow únicamente pueden ver el nombre de usuario elegido, as
 
 Comxow no utiliza cookies de seguimiento ni de publicidad, ni herramientas de analítica de terceros. La aplicación almacena determinada información técnica en el propio dispositivo del usuario (por ejemplo, el idioma elegido, si ya se han aceptado estas condiciones, o las obras guardadas localmente) con el único fin de que la aplicación funcione correctamente y de ayudar a preservar las creaciones del usuario; esta información no se transmite a los servidores de Comxow salvo cuando el propio usuario decide guardar o publicar una obra en la nube.
 
-El usuario puede solicitar en cualquier momento el acceso, la rectificación o la eliminación de su dirección de correo electrónico y de su cuenta, y ejercer los demás derechos que le reconoce el Reglamento (UE) 2016/679 (RGPD), escribiendo a albertobicho@gmail.com. El usuario tiene también derecho a presentar una reclamación ante la Agencia Española de Protección de Datos (www.aepd.es) si considera que el tratamiento de sus datos no se ajusta a la normativa.
+El usuario puede solicitar en cualquier momento el acceso, la rectificación o la eliminación de su dirección de correo electrónico y de su cuenta, y ejercer los demás derechos que le reconoce el Reglamento (UE) 2016/679 (RGPD), escribiendo a contacto@comxow.com. El usuario tiene también derecho a presentar una reclamación ante la Agencia Española de Protección de Datos (www.aepd.es) si considera que el tratamiento de sus datos no se ajusta a la normativa.
 
 Además de la cuenta, para guardar obras en la nube y publicarlas el usuario es responsable de mantener la confidencialidad de su contraseña y de toda actividad realizada desde su cuenta.
 
@@ -65,7 +65,7 @@ Comxow se reserva el derecho a retirar, directamente y sin previo aviso, cualqui
 
 Cualquier persona que considere que un contenido alojado en Comxow es lesivo, ilícito, o infringe sus derechos de propiedad intelectual, puede notificarlo a:
 
-albertobicho@gmail.com
+contacto@comxow.com
 
 indicando la identificación del contenido y su ubicación, el motivo de la solicitud de retirada, y los datos de contacto de quien notifica. Comxow revisará la notificación y actuará con la diligencia exigida por el Reglamento (UE) 2022/2065, de Servicios Digitales (DSA).
 
@@ -101,4 +101,4 @@ Estas Condiciones de Uso se rigen por la legislación española. Para la resoluc
 
 ## 16. Contacto
 
-Para cualquier cuestión relacionada con estas Condiciones de Uso, puede escribir a albertobicho@gmail.com.
+Para cualquier cuestión relacionada con estas Condiciones de Uso, puede escribir a contacto@comxow.com.

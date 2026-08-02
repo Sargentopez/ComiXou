@@ -10,7 +10,7 @@ Accessing and using Comxow implies full and unreserved acceptance of these Terms
 
 In compliance with Spanish Law 34/2002 on Information Society Services and Electronic Commerce (LSSI-CE), the following details of the owner and party responsible for Comxow are provided:
 
-Alberto Gaviña Costero · [Tax ID] · [Address for notifications] · albertobicho@gmail.com
+Alberto Gaviña Costero · [Tax ID] · [Address for notifications] · contacto@comxow.com
 
 ## 3. Minors
 
@@ -30,7 +30,7 @@ Other Comxow users can only see the chosen username, along with any other contac
 
 Comxow does not use tracking or advertising cookies, or third-party analytics tools. The application stores certain technical information on the user's own device (for example, the chosen language, whether these terms have already been accepted, or locally saved works) solely so the application works correctly and to help preserve the user's creations; this information is not transmitted to Comxow's servers unless the user themself chooses to save or publish a work to the cloud.
 
-Users may request access to, correction of, or deletion of their email address and account at any time, and exercise the other rights granted under Regulation (EU) 2016/679 (GDPR), by writing to albertobicho@gmail.com. Users also have the right to file a complaint with the Spanish Data Protection Agency (Agencia Española de Protección de Datos, www.aepd.es) if they believe their data has not been processed in accordance with the law.
+Users may request access to, correction of, or deletion of their email address and account at any time, and exercise the other rights granted under Regulation (EU) 2016/679 (GDPR), by writing to contacto@comxow.com. Users also have the right to file a complaint with the Spanish Data Protection Agency (Agencia Española de Protección de Datos, www.aepd.es) if they believe their data has not been processed in accordance with the law.
 
 Beyond the account itself, to save works to the cloud and publish them the user is responsible for keeping their password confidential and for all activity carried out from their account.
 
@@ -65,7 +65,7 @@ Comxow reserves the right to remove, directly and without prior notice, any cont
 
 Anyone who believes that content hosted on Comxow is harmful, unlawful, or infringes their intellectual property rights may report it to:
 
-albertobicho@gmail.com
+contacto@comxow.com
 
 stating the content and its location, the reason for the removal request, and the reporting party's contact details. Comxow will review the report and act with the diligence required by Regulation (EU) 2022/2065 on Digital Services (DSA).
 
@@ -101,4 +101,4 @@ These Terms of Use are governed by Spanish law. Any dispute will be submitted to
 
 ## 16. Contact
 
-For any question related to these Terms of Use, please write to albertobicho@gmail.com.
+For any question related to these Terms of Use, please write to contacto@comxow.com.

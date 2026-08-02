@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -1671,7 +1671,7 @@ function _tdWireInsertImage(){
 // basta con leer editor.getDocument().getAttachments() justo después de
 // llamar a insertFile: el adjunto recién creado ya está ahí, identificable
 // por su propio File (siempre una instancia nueva en cada selección).
-function _tdInsertImage(file){
+function _tdInsertImage(file, opts){
   _tdLogImg('_tdInsertImage llamada', file ? (file.name + ' ' + file.type) : '(sin archivo)');
   if(!file || !file.type || !file.type.startsWith('image/')){ _tdLogImg('_tdInsertImage ABORTA', 'archivo no es imagen'); return; }
   const editorEl = document.getElementById('tdEditor');
@@ -1694,7 +1694,7 @@ function _tdInsertImage(file){
     return;
   }
   if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); return; }
-  _tdProcessNewImageAttachment(att, file);
+  _tdProcessNewImageAttachment(att, file, opts);
 }
 
 // Conjunto de ids de adjuntos ya tratados (URL persistente + tamaño inicial
@@ -1713,7 +1713,7 @@ window._tdProcessedAttIds = window._tdProcessedAttIds || new Set();
 // serializa/guarda, ver data-trix-serialized-attributes en su propio
 // código), así que la vista previa instantánea (blob) no se pierde
 // mientras se sustituye en segundo plano la URL de guardado.
-function _tdProcessNewImageAttachment(att, file){
+function _tdProcessNewImageAttachment(att, file, opts){
   if(!att || !file || window._tdProcessedAttIds.has(att.id)) return;
   window._tdProcessedAttIds.add(att.id);
   const editorEl = document.getElementById('tdEditor');
@@ -1728,17 +1728,31 @@ function _tdProcessNewImageAttachment(att, file){
     img.onload = () => {
       const natW = img.naturalWidth || 1, natH = img.naturalHeight || 1;
       _tdLogImg('Image onload (dataUrl decodificada)', 'natural=' + natW + '×' + natH);
-      // Ancho por defecto: 70% de la columna de escritura visible (mismo
-      // criterio que edAddImage usa para el canvas: 0.7 del ancho de
-      // página), medido sobre el ancho REAL de #tdEditor en este instante.
       const colW = (editorEl && editorEl.clientWidth) || 600;
-      let w = Math.round(colW * 0.7);
-      let h = Math.round(w * (natH / natW));
-      // Tope: no más alta que 1.2x el ancho de columna — una imagen muy
-      // vertical no debe dominar la página entera de entrada.
-      const maxH = Math.round(colW * 1.2);
-      if(h > maxH){ h = maxH; w = Math.round(h * (natW / natH)); }
-      _tdLogImg('calculado tamaño destino', 'colW=' + colW + ' → w=' + w + ' h=' + h);
+      let w, h;
+      if(opts && opts.pageWidthFrac){
+        // Objeto de biblioteca: ya tenía un tamaño concreto en la página
+        // (ver _tdInsertFromBib) — se respeta ESE tamaño en vez de un
+        // porcentaje genérico. BUG CORREGIDO (reportado por Alberto:
+        // "debería insertarse en la cuarta parte del tamaño"): antes se
+        // usaba SIEMPRE el 70% de columna (pensado para fotos sueltas de
+        // tamaño arbitrario), sin importar lo pequeño o grande que fuera
+        // el objeto real en la página.
+        w = Math.max(20, Math.round(colW * opts.pageWidthFrac));
+        h = Math.round(w * (natH / natW));
+        _tdLogImg('tamaño desde biblioteca (pageWidthFrac)', 'pageWidthFrac=' + opts.pageWidthFrac + ' → w=' + w + ' h=' + h);
+      } else {
+        // Ancho por defecto: 70% de la columna de escritura visible (mismo
+        // criterio que edAddImage usa para el canvas: 0.7 del ancho de
+        // página), medido sobre el ancho REAL de #tdEditor en este instante.
+        w = Math.round(colW * 0.7);
+        h = Math.round(w * (natH / natW));
+        // Tope: no más alta que 1.2x el ancho de columna — una imagen muy
+        // vertical no debe dominar la página entera de entrada.
+        const maxH = Math.round(colW * 1.2);
+        if(h > maxH){ h = maxH; w = Math.round(h * (natW / natH)); }
+        _tdLogImg('calculado tamaño destino', 'colW=' + colW + ' → w=' + w + ' h=' + h);
+      }
       try{
         att.setAttributes({ width: w, height: h, url: dataUrl, href: dataUrl });
         _tdLogImg('att.setAttributes() ejecutado sin lanzar excepción', 'att.getWidth()=' + att.getWidth() + ' att.getHeight()=' + att.getHeight() + ' att.getURL().length=' + (att.getURL()||'').length);
@@ -1859,13 +1873,24 @@ function _tdRenderLayersToImage(items, cb){
   const byPx = Math.max(1, Math.ceil((y1-y0) * ph));
   const baseX = -(mx + x0*pw), baseY = -(my + y0*ph);
 
+  // BUG CORREGIDO (reportado por Alberto: "a menudo faltan objetos del
+  // grupo"): edDeserLayer crea las capas de tipo imagen SIN cargar la
+  // imagen — new ImageLayer(null, ...), solo guarda su src como texto; la
+  // carga real de img ocurre en otro sitio, más tarde y de forma
+  // asíncrona. Llamar a la.draw() justo después de deserializar no
+  // dibujaba nada (ImageLayer.draw: "const src=this._oc||this.img; if
+  // (!src) return;"), así que los miembros de tipo imagen de un grupo se
+  // quedaban invisibles en el resultado. Se carga aquí explícitamente
+  // desde la.src, con el mismo mecanismo que ya usa ld.dataUrl para las
+  // capas basadas en canvas — así queda lista ANTES de dibujar, no después.
   const promises = items.map(({la, ld}) => {
-    if(!ld || !ld.dataUrl) return Promise.resolve({la, img:null});
+    const srcToLoad = (ld && ld.dataUrl) || (la.type === 'image' && la.src) || null;
+    if(!srcToLoad) return Promise.resolve({la, img:null});
     return new Promise(resolve => {
       const img = new Image();
       img.onload  = () => resolve({la, img});
       img.onerror = () => resolve({la, img:null});
-      img.src = ld.dataUrl;
+      img.src = srcToLoad;
     });
   });
   Promise.all(promises).then(results => {
@@ -1891,13 +1916,18 @@ function _tdRenderLayersToImage(items, cb){
       }
       offCtx.restore();
     });
-    cb(off.toDataURL('image/png'));
+    // Segundo argumento: ancho REAL del recorte, como fracción de la página
+    // (x1-x0) — el tamaño que de verdad tenía el objeto, para que quien
+    // inserte esta imagen pueda respetarlo en vez de aplicar un tamaño por
+    // defecto genérico (ver _tdInsertFromBib/_tdInsertImage).
+    cb(off.toDataURL('image/png'), x1 - x0);
   });
 }
 
 // Inserta un elemento de la biblioteca en el flujo de texto como imagen
 // estática, con la caja de recorte calculada igual que edExportSelectionPNG
-// (ver _tdRenderLayersToImage arriba).
+// (ver _tdRenderLayersToImage arriba), respetando el tamaño real que el
+// objeto ya tenía en la página (ver _tdInsertImage/pageWidthFrac).
 function _tdInsertFromBib(entry){
   if(!entry) return;
   _tdLogImg('insertar desde biblioteca', 'id=' + entry.id + ' isGroup=' + !!entry.isGroup + ' isGifAnim=' + !!entry.isGifAnim + ' orientation=' + entry.orientation);
@@ -1912,13 +1942,19 @@ function _tdInsertFromBib(entry){
   const _savedOrientBib = edOrientation;
   if(entry.orientation) edOrientation = entry.orientation;
 
-  const _finish = (dataUrl) => {
+  // BUG CORREGIDO (reportado por Alberto: "debería insertarse en la cuarta
+  // parte del tamaño"): antes se dejaba _tdInsertImage con su tamaño por
+  // defecto genérico (70% de columna, pensado para fotos sueltas de
+  // tamaño arbitrario) — ahora se le pasa el ancho REAL que tenía el
+  // objeto en la página (widthFrac, segundo argumento de
+  // _tdRenderLayersToImage), para que un objeto pequeño se inserte pequeño.
+  const _finish = (dataUrl, widthFrac) => {
     edOrientation = _savedOrientBib;
     if(!dataUrl){ _tdLogImg('insertar desde biblioteca ABORTA', 'sin dataUrl resultante'); return; }
     try{
       const blob = _dataUrlToBlob(dataUrl);
       const file = new File([blob], 'biblioteca.png', { type: blob.type || 'image/png' });
-      _tdInsertImage(file);
+      _tdInsertImage(file, widthFrac ? { pageWidthFrac: widthFrac } : undefined);
     }catch(err){
       _tdLogImg('EXCEPCIÓN insertando desde biblioteca', (err && err.message) || String(err));
       edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
@@ -1940,7 +1976,7 @@ function _tdInsertFromBib(entry){
       return { la, ld };
     }).filter(Boolean);
     if(!items.length){ _finish(entry.thumb); return; }
-    _tdRenderLayersToImage(items, dataUrl => _finish(dataUrl || entry.thumb));
+    _tdRenderLayersToImage(items, (dataUrl, widthFrac) => _finish(dataUrl || entry.thumb, widthFrac));
     return;
   }
 
@@ -1949,14 +1985,30 @@ function _tdInsertFromBib(entry){
   if(!la){ _finish(entry.thumb); return; }
   delete la._fusionId;
   if(la.type === 'image' || la.type === 'gif'){
-    // Ya es una imagen — usar su propio src (más nítido que la miniatura)
-    _finish(la.src || entry.thumb);
+    // Ya es una imagen — usar su propio src (más nítido que la miniatura).
+    // Ancho real = el propio width/height del objeto (fracción de página).
+    _finish(la.src || entry.thumb, la.width);
   } else if(la.width != null && la.height != null){
     // Cualquier otro tipo con caja propia (shape/line/text/bocadillo/
-    // trazo/dibujo a mano): el propio entry.layerData ya trae su .dataUrl
-    // si es una capa basada en canvas (ver edSerLayer), así que esto
-    // funciona igual de bien para todos ellos.
-    _tdRenderLayersToImage([{ la, ld: entry.layerData }], dataUrl => _finish(dataUrl || entry.thumb));
+    // trazo/dibujo a mano). BUG CORREGIDO (reportado por Alberto: "el
+    // objeto insertado ha sido un dibujo a mano y solo se ha insertado su
+    // capa de tinta, el resto no"): un trazo puede llevar capas VINCULADAS
+    // (relleno/acuarela/lápiz — ver _bibSerGroupLayer) que antes se
+    // ignoraban por completo, incluyendo solo la capa principal. Se
+    // incluyen aquí todas, en el mismo orden que ya usa
+    // gcpInsertFromBib/_doMergeGcp: relleno → acuarela → lápiz → trazo
+    // encima (mismo invariante de apilado que en el canvas).
+    const items = [];
+    ['fillLayerData', 'watercolorLayerData', 'pencilLayerData'].forEach(key => {
+      const cld = entry[key];
+      if(!cld || !cld.dataUrl) return;
+      items.push({
+        la: { x: cld.fillX, y: cld.fillY, width: cld.fillWidth, height: cld.fillHeight, rotation: cld.fillRotation || 0, opacity: 1, type: cld.type },
+        ld: cld
+      });
+    });
+    items.push({ la, ld: entry.layerData });
+    _tdRenderLayersToImage(items, (dataUrl, widthFrac) => _finish(dataUrl || entry.thumb, widthFrac));
   } else {
     _finish(entry.thumb);
   }

@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /* Icono estático — es el mismo icon.svg de la app (favicon/PWA), reutilizado
    aquí embebido en base64 para poder dibujarlo en canvas (igual que logo-data.js
    hace con logo.svg). NO es un asset nuevo. */

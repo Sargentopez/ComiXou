@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -823,6 +823,15 @@ const ED_CANVAS_H = ED_PAGE_H * 3; // 2340 - workspace completo
 let _logoImg = null;
 // Icono estático (sin animar) — misma hoja de créditos, junto al logo
 let _iconImg = null;
+// Caché de imágenes insertadas en el flujo de texto (hoja de texto paginada,
+// ver richLines/_tdInsertImage/_tdInsertFromBib en editor-textdoc.js) —
+// misma idea que _tdImgCache en editor.js: caché GLOBAL por src (data URL),
+// porque el mismo objeto de biblioteca puede insertarse varias veces en un
+// mismo documento. A diferencia de editor.js (carga perezosa + redibujado al
+// cargar), aquí se precarga entera en preloadImages() antes de renderizar,
+// igual que el resto de imágenes de capas — así _drawRichTextLines() nunca
+// dibuja a medias ni necesita su propio bucle de redibujado.
+const _tdImgCache = Object.create(null);
 
 const RS = {
   panels:       [],   // [{id, orientation, text_mode, data_url, texts:[]}]
@@ -1285,6 +1294,29 @@ async function preloadImages() {
       setLoadingProgress(pct, '');
     }
   }));
+
+  // Precargar imágenes insertadas en el flujo de texto (hoja de texto,
+  // richLines) de todas las capas de texto de todos los paneles — ver
+  // _tdImgCache más arriba. Recogidas y deduplicadas primero (un mismo
+  // objeto de biblioteca puede insertarse varias veces) para no descargar
+  // la misma data URL dos veces.
+  const _richImgSrcs = new Set();
+  RS.panels.forEach(panel => {
+    (panel.layers || []).forEach(layer => {
+      if (!Array.isArray(layer.richLines)) return;
+      layer.richLines.forEach(line => {
+        if (line.kind === 'image' && line.src) _richImgSrcs.add(line.src);
+      });
+    });
+  });
+  if (_richImgSrcs.size) {
+    await Promise.all(Array.from(_richImgSrcs).map(src => new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => { _tdImgCache[src] = img; resolve(); };
+      img.onerror = () => resolve(); // fallo aislado: esa imagen no se dibuja, el resto del documento sigue
+      img.src = src;
+    })));
+  }
 
   setLoadingProgress(100, '');
 
@@ -2754,6 +2786,24 @@ function _drawRichTextLines(ctx, t, w, h, textColor_) {
   const _quoteCol = '#4A4540'; // --gray-700 — mismo tono atenuado que .td-editor blockquote
   const _fam = t.richFontFamily;
   (t.richLines || []).forEach(line => {
+    // Imagen insertada en el flujo de texto (ver _tdParseBlocks/_tdLayoutPages
+    // en editor-textdoc.js) — se dibuja con drawImage, no con fillText. La
+    // imagen ya está precargada en _tdImgCache por preloadImages() (más
+    // arriba), a diferencia de editor.js que la carga de forma perezosa —
+    // aquí no hace falta redibujar al cargar porque ya está lista antes de
+    // la primera pasada de render.
+    if (line.kind === 'image' && line.src) {
+      const img = _tdImgCache[line.src];
+      if (img && img.complete && img.naturalWidth > 0) {
+        // line.imgX ya viene calculada por _tdLayoutPages (editor-textdoc.js),
+        // igual que con la x de cada run de texto — mismo criterio que
+        // TextLayer._drawRichLines() en editor.js (bug ya corregido ahí de
+        // alineación a la izquierda).
+        const ix = line.imgX !== undefined ? line.imgX : line.indent;
+        ctx.drawImage(img, ix, line.y, line.imgW, line.imgH);
+      }
+      return;
+    }
     const _lineCol = line.kind === 'quote' ? _quoteCol : _col;
     if (line.kind === 'quote') {
       ctx.save();

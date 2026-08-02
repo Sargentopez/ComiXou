@@ -1,4 +1,4 @@
-/* Comxow/COMXOW, creada por A. Gavina Costero  2026, albertobicho@gmail.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -310,12 +310,12 @@ function _creditsModalHtml() {
         <button class="sc-close" id="creditsClose">✕</button>
       </div>
       <div class="sc-body">
-        <p class="cr-app">${I18n.t('credits_appInfo')} <a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a></p>
+        <p class="cr-app">${I18n.t('credits_appInfo')} <a href="mailto:contacto@comxow.com">contacto@comxow.com</a></p>
         <div class="sc-section">${I18n.t('credits_thirdPartyLibs')}</div>
         ${rows}
         <div class="sc-section">${I18n.t('credits_license')}</div>
         ${licenseParagraphs}
-        <p class="cr-license">${I18n.t('credits_contactAuth', { email: '<a href="mailto:albertobicho@gmail.com">albertobicho@gmail.com</a>' })}</p>
+        <p class="cr-license">${I18n.t('credits_contactAuth', { email: '<a href="mailto:contacto@comxow.com">contacto@comxow.com</a>' })}</p>
       </div>
     </div>`;
 }
