@@ -73,6 +73,11 @@ const TRANSLATIONS = {
     noAuthors:        "Sin autores disponibles",
     noComics:         "Aún no hay obras publicadas.",
     beFirst:          "¡Sé el primero en crear uno!",
+    // Distinto de noComics/beFirst a propósito: esto se muestra cuando la
+    // carga de obras ha FALLADO (sin conexión, timeout...), no cuando
+    // sencillamente no hay ninguna publicada — ver renderComics/_homeShowEmptyState en home.js.
+    loadWorksErrorTitle: "No se han podido cargar las obras.",
+    loadWorksErrorSub:   "Comprueba tu conexión a internet e inténtalo de nuevo.",
     read:             "Leer",
     edit:             "Editar",
     unpublish:        "Dejar de publicar",
@@ -979,6 +984,11 @@ const TRANSLATIONS = {
     noAuthors:        "No authors available",
     noComics:         "No works published yet.",
     beFirst:          "Be the first to create one!",
+    // Deliberately distinct from noComics/beFirst: shown when loading works
+    // has FAILED (no connection, timeout...), not when there simply aren't
+    // any published yet — see renderComics/_homeShowEmptyState in home.js.
+    loadWorksErrorTitle: "Couldn't load the works.",
+    loadWorksErrorSub:   "Check your internet connection and try again.",
     read:             "Read",
     edit:             "Edit",
     unpublish:        "Unpublish",

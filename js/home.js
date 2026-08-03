@@ -35,6 +35,42 @@ let _homeWorks         = null;   // caché de obras publicadas desde Supabase
 let _homeRefreshTimer  = null;   // intervalo de actualización periódica
 let _homeLastFetch     = 0;      // timestamp de la última carga
 const _HOME_REFRESH_MS = 5 * 60 * 1000; // 5 minutos
+// true si el último intento de carga real (no la caché local) ha FALLADO
+// (sin conexión, timeout, Supabase no disponible...) — para que, si al
+// final no hay ninguna obra que mostrar, renderComics() pueda avisar de que
+// la carga falló en vez de decir "todavía no hay obras publicadas" (que es
+// una afirmación sobre el contenido, no sobre si se ha podido comprobar).
+// A propósito NO se recuerda la última lista buena en caché para mostrarla
+// en su lugar si la carga real falla — el expositor debe reflejar siempre
+// el estado real del servidor al accederse, nunca una caché que podría
+// estar desactualizada (obra editada/despublicada desde entonces).
+let _homeLoadError     = false;
+
+// Tiempo máximo que se espera la carga real de obras antes de darla por
+// fallida — ver _withTimeout y su uso en _loadPublishedWorks. OJO: NO ligar
+// este número al timeout de red interno de supabase-client.js (_get, 8000ms)
+// dando por hecho que coinciden — SupabaseClient.fetchPublishedWorks puede
+// hacer DOS peticiones _get seguidas (obras + miniaturas de resguardo, ver
+// _fetchWorks), cada una con su propio límite de 8s independiente, así que
+// el total real podría superar los 8000ms sin que eso sea ningún fallo. Este
+// número de aquí es el límite TOTAL, de cara a la persona, para toda la
+// operación de _loadPublishedWorks — la ventana de bienvenida (#cxIntro en
+// index.html) tiene su propia red de seguridad de último recurso puesta
+// ALGO por encima de este mismo número (ver NETWORK_TIMEOUT_MS en
+// index.html) para el caso, ya extremo, de que ni siquiera esto llegara a
+// dispararse.
+const _HOME_LOAD_TIMEOUT_MS = 10000;
+
+// Aplica un límite de tiempo a cualquier promesa: si no se resuelve antes,
+// rechaza con un error claro en vez de dejar la espera abierta para
+// siempre. Usada para acotar la carga real de obras a _HOME_LOAD_TIMEOUT_MS
+// pase lo que pase por dentro de SupabaseClient.fetchPublishedWorks.
+function _withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout (${ms}ms) cargando obras`)), ms)),
+  ]);
+}
 
 // Invalida el cache de portada para forzar recarga desde Supabase.
 // Llamada desde my-comics.js tras unpublish/delete.
@@ -94,6 +130,7 @@ function _homeStopRefresh() {
 async function _loadPublishedWorks() {
   if (typeof SupabaseClient === 'undefined' || typeof SupabaseClient.fetchPublishedWorks !== 'function') {
     _homeWorks = [];
+    _homeLoadError = true; // SupabaseClient no disponible es un fallo de carga, no "no hay obras"
     renderComics();
     // Ventana de bienvenida (#cxIntro en index.html): sin Supabase disponible
     // no hay nada más que esperar, avisar ya.
@@ -102,7 +139,12 @@ async function _loadPublishedWorks() {
   }
 
   // Mostrar inmediatamente lo que haya en caché local (stale-while-revalidate)
-  // para que el grid no aparezca vacío mientras llega Supabase.
+  // para que el grid no aparezca vacío mientras llega Supabase. Esto queda
+  // oculto tras la animación de inicio (ver #cxIntro en index.html) mientras
+  // dura la carga real, así que no contradice que el expositor deba
+  // reflejar siempre el estado real del servidor: es solo lo que se pinta
+  // (sin verse) MIENTRAS se espera esa respuesta real, nunca lo que se deja
+  // puesto si esa respuesta real falla (ver el catch de abajo).
   if (_homeWorks === null) {
     const local = typeof ComicStore !== 'undefined' ? ComicStore.getPublished() : [];
     if (local && local.length > 0) {
@@ -113,12 +155,18 @@ async function _loadPublishedWorks() {
   }
 
   try {
-    const fresh = await SupabaseClient.fetchPublishedWorks();
+    const fresh = await _withTimeout(SupabaseClient.fetchPublishedWorks(), _HOME_LOAD_TIMEOUT_MS);
     _homeWorks = fresh;
+    _homeLoadError = false;
     _homeLastFetch = Date.now();
   } catch(e) {
     console.error('Error cargando obras:', e);
-    if (_homeWorks === null) _homeWorks = [];
+    _homeLoadError = true;
+    // A propósito NO se recupera la caché local de arriba aquí: si la carga
+    // real ha fallado, el expositor debe avisar de ese fallo (ver
+    // renderComics), no volver a poner en pantalla una lista que podría
+    // estar desactualizada.
+    _homeWorks = [];
   }
   renderComics();
   // Ventana de bienvenida (#cxIntro en index.html): las obras ya han terminado
@@ -291,6 +339,29 @@ function setActiveBtn(id) {
 }
 
 // ── RENDER ──
+// Alterna el mensaje del estado vacío entre "no hay obras publicadas" (de
+// verdad no hay ninguna que mostrar) y "no se han podido cargar las obras"
+// (la carga real ha fallado — sin conexión, timeout, Supabase no
+// disponible... — ver _homeLoadError en _loadPublishedWorks). Cambia la
+// propia clave data-i18n en vez de solo el texto: así, si la persona cambia
+// de idioma mientras este aviso está en pantalla, I18n.applyAll() lo sigue
+// traduciendo bien sin que este código tenga que volver a ejecutarse.
+function _homeRenderEmptyState(empty) {
+  const icon  = document.getElementById('emptyStateIcon');
+  const title = document.getElementById('emptyStateTitle');
+  const sub   = document.getElementById('emptyStateSub');
+  if (!title || !sub) return;
+  const titleKey = _homeLoadError ? 'loadWorksErrorTitle' : 'noComics';
+  const subKey   = _homeLoadError ? 'loadWorksErrorSub'   : 'beFirst';
+  if (icon) icon.textContent = _homeLoadError ? '⚠️' : '📚';
+  title.dataset.i18n = titleKey;
+  sub.dataset.i18n = subKey;
+  if (typeof I18n !== 'undefined' && typeof I18n.t === 'function') {
+    title.textContent = I18n.t(titleKey);
+    sub.textContent = I18n.t(subKey);
+  }
+}
+
 function renderComics() {
   const grid  = document.getElementById('comicsGrid');
   const empty = document.getElementById('emptyState');
@@ -308,6 +379,7 @@ function renderComics() {
 
   if (comics.length === 0) {
     empty.classList.remove('hidden');
+    _homeRenderEmptyState(empty);
     return;
   }
   empty.classList.add('hidden');

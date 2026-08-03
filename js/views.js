@@ -49,13 +49,13 @@ Router.register('home', {
       <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Mis Creaciones</button>
     </nav>
     <div class="home-empty hidden" id="emptyState">
-        <span>📚</span>
-        <p data-i18n="noComics">Aún no hay obras publicadas.</p>
-        <p data-i18n="beFirst">¡Sé el primero en crear una!</p>
+        <span id="emptyStateIcon">📚</span>
+        <p id="emptyStateTitle" data-i18n="noComics">Aún no hay obras publicadas.</p>
+        <p id="emptyStateSub" data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.84</footer>
+    <footer class="app-version">v36.86</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }

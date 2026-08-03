@@ -59,8 +59,8 @@
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="css/main.css?v=36.84">
-  <link rel="stylesheet" href="css/home.css?v=36.84">
+  <link rel="stylesheet" href="css/main.css?v=36.86">
+  <link rel="stylesheet" href="css/home.css?v=36.86">
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="fonts/fonts.css">
   <!-- Ventana de bienvenida/condiciones de uso (ver #cxIntro más abajo, justo tras
@@ -154,7 +154,7 @@
        con el primer parseo del HTML, antes de que se ejecute ningún script. -->
   <div id="cxIntro">
     <div id="cxIntroCard">
-      <img src="intro-anim.png?v=36.84" alt="Comxow — IDEA Y COMPARTE">
+      <img src="intro-anim.png?v=36.86" alt="Comxow — IDEA Y COMPARTE">
       <div id="cxIntroGate">
         <label>
           <input type="checkbox" id="cxIntroCheck">
@@ -213,9 +213,31 @@
         // solo la animación flotando sobre el fondo oscuro.
         document.getElementById('cxIntroCard').classList.add('cx-no-frame');
         gate.style.display = 'none';
-        // Seguridad: si por lo que sea ninguna vista llama a _cxSplashReady
-        // (ver router.js / home.js), no dejar la app bloqueada para siempre.
-        setTimeout(hide, MIN_SHOW_MS + 3000);
+        // Red de SEGURIDAD, último recurso: si por lo que sea ninguna vista
+        // llama a _cxSplashReady (ver router.js / home.js), no dejar la app
+        // bloqueada para siempre.
+        //
+        // BUG QUE ESTO CORRIGE (reportado por Alberto: la animación
+        // desaparecía sin que las obras estuvieran cargadas, dejando ver
+        // "Aún no hay obras publicadas" aunque sí las hubiera): esta red de
+        // seguridad estaba fijada a MIN_SHOW_MS + 3000 = 7482ms — un número
+        // MENOR que el tiempo que _loadPublishedWorks (home.js) puede tardar
+        // de verdad en darse por vencida ante un fallo de red. Con conexión
+        // lenta o sin conexión, esta red de seguridad se disparaba ANTES de
+        // que esa carga real hubiera tenido ocasión de terminar (con éxito o
+        // con error) y llamar a _cxSplashReady() por sí misma — la animación
+        // desaparecía antes de tiempo, dejando debajo lo que hubiera en ese
+        // instante (típicamente nada aún pintado), y encima con el mensaje
+        // de "no hay obras" tal cual — del todo INCORRECTO cuando la causa
+        // real es que la carga no ha terminado o ha fallado por conexión
+        // (ver home.js, _homeLoadError).
+        //
+        // Por eso este número tiene que ser MAYOR que _HOME_LOAD_TIMEOUT_MS
+        // (home.js — el límite TOTAL que se le da a esa carga real antes de
+        // darla por fallida), no un valor suelto: si ese número cambia algún
+        // día en home.js, este de aquí también hay que revisarlo.
+        var HOME_LOAD_TIMEOUT_MS = 10000; // debe coincidir con _HOME_LOAD_TIMEOUT_MS en home.js
+        setTimeout(hide, Math.max(MIN_SHOW_MS, HOME_LOAD_TIMEOUT_MS) + 2000);
       } else {
         chk.addEventListener('change', function () { btn.disabled = !chk.checked; });
         btn.addEventListener('click', function () {
@@ -243,49 +265,49 @@
   <div class="toast" id="toast"></div>
 
   <!-- Core -->
-  <script src="js/utils.js?v=36.84"></script>
-  <script src="js/i18n.js?v=36.84"></script>
-  <script src="js/auth.js?v=36.84"></script>
-  <script src="js/storage.js?v=36.84"></script>
-  <script src="js/pako.min.js?v=36.84"></script>
-  <script src="js/trix.umd.min.js?v=36.84"></script>
-  <script src="js/supabase-client.js?v=36.84"></script>
-  <script src="js/genres.js?v=36.84"></script>
+  <script src="js/utils.js?v=36.86"></script>
+  <script src="js/i18n.js?v=36.86"></script>
+  <script src="js/auth.js?v=36.86"></script>
+  <script src="js/storage.js?v=36.86"></script>
+  <script src="js/pako.min.js?v=36.86"></script>
+  <script src="js/trix.umd.min.js?v=36.86"></script>
+  <script src="js/supabase-client.js?v=36.86"></script>
+  <script src="js/genres.js?v=36.86"></script>
   <!-- seed.js desactivado — solo para desarrollo local -->
-  <!-- <script src="js/seed.js?v=36.84"></script> -->
+  <!-- <script src="js/seed.js?v=36.86"></script> -->
 
   <!-- Router SPA -->
-  <script src="js/router.js?v=36.84"></script>
+  <script src="js/router.js?v=36.86"></script>
 
   <!-- Lógica de cada vista -->
-  <script src="js/home.js?v=36.84"></script>
-  <script src="js/auth-pages.js?v=36.84"></script>
-  <script src="js/editor-layers.js?v=36.84"></script>
-  <script src="js/editor-pages.js?v=36.84"></script>
-  <script src="js/editor-textdoc.js?v=36.84"></script>
-  <script src="js/omggif.js?v=36.84"></script>
-  <script src="js/UPNG.js?v=36.84"></script>
+  <script src="js/home.js?v=36.86"></script>
+  <script src="js/auth-pages.js?v=36.86"></script>
+  <script src="js/editor-layers.js?v=36.86"></script>
+  <script src="js/editor-pages.js?v=36.86"></script>
+  <script src="js/editor-textdoc.js?v=36.86"></script>
+  <script src="js/omggif.js?v=36.86"></script>
+  <script src="js/UPNG.js?v=36.86"></script>
   <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.min.js"></script>
-  <script src="js/editor.js?v=36.84"></script>
-  <script src="js/logo-data.js?v=36.84"></script>
-  <script src="js/icon-data.js?v=36.84"></script>
-  <script src="js/reader.js?v=36.84"></script>
-  <script src="js/admin.js?v=36.84"></script>
+  <script src="js/editor.js?v=36.86"></script>
+  <script src="js/logo-data.js?v=36.86"></script>
+  <script src="js/icon-data.js?v=36.86"></script>
+  <script src="js/reader.js?v=36.86"></script>
+  <script src="js/admin.js?v=36.86"></script>
 
   <!-- Fullscreen -->
-  <script src="js/fullscreen.js?v=36.84"></script>
+  <script src="js/fullscreen.js?v=36.86"></script>
 
   <!-- My comics view -->
-  <script src="js/my-comics.js?v=36.84"></script>
+  <script src="js/my-comics.js?v=36.86"></script>
 
   <!-- Registro de vistas -->
-  <script src="js/views.js?v=36.84"></script>
+  <script src="js/views.js?v=36.86"></script>
 
   <!-- Header persistente -->
-  <script src="js/header.js?v=36.84"></script>
+  <script src="js/header.js?v=36.86"></script>
 
   <!-- PWA -->
-  <script src="js/pwa.js?v=36.84"></script>
+  <script src="js/pwa.js?v=36.86"></script>
 
   <!-- Arrancar -->
   <script>

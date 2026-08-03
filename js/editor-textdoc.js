@@ -1703,6 +1703,79 @@ function _tdInsertImage(file, opts){
 // una imagen (ver _tdWatchForPastedImages).
 window._tdProcessedAttIds = window._tdProcessedAttIds || new Set();
 
+// Separa una imagen recién insertada en su PROPIA línea, cortando el texto
+// que hubiera antes y/o después en la misma línea — petición explícita de
+// Alberto: "un título no suele incorporar una imagen en él", así que una
+// imagen debe comportarse como un cambio de párrafo, igual que si se
+// hubiera pulsado Intro a cada lado, en vez de quedarse mezclada como una
+// pieza más dentro del párrafo de texto normal.
+//
+// BUG QUE ESTO CORRIGE (reportado por Alberto: "cuando selecciono un texto
+// y elijo Título, todo el texto se queda con el estilo título, no solo el
+// seleccionado"): "Título" es un atributo de BLOQUE nativo de Trix (como en
+// Word/Google Docs: afecta a toda la línea/párrafo del cursor, no solo a la
+// selección exacta — comprobado con una reproducción real, Playwright +
+// este mismo trix.umd.min.js vendorizado; el propio motor de Trix se
+// comporta así siempre, no es un fallo de esta app). Antes de insertar
+// imágenes, los párrafos terminaban en un Intro relativamente cerca del
+// texto a destacar, así que no se notaba. Al insertar una imagen SIN pulsar
+// Intro a los lados, "texto antes + imagen + texto después" pasaba a ser
+// UNA ÚNICA línea para Trix — potencialmente mucho más larga de lo que
+// parece a simple vista — y aplicar Título en cualquier punto de esa línea
+// lo convertía TODO en título. Con esta función, la imagen separa el texto
+// en líneas reales de forma automática, así que "Título" (y cualquier otro
+// atributo de bloque: cita, alineación...) vuelve a quedar acotado a la
+// línea que de verdad se está editando.
+//
+// Método: editor.insertLineBreak() — API PÚBLICA de Trix. Solo inserta un
+// "\n" (equivalente a <br>) DENTRO del mismo bloque de Trix, no crea un
+// <div> separado — pero se comprobó con una reproducción real (Playwright:
+// separar así el texto alrededor de una imagen y luego aplicar heading1 a
+// una selección parcial) que Trix ACOTA los atributos de bloque a los
+// límites de "\n" más cercanos, vía su propio
+// expandRangeToLineBreaksAndSplitBlocks interno — no hace falta un <div>
+// separado de verdad para que el bug de arriba quede corregido, y así se
+// evita depender de ninguna API interna/no documentada de Trix.
+//
+// editor.getDocument().getRangeOfAttachment(att) da el rango exacto (1
+// carácter) que ocupa la imagen. DETRÁS: se inserta SIEMPRE un salto justo
+// tras la imagen (la posición donde ya queda el cursor tras insertarla) —
+// sin comprobar antes "¿hay ya algo después?", porque en el caso normal
+// (Alberto sigue escribiendo justo tras insertar) todavía no lo hay: el
+// salto tiene que quedar puesto de antemano para que ESE texto futuro caiga
+// ya en su propia línea. Si en cambio la imagen se pega/suelta en mitad de
+// una frase ya escrita, este mismo salto único ya separa la imagen de lo
+// que la sigue, sin dejar una línea en blanco de más. DELANTE: solo si de
+// verdad hay contenido pegado a la imagen en la misma línea (si ya se había
+// pulsado Intro justo antes de insertar, no añadir una línea en blanco de
+// más) — y aquí hace falta guardar y restaurar la posición del cursor
+// después, porque este segundo salto se inserta ANTES de la imagen y
+// desplaza +1 todo lo que va desde ahí en adelante, incluida la posición
+// donde había quedado el cursor tras el salto de detrás (sin restaurarla,
+// lo próximo que se escriba acabaría colándose delante de la imagen en vez
+// de detrás — comprobado con la misma reproducción antes de dar esto por
+// bueno).
+function _tdSplitParagraphAroundAttachment(editor, att){
+  try{
+    const range = editor.getDocument().getRangeOfAttachment(att);
+    if(!range) return;
+    const [start] = range;
+
+    editor.insertLineBreak();
+
+    const fullText = editor.getDocument().toString();
+    const prevChar = start > 0 ? fullText[start - 1] : '\n';
+    if(prevChar !== '\n'){
+      const cursorPos = editor.getSelectedRange()[0];
+      editor.setSelectedRange([start, start]);
+      editor.insertLineBreak();
+      editor.setSelectedRange([cursorPos + 1, cursorPos + 1]);
+    }
+  }catch(_e){
+    _tdLogImg('EXCEPCIÓN en _tdSplitParagraphAroundAttachment', (_e && _e.message) || String(_e));
+  }
+}
+
 // Aplica a un adjunto de imagen recién creado el mismo tratamiento, venga
 // del botón "Insertar" (galería/cámara, ver _tdInsertImage) o de pegar con
 // Ctrl+V/gesto táctil (ver _tdWatchForPastedImages): sustituir su URL
@@ -1717,6 +1790,15 @@ function _tdProcessNewImageAttachment(att, file, opts){
   if(!att || !file || window._tdProcessedAttIds.has(att.id)) return;
   window._tdProcessedAttIds.add(att.id);
   const editorEl = document.getElementById('tdEditor');
+  // Separar la imagen en su propia línea ANTES de cualquier otra cosa — ver
+  // _tdSplitParagraphAroundAttachment. Se hace aquí (punto compartido por
+  // los 3 caminos de inserción: botón galería/cámara y objeto de biblioteca
+  // vía _tdInsertImage, y pegar/soltar nativo vía _tdWatchForPastedImages)
+  // para cubrir los tres con un único cambio, y de forma SÍNCRONA (antes
+  // del FileReader asíncrono de más abajo) para que, si Alberto sigue
+  // escribiendo de inmediato tras insertar la imagen, el texto nuevo caiga
+  // ya en la línea correcta.
+  if(editorEl && editorEl.editor) _tdSplitParagraphAroundAttachment(editorEl.editor, att);
 
   const reader = new FileReader();
   reader.onerror = () => { _tdLogImg('FileReader onerror', String(reader.error)); edToast(I18n.t('td_errReadText', { msg: 'FileReader' })); };
