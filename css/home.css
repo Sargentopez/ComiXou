@@ -168,6 +168,27 @@
 .home-empty span { font-size: 3rem; }
 .home-empty.hidden { display: none !important; }
 
+/* ── SCROLL INFINITO: centinela + aviso de "cargando más"/reintentar ──
+   Ver _homeLoadNextPage/_ensureSentinel en home.js. Mismo tono visual que
+   .home-empty pero mucho más compacto, ya que aquí SÍ hay obras encima —
+   esto es solo el pie del listado mientras carga la página siguiente. */
+.home-loadmore {
+  text-align: center; padding: 18px 20px;
+  color: var(--gray-500); font-size: 0.85rem; font-weight: 600;
+}
+.home-loadmore.hidden { display: none !important; }
+.home-loadmore-retry {
+  color: var(--blue); font-weight: 700; cursor: pointer;
+  text-decoration: underline; background: none; border: none;
+  font-family: var(--font-body); font-size: 0.85rem; padding: 0; margin-left: 6px;
+}
+/* Lote virtualizado (ver _homeAppendBatch/_homeUnloadBatch en home.js):
+   cuando se "descarga" de memoria por estar lejos de la pantalla, se vacía
+   y se le fija esta altura en línea (style="height:Npx") para que el
+   listado no dé ningún salto de scroll — sin position/overflow especiales,
+   es simplemente un contenedor de filas normal. */
+.comic-batch { box-sizing: border-box; }
+
 @media(min-width: 600px) {
   .page-nav { padding: 0 24px; }
   .comic-row { padding: 14px 24px; gap: 16px; }

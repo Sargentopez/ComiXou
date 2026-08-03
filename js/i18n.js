@@ -75,9 +75,15 @@ const TRANSLATIONS = {
     beFirst:          "¡Sé el primero en crear uno!",
     // Distinto de noComics/beFirst a propósito: esto se muestra cuando la
     // carga de obras ha FALLADO (sin conexión, timeout...), no cuando
-    // sencillamente no hay ninguna publicada — ver renderComics/_homeShowEmptyState en home.js.
+    // sencillamente no hay ninguna publicada — ver _homeRenderEmptyState/_homeUpdateEmptyState en home.js.
     loadWorksErrorTitle: "No se han podido cargar las obras.",
     loadWorksErrorSub:   "Comprueba tu conexión a internet e inténtalo de nuevo.",
+    // Scroll infinito del expositor (home.js) — distintas de las de arriba:
+    // estas son para cuando YA hay obras en pantalla y se están cargando
+    // más al hacer scroll, no para la carga inicial.
+    loadingMoreWorks: "Cargando más obras…",
+    loadMoreError:    "No se han podido cargar más obras.",
+    retryLoadMore:    "Reintentar",
     read:             "Leer",
     edit:             "Editar",
     unpublish:        "Dejar de publicar",
@@ -986,9 +992,15 @@ const TRANSLATIONS = {
     beFirst:          "Be the first to create one!",
     // Deliberately distinct from noComics/beFirst: shown when loading works
     // has FAILED (no connection, timeout...), not when there simply aren't
-    // any published yet — see renderComics/_homeShowEmptyState in home.js.
+    // any published yet — see _homeRenderEmptyState/_homeUpdateEmptyState in home.js.
     loadWorksErrorTitle: "Couldn't load the works.",
     loadWorksErrorSub:   "Check your internet connection and try again.",
+    // Home showcase infinite scroll (home.js) — distinct from the ones
+    // above: these are for when works are ALREADY on screen and more are
+    // loading as the person scrolls, not for the initial load.
+    loadingMoreWorks: "Loading more works…",
+    loadMoreError:    "Couldn't load more works.",
+    retryLoadMore:    "Retry",
     read:             "Read",
     edit:             "Edit",
     unpublish:        "Unpublish",

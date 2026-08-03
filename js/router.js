@@ -86,7 +86,7 @@ const Router = (() => {
     // salvo 'home' avisan aquí mismo de que su init síncrono ya terminó, así
     // que ya se puede ocultar la ventana (si la persona ya había aceptado las
     // condiciones — si no, la señal se ignora y la ventana sigue bloqueando).
-    // 'home' avisa por su cuenta desde _loadPublishedWorks() en home.js,
+    // 'home' avisa por su cuenta desde _homeStartLoading() en home.js,
     // porque su carga real es asíncrona (Supabase) y termina después de este
     // punto — esperar aquí sería avisar demasiado pronto.
     if (name !== 'home' && typeof window._cxSplashReady === 'function') window._cxSplashReady();

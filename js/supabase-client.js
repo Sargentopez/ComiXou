@@ -1063,6 +1063,96 @@ const SupabaseClient = (() => {
     return _fetchWorks('published=eq.true');
   }
 
+  // ── EXPOSITOR (home.js): LISTADO PAGINADO POR CURSOR ────────
+  // A diferencia de fetchPublishedWorks (arriba, usada por el admin para
+  // ver TODAS las obras de golpe), esta es la versión que usa el expositor
+  // público — pensada para poder llegar a tener miles de obras publicadas
+  // sin tener que cargarlas ni tenerlas todas en memoria de golpe.
+  //
+  // Paginación por CURSOR ("keyset"/"seek"), no por OFFSET: con OFFSET,
+  // Postgres tiene que recorrer y descartar TODAS las filas anteriores en
+  // cada página (página 1 con una tabla de miles de filas es instantánea,
+  // pero la página 50 ya tiene que descartar cientos de filas antes de
+  // devolver las 20 que tocan, y esto empeora linealmente cuantas más
+  // obras haya) — con cursor, Postgres usa directamente el índice de
+  // (published, updated_at, id) para saltar al punto exacto donde se
+  // quedó la página anterior, con coste prácticamente constante sin
+  // importar cuántas páginas lleve ya cargadas la persona. Es el mismo
+  // patrón que usan Stripe, GitHub y Slack en sus APIs — el cursor es,
+  // literalmente, el updated_at + id del último elemento de la página
+  // anterior; "id" como desempate porque updated_at por sí solo podría
+  // repetirse entre varias obras.
+  //
+  // Requiere un índice en Supabase para que el salto sea realmente O(1) —
+  // ver el SQL que se le ha pasado a Alberto para crearlo.
+  const WORKS_PAGE_SIZE = 20;
+
+  function _worksCursorFilter(cursor) {
+    if (!cursor) return '';
+    const ts = encodeURIComponent(cursor.updatedAt);
+    // or=(A,and(B,C)) en sintaxis PostgREST: "o bien es estrictamente más
+    // antigua, o tiene la MISMA fecha pero un id menor" — el filtro
+    // estándar de "seek method" para paginar por dos columnas a la vez.
+    return `&or=(updated_at.lt.${ts},and(updated_at.eq.${ts},id.lt.${cursor.id}))`;
+  }
+
+  async function _fetchWorksPage(baseFilter, cursor, limit) {
+    const pageSize = limit || WORKS_PAGE_SIZE;
+    const works = await _get(
+      `works?${baseFilter}${_worksCursorFilter(cursor)}` +
+      `&order=updated_at.desc,id.desc&limit=${pageSize}` +
+      `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at,cover_url`
+    );
+    if (!works || !works.length) return { items: [], nextCursor: cursor, hasMore: false };
+
+    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
+    let thumbMap = {};
+    if (_needFallback.length) {
+      try {
+        const panels = await _get(
+          `panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`
+        );
+        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
+      } catch(e) { /* sin thumbnails */ }
+    }
+
+    const items = works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
+    const last  = works[works.length - 1];
+    return {
+      items,
+      nextCursor: { updatedAt: last.updated_at, id: last.id },
+      // Heurística estándar de paginación por cursor: si ha vuelto una
+      // página LLENA, es probable que haya más — si ha vuelto más corta,
+      // es que ya no queda nada más. No hace falta (ni conviene, por coste)
+      // una consulta de COUNT(*) aparte solo para saberlo con certeza.
+      hasMore: works.length === pageSize,
+    };
+  }
+
+  // opts: { genre, author, limit } — genre/author filtran igual que hacía
+  // antes el filtro en memoria de home.js, pero ahora en el propio servidor
+  // (necesario para que, con miles de obras, un filtro siga encontrando
+  // resultados que no estuvieran en las primeras páginas ya cargadas).
+  async function fetchPublishedWorksPage(cursor, opts) {
+    let filter = 'published=eq.true';
+    if (opts && opts.genre)  filter += `&genre=eq.${encodeURIComponent(opts.genre)}`;
+    if (opts && opts.author) filter += `&author_name=eq.${encodeURIComponent(opts.author)}`;
+    return _fetchWorksPage(filter, cursor, opts && opts.limit);
+  }
+
+  // Universo COMPLETO de géneros/autores publicados, para el menú de
+  // Filtros — deliberadamente separada de fetchPublishedWorksPage: el menú
+  // de filtros tiene que poder ofrecer un género/autor aunque sus obras
+  // aún no se hayan cargado en pantalla (solo las primeras páginas están
+  // cargadas en un momento dado). Trae solo genre/author_name (sin
+  // miniaturas ni el resto de columnas) para que sea ligera incluso con
+  // miles de filas — es la misma idea que las apps grandes llaman
+  // "facets"/"filtros disponibles", resuelta aparte del listado principal.
+  async function fetchPublishedFacets() {
+    const rows = await _get(`works?published=eq.true&select=genre,author_name`);
+    return (rows || []).map(r => ({ genre: r.genre || '', username: r.author_name || '' }));
+  }
+
   // Convierte una fila de Supabase al formato compatible con home/admin/my-comics
   function _workToComic(w, published, thumb) {
     return {
@@ -1324,5 +1414,5 @@ continue;
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole };
 })();
