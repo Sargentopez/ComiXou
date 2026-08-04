@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.87</footer>
+    <footer class="app-version">v36.88</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -495,6 +495,17 @@ Router.register('editor', {
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-group" data-i18n="ed_group">⊞ Agrupar</button>
               <button class="ed-dropdown-item" id="_sel-ungroup" data-i18n="ed_ungroup">⊟ Desagrupar</button>
+              <div class="ed-dropdown-submenu" id="dd-align-wrap">
+                <button class="ed-dropdown-item ed-has-submenu" id="dd-alignbtn" data-i18n="ed_arrangeBtn">↕ Ordenar ▸</button>
+                <div class="ed-submenu" id="dd-align-sub">
+                  <button class="ed-dropdown-item" id="dd-align-left"   data-i18n="ed_alignLeft">⇤ Alinear izquierda</button>
+                  <button class="ed-dropdown-item" id="dd-align-right"  data-i18n="ed_alignRight">⇥ Alinear derecha</button>
+                  <button class="ed-dropdown-item" id="dd-align-top"   data-i18n="ed_alignTop">⤒ Alinear arriba</button>
+                  <button class="ed-dropdown-item" id="dd-align-bottom" data-i18n="ed_alignBottom">⤓ Alinear abajo</button>
+                  <div class="ed-dropdown-sep"></div>
+                  <button class="ed-dropdown-item" id="dd-align-center" data-i18n="ed_alignCenter">＋ Centrar</button>
+                </div>
+              </div>
               <button class="ed-dropdown-item" id="_sel-merge" data-i18n="ed_merge">⊕ Unir</button>
               <button class="ed-dropdown-item" id="_sel-bib-save" data-i18n="ed_saveToLibrary">📥 Guardar en biblioteca</button>
               <div class="ed-dropdown-sep"></div>

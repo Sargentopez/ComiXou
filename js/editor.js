@@ -4730,6 +4730,7 @@ function _edUpdateSelectMenu(){
   const _btnAll  = $('_sel-all');
   const _btnNone = $('_sel-none');
   const _btnGroup = $('_sel-group');
+  const _btnAlign = $('dd-alignbtn');
   const _btnMerge = $('_sel-merge');
   const _btnDel   = $('_sel-delete');
   if(_btnAll)  _btnAll .setAttribute('style', _canSelAll ? '' : _dis);
@@ -4737,6 +4738,9 @@ function _edUpdateSelectMenu(){
   const _btnDl = $('dd-exportselbtn');
   if(_btnDl)  _btnDl .setAttribute('style', _canDesel  ? '' : _dis);
   if(_btnGroup) _btnGroup.setAttribute('style', _hasSel ? '' : _dis);
+  // Alinear necesita el mismo mínimo que Agrupar (2+ objetos) — igual que
+  // Descargar/Agrupar, se deshabilita en vez de ocultarse cuando no aplica.
+  if(_btnAlign) _btnAlign.setAttribute('style', _hasSel ? '' : _dis);
   if(_btnMerge) _btnMerge.style.display = (_hasSel && _mergeTypes) ? '' : 'none';
   if(_btnDel)   _btnDel.setAttribute('style', _hasSel ? 'color:#c00' : 'color:#c00;' + _dis);
 }
@@ -23343,6 +23347,134 @@ function edUngroupSelected(){
   edToast(I18n.t('ed_ungrouped'));
 }
 
+/* AABB (bounding box alineado a ejes) de un layer en espacio GLOBAL de la
+   página (fracción 0-1), teniendo en cuenta su propia rotación — mismo
+   cálculo por esquina que usa _msRecalcBbox (rotar cada esquina en espacio
+   de píxeles, para que no se deforme en páginas no cuadradas, y volver a
+   fracción), pero SIN des-rotar a ningún marco de grupo: para alinear solo
+   hace falta el rectángulo envolvente en coordenadas absolutas de página.
+   Petición explícita de Alberto: pide "izquierda/derecha/arriba/abajo" y
+   "centrar" tal cual se ven en el lienzo, no relativas a ninguna rotación
+   de grupo — ver edAlignSelected. */
+function _edLayerAABB(la, pw, ph){
+  const rot = (la.rotation||0) * Math.PI / 180;
+  const hw = la.width/2, hh = la.height/2;
+  let x0=Infinity, y0=Infinity, x1=-Infinity, y1=-Infinity;
+  for(const [lcx,lcy] of [[-hw,-hh],[hw,-hh],[-hw,hh],[hw,hh]]){
+    const wx = lcx*pw, wy = lcy*ph;
+    const vx = la.x + (wx*Math.cos(rot) - wy*Math.sin(rot))/pw;
+    const vy = la.y + (wx*Math.sin(rot) + wy*Math.cos(rot))/ph;
+    x0 = Math.min(x0,vx); y0 = Math.min(y0,vy);
+    x1 = Math.max(x1,vx); y1 = Math.max(y1,vy);
+  }
+  return {x0,y0,x1,y1};
+}
+
+/* Desplaza TODOS los miembros de una unidad (ver edAlignSelected) por el
+   mismo (dx,dy) — traslación pura, nunca cambia tamaño ni rotación — y
+   sincroniza cualquier subcapa fill/pencil/watercolor vinculada, igual que
+   hace el arrastre normal de multiselección (ver _edSyncFill en el
+   manejador de pointermove). */
+function _edShiftUnit(u, dx, dy){
+  u.idxs.forEach(i => {
+    const la = edLayers[i];
+    if(!la || la.locked) return;
+    la.x += dx; la.y += dy;
+    _edSyncFill(la, false);
+  });
+}
+
+/* ── Alinea los objetos seleccionados entre sí ──
+   mode: 'left' | 'right' | 'top' | 'bottom' | 'center'
+   Petición explícita de Alberto: "asegúrate de que los grupos se alineen
+   como un solo objeto con el resto de objetos seleccionados" — un grupo
+   entero (varias capas que comparten groupId) cuenta como UNA sola unidad,
+   nunca se desagrega en sus componentes. Mismo criterio que ya usa el
+   resto del editor para grupos: "los grupos siempre se seleccionan/mueven
+   como una unidad, nunca solo alguno de sus componentes" (ver
+   _edExpandGroupSelection). Se calcula el bounding box CONJUNTO de todos
+   los miembros del grupo (unión de sus AABB individuales), se decide el
+   desplazamiento para ESE conjunto, y se aplica el MISMO desplazamiento a
+   cada miembro — así el grupo se mueve entero, sin romper la disposición
+   relativa de sus piezas internas.
+   Alinear izquierda/derecha/arriba/abajo: mueve cada unidad para que su
+   borde correspondiente coincida con el borde más extremo de toda la
+   selección (el mismo comportamiento estándar de Illustrator/Figma/
+   PowerPoint: se alinean ENTRE SÍ, no contra el lienzo).
+   Centrar: sin distinguir eje horizontal/vertical por separado (un único
+   botón "Centrar", no dos) — mueve el CENTRO de cada unidad al centro del
+   bounding box conjunto de toda la selección, en ambos ejes a la vez (así
+   es como "Alinear centro" suele combinarse en herramientas más simples;
+   con dos objetos, el resultado es dejarlos superpuestos por su centro). */
+function edAlignSelected(mode){
+  if(!edMultiSel || edMultiSel.length < 2) return;
+  const pw = edPageW(), ph = edPageH();
+
+  // 1) Agrupar los índices seleccionados en "unidades": un grupo entero
+  //    cuenta como una sola unidad; un objeto suelto es su propia unidad.
+  //    Se excluyen 'draw' (ocupa siempre toda la página, ver _msRecalcBbox)
+  //    y las subcapas vinculadas fill/pencil/watercolor (no son objetos
+  //    independientes, se sincronizan solas vía _edShiftUnit→_edSyncFill).
+  const units = [];
+  const seenGroups = new Set();
+  edMultiSel.forEach(i => {
+    const la = edLayers[i];
+    if(!la || la.type==='draw' || la.type==='fill' || la.type==='pencil' || la.type==='watercolor') return;
+    if(la.groupId){
+      if(seenGroups.has(la.groupId)) return;
+      seenGroups.add(la.groupId);
+      const idxs = _edGroupMemberIdxs(la.groupId)
+        .filter(gi => edLayers[gi] && edLayers[gi].type!=='draw' && edLayers[gi].type!=='fill' && edLayers[gi].type!=='pencil' && edLayers[gi].type!=='watercolor');
+      if(idxs.length) units.push({idxs});
+    } else {
+      units.push({idxs:[i]});
+    }
+  });
+  if(units.length < 2) return;
+
+  // 2) Bounding box conjunto de cada unidad (unión de los AABB de sus miembros).
+  units.forEach(u => {
+    let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+    u.idxs.forEach(i => {
+      const b = _edLayerAABB(edLayers[i], pw, ph);
+      x0=Math.min(x0,b.x0); y0=Math.min(y0,b.y0);
+      x1=Math.max(x1,b.x1); y1=Math.max(y1,b.y1);
+    });
+    u.box = {x0,y0,x1,y1};
+  });
+
+  edPushHistory();
+
+  if(mode === 'left'){
+    const t = Math.min(...units.map(u=>u.box.x0));
+    units.forEach(u => _edShiftUnit(u, t - u.box.x0, 0));
+  } else if(mode === 'right'){
+    const t = Math.max(...units.map(u=>u.box.x1));
+    units.forEach(u => _edShiftUnit(u, t - u.box.x1, 0));
+  } else if(mode === 'top'){
+    const t = Math.min(...units.map(u=>u.box.y0));
+    units.forEach(u => _edShiftUnit(u, 0, t - u.box.y0));
+  } else if(mode === 'bottom'){
+    const t = Math.max(...units.map(u=>u.box.y1));
+    units.forEach(u => _edShiftUnit(u, 0, t - u.box.y1));
+  } else if(mode === 'center'){
+    const minX0=Math.min(...units.map(u=>u.box.x0)), maxX1=Math.max(...units.map(u=>u.box.x1));
+    const minY0=Math.min(...units.map(u=>u.box.y0)), maxY1=Math.max(...units.map(u=>u.box.y1));
+    const cx=(minX0+maxX1)/2, cy=(minY0+maxY1)/2;
+    units.forEach(u => {
+      const ucx=(u.box.x0+u.box.x1)/2, ucy=(u.box.y0+u.box.y1)/2;
+      _edShiftUnit(u, cx-ucx, cy-ucy);
+    });
+  } else {
+    return; // modo desconocido: no tocar historial ya empujado de más
+  }
+
+  edMultiSel.forEach(i => { if(edLayers[i] && typeof edLayers[i]._updateBbox === 'function') edLayers[i]._updateBbox(); });
+  _msRecalcBbox();
+  edPushHistory(); edRedraw();
+  edToast(I18n.t('ed_aligned'));
+}
+
 
 
 /* ── Comprueba si la selección actual es unible, devuelve el tipo o null ── */
@@ -27626,6 +27758,16 @@ function EditorView_init(){
   $('dd-exportselpng')?.addEventListener('click',()=>{ edExportSelectionPNG('png', $('dd-exportsel-insert-chk')?.checked); edCloseMenus(); });
   $('dd-exportseljpg')?.addEventListener('click',()=>{ edExportSelectionPNG('jpg', $('dd-exportsel-insert-chk')?.checked); edCloseMenus(); });
   $('dd-exportselsvg')?.addEventListener('click',()=>{ edExportSelectionSVG(); edCloseMenus(); });
+  // Submenú Ordenar (alinear objetos) — mismo patrón inline que Descargar selección
+  $('dd-alignbtn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    $('dd-align-sub')?.classList.toggle('open');
+  });
+  $('dd-align-left')?.addEventListener('click',   ()=>{ edAlignSelected('left');   edCloseMenus(); });
+  $('dd-align-right')?.addEventListener('click',  ()=>{ edAlignSelected('right');  edCloseMenus(); });
+  $('dd-align-top')?.addEventListener('click',    ()=>{ edAlignSelected('top');    edCloseMenus(); });
+  $('dd-align-bottom')?.addEventListener('click', ()=>{ edAlignSelected('bottom'); edCloseMenus(); });
+  $('dd-align-center')?.addEventListener('click', ()=>{ edAlignSelected('center'); edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
   $('dd-imagen-btn')?.addEventListener('click', e => {
