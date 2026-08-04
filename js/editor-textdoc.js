@@ -2283,13 +2283,32 @@ function _tdEnsureSelectionClearance(){
 }
 let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
 
+// Nodo de texto interno de Trix sin equivalente en el recuento de
+// _tdParseBlocks (p.ej. los "cursor-target" \uFEFF a los lados de un
+// adjunto — ver el guard gemelo en runsFromInline, dentro de
+// _tdParseBlocks): cualquier texto cuyo ancestro más cercano (hasta
+// `container`) tenga data-trix-serialize="false" es invisible para el
+// recuento de caracteres y debe saltarse aquí también, o este TreeWalker
+// (que SÍ recorre el DOM entero sin filtrar) desalinearía la posición de la
+// línea de salto de página respecto a los offsets que calcula
+// _tdLayoutPages, para cualquier punto posterior a una imagen en el
+// documento — reintroduciría el mismo bug de otra forma.
+function _tdIsInternalTrixTextNode(node, container){
+  const el = node.parentElement;
+  if(!el) return false;
+  const marked = el.closest('[data-trix-serialize="false"]');
+  return !!(marked && container.contains(marked));
+}
+
 // Busca la posición (nodo de texto + offset) en `container` que corresponde
 // al carácter nº targetOffset contando solo nodos de texto, en orden documento
 // — el mismo criterio de recuento que usa _tdLayoutPages sobre el HTML ya
-// serializado (ver charsSoFar).
+// serializado (ver charsSoFar y el guard de _tdIsInternalTrixTextNode).
 function _tdCharOffsetToRange(container, targetOffset){
   if(targetOffset <= 0) return null;
-  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => _tdIsInternalTrixTextNode(n, container) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
   let consumed = 0, node;
   while((node = walker.nextNode())){
     const len = node.textContent.length;
@@ -2312,7 +2331,9 @@ function _tdCharOffsetToRange(container, targetOffset){
 function _tdCharOffsetToPoint(container, targetOffset){
   if(targetOffset < 0) return null;
   if(targetOffset === 0){
-    const walker0 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const walker0 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => _tdIsInternalTrixTextNode(n, container) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
     const first = walker0.nextNode();
     return first ? {node: first, offset: 0} : null;
   }
@@ -2808,6 +2829,30 @@ function _tdParseBlocks(html){
       if(child.nodeType === Node.TEXT_NODE){
         if(child.textContent) runs.push({text: child.textContent, ...state});
       } else if(child.nodeType === Node.ELEMENT_NODE){
+        // Nodos internos de Trix marcados con data-trix-serialize="false"
+        // (p.ej. los "cursor-target" \uFEFF que Trix coloca a los lados de
+        // CUALQUIER adjunto no editable, como una imagen, para darle al
+        // cursor un sitio donde colocarse junto a él): el propio serializador
+        // de Trix los elimina antes de escribir el HTML "limpio" (ver
+        // trix.umd.min.js, selector literal "[data-trix-serialize=false]").
+        // _tdParseBlocks debe ignorarlos exactamente igual — si no, al leer
+        // el DOM VIVO del editor (editorEl.innerHTML, usado por la vista
+        // previa en vivo — ver _tdRecomputeViewPagination) aparecen como
+        // "palabras" fantasma pegadas a cada imagen que NO existen al leer
+        // el HTML limpio (hidden.value/la.sourceHTML, usado por "Guardar
+        // cambios"/_tdApplyToCanvas). Si una imagen queda sola al principio
+        // de su línea (caso habitual desde _tdSplitParagraphAroundAttachment,
+        // que la deja en su propia línea), esa palabra fantasma es la ÚNICA
+        // palabra de esa línea y provoca un flushLine() de más — una línea
+        // en blanco de un alto de línea entero que sí ocupa espacio en la
+        // vista previa pero nunca existió en el resultado real — bug
+        // reportado por Alberto: "los saltos de hoja no coinciden con los
+        // saltos reales del editor general... desde que se implementó la
+        // inserción de imágenes". Comprobado con Playwright + el propio
+        // trix.umd.min.js: _tdParseBlocks(editorEl.innerHTML) y
+        // _tdParseBlocks(hidden.value) daban bloques distintos para el mismo
+        // documento; con este guard dan EXACTAMENTE los mismos runs.
+        if(child.getAttribute('data-trix-serialize') === 'false') return;
         const tag = child.tagName.toLowerCase();
         if(tag === 'br'){ runs.push({break:true}); return; }
         // Imagen insertada en el flujo de texto (ver _tdInsertImage): Trix la
