@@ -2407,18 +2407,53 @@ function _tdCharRect(container, charOffset){
 // c, el primero de la página siguiente) — ver _tdRecomputeViewPagination
 // para la explicación completa de por qué hace falta el quiebro en vez de
 // una recta simple (Trix y el lienzo miden el texto con motores distintos).
-function _tdComputeSplitGeometry(editorEl, innerRect, blocks, c){
-  if(c <= 0) return { x: 0, yBefore: 0, yAfter: 0 };
-  // c-1 (el "último carácter" tal cual lo da pageStartChars) a veces es el
-  // ESPACIO que provocó el propio salto de línea — _tdLayoutPages lo cuenta
-  // como parte de esta línea antes de recortarlo de su representación
-  // visual (ver flushLine). Un espacio así no es fiable de medir en
-  // pantalla (se colapsa visualmente al ajustar la línea) — se retrocede
-  // al último carácter real (no-espacio) antes de medir.
-  const flatText = _tdBlocksFlatText(blocks);
-  const lastReal = _tdLastNonSpaceOffset(flatText, c - 1);
-  const rBefore = _tdCharRect(editorEl, lastReal);
-  const rAfter = _tdCharRect(editorEl, c);
+// imgBeforeEl/imgAfterEl (ver _tdImagesAtPageEdges): si la última línea de
+// la página anterior y/o la primera de esta son una imagen, el elemento
+// <img> real correspondiente — una imagen no consume ningún carácter en el
+// esquema de offsets (ver _tdParseBlocks), así que basarse en `c`/`c-1`
+// para su lado encontraría el último/primer carácter de TEXTO real, que
+// puede estar varias imágenes/párrafos antes o después de donde cae el
+// salto de verdad — bug reportado por Alberto ("no sabe dónde colocarse
+// cuando coincide con imágenes"). Con el elemento real no hace falta
+// adivinar nada: se mide directamente.
+function _tdComputeSplitGeometry(editorEl, innerRect, blocks, c, imgBeforeEl, imgAfterEl){
+  if(c <= 0 && !imgAfterEl) return { x: 0, yBefore: 0, yAfter: 0 };
+
+  const rBefore = imgBeforeEl ? imgBeforeEl.getBoundingClientRect() : (() => {
+    // c-1 (el "último carácter" tal cual lo da pageStartChars) a veces es el
+    // ESPACIO que provocó el propio salto de línea — _tdLayoutPages lo cuenta
+    // como parte de esta línea antes de recortarlo de su representación
+    // visual (ver flushLine). Un espacio así no es fiable de medir en
+    // pantalla (se colapsa visualmente al ajustar la línea) — se retrocede
+    // al último carácter real (no-espacio) antes de medir.
+    const flatText = _tdBlocksFlatText(blocks);
+    const lastReal = _tdLastNonSpaceOffset(flatText, c - 1);
+    return _tdCharRect(editorEl, lastReal);
+  })();
+  const rAfter = imgAfterEl ? imgAfterEl.getBoundingClientRect() : _tdCharRect(editorEl, c);
+
+  // Si cualquiera de los dos lados es una imagen, no hay ninguna ambigüedad
+  // de ajuste de línea que resolver con un quiebro en Z (a diferencia del
+  // texto, el borde de una imagen es exacto e igual en Trix y en el
+  // lienzo) — pedido explícito de Alberto: la línea debe poder apoyarse
+  // directamente en el borde real de la imagen, a toda su anchura, "por
+  // debajo de ella" si termina una página o "por encima" si empieza la
+  // siguiente, igual que ya ocurre con la última/primera palabra de texto.
+  // x=0 hace que la mitad DERECHA del quiebro (.td-pagebreak-visual-top,
+  // ver css/editor.css) ocupe todo el ancho; si el otro lado no es TAMBIÉN
+  // una imagen distinta, se iguala yBefore/yAfter para que las dos mitades
+  // se fundan en una única recta continua en vez de fragmentarse sin
+  // sentido (con hueco 0, visual-top + visual-bottom cubren juntas todo el
+  // ancho a la misma altura, sea cual sea x — ver comentario del CSS).
+  if(imgBeforeEl || imgAfterEl){
+    let yBefore = rBefore ? Math.max(0, rBefore.bottom - innerRect.top) : 0;
+    let yAfter = rAfter ? Math.max(0, rAfter.top - innerRect.top) : yBefore;
+    if(!(imgBeforeEl && imgAfterEl)){
+      if(imgBeforeEl) yAfter = yBefore; else yBefore = yAfter;
+    }
+    return { x: 0, yBefore, yAfter };
+  }
+
   // x: posición HORIZONTAL relativa al VIEWPORT (rBefore.right tal cual la
   // da getClientRects, SIN restar innerRect.left) — no relativa a .td-page.
   // Motivo: .td-pagebreak-line (ver css/editor.css) se posiciona con el
@@ -2510,6 +2545,34 @@ function _tdEditingFlowFrames(flowId){
   return frames;
 }
 
+// Para cada página (índice i, alineado con `pages`/`pageStartChars`),
+// averigua si su ÚLTIMA línea y/o su PRIMERA línea es una imagen y, si lo
+// es, a qué elemento <img> real del editor en vivo corresponde —
+// {imgLastEl, imgFirstEl} por página, o null si esa página no tiene líneas.
+// _tdParseBlocks y _tdLayoutPages procesan las imágenes en el mismo orden
+// en que aparecen en el DOM (nunca las reordenan ni las saltan), así que la
+// N-ésima línea de tipo imagen del documento (contando página a página, en
+// orden) corresponde exactamente a la N-ésima
+// ".attachment--preview img" del editor — no hace falta comparar por src
+// (que podría repetirse si la misma imagen de la biblioteca se inserta más
+// de una vez).
+function _tdImagesAtPageEdges(editorEl, pages){
+  const imageEls = editorEl.querySelectorAll('.attachment--preview img');
+  let imgIdx = 0;
+  return pages.map(page => {
+    if(!page.length) return { imgLastEl: null, imgFirstEl: null };
+    let imgFirstEl = null, imgLastEl = null;
+    page.forEach((line, li) => {
+      if(line.kind !== 'image') return;
+      const el = imageEls[imgIdx] || null;
+      if(li === 0) imgFirstEl = el;
+      if(li === page.length - 1) imgLastEl = el;
+      imgIdx++;
+    });
+    return { imgLastEl, imgFirstEl };
+  });
+}
+
 let _tdRecomputeTimer = null;
 function _tdRecomputeViewPagination(){
   const hidden = document.getElementById('tdHiddenInput');
@@ -2550,13 +2613,25 @@ function _tdRecomputeViewPagination(){
   const editingFrames = _tdEditingFlowId ? _tdEditingFlowFrames(_tdEditingFlowId) : null;
   const frameSizes = editingFrames || {pw: edPageW(), ph: edPageH()};
 
-  const { pageStartChars, lineStartChars } = _tdLayoutPages(
+  const { pages, pageStartChars, lineStartChars } = _tdLayoutPages(
     blocks, frameSizes, lineHeightMult,
     { marginFracX, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
     []
   );
   _tdViewPageStartChars = pageStartChars;
   _tdLineStartCharsCache = lineStartChars;
+
+  // Imágenes que quedan justo en el BORDE de una página (última línea de la
+  // página anterior, o primera línea de la siguiente) — ver
+  // _tdImagesAtPageEdges. Una imagen no consume ningún carácter en el
+  // esquema de offsets (ver _tdParseBlocks/_tdLayoutPages), así que
+  // _tdComputeSplitGeometry no puede fiarse de un offset de carácter para
+  // saber dónde cae su borde real: necesita el elemento <img> del DOM en
+  // vivo directamente. Pedido explícito de Alberto: "debe comportarse como
+  // con el texto" — la línea de salto debe poder apoyarse en el borde
+  // inferior de la imagen (si termina una página) o en el superior (si
+  // empieza la siguiente), igual que ya hace con la última/primera palabra.
+  const pageEdgeImages = _tdImagesAtPageEdges(editorEl, pages);
 
   // Medir en el DOM real (con el tamaño/margen de escritura de siempre, sin
   // tocarlos) dónde cae cada uno de esos saltos previstos, y también CADA
@@ -2572,7 +2647,16 @@ function _tdRecomputeViewPagination(){
     const rect = range.getBoundingClientRect();
     return Math.max(0, rect.top - innerRect.top);
   };
-  _tdViewPageOffsets = pageStartChars.map(charToY);
+  // Igual que en _tdComputeSplitGeometry: si la página empieza con una
+  // imagen, su offset de carácter no apunta a ella (una imagen no consume
+  // ningún carácter) sino al texto anterior — se usa el borde superior real
+  // de la imagen en su lugar para que "ir a esta página" salte al sitio
+  // correcto.
+  _tdViewPageOffsets = pageStartChars.map((c, i) => {
+    const imgFirstEl = pageEdgeImages[i] ? pageEdgeImages[i].imgFirstEl : null;
+    if(imgFirstEl) return Math.max(0, imgFirstEl.getBoundingClientRect().top - innerRect.top);
+    return charToY(c);
+  });
   _tdLineOffsetsCache = lineStartChars.map(charToY);
 
   // Posición de cada línea de cambio de página — a partir del rectángulo
@@ -2597,7 +2681,11 @@ function _tdRecomputeViewPagination(){
   // yAfter coinciden (hueco 0) y las dos rectas quedan a la misma altura,
   // unidas por xSplit — visualmente una única línea con un pequeño quiebro
   // en xSplit, sin caso aparte.
-  const splits = pageStartChars.map(c => _tdComputeSplitGeometry(editorEl, innerRect, blocks, c));
+  const splits = pageStartChars.map((c, i) => {
+    const imgBeforeEl = (i > 0 && pageEdgeImages[i - 1]) ? pageEdgeImages[i - 1].imgLastEl : null;
+    const imgAfterEl = pageEdgeImages[i] ? pageEdgeImages[i].imgFirstEl : null;
+    return _tdComputeSplitGeometry(editorEl, innerRect, blocks, c, imgBeforeEl, imgAfterEl);
+  });
 
   // Líneas de cambio de página: una por cada punto donde termina una página
   // y empieza la siguiente (todas menos la primera, que es el principio del
