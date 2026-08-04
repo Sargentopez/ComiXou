@@ -476,11 +476,18 @@ const TRANSLATIONS = {
     ed_group:               "⊞ Agrupar",
     ed_ungroup:             "⊟ Desagrupar",
     ed_arrangeBtn:          "↕ Ordenar ▸",
+    // Variante para el editor de animaciones (GCP): ahí "Ordenar" es un
+    // botón de PRIMER NIVEL en la barra (▾, como "Guías ▾"/"Matriz ▾"), no
+    // un submenú anidado dentro de "Selección" (▸, como en el editor
+    // general) — ver _gcpInitAlignMenu.
+    gcp_arrangeBtn:         "↕ Ordenar ▾",
     ed_alignLeft:           "⇤ Alinear izquierda",
     ed_alignRight:          "⇥ Alinear derecha",
     ed_alignTop:            "⤒ Alinear arriba",
     ed_alignBottom:         "⤓ Alinear abajo",
     ed_alignCenter:         "＋ Centrar",
+    ed_alignCenterH:        "↔ Centrado horizontal",
+    ed_alignCenterV:        "↕ Centrado vertical",
     ed_merge:               "⊕ Unir",
     ed_saveToLibrary:       "📥 Guardar en biblioteca",
     ed_deleteSelection:     "✕ Eliminar selección",
@@ -1395,11 +1402,14 @@ const TRANSLATIONS = {
     ed_group:               "⊞ Group",
     ed_ungroup:             "⊟ Ungroup",
     ed_arrangeBtn:          "↕ Arrange ▸",
+    gcp_arrangeBtn:         "↕ Arrange ▾",
     ed_alignLeft:           "⇤ Align left",
     ed_alignRight:          "⇥ Align right",
     ed_alignTop:            "⤒ Align top",
     ed_alignBottom:         "⤓ Align bottom",
     ed_alignCenter:         "＋ Center",
+    ed_alignCenterH:        "↔ Horizontal center",
+    ed_alignCenterV:        "↕ Vertical center",
     ed_merge:               "⊕ Merge",
     ed_saveToLibrary:       "📥 Save to library",
     ed_deleteSelection:     "✕ Delete selection",

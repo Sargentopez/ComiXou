@@ -7339,6 +7339,47 @@ function _edDuplicateGroup(gid) {
   });
   const _insertGrpAt = _maxIdx >= 0 ? _maxIdx + 1 : edLayers.length;
   edLayers.splice(_insertGrpAt, 0, ...copies.filter(Boolean));
+
+  // Seleccionar la copia recién creada como grupo — mismo patrón que
+  // edDuplicateSelected() ya hace para un objeto individual (deja
+  // edSelectedIdx apuntando a la copia, no al original).
+  //
+  // BUG CORREGIDO (reportado por Alberto, en dos capas — la primera
+  // corrección de esta función solo arregló la mitad):
+  //
+  // 1) Esta función dejaba la selección intacta apuntando al grupo
+  //    ORIGINAL tras duplicar, en vez de a la copia — el primer toque
+  //    sobre la copia solo movía la pieza tocada.
+  //
+  // 2) (Lo que seguía fallando) Poner edMultiSel/edActiveTool='multiselect'
+  //    NO BASTA por sí solo — sin window._edGroupSilentTool, el manejador
+  //    de soltar el puntero (ver el bloque "if(edMultiDragging||...)" un
+  //    poco más abajo en este archivo) no tiene forma de distinguir "esto
+  //    es un grupo tocado silenciosamente, consérvalo seleccionado entre
+  //    arrastres" de una multiselección normal, y el manejador de volver a
+  //    tocar tampoco sabe restaurar correctamente el estado — así que el
+  //    PRIMER arrastre sí movía el grupo entero (los índices de edMultiSel
+  //    eran correctos en ese momento), pero el SEGUNDO volvía a mover solo
+  //    un objeto: exactamente el síntoma reportado. window._edGroupSilentTool
+  //    guarda la herramienta a la que volver cuando finalmente se toque
+  //    fuera del grupo — igual que hace el propio manejador de toque único
+  //    sobre un grupo (ver más abajo, "Si el objeto pertenece a un grupo y
+  //    la herramienta activa NO es multiselect..."), que es el camino ya
+  //    probado que esta función debía imitar por completo, no solo en parte.
+  //    Si YA estábamos dentro de una selección de grupo silenciosa antes de
+  //    duplicar (Ctrl+D con el grupo original tocado una vez), se conserva
+  //    la herramienta previa ya guardada en vez de sobrescribirla con
+  //    'multiselect'.
+  const _newIdxs = _edGroupMemberIdxs(newGid);
+  const _prevTool = (window._edGroupSilentTool !== undefined) ? window._edGroupSilentTool : edActiveTool;
+  edMultiSel = _newIdxs;
+  edSelectedIdx = -1;
+  edMultiGroupRot = 0;
+  _msRecalcBbox();
+  edActiveTool = 'multiselect';
+  window._edGroupSilentTool = _prevTool;
+
+  edCloseOptionsPanel();
   edPushHistory(); edRedraw();
   edToast(I18n.t('ed_groupDuplicated'));
 }
@@ -23355,7 +23396,7 @@ function edUngroupSelected(){
    hace falta el rectángulo envolvente en coordenadas absolutas de página.
    Petición explícita de Alberto: pide "izquierda/derecha/arriba/abajo" y
    "centrar" tal cual se ven en el lienzo, no relativas a ninguna rotación
-   de grupo — ver edAlignSelected. */
+   de grupo — ver edAlignSelected/_gcpAlignSelected. */
 function _edLayerAABB(la, pw, ph){
   const rot = (la.rotation||0) * Math.PI / 180;
   const hw = la.width/2, hh = la.height/2;
@@ -23370,22 +23411,35 @@ function _edLayerAABB(la, pw, ph){
   return {x0,y0,x1,y1};
 }
 
-/* Desplaza TODOS los miembros de una unidad (ver edAlignSelected) por el
-   mismo (dx,dy) — traslación pura, nunca cambia tamaño ni rotación — y
+/* Desplaza TODOS los miembros de una unidad (ver _edComputeAlignUnits) por
+   el mismo (dx,dy) — traslación pura, nunca cambia tamaño ni rotación — y
    sincroniza cualquier subcapa fill/pencil/watercolor vinculada, igual que
    hace el arrastre normal de multiselección (ver _edSyncFill en el
-   manejador de pointermove). */
-function _edShiftUnit(u, dx, dy){
+   manejador de pointermove). "layers" se pasa explícito (edLayers o
+   window._gcpLayers según quién llame) — _edSyncFill sigue resolviendo
+   contra la variable global edLayers, así que el llamador GCP debe
+   invocar esto dentro de _gcpWithEditorContext para que esa resolución
+   sea correcta (ver _gcpAlignSelected). */
+function _edShiftUnit(layers, u, dx, dy){
   u.idxs.forEach(i => {
-    const la = edLayers[i];
+    const la = layers[i];
     if(!la || la.locked) return;
     la.x += dx; la.y += dy;
     _edSyncFill(la, false);
   });
 }
 
-/* ── Alinea los objetos seleccionados entre sí ──
-   mode: 'left' | 'right' | 'top' | 'bottom' | 'center'
+/* ── Calcula, para cada UNIDAD de la selección dada, el desplazamiento
+   (dx,dy) necesario para el modo de alineación pedido — mode: 'left' |
+   'right' | 'top' | 'bottom' | 'center' | 'centerH' | 'centerV'. Función
+   PURA y compartida entre el editor general (edAlignSelected) y el editor
+   de animaciones (_gcpAlignSelected): no toca historial, no redibuja, no
+   sincroniza nada — cada uno de esos dos llamadores conoce su propio
+   sistema de historial/guardado (edHistory vs. _gcpHistory, editores
+   independientes) y se encarga de eso por su cuenta. Devuelve null si no
+   hay al menos 2 unidades alineables, o si el modo es desconocido.
+   layers: array de capas (edLayers o window._gcpLayers)
+   selIdxs: índices seleccionados dentro de layers (edMultiSel o window._gcpMultiSel)
    Petición explícita de Alberto: "asegúrate de que los grupos se alineen
    como un solo objeto con el resto de objetos seleccionados" — un grupo
    entero (varias capas que comparten groupId) cuenta como UNA sola unidad,
@@ -23401,74 +23455,101 @@ function _edShiftUnit(u, dx, dy){
    borde correspondiente coincida con el borde más extremo de toda la
    selección (el mismo comportamiento estándar de Illustrator/Figma/
    PowerPoint: se alinean ENTRE SÍ, no contra el lienzo).
-   Centrar: sin distinguir eje horizontal/vertical por separado (un único
-   botón "Centrar", no dos) — mueve el CENTRO de cada unidad al centro del
-   bounding box conjunto de toda la selección, en ambos ejes a la vez (así
-   es como "Alinear centro" suele combinarse en herramientas más simples;
-   con dos objetos, el resultado es dejarlos superpuestos por su centro). */
-function edAlignSelected(mode){
-  if(!edMultiSel || edMultiSel.length < 2) return;
-  const pw = edPageW(), ph = edPageH();
-
-  // 1) Agrupar los índices seleccionados en "unidades": un grupo entero
-  //    cuenta como una sola unidad; un objeto suelto es su propia unidad.
-  //    Se excluyen 'draw' (ocupa siempre toda la página, ver _msRecalcBbox)
-  //    y las subcapas vinculadas fill/pencil/watercolor (no son objetos
-  //    independientes, se sincronizan solas vía _edShiftUnit→_edSyncFill).
+   Centrar: mueve el CENTRO de cada unidad al centro del bounding box
+   conjunto de toda la selección, en ambos ejes A LA VEZ (con dos objetos,
+   el resultado es dejarlos superpuestos por su centro).
+   Centrado horizontal / Centrado vertical: igual que "Centrar" pero en UN
+   SOLO eje — horizontal iguala los centros X sin tocar Y (completa el
+   hueco entre "izquierda" y "derecha"), vertical iguala los centros Y sin
+   tocar X (completa el hueco entre "arriba" y "abajo") — mismo patrón de 6
+   alineaciones + centrado combinado que Figma/Illustrator. */
+function _edComputeAlignUnits(layers, selIdxs, mode, pw, ph){
   const units = [];
   const seenGroups = new Set();
-  edMultiSel.forEach(i => {
-    const la = edLayers[i];
+  (selIdxs||[]).forEach(i => {
+    const la = layers[i];
     if(!la || la.type==='draw' || la.type==='fill' || la.type==='pencil' || la.type==='watercolor') return;
     if(la.groupId){
       if(seenGroups.has(la.groupId)) return;
       seenGroups.add(la.groupId);
-      const idxs = _edGroupMemberIdxs(la.groupId)
-        .filter(gi => edLayers[gi] && edLayers[gi].type!=='draw' && edLayers[gi].type!=='fill' && edLayers[gi].type!=='pencil' && edLayers[gi].type!=='watercolor');
+      const idxs = [];
+      for(let k=0; k<layers.length; k++){
+        const m = layers[k];
+        if(m && m.groupId===la.groupId && m.type!=='draw' && m.type!=='fill' && m.type!=='pencil' && m.type!=='watercolor') idxs.push(k);
+      }
       if(idxs.length) units.push({idxs});
     } else {
       units.push({idxs:[i]});
     }
   });
-  if(units.length < 2) return;
+  if(units.length < 2) return null;
 
-  // 2) Bounding box conjunto de cada unidad (unión de los AABB de sus miembros).
   units.forEach(u => {
     let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
     u.idxs.forEach(i => {
-      const b = _edLayerAABB(edLayers[i], pw, ph);
+      const b = _edLayerAABB(layers[i], pw, ph);
       x0=Math.min(x0,b.x0); y0=Math.min(y0,b.y0);
       x1=Math.max(x1,b.x1); y1=Math.max(y1,b.y1);
     });
     u.box = {x0,y0,x1,y1};
   });
 
-  edPushHistory();
-
   if(mode === 'left'){
     const t = Math.min(...units.map(u=>u.box.x0));
-    units.forEach(u => _edShiftUnit(u, t - u.box.x0, 0));
+    units.forEach(u => { u.dx = t - u.box.x0; u.dy = 0; });
   } else if(mode === 'right'){
     const t = Math.max(...units.map(u=>u.box.x1));
-    units.forEach(u => _edShiftUnit(u, t - u.box.x1, 0));
+    units.forEach(u => { u.dx = t - u.box.x1; u.dy = 0; });
   } else if(mode === 'top'){
     const t = Math.min(...units.map(u=>u.box.y0));
-    units.forEach(u => _edShiftUnit(u, 0, t - u.box.y0));
+    units.forEach(u => { u.dx = 0; u.dy = t - u.box.y0; });
   } else if(mode === 'bottom'){
     const t = Math.max(...units.map(u=>u.box.y1));
-    units.forEach(u => _edShiftUnit(u, 0, t - u.box.y1));
+    units.forEach(u => { u.dx = 0; u.dy = t - u.box.y1; });
   } else if(mode === 'center'){
     const minX0=Math.min(...units.map(u=>u.box.x0)), maxX1=Math.max(...units.map(u=>u.box.x1));
     const minY0=Math.min(...units.map(u=>u.box.y0)), maxY1=Math.max(...units.map(u=>u.box.y1));
     const cx=(minX0+maxX1)/2, cy=(minY0+maxY1)/2;
     units.forEach(u => {
       const ucx=(u.box.x0+u.box.x1)/2, ucy=(u.box.y0+u.box.y1)/2;
-      _edShiftUnit(u, cx-ucx, cy-ucy);
+      u.dx = cx-ucx; u.dy = cy-ucy;
+    });
+  } else if(mode === 'centerH'){
+    // Centrado horizontal: iguala el centro X (horizontal) de cada unidad
+    // al centro X del conjunto de la selección — el eje Y no se toca.
+    // Completa el hueco entre "izquierda" y "derecha" en el eje horizontal,
+    // igual que hace "centrar" con los dos ejes a la vez.
+    const minX0=Math.min(...units.map(u=>u.box.x0)), maxX1=Math.max(...units.map(u=>u.box.x1));
+    const cx=(minX0+maxX1)/2;
+    units.forEach(u => {
+      const ucx=(u.box.x0+u.box.x1)/2;
+      u.dx = cx-ucx; u.dy = 0;
+    });
+  } else if(mode === 'centerV'){
+    // Centrado vertical: iguala el centro Y (vertical) de cada unidad al
+    // centro Y del conjunto de la selección — el eje X no se toca.
+    // Completa el hueco entre "arriba" y "abajo" en el eje vertical.
+    const minY0=Math.min(...units.map(u=>u.box.y0)), maxY1=Math.max(...units.map(u=>u.box.y1));
+    const cy=(minY0+maxY1)/2;
+    units.forEach(u => {
+      const ucy=(u.box.y0+u.box.y1)/2;
+      u.dx = 0; u.dy = cy-ucy;
     });
   } else {
-    return; // modo desconocido: no tocar historial ya empujado de más
+    return null;
   }
+  return units;
+}
 
+/* ── Editor general: alinea los objetos seleccionados entre sí ── */
+function edAlignSelected(mode){
+  if(!edMultiSel || edMultiSel.length < 2) return;
+  const pw = edPageW(), ph = edPageH();
+  const units = _edComputeAlignUnits(edLayers, edMultiSel, mode, pw, ph);
+  if(!units) return;
+
+  edPushHistory();
+  units.forEach(u => _edShiftUnit(edLayers, u, u.dx, u.dy));
   edMultiSel.forEach(i => { if(edLayers[i] && typeof edLayers[i]._updateBbox === 'function') edLayers[i]._updateBbox(); });
   _msRecalcBbox();
   edPushHistory(); edRedraw();
@@ -27763,11 +27844,13 @@ function EditorView_init(){
     e.stopPropagation();
     $('dd-align-sub')?.classList.toggle('open');
   });
-  $('dd-align-left')?.addEventListener('click',   ()=>{ edAlignSelected('left');   edCloseMenus(); });
-  $('dd-align-right')?.addEventListener('click',  ()=>{ edAlignSelected('right');  edCloseMenus(); });
-  $('dd-align-top')?.addEventListener('click',    ()=>{ edAlignSelected('top');    edCloseMenus(); });
-  $('dd-align-bottom')?.addEventListener('click', ()=>{ edAlignSelected('bottom'); edCloseMenus(); });
-  $('dd-align-center')?.addEventListener('click', ()=>{ edAlignSelected('center'); edCloseMenus(); });
+  $('dd-align-left')?.addEventListener('click',    ()=>{ edAlignSelected('left');    edCloseMenus(); });
+  $('dd-align-centerH')?.addEventListener('click', ()=>{ edAlignSelected('centerH'); edCloseMenus(); });
+  $('dd-align-right')?.addEventListener('click',   ()=>{ edAlignSelected('right');   edCloseMenus(); });
+  $('dd-align-top')?.addEventListener('click',     ()=>{ edAlignSelected('top');     edCloseMenus(); });
+  $('dd-align-centerV')?.addEventListener('click', ()=>{ edAlignSelected('centerV'); edCloseMenus(); });
+  $('dd-align-bottom')?.addEventListener('click',  ()=>{ edAlignSelected('bottom');  edCloseMenus(); });
+  $('dd-align-center')?.addEventListener('click',  ()=>{ edAlignSelected('center');  edCloseMenus(); });
   // Submenú exportar: toggle inline al clicar
   // Submenús inline — mismo patrón que exportar
   $('dd-imagen-btn')?.addEventListener('click', e => {
@@ -29805,15 +29888,39 @@ function _bibThumb(la) {
   const _wcThumb      = _btUid ? edLayers.find(l => l.type==='watercolor' && l._drawLayerId===_btUid) : null;
   const _pencilThumb  = _btUid ? edLayers.find(l => l.type==='pencil'     && l._drawLayerId===_btUid) : null;
   if ((la.type === 'stroke' || la.type === 'draw') && la._canvas && la._canvas.width > 0) {
-    const scale = Math.min((S-pad*2)/Math.max(pw,1), (S-pad*2)/Math.max(ph,1));
-    const dw=pw*scale, dh=ph*scale, dx=(S-dw)/2, dy=(S-dh)/2;
-    tc.save();
-    tc.setTransform(scale, 0, 0, scale, dx - mx*scale, dy - my*scale);
-    if (_flThumb     && typeof _flThumb.draw     === 'function') _flThumb.draw(tc);
-    if (_wcThumb     && typeof _wcThumb.draw     === 'function') _wcThumb.draw(tc);
-    if (_pencilThumb && typeof _pencilThumb.draw === 'function') _pencilThumb.draw(tc);
-    if (typeof la.draw === 'function') la.draw(tc);
-    tc.restore();
+    // Canvas workspace COMPLETO — captura objetos fuera del lienzo, mismo
+    // patrón ya usado (y probado) en _bibThumbGroup para miniaturas de
+    // grupo. BUG CORREGIDO (reportado por Alberto): antes se dibujaba
+    // directamente sobre la miniatura con una transformación acotada al
+    // área de la PÁGINA — si el objeto estaba en la zona de trabajo fuera
+    // del lienzo, quedaba fuera de ese recorte y la miniatura lo mostraba
+    // diminuto o directamente invisible. La miniatura debe mostrar siempre
+    // el objeto en sí, sin relación a su posición respecto al lienzo.
+    const off = document.createElement('canvas');
+    off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
+    const octx = off.getContext('2d');
+    if (_flThumb     && typeof _flThumb.draw     === 'function') _flThumb.draw(octx, off);
+    if (_wcThumb     && typeof _wcThumb.draw     === 'function') _wcThumb.draw(octx, off);
+    if (_pencilThumb && typeof _pencilThumb.draw === 'function') _pencilThumb.draw(octx, off);
+    if (typeof la.draw === 'function') la.draw(octx, off);
+
+    // Bbox en coordenadas absolutas de workspace — 'draw' (DrawLayer) cubre
+    // siempre toda la página entera, igual que en _bibThumbGroup.
+    let bx0, by0, bx1, by1;
+    if (la.type === 'draw') {
+      bx0 = mx; by0 = my; bx1 = mx + pw; by1 = my + ph;
+    } else {
+      const ocx = mx + la.x*pw, ocy = my + la.y*ph;
+      const ohw = la.width*pw/2, ohh = la.height*ph/2;
+      bx0 = ocx-ohw; by0 = ocy-ohh; bx1 = ocx+ohw; by1 = ocy+ohh;
+    }
+    bx0 -= 4; by0 -= 4; bx1 += 4; by1 += 4;
+    const bw = bx1-bx0, bh = by1-by0;
+    if (bw > 0 && bh > 0) {
+      const scale = Math.min((S-pad*2)/bw, (S-pad*2)/bh);
+      const dw = bw*scale, dh = bh*scale, dx=(S-dw)/2, dy=(S-dh)/2;
+      tc.drawImage(off, bx0, by0, bw, bh, dx, dy, dw, dh);
+    }
   } else if (la.type === 'shape' || la.type === 'line') {
     _lyDrawShapeThumb(thumb, la);
   } else if (la.type === 'image' && la.img && la.img.complete && la.img.naturalWidth > 0) {
@@ -31695,6 +31802,53 @@ function _gcpOpenPropsPanel(la, laIdx) {
     _gcpAutoSaveFrame();
     _gcpClosePropsPanel();
   });
+}
+
+// ── Alinea los objetos seleccionados del editor de animaciones (GCP) ──
+// Misma geometría que edAlignSelected (ver _edComputeAlignUnits) — grupos
+// tratados como una sola unidad, igual que en el editor general — pero con
+// el historial y el guardado PROPIOS del GCP, NO los del editor general:
+//
+// BUG QUE ESTO EVITA: el GCP tiene su propio sistema de historial
+// independiente (window._gcpHistory/_gcpPushHistory/_gcpUndo/_gcpRedo, con
+// sus propios botones ↶/↷ — ver más abajo), completamente aparte del
+// edHistory del editor general. edPushHistory() no sabe nada del GCP y
+// escribiría en edHistory con datos del GCP dentro si se llamara aquí sin
+// más — el deshacer/rehacer de este editor quedaría roto (Ctrl+Z en el GCP
+// comprueba _gcpHistory, nunca edHistory). Por eso NO se reutiliza
+// edAlignSelected tal cual (ni siquiera envuelto en _gcpWithEditorContext,
+// que solo intercambia edLayers/edMultiSel/etc., no qué función de
+// historial se llama) — se usa _gcpPushHistory()/_gcpAutoSaveFrame() en su
+// lugar, mismo patrón que _gcpDuplicateSelected/_gcpDeleteSelected de aquí
+// abajo.
+//
+// _gcpWithEditorContext SÍ se usa para el desplazamiento en sí y para
+// recalcular el bbox de multiselección: así _edSyncFill (que resuelve
+// contra la variable global edLayers) y _msRecalcBbox (que lee/escribe
+// edMultiSel/edMultiBbox) operan correctamente sobre los datos del GCP,
+// reutilizando ese código tal cual — ver el comentario de
+// _gcpWithEditorContext: "permite reutilizar TODO el código del editor
+// general" para justo este tipo de cálculo, que sí es idéntico entre los
+// dos editores.
+function _gcpAlignSelected(mode){
+  if(!window._gcpMultiSel || window._gcpMultiSel.length < 2) return;
+  const pw = edPageW(), ph = edPageH();
+  const units = _edComputeAlignUnits(window._gcpLayers, window._gcpMultiSel, mode, pw, ph);
+  if(!units) return;
+
+  _gcpPushHistory();
+  _gcpWithEditorContext(() => {
+    units.forEach(u => _edShiftUnit(window._gcpLayers, u, u.dx, u.dy));
+  });
+  window._gcpMultiSel.forEach(i => {
+    const la = window._gcpLayers[i];
+    if(la && typeof la._updateBbox === 'function') la._updateBbox();
+  });
+  _gcpWithEditorContext(() => { _msRecalcBbox(); });
+  _gcpAutoSaveFrame(); // persiste x/y nuevos en el frame activo + invalida miniaturas
+  _gcpPushHistory();
+  _gcpRedraw();
+  edToast(I18n.t('ed_aligned'));
 }
 
 // Duplica el objeto indicado (o el seleccionado si no se pasa índice) del GCP.
@@ -36189,6 +36343,7 @@ function gcpOpen(edLayerIdx) {
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
+    _gcpInitAlignMenu(); // botones Ordenar (alinear objetos) GCP
     document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
       requestAnimationFrame(_gcpSyncComportamiento);
     });
@@ -36205,6 +36360,7 @@ function gcpOpen(edLayerIdx) {
         if (!open) {
           if (id === 'capas') _gcpRenderLayersDropdown(dd);
           if (id === 'gcpRules') _gcpRuleToggleSync();
+          if (id === 'align') _gcpUpdateAlignMenu();
           // Mover al body para escapar de stacking contexts (igual que edToggleMenu)
           dd._gcpOrigParent = dd._gcpOrigParent || dd.parentNode;
           document.body.appendChild(dd);
@@ -36876,6 +37032,38 @@ function _gcpInitRules() {
       _gcpRedraw();
     });
   }
+}
+
+// ── Ordenar (alinear objetos) del editor de animaciones — botón propio en
+// la barra de herramientas, ver _gcpAlignSelected. El GCP no tiene menú
+// "Selección" como el editor general (petición explícita de Alberto), así
+// que aquí es un botón de primer nivel con su propio desplegable, mismo
+// patrón data-gcpmenu="align" / #gdd-align que el resto de menús GCP (ver
+// el manejador genérico "Menús GIF" más arriba, que ya abre/cierra
+// #gdd-align solo con tener ese atributo puesto en el HTML).
+function _gcpInitAlignMenu() {
+  const _map = { 'gcp-align-left':'left', 'gcp-align-centerH':'centerH', 'gcp-align-right':'right', 'gcp-align-top':'top', 'gcp-align-centerV':'centerV', 'gcp-align-bottom':'bottom', 'gcp-align-center':'center' };
+  Object.keys(_map).forEach(id => {
+    document.getElementById(id)?.addEventListener('click', () => {
+      _gcpAlignSelected(_map[id]);
+      _gcpCloseAllDropdowns();
+    });
+  });
+}
+
+// Habilita/deshabilita los 7 botones de Ordenar según haya o no 2+ objetos
+// seleccionados — mismo criterio y mismo estilo (opacidad + pointer-events)
+// que _edUpdateSelectMenu usa para "Agrupar"/"Ordenar" en el editor general.
+// Se llama al ABRIR el desplegable (ver el manejador "Menús GIF"), igual
+// que ya se hace para "capas"/"gcpRules" — no hace falta mantenerlo
+// sincronizado en todo momento, solo que esté correcto en el instante en
+// que la persona lo ve.
+function _gcpUpdateAlignMenu() {
+  const _dis = 'opacity:0.35;cursor:not-allowed;pointer-events:none';
+  const _hasSel = window._gcpMultiSel && window._gcpMultiSel.length >= 2;
+  ['gcp-align-left','gcp-align-centerH','gcp-align-right','gcp-align-top','gcp-align-centerV','gcp-align-bottom','gcp-align-center'].forEach(id => {
+    document.getElementById(id)?.setAttribute('style', _hasSel ? '' : _dis);
+  });
 }
 
 // _gcpDownloadApng — exporta animacion GCP como APNG transparente

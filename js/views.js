@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v36.88</footer>
+    <footer class="app-version">v36.92</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -498,12 +498,15 @@ Router.register('editor', {
               <div class="ed-dropdown-submenu" id="dd-align-wrap">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-alignbtn" data-i18n="ed_arrangeBtn">↕ Ordenar ▸</button>
                 <div class="ed-submenu" id="dd-align-sub">
-                  <button class="ed-dropdown-item" id="dd-align-left"   data-i18n="ed_alignLeft">⇤ Alinear izquierda</button>
-                  <button class="ed-dropdown-item" id="dd-align-right"  data-i18n="ed_alignRight">⇥ Alinear derecha</button>
-                  <button class="ed-dropdown-item" id="dd-align-top"   data-i18n="ed_alignTop">⤒ Alinear arriba</button>
-                  <button class="ed-dropdown-item" id="dd-align-bottom" data-i18n="ed_alignBottom">⤓ Alinear abajo</button>
+                  <button class="ed-dropdown-item" id="dd-align-left"    data-i18n="ed_alignLeft">⇤ Alinear izquierda</button>
+                  <button class="ed-dropdown-item" id="dd-align-centerH" data-i18n="ed_alignCenterH">↔ Centrado horizontal</button>
+                  <button class="ed-dropdown-item" id="dd-align-right"   data-i18n="ed_alignRight">⇥ Alinear derecha</button>
                   <div class="ed-dropdown-sep"></div>
-                  <button class="ed-dropdown-item" id="dd-align-center" data-i18n="ed_alignCenter">＋ Centrar</button>
+                  <button class="ed-dropdown-item" id="dd-align-top"     data-i18n="ed_alignTop">⤒ Alinear arriba</button>
+                  <button class="ed-dropdown-item" id="dd-align-centerV" data-i18n="ed_alignCenterV">↕ Centrado vertical</button>
+                  <button class="ed-dropdown-item" id="dd-align-bottom"  data-i18n="ed_alignBottom">⤓ Alinear abajo</button>
+                  <div class="ed-dropdown-sep"></div>
+                  <button class="ed-dropdown-item" id="dd-align-center"  data-i18n="ed_alignCenter">＋ Centrar</button>
                 </div>
               </div>
               <button class="ed-dropdown-item" id="_sel-merge" data-i18n="ed_merge">⊕ Unir</button>
@@ -1079,6 +1082,25 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="gcp-rule-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:middle;margin-right:5px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/></svg><span id="gcp-rule-toggle-txt" data-i18n="ed_hideGuides">Ocultar guías</span></button>
               <button class="ed-dropdown-item" id="gcp-rule-lock-all" data-i18n="ed_lockGuides">🔒 Bloquear guías</button>
               <button class="ed-dropdown-item" id="gcp-rule-clear" style="color:#c00" data-i18n="ed_clearGuides">✕ Borrar guías</button>
+            </div>
+          </div>
+          <div class="ed-menu-sep"></div>
+          <!-- Ordenar (alinear objetos) — botón propio en la barra, el GCP no
+               tiene menú "Selección" como el editor general. Mismas 7
+               opciones y mismas claves i18n que allí (ver dd-align-sub en el
+               submenú Selección del editor general). -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" data-gcpmenu="align" data-i18n="gcp_arrangeBtn">↕ Ordenar ▾</button>
+            <div class="ed-dropdown" id="gdd-align">
+              <button class="ed-dropdown-item" id="gcp-align-left"    data-i18n="ed_alignLeft">⇤ Alinear izquierda</button>
+              <button class="ed-dropdown-item" id="gcp-align-centerH" data-i18n="ed_alignCenterH">↔ Centrado horizontal</button>
+              <button class="ed-dropdown-item" id="gcp-align-right"   data-i18n="ed_alignRight">⇥ Alinear derecha</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="gcp-align-top"     data-i18n="ed_alignTop">⤒ Alinear arriba</button>
+              <button class="ed-dropdown-item" id="gcp-align-centerV" data-i18n="ed_alignCenterV">↕ Centrado vertical</button>
+              <button class="ed-dropdown-item" id="gcp-align-bottom"  data-i18n="ed_alignBottom">⤓ Alinear abajo</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="gcp-align-center"  data-i18n="ed_alignCenter">＋ Centrar</button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
