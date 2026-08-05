@@ -1112,6 +1112,34 @@ function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='buck
 // Cuatro canvases independientes, compositan al hacer OK.
 // _edTmp.active: 'pen'|'pencil'|'watercolor'|'bucket'
 let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen' };
+// Instantánea del canal alfa de la tinta al ENTRAR a una sesión de dibujo —
+// ver _edDrawInitHistory/_edFreezeDrawLayer/_edAutoSmoothExposedFillEdges.
+// {alpha:Uint8Array, w, h} | null.
+let _edInkBaselineAlpha = null;
+
+// ── Log temporal de creación de dibujo/relleno (para el botón 🩺, a petición
+// de Alberto: "el relleno desaparece al crear, quiero ver qué pasa desde que
+// se crea el objeto hasta que se inserta en el canvas") — mismo patrón que
+// window._edJankLog/_edDragPerfLog ya existentes. _edFCL() añade una línea
+// con marca de tiempo relativa a cuándo se limpió el log por última vez
+// (_edDrawInitHistory lo limpia al abrir una sesión nueva, así cada intento
+// de reproducir el fallo empieza con el log vacío). Vive en try/catch propio
+// para que un fallo aquí nunca pueda romper el dibujo real.
+window._edFCLog = window._edFCLog || [];
+window._edFCT0 = window._edFCT0 || Date.now();
+function _edFCL(msg){
+  try { window._edFCLog.push('+' + String(Date.now() - window._edFCT0).padStart(6) + 'ms  ' + msg); }
+  catch(_e) {}
+}
+function _edFCCanvasInfo(c, ctx){
+  if (!c) return 'sin canvas';
+  try {
+    const d = (ctx || c.getContext('2d')).getImageData(0, 0, c.width, c.height).data;
+    let px = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 10) px++;
+    return c.width + 'x' + c.height + ' px_opacos=' + px;
+  } catch(e) { return c.width + 'x' + c.height + ' (getImageData error: ' + e.message + ')'; }
+}
 
 // ── Serialización de _buttonAction ──────────────────────────────────────────
 const _edSerLayerOrig = edSerLayer;
@@ -13704,9 +13732,16 @@ function _edDrawClearHistory(){
   window._edDrawSessionActive = false; // fin de sesión — desbloquear edPushHistory
   _edDrawUpdateUndoRedoBtns();
   _edTmpDestroy();
+  // Fin de sesión por CUALQUIER vía (congelar, eliminar el dibujo entero...)
+  // — la instantánea de entrada ya no aplica a la próxima sesión que se abra.
+  _edInkBaselineAlpha = null;
 }
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
+  // Log de creación: nueva sesión, log limpio (ver window._edFCLog / botón 🩺)
+  window._edFCLog = [];
+  window._edFCT0 = Date.now();
+  _edFCL('=== _edDrawInitHistory: inicio de sesión (página ' + edCurrentPage + ') ===');
   // Marcar sucia la página YA al iniciar la sesión, no solo al congelar el
   // trazo. Nada impide guardar mientras una sesión de dibujo sigue activa
   // (no hay guard que lo bloquee), y dodge/burn muta el canvas de la capa
@@ -13718,8 +13753,29 @@ function _edDrawInitHistory(){
   // Crear canvases temporales para la sesión
   _edTmpCreate();
   _edTmp.active = 'pen';
+  // ¿Existe ya una capa de dibujo (estamos REEDITANDO algo ya creado antes)?
+  // Se comprueba ANTES de _edTmpLoadFromLayers (esa función no crea nada,
+  // solo carga contenido si ya existe una capa 'draw').
+  const _preExistingDrawLayer = page.layers.find(l => l.type === 'draw');
+  _edFCL('_preExistingDrawLayer: ' + (_preExistingDrawLayer ? 'SÍ (reeditar)' : 'NO (crear desde cero)'));
   // Si hay contenido previo (edición de trazo existente), cargarlo en los temporales
   _edTmpLoadFromLayers();
+  // Instantánea del canal alfa de la tinta AL ENTRAR — punto de partida para
+  // detectar, al salir (ver _edFreezeDrawLayer), cuánta tinta se ha borrado
+  // durante toda la sesión (con el borrador, cualquier número de trazos) y
+  // suavizar automáticamente solo la franja de relleno que haya quedado
+  // expuesta — ver _edAutoSmoothExposedFillEdges.
+  //
+  // Restricción "solo reeditar" RETIRADA: se añadió como medida de seguridad
+  // cuando el relleno desapareció al crear (v36.99), pero en v37.01 —con esa
+  // misma restricción activa, o sea con _edInkBaselineAlpha en null y
+  // _edAutoSmoothExposedFillEdges sin poder llamarse nunca en creación— el
+  // fallo volvió a reproducirse igual. Eso demuestra que este suavizado NO
+  // era la causa. Vuelve a tomarse la instantánea siempre (crear o
+  // reeditar), y seguimos diagnosticando con el log de _edFCL para encontrar
+  // la causa real, que está en otro punto de la cadena.
+  _edInkBaselineAlpha = _edSnapshotInkAlpha(_edTmp.pen);
+  _edFCL('_edInkBaselineAlpha tras _edDrawInitHistory: ' + (_edInkBaselineAlpha ? ('objeto ' + _edInkBaselineAlpha.w + 'x' + _edInkBaselineAlpha.h) : 'null'));
   // Guardar punto inicial con el mismo formato que _edDrawPushHistory
   edDrawHistory = [];
   edDrawHistoryIdx = -1;
@@ -13815,6 +13871,9 @@ function _edGetOrCreateDrawLayer(){
   if(firstTextIdx >= 0) page.layers.splice(firstTextIdx, 0, fl, wcL, pencilL, dl);
   else { page.layers.push(fl, wcL, pencilL, dl); }
   edLayers = page.layers;
+  _edFCL('_edGetOrCreateDrawLayer: grupo NUEVO creado — dl._uid=' + dl._uid +
+    ' | fl._drawLayerId=' + fl._drawLayerId + ' (' + (fl._drawLayerId === dl._uid ? 'OK, coincide' : 'DESAJUSTE!') + ')' +
+    ' | fl canvas=' + _edFCCanvasInfo(fl._canvas, fl._ctx));
   return dl;
 }
 
@@ -13925,30 +13984,34 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
     // Sin huecos cercanos que cerrar: seguir con el relleno tal cual.
   }
 
-  // ── Suavizado automático bajo la tinta, en dos fases ────────────────────
-  // FASE 1 — sin suavizar: mientras la tinta va subiendo (o está en su pico
-  // ya alcanzado, aunque se mantenga plana después) el relleno va al 100%.
-  // Esto cubre toda la rampa de entrada de la tinta y su núcleo opaco,
-  // por ancho que sea — así el relleno llega al 100% justo hasta donde la
-  // propia tinta también está al 100%, sin línea de corte.
-  // FASE 2 — suavizado, con un contador FIJO de niveles (no "hasta el
-  // infinito"): en cuanto se detecta que la tinta ya no sube respecto al
-  // máximo visto hasta ahora, el SIGUIENTE píxel de relleno pasa a nivel 1
-  // de transparencia, el siguiente a nivel 2 (más transparente que el
-  // anterior), el siguiente a nivel 3... y al llegar al último nivel el
-  // relleno ya no se dibuja más — el relleno acaba ahí, no sigue avanzando
-  // por debajo del resto de la tinta.
+  // ── Relleno bajo la tinta hasta su propio pico de opacidad ──────────────
+  // Mientras la tinta va subiendo (o está en su pico ya alcanzado, aunque se
+  // mantenga plana después) el relleno va al 100%. Esto cubre toda la rampa
+  // de entrada de la tinta y su núcleo opaco, por ancho que sea — así el
+  // relleno llega al 100% justo hasta donde la propia tinta también está al
+  // 100%, sin línea de corte. En cuanto la tinta deja de subir respecto al
+  // máximo visto hasta ahora por ese camino, la propagación se DETIENE ahí
+  // mismo — sin degradado ni avance por debajo del resto de la tinta.
+  //
+  // Antes había una "fase 2" aquí (degradado de varios niveles bajo la
+  // tinta, pensado para que el borde no quedara rayado al borrar la tinta
+  // encima). No funcionó: el BFS no tenía forma de distinguir "la tinta que
+  // de verdad delimita este relleno" de cualquier OTRA línea de tinta
+  // conectada que saliera de ahí — con tinta fina (pocos píxeles de ancho)
+  // llegaba a atravesarla entera y aparecer al otro lado, y si de la tinta
+  // partía otra línea distinta, el degradado se colaba por ella también.
+  // Pedido explícito de Alberto: quitarla — para el borde rayado al borrar
+  // tinta, usar el suavizado manual, no uno automático que se extiende por
+  // donde no debe.
   let _extAlphaOL = null;
   {
-    const _TAPER_N = 4; // niveles totales (3 de transparencia + el final en 0)
-    const _runMax = new Int16Array(W*H).fill(-1);
-    const _depth  = new Int16Array(W*H).fill(-1); // 0 = aún fase 1 (100%)
+    const _runMax = new Int16Array(W*H).fill(-1); // -1 = no alcanzado por el relleno
     const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
     const _q = [];
     const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
-    // Sembrar: vecinos directos del núcleo del relleno que tengan tinta
-    // (el primer píxel siempre entra en fase 1: aún no sabemos si la tinta
-    // sigue subiendo, así que se trata como si viniera de un máximo de -∞)
+    // Sembrar: vecinos directos del núcleo del relleno que tengan tinta (el
+    // primer píxel siempre se acepta: aún no sabemos si la tinta sigue
+    // subiendo, se trata como si viniera de un máximo de -∞)
     for (let y=0; y<H; y++){
       for (let x=0; x<W; x++){
         const idx = y*W+x;
@@ -13961,17 +14024,17 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
           const inkA = orig[nidx*4+3];
           if (inkA <= 0) continue;
           _runMax[nidx] = inkA;
-          _depth[nidx]  = 0;
           _q.push(nidx);
         }
       }
     }
-    // BFS estricta: cada píxel se visita y fija una sola vez
+    // BFS estricta: cada píxel se visita y fija una sola vez. Solo se
+    // propaga a un vecino si su tinta sigue subiendo respecto al máximo ya
+    // visto por ese camino — en cuanto deja de subir, ese vecino se queda
+    // sin marcar (no se rellena) y esa rama de la propagación termina ahí.
     for (let _qh=0; _qh<_q.length; _qh++){
       const idx = _q[_qh];
-      const predMax   = _runMax[idx];
-      const predDepth = _depth[idx];
-      if (predDepth >= _TAPER_N) continue; // ya en nivel final: no propagar más
+      const predMax = _runMax[idx];
       const x = idx % W, y = (idx / W) | 0;
       for (const [ddx,ddy] of _NB){
         const nx=x+ddx, ny=y+ddy;
@@ -13979,25 +14042,15 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
         const nidx = ny*W+nx;
         if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
         const inkA = orig[nidx*4+3];
-        if (inkA <= 0) continue;
-        if (inkA > predMax) {
-          // La tinta sigue subiendo respecto al máximo ya visto: fase 1 (100%)
-          _runMax[nidx] = inkA;
-          _depth[nidx]  = 0;
-        } else {
-          // La tinta ya no sube (esté o no en su pico): un nivel más de
-          // transparencia, sin importar lo que haga la tinta a partir de aquí
-          _runMax[nidx] = predMax;
-          _depth[nidx]  = predDepth + 1;
-        }
+        if (inkA <= 0 || inkA <= predMax) continue; // la tinta ya no sube: no propagar
+        _runMax[nidx] = inkA;
         if (_q.length < _MAX_Q) _q.push(nidx);
       }
     }
     _extAlphaOL = new Uint8Array(W*H);
     for (let i=0; i<W*H; i++){
-      if (filled[i] || _depth[i] < 0) continue;
-      const _extA = _depth[i] === 0 ? fA : Math.round(fA * (_TAPER_N - _depth[i]) / _TAPER_N);
-      if (_extA > 0) _extAlphaOL[i] = _extA;
+      if (filled[i] || _runMax[i] < 0) continue;
+      _extAlphaOL[i] = fA;
     }
   }
 
@@ -14028,6 +14081,7 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
 
 function edFloodFill(nx, ny){
   const page = edPages[edCurrentPage]; if(!page) return;
+  _edFCL('edFloodFill: invocado (nx=' + nx.toFixed(3) + ', ny=' + ny.toFixed(3) + ')');
 
   // Si hay un StrokeLayer seleccionado con FillLayer vinculado (barra flotante),
   // usar directamente el canvas del StrokeLayer como referencia y el FillLayer como destino
@@ -14164,10 +14218,12 @@ function edFloodFill(nx, ny){
   let _ffFilledCount = 0;
   for (let _fci = 0; _fci < fw*fh; _fci++) if (filled[_fci]) _ffFilledCount++;
   const _ffLeak = (_ffFilledCount / (fw*fh)) >= 0.9;
+  _edFCL('edFloodFill: filled=' + _ffFilledCount + '/' + (fw*fh) + ' (' + (_ffFilledCount/(fw*fh)*100).toFixed(1) + '%) — ¿fuga? ' + (_ffLeak ? 'SÍ' : 'no'));
   if (_ffLeak && !window._edFillGapRetry) {
     const _inkLayer = _edTmp.pen || dl;
     const _gapsClosed = _inkLayer?._canvas &&
       _edCloseInkGapsInRegion(_inkLayer, 0, 0, _inkLayer._canvas.width-1, _inkLayer._canvas.height-1);
+    _edFCL('edFloodFill: fuga detectada — huecos cerrados: ' + (_gapsClosed ? 'SÍ, reintentando' : 'NO, sin huecos cercanos que cerrar'));
     if (_gapsClosed) {
       window._edFillGapRetry = true;
       try { edFloodFill(nx, ny); } finally { window._edFillGapRetry = false; }
@@ -14177,36 +14233,40 @@ function edFloodFill(nx, ny){
     // seguir con el relleno tal cual (igual que si esta detección no existiera).
   }
 
-  // ── Suavizado automático bajo la tinta, en dos fases ────────────────────
-  // El núcleo del relleno (filled=1) tiene un borde recto justo donde
-  // empieza la tinta. Si luego se borra la tinta, ese borde recto queda
-  // expuesto sin suavizar — hasta ahora había que pulsar "Suavizar" a mano.
-  // FASE 1 — sin suavizar: mientras la tinta va subiendo (o está en su pico
-  // ya alcanzado, aunque se mantenga plana después) el relleno va al 100%.
-  // Esto cubre toda la rampa de entrada de la tinta y su núcleo opaco, por
-  // ancho que sea — el relleno llega al 100% justo hasta donde la propia
-  // tinta también está al 100%, sin línea de corte.
-  // FASE 2 — suavizado, con un contador FIJO de niveles (no "hasta el
-  // infinito"): en cuanto la tinta ya no sube respecto al máximo visto
-  // hasta ahora, el SIGUIENTE píxel de relleno pasa a nivel 1 de
-  // transparencia, el siguiente a nivel 2 (más transparente que el
-  // anterior), el siguiente a nivel 3... y al llegar al último nivel el
-  // relleno ya no se dibuja más — acaba ahí, no sigue bajo el resto de tinta.
+  // ── Relleno bajo la tinta hasta su propio pico de opacidad ──────────────
+  // El núcleo del relleno (filled=1) tendría un borde recto justo donde
+  // empieza la tinta si se parase ahí sin más — mientras la tinta va
+  // subiendo (o está en su pico ya alcanzado, aunque se mantenga plana
+  // después) el relleno va al 100%. Esto cubre toda la rampa de entrada de
+  // la tinta y su núcleo opaco, por ancho que sea — el relleno llega al
+  // 100% justo hasta donde la propia tinta también está al 100%, sin línea
+  // de corte. En cuanto la tinta deja de subir respecto al máximo visto
+  // hasta ahora por ese camino, la propagación se DETIENE ahí mismo — sin
+  // degradado ni avance por debajo del resto de la tinta.
+  //
+  // Antes había una "fase 2" aquí (degradado de varios niveles bajo la
+  // tinta, pensado para que ese borde no quedara rayado al borrar la tinta
+  // encima — había que pulsar "Suavizar" a mano). No funcionó: el BFS no
+  // tenía forma de distinguir "la tinta que de verdad delimita este
+  // relleno" de cualquier OTRA línea de tinta conectada que saliera de
+  // ahí — con tinta fina (pocos píxeles de ancho) llegaba a atravesarla
+  // entera y aparecer al otro lado, y si de la tinta partía otra línea
+  // distinta, el degradado se colaba por ella también. Pedido explícito de
+  // Alberto: quitarla — para el borde rayado al borrar tinta, usar el
+  // suavizado manual, no uno automático que se extiende por donde no debe.
   let _extAlpha = null;
   {
     const _inkRef = _edTmp.pen || dl;
     if (_inkRef?._canvas && _inkRef._canvas.width === fw && _inkRef._canvas.height === fh) {
-      const _TAPER_N = 4; // niveles totales (3 de transparencia + el final en 0)
       const _inkCtx = _inkRef._ctx || _inkRef._canvas.getContext('2d');
       const _inkData = _inkCtx.getImageData(0, 0, fw, fh).data;
-      const _runMax = new Int16Array(fw*fh).fill(-1);
-      const _depth  = new Int16Array(fw*fh).fill(-1); // 0 = aún fase 1 (100%)
+      const _runMax = new Int16Array(fw*fh).fill(-1); // -1 = no alcanzado por el relleno
       const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
       const _q = [];
       const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
       // Sembrar: vecinos directos del núcleo del relleno que tengan tinta
-      // (el primer píxel siempre entra en fase 1: aún no sabemos si la
-      // tinta sigue subiendo, se trata como si viniera de un máximo de -∞)
+      // (el primer píxel siempre se acepta: aún no sabemos si la tinta
+      // sigue subiendo, se trata como si viniera de un máximo de -∞)
       for (let y=0; y<fh; y++){
         for (let x=0; x<fw; x++){
           const idx = y*fw+x;
@@ -14219,20 +14279,18 @@ function edFloodFill(nx, ny){
             const inkA = _inkData[nidx*4+3];
             if (inkA <= 0) continue;
             _runMax[nidx] = inkA;
-            _depth[nidx]  = 0;
             _q.push(nidx);
           }
         }
       }
-      // BFS estricta: cada píxel se visita y fija UNA sola vez, heredando el
-      // estado de sus vecinos YA fijados (más cercanos al relleno) — nunca
-      // se revisita, para que un valor alto más profundo en la tinta no se
-      // propague hacia atrás y rebaje un píxel más cercano al relleno.
+      // BFS estricta: cada píxel se visita y fija UNA sola vez. Solo se
+      // propaga a un vecino si su tinta sigue subiendo respecto al máximo
+      // ya visto por ese camino — en cuanto deja de subir, ese vecino se
+      // queda sin marcar (no se rellena) y esa rama de la propagación
+      // termina ahí.
       for (let _qh=0; _qh<_q.length; _qh++){
         const idx = _q[_qh];
-        const predMax   = _runMax[idx];
-        const predDepth = _depth[idx];
-        if (predDepth >= _TAPER_N) continue; // ya en nivel final: no propagar más
+        const predMax = _runMax[idx];
         const x = idx % fw, y = (idx / fw) | 0;
         for (const [ddx,ddy] of _NB){
           const nx=x+ddx, ny=y+ddy;
@@ -14240,25 +14298,15 @@ function edFloodFill(nx, ny){
           const nidx = ny*fw+nx;
           if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
           const inkA = _inkData[nidx*4+3];
-          if (inkA <= 0) continue;
-          if (inkA > predMax) {
-            // La tinta sigue subiendo respecto al máximo ya visto: fase 1 (100%)
-            _runMax[nidx] = inkA;
-            _depth[nidx]  = 0;
-          } else {
-            // La tinta ya no sube (esté o no en su pico): un nivel más de
-            // transparencia, sin importar lo que haga la tinta a partir de aquí
-            _runMax[nidx] = predMax;
-            _depth[nidx]  = predDepth + 1;
-          }
+          if (inkA <= 0 || inkA <= predMax) continue; // la tinta ya no sube: no propagar
+          _runMax[nidx] = inkA;
           if (_q.length < _MAX_Q) _q.push(nidx);
         }
       }
       _extAlpha = new Uint8Array(fw*fh);
       for (let i=0; i<fw*fh; i++){
-        if (filled[i] || _depth[i] < 0) continue;
-        const _extA = _depth[i] === 0 ? fA : Math.round(fA * (_TAPER_N - _depth[i]) / _TAPER_N);
-        if (_extA > 0) _extAlpha[i] = _extA;
+        if (filled[i] || _runMax[i] < 0) continue;
+        _extAlpha[i] = fA;
       }
     }
   }
@@ -14282,6 +14330,7 @@ function edFloodFill(nx, ny){
 
   // Escribir resultado en _edTmp.bucket (capa temporal del bote) si existe
   const _ffDest = _edTmp.bucket;
+  let _filledCount = 0; for (let _fi=0;_fi<fw*fh;_fi++) if (filled[_fi]) _filledCount++;
   if (_ffDest?._canvas) {
     const _ffCtx = _ffDest._ctx;
     const _ffPrev = _ffCtx.getImageData(0, 0, fw, fh);
@@ -14295,6 +14344,8 @@ function edFloodFill(nx, ny){
       }
     }
     _ffCtx.putImageData(_ffPrev, 0, 0);
+    _edFCL('edFloodFill: escrito en _edTmp.bucket (sesión activa) — filled=' + _filledCount +
+      ' px | bucket tras escribir: ' + _edFCCanvasInfo(_ffDest._canvas, _ffCtx));
   } else {
     // Fallback: escribir en FillLayer real (fuera de sesión de dibujo)
     const _flFill = page.layers.find(l => l.type==='fill' && l._drawLayerId === dl._fillLayerId);
@@ -14313,8 +14364,10 @@ function edFloodFill(nx, ny){
         }
       }
       _flFill._ctx.putImageData(_flPrev, 0, 0);
+      _edFCL('edFloodFill: FALLBACK — escrito directamente en FillLayer real (fuera de sesión) — filled=' + _filledCount + ' px');
     } else {
       ctx.putImageData(resultImageData, x0, y0);
+      _edFCL('edFloodFill: FALLBACK EXTREMO — sin _edTmp.bucket NI FillLayer vinculado — escrito DIRECTAMENTE en la capa de tinta (dl._ctx) — filled=' + _filledCount + ' px');
     }
   }
   // Guardar en historial del panel DESPUÉS del relleno — así cada entrada
@@ -14342,6 +14395,236 @@ function _edFillSmooth() {
   edRedraw();
   edToast(I18n.t('ed_edgesSmoothed'));
 }
+
+// ── Suavizado AUTOMÁTICO y localizado al borrar tinta que limitaba un relleno ──
+// Estudio pedido por Alberto tras retirar el sistema de "fase 2" (que se
+// colaba por ramas de tinta ajenas — ver el bloque de "Relleno bajo la tinta
+// hasta su propio pico de opacidad" más arriba). La diferencia de fondo: allí
+// no se sabía TODAVÍA cuánta tinta se borraría después, así que había que
+// "adivinar" propagándose por el contorno — de ahí los escapes. Aquí se
+// dispara justo AL BORRAR, cuando ya se sabe exactamente qué píxeles de
+// tinta han desaparecido — no hace falta propagar nada, solo suavizar
+// exactamente esa franja.
+//
+// _edSnapshotInkAlpha(drawLayerLike): copia solo el canal alfa de un
+// DrawLayer/StrokeLayer (Uint8Array — 1 byte/píxel en vez de 4, más barato
+// de guardar durante toda una sesión de dibujo que puede incluir muchos
+// trazos de borrador antes de llegar a "OK").
+function _edSnapshotInkAlpha(drawLayerLike) {
+  const c = drawLayerLike?._canvas; if (!c || !c.width || !c.height) return null;
+  const ctx = drawLayerLike._ctx || c.getContext('2d');
+  const data = ctx.getImageData(0, 0, c.width, c.height).data;
+  const n = c.width * c.height;
+  const alpha = new Uint8Array(n);
+  for (let i = 0; i < n; i++) alpha[i] = data[i*4+3];
+  return { alpha, w: c.width, h: c.height };
+}
+
+// Compara una instantánea de alfa de tinta ANTES (oldSnap, ver
+// _edSnapshotInkAlpha) contra el estado ACTUAL del mismo canvas de tinta, y
+// allí donde ha bajado de forma notable Y había relleno sólido justo debajo,
+// aplica sobre fillCtx el mismo blur que _edFillSmooth — pero SOLO en esa
+// franja exacta (con un pequeño margen para que el blur tenga contorno
+// alrededor), nunca al lienzo entero. Devuelve true si suavizó algo.
+function _edAutoSmoothExposedFillEdges(fillCtx, inkCtx, oldSnap) {
+  if (!fillCtx || !inkCtx || !oldSnap) return false;
+  const fw = oldSnap.w, fh = oldSnap.h;
+  if (!fw || !fh) return false;
+
+  const newAlphaFull = inkCtx.getImageData(0, 0, fw, fh).data;
+  const fillImgData = fillCtx.getImageData(0, 0, fw, fh);
+  const fd = fillImgData.data;
+
+  // Umbral de bajada de tinta: ignora el ruido normal del propio trazo
+  // (antialiasing, superposición de pasadas) y solo cuenta bajadas claras,
+  // de verdad debidas a un borrado. Umbral de relleno: solo interesa donde
+  // había relleno realmente SÓLIDO debajo (el núcleo o la rampa extendida
+  // de la fase 1 del relleno) — sin relleno ahí, no hay nada que suavizar.
+  const INK_DROP_MIN = 40;
+  const FILL_SOLID_MIN = 200;
+
+  // Paso 1 — candidatos: tinta borrada Y relleno sólido debajo (igual que
+  // antes). Por sí solo esto NO basta: si se borra un tramo ANCHO de tinta
+  // que tenía relleno sólido debajo en varios píxeles de profundidad
+  // (fase 1 puede extender el relleno bastante bajo tinta gruesa), difuminar
+  // TODOS esos píxeles por igual ensancha el halo mucho más de lo que
+  // debería — el relleno "crece" visualmente respecto a lo que ocupaba
+  // antes de borrar la tinta. Bug reportado por Alberto.
+  const candidate = new Uint8Array(fw*fh);
+  for (let y=0; y<fh; y++){
+    const rowBase = y*fw;
+    for (let x=0; x<fw; x++){
+      const i = rowBase+x;
+      if ((oldSnap.alpha[i] - newAlphaFull[i*4+3]) < INK_DROP_MIN) continue;
+      if (fd[i*4+3] < FILL_SOLID_MIN) continue;
+      candidate[i] = 1;
+    }
+  }
+
+  // Paso 2 — de los candidatos, quedarnos SOLO con los que están en el
+  // CONTORNO real del relleno: al menos un vecino (8 direcciones, incluye
+  // diagonales para que una esquina no se cuele sin marcar) con relleno NO
+  // sólido, o el borde del propio lienzo. Los píxeles candidatos que están
+  // varios píxeles hacia DENTRO del relleno (rodeados de relleno sólido por
+  // todos lados) no son contorno — se dejan exactamente como estaban, al
+  // 100%, sin difuminar. Así el antialiasing arranca justo en el límite de
+  // opacidad 100% del relleno (pedido explícito de Alberto) y nunca se
+  // extiende más allá de lo que el relleno ya ocupaba antes de borrar la
+  // tinta — por ancho que fuera el tramo de tinta borrado.
+  const NB8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  const mask = new Uint8Array(fw*fh);
+  let any = false, minX=fw, minY=fh, maxX=-1, maxY=-1;
+  for (let y=0; y<fh; y++){
+    for (let x=0; x<fw; x++){
+      const i = y*fw+x;
+      if (!candidate[i]) continue;
+      let isContour = false;
+      for (const [ddx,ddy] of NB8){
+        const nx=x+ddx, ny=y+ddy;
+        if (nx<0||nx>=fw||ny<0||ny>=fh){ isContour = true; break; }
+        if (fd[(ny*fw+nx)*4+3] < FILL_SOLID_MIN){ isContour = true; break; }
+      }
+      if (!isContour) continue;
+      mask[i] = 1; any = true;
+      if (x<minX) minX=x; if (x>maxX) maxX=x;
+      if (y<minY) minY=y; if (y>maxY) maxY=y;
+    }
+  }
+  if (!any) return false;
+
+  // Recorte de trabajo con margen (el blur necesita contorno alrededor del
+  // borde real para que el resultado no quede con un canto duro en el
+  // límite del propio recorte) — algo más ancho que para una sola pasada,
+  // ya que dos blurs encadenados alcanzan un poco más lejos que uno solo.
+  const PAD = 5;
+  const bx = Math.max(0, minX-PAD), by = Math.max(0, minY-PAD);
+  const bx2 = Math.min(fw-1, maxX+PAD), by2 = Math.min(fh-1, maxY+PAD);
+  const bw = bx2-bx+1, bh = by2-by+1;
+
+  // Misma técnica que _edFillSmooth (filter:blur(0.75px) vía drawImage —
+  // putImageData no respeta filter, por eso el recorte se extrae primero a
+  // un canvas normal y el blur se aplica en el drawImage del paso siguiente).
+  // DOS pasadas encadenadas (pedido explícito de Alberto: con una sola
+  // seguía viéndose el borde bastante rateado al quitar la tinta) — la
+  // segunda difumina el resultado ya difuminado de la primera, sobre un
+  // segundo canvas temporal.
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = bw; cropCanvas.height = bh;
+  cropCanvas.getContext('2d').putImageData(fillImgData, -bx, -by, bx, by, bw, bh);
+
+  const blurCanvas = document.createElement('canvas');
+  blurCanvas.width = bw; blurCanvas.height = bh;
+  const blurCtx = blurCanvas.getContext('2d');
+  blurCtx.filter = 'blur(0.75px)';
+  blurCtx.drawImage(cropCanvas, 0, 0);
+
+  const blurCanvas2 = document.createElement('canvas');
+  blurCanvas2.width = bw; blurCanvas2.height = bh;
+  const blurCtx2 = blurCanvas2.getContext('2d');
+  blurCtx2.filter = 'blur(0.75px)';
+  blurCtx2.drawImage(blurCanvas, 0, 0);
+  const blurredData = blurCtx2.getImageData(0, 0, bw, bh).data;
+
+  // Recomponer: SOLO los píxeles marcados toman el valor difuminado — el
+  // resto del recorte (relleno bajo tinta que sigue intacta ahí, aunque
+  // esté dentro del mismo bbox) se queda exactamente como estaba, así que
+  // no se toca ningún borde que la tinta siga tapando de verdad.
+  for (let yy=0; yy<bh; yy++){
+    for (let xx=0; xx<bw; xx++){
+      const gx = bx+xx, gy = by+yy, gi = gy*fw+gx;
+      if (!mask[gi]) continue;
+      const si = (yy*bw+xx)*4, di = gi*4;
+      fd[di]=blurredData[si]; fd[di+1]=blurredData[si+1];
+      fd[di+2]=blurredData[si+2]; fd[di+3]=blurredData[si+3];
+    }
+  }
+  fillCtx.putImageData(fillImgData, 0, 0);
+  return true;
+}
+
+// ── Suavizado automático — segunda vía: VACIAR la capa de tinta entera ──────
+// Alberto señaló que hay dos formas de eliminar tinta que delimita un
+// relleno: el borrador (ver hooks en _edDrawInitHistory/_edFreezeDrawLayer,
+// arriba) y borrar la capa "Tinta" entera de un tirón desde el panel de
+// capas (editor-layers.js, botón ✕ de esa fila) — un camino de código
+// totalmente distinto, sin sesión de dibujo de por medio, directamente
+// sobre las capas ya congeladas.
+//
+// Se llama justo ANTES de eliminar `la` (la capa de tinta — StrokeLayer o,
+// más raro, DrawLayer) de edLayers. Reutiliza _edAutoSmoothExposedFillEdges
+// tal cual, "engañándola" con un canvas de tinta totalmente transparente
+// como estado "después" (ya que aquí no se borra parcialmente: TODA la
+// tinta desaparece de golpe).
+function _edSmoothFillUnderDeletedInk(la) {
+  if (!la?._canvas) return;
+  const uid = la._uid || la._fillLayerId;
+  if (!uid) return;
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const fl = page.layers.find(l => l.type === 'fill' && l._drawLayerId === uid);
+  if (!fl?._canvas) return;
+
+  // La tinta (StrokeLayer, ya congelada) y el relleno (FillLayer) pueden
+  // estar cada uno recortado a su propio bbox, con orígenes distintos —
+  // renderizar la tinta con su propio .draw() sobre un canvas de todo el
+  // workspace la alinea al mismo sistema de coordenadas que va a usar el
+  // relleno tras _edExpandGroupLayerToWs, sin mutar `la` (que se va a
+  // eliminar de todos modos justo después de esta llamada).
+  const inkWs = document.createElement('canvas');
+  inkWs.width = ED_CANVAS_W; inkWs.height = ED_CANVAS_H;
+  let inkWsCtx;
+  try { inkWsCtx = inkWs.getContext('2d'); la.draw(inkWsCtx); } catch(_e) { return; }
+  const inkSnap = _edSnapshotInkAlpha({ _canvas: inkWs, _ctx: inkWsCtx });
+  if (!inkSnap) return;
+
+  // Pasar el relleno a representación de workspace (mismo mecanismo que ya
+  // usa el recorte de StrokeLayer con capas vinculadas) para que sus
+  // píxeles queden alineados 1:1 con inkWs — se queda así tras la llamada
+  // (mismo criterio que los demás usos de _edExpandGroupLayerToWs).
+  _edExpandGroupLayerToWs(fl, la);
+
+  // Canvas vacío (alfa 0 en todos los píxeles) = "la tinta ya no está, se
+  // acaba de vaciar la capa entera" — con esto basta para que
+  // _edAutoSmoothExposedFillEdges detecte como "expuesta" cualquier zona de
+  // relleno sólido que estuviera bajo esta tinta, sin duplicar su lógica.
+  const emptyInk = document.createElement('canvas');
+  emptyInk.width = ED_CANVAS_W; emptyInk.height = ED_CANVAS_H;
+  try {
+    _edAutoSmoothExposedFillEdges(fl._ctx, emptyInk.getContext('2d'), inkSnap);
+  } catch(_e) {}
+
+  // Recortar de vuelta al contenido real — sin esto, `fl` se quedaría para
+  // siempre ocupando todo el área de trabajo (ED_CANVAS_W×ED_CANVAS_H,
+  // ~4.2M píxeles) por culpa de _edExpandGroupLayerToWs, cuando su
+  // contenido real normalmente es mucho más pequeño — pedido explícito de
+  // Alberto para ahorrar memoria/tamaño guardado.
+  try { _edRecropExpandedLayer(fl); } catch(_e) {}
+}
+
+// Recorta una capa que se expandió a workspace completo (ver
+// _edExpandGroupLayerToWs) de vuelta a su contenido real — mismo cálculo
+// que ya usa _edFreezeDrawLayer para derivar x/y/width/height en fracción
+// de página a partir de un bbox absoluto de workspace, aplicado aquí a una
+// capa ya existente en vez de a una recién creada. Sin bbox (capa vacía) no
+// toca nada — se deja tal cual, expandida, en ese caso raro.
+function _edRecropExpandedLayer(la) {
+  if (!la?._canvas || !la._isWorkspaceCanvas) return false;
+  const bb = StrokeLayer._boundingBox(la._canvas);
+  if (!bb || !bb.w || !bb.h) return false;
+  const cropped = document.createElement('canvas');
+  cropped.width = bb.w; cropped.height = bb.h;
+  cropped.getContext('2d').drawImage(la._canvas, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
+  const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+  la._canvas = cropped;
+  la._ctx = cropped.getContext('2d');
+  la.x = (bb.x + bb.w/2 - mx) / pw;
+  la.y = (bb.y + bb.h/2 - my) / ph;
+  la.width  = bb.w / pw;
+  la.height = bb.h / ph;
+  la.rotation = 0;
+  la._isWorkspaceCanvas = false;
+  return true;
+}
+
 
 // ── Degradado: dibujar preview de la línea en overlay canvas ──────────────────
 function _edDrawGradPreview(e) {
@@ -17416,23 +17699,54 @@ function _edFreezeDrawLayer(){
 
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
+  _edFCL('=== _edFreezeDrawLayer: inicio (OK) — dl._uid=' + (dl._uid||'none') +
+    ' | bucket ANTES de suavizar: ' + _edFCCanvasInfo(_edTmp.bucket?._canvas, _edTmp.bucket?._ctx));
+  // Suavizado automático de la tinta borrada durante la sesión (ver
+  // _edDrawInitHistory para la instantánea de entrada) — SOLO al congelar,
+  // no en cada trazo del borrador (pedido explícito de Alberto: por si se
+  // borra y se afina varias veces seguidas antes de terminar). Tiene que ir
+  // ANTES de _edTmpComposite(): el blur se aplica sobre _edTmp.bucket
+  // (relleno todavía temporal) para que quede horneado en el FillLayer real
+  // igual que el resto de la sesión, no como un paso aparte después.
+  if (_edInkBaselineAlpha && _edTmp.pen?._canvas && _edTmp.bucket?._canvas) {
+    let _smoothApplied = null, _smoothError = null;
+    try {
+      _smoothApplied = _edAutoSmoothExposedFillEdges(_edTmp.bucket._ctx, _edTmp.pen._ctx, _edInkBaselineAlpha);
+    } catch(_e) { _smoothError = _e.message; }
+    _edFCL('_edAutoSmoothExposedFillEdges: applied=' + _smoothApplied + (_smoothError ? (' ERROR: ' + _smoothError) : '') +
+      ' | bucket DESPUÉS de suavizar: ' + _edFCCanvasInfo(_edTmp.bucket?._canvas, _edTmp.bucket?._ctx));
+  } else {
+    _edFCL('_edAutoSmoothExposedFillEdges: NO SE LLAMÓ (baseline=' + (_edInkBaselineAlpha?'sí':'null') + ')');
+  }
+  _edInkBaselineAlpha = null;
   // Compositar las 4 capas temporales sobre DrawLayer/FillLayer antes de congelar
   if(_edTmp.pen || _edTmp.pencil || _edTmp.watercolor || _edTmp.bucket){
     _edTmpComposite();
   }
+  {
+    const _uidChk = dl._uid || dl._fillLayerId;
+    const _flChk = _uidChk ? page.layers.find(l => l.type==='fill' && l._drawLayerId===_uidChk) : null;
+    _edFCL('tras _edTmpComposite(): FillLayer real ' + (_flChk ? ('encontrado — ' + _edFCCanvasInfo(_flChk._canvas, _flChk._ctx)) : 'NO ENCONTRADO (uid buscado: ' + _uidChk + ')'));
+  }
   const bb = StrokeLayer._boundingBox(dl._canvas);
+  _edFCL('bbox de la tinta (dl._canvas): ' + (bb ? ('x='+bb.x+' y='+bb.y+' w='+bb.w+' h='+bb.h) : 'null (tinta vacía)'));
   _edDrawClearHistory();  // limpiar historial local al convertir en objeto
   if(!bb){
     // DrawLayer (pen/estilógrafo) vacío: comprobar TODAS las sub-capas del grupo
+    _edFCL('RAMA TINTA VACÍA: dl._canvas no tenía ningún píxel de tinta');
     const _uid0 = dl._uid || dl._fillLayerId;
     const _flEm = _uid0 ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uid0) : null;
     const _pcEm = _uid0 ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uid0) : null;
     const _wcEm = _uid0 ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uid0) : null;
+    _edFCL('RAMA TINTA VACÍA: fl encontrada=' + !!_flEm + ' (' + _edFCCanvasInfo(_flEm?._canvas, _flEm?._ctx) + ')');
     const _bbFm = _flEm?._canvas ? StrokeLayer._boundingBox(_flEm._canvas) : null;
     const _bbPm = _pcEm?._canvas ? StrokeLayer._boundingBox(_pcEm._canvas) : null;
     const _bbWm = _wcEm?._canvas ? StrokeLayer._boundingBox(_wcEm._canvas) : null;
+    _edFCL('RAMA TINTA VACÍA: bbox fill=' + (_bbFm?('x='+_bbFm.x+' y='+_bbFm.y+' w='+_bbFm.w+' h='+_bbFm.h):'null') +
+      ' | bbox pencil=' + (_bbPm?'sí':'null') + ' | bbox watercolor=' + (_bbWm?'sí':'null'));
     if(!_bbFm && !_bbPm && !_bbWm){
       // Todo el grupo vacío: eliminar todas las capas
+      _edFCL('RAMA TINTA VACÍA: TODO el grupo vacío (ni fill ni pencil ni watercolor tienen contenido) — se ELIMINAN las 4 capas, incluida la del relleno');
       for (const _e of [_wcEm, _pcEm, _flEm]) {
         if (_e) page.layers.splice(page.layers.indexOf(_e), 1);
       }
@@ -17494,6 +17808,8 @@ function _edFreezeDrawLayer(){
     _edDrawClearHistory();
     edPushHistory(true);
     edRedraw();
+    _edFCL('=== RAMA TINTA VACÍA: FIN — stroke creado con ink transparente, fill final: ' +
+      _edFCCanvasInfo(_flEm?._canvas, _flEm?._ctx) + ' ===');
     return;
   }
   // ── Calcular bbox UNION de stroke + fill + pencil + watercolor ─────────────
@@ -17524,6 +17840,8 @@ function _edFreezeDrawLayer(){
   }
   const _uW = Math.max(1, _uX1 - _uX0);
   const _uH = Math.max(1, _uY1 - _uY0);
+  _edFCL('bbox fill: ' + (_bbFill ? ('x='+_bbFill.x+' y='+_bbFill.y+' w='+_bbFill.w+' h='+_bbFill.h) : 'null') +
+    ' | bbox union: x=' + _uX0 + ' y=' + _uY0 + ' w=' + _uW + ' h=' + _uH);
 
   // Propiedades comunes en fracciones de página (centro del bbox union)
   const _uCx = (_uX0 + _uW/2 - _mx) / _fpw;
@@ -17560,6 +17878,7 @@ function _edFreezeDrawLayer(){
   // ── Helper: recortar una capa del grupo al bbox union ─────────────────────
   function _cropGroupLayer(la, refId) {
     if (!la) return;
+    const _isFillLa = (la === _flFreeze);
     la._drawLayerId = sl._uid || refId;
     la._srcCanvas = null; la._previewSx = null; la._previewSy = null;
     const _crop = document.createElement('canvas');
@@ -17574,6 +17893,7 @@ function _edFreezeDrawLayer(){
       } catch(e) {}
       return false;
     })();
+    if (_isFillLa) _edFCL('_cropGroupLayer(fill): _hasPixels=' + _hasPixels + ' | _preEditCanvas=' + (la._preEditCanvas ? 'sí' : 'no') + ' | recorte ' + _edFCCanvasInfo(_crop));
     if (!_hasPixels && la._preEditCanvas) {
       // El temporal estaba vacío (no se usó esa herramienta en la reedición):
       // restaurar el canvas pre-edición tal como estaba.
@@ -17585,6 +17905,7 @@ function _edFreezeDrawLayer(){
       la.x = la._preEditX; la.y = la._preEditY;
       la.width = la._preEditW; la.height = la._preEditH;
       la.rotation = la._preEditRot;
+      if (_isFillLa) _edFCL('_cropGroupLayer(fill): restaurado _preEditCanvas (recorte vacío)');
     } else {
       la._canvas = _crop;
       la._ctx    = _crop.getContext('2d');
@@ -17594,6 +17915,7 @@ function _edFreezeDrawLayer(){
       la.x = _uCx; la.y = _uCy;
       la.width = _uFw; la.height = _uFh;
       la.rotation = 0;
+      if (_isFillLa) _edFCL('_cropGroupLayer(fill): usado el recorte tal cual — resultado final: ' + _edFCCanvasInfo(la._canvas, la._ctx));
     }
     // Limpiar snapshot
     la._preEditCanvas = null; la._preEditX = null; la._preEditY = null;
@@ -17619,6 +17941,8 @@ function _edFreezeDrawLayer(){
   }
   edLayers = page.layers;
   edSelectedIdx = page.layers.indexOf(sl);
+  _edFCL('=== _edFreezeDrawLayer: FIN — edSelectedIdx=' + edSelectedIdx +
+    ' | fill final: ' + _edFCCanvasInfo(_flFreeze?._canvas, _flFreeze?._ctx) + ' ===');
   // Registrar el resultado final (StrokeLayer) en el historial global.
   window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
   edPushHistory(true); // force: el resultado del dibujo siempre se guarda
@@ -37676,6 +38000,21 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
+  // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al
+  // ABRIR una sesión nueva de dibujo (_edDrawInitHistory) — reproduce el
+  // fallo (tinta + relleno + borrar parte del contorno + OK) y ejecuta este
+  // diagnóstico justo después, sin dibujar nada más entre medias, para que
+  // este log muestre exactamente esa sesión y ninguna otra.
+  L('');
+  L('── LOG DE CREACIÓN (relleno que desaparece) ──');
+  if (window._edFCLog && window._edFCLog.length) {
+    window._edFCLog.forEach(l => L('  ' + l));
+  } else {
+    L('  (vacío — no se ha abierto ninguna sesión de dibujo todavía)');
+  }
+  L('');
 
   // ── INTEGRIDAD DE GRUPOS (investigación: borrar grupo original afecta al
   // duplicado en grupos con muchos elementos). Recorre TODAS las páginas y

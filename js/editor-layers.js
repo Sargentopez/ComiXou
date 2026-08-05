@@ -832,6 +832,14 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   clrBtn.addEventListener('pointerup', e => {
     e.stopPropagation();
     edConfirm(I18n.t('ly_confirmDeleteSubLayer'), () => {
+      // Vaciar la fila de TINTA: segunda vía (aparte del borrador) de
+      // eliminar tinta que puede estar delimitando un relleno — ver
+      // _edSmoothFillUnderDeletedInk. Debe ir ANTES de la eliminación: la
+      // función necesita la tinta todavía intacta para saber qué franja del
+      // relleno va a quedar expuesta.
+      if ((la.type === 'stroke' || la.type === 'draw') && typeof _edSmoothFillUnderDeletedInk === 'function') {
+        try { _edSmoothFillUnderDeletedInk(la); } catch(_e) {}
+      }
       const _flIdx = edLayers.indexOf(la);
       if (_flIdx >= 0) edLayers.splice(_flIdx, 1);
       const _pair = edLayers.find(l => l._uid && (l._fillLayerId===la._drawLayerId ||

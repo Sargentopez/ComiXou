@@ -1508,17 +1508,39 @@ function _tdSyncParrafoMenuActive(){
 // corresponden a la posición actual del cursor — 'Lora'/'22px' son los
 // valores por defecto del documento si el punto del cursor no tiene
 // ninguno de los dos atributos explícito.
+//
+// editor.composition.getCurrentTextAttributes(), NO
+// getDocument().getPieceAtPosition(range[0]): son cosas distintas.
+// getPieceAtPosition(offset) devuelve la pieza que CONTIENE ese índice — en
+// el límite EXACTO entre dos piezas (p.ej. justo tras el último carácter de
+// un párrafo en 28px, con el siguiente párrafo en tamaño normal) devuelve
+// la pieza de DESPUÉS del cursor, no la de ANTES — así que ahí marcaba
+// "Normal" aunque lo próximo que se escribiera siguiera en 28px. Ese límite
+// se cruza constantemente al escribir seguido (fin de cada palabra/línea/
+// párrafo) — bug reportado por Alberto: "el tamaño de letra no se
+// conserva... aunque haya cambio de párrafo". getCurrentTextAttributes()
+// es el mecanismo INTERNO real de Trix para esto exacto — el mismo que usa
+// su propia barra de herramientas nativa para resaltar Negrita/Cursiva —
+// resuelve correctamente ese límite según la convención estándar de
+// cualquier editor de texto enriquecido: con el cursor colapsado, lo que
+// hay INMEDIATAMENTE ANTES. Comprobado con Playwright + el propio
+// trix.umd.min.js: en el límite exacto entre dos tamaños,
+// getPieceAtPosition daba null (visualmente "Normal") mientras
+// getCurrentTextAttributes daba el tamaño real que se seguiría escribiendo.
 function _tdSyncFontMenuActive(){
   const editorEl = document.getElementById('tdEditor');
-  if(!editorEl || !editorEl.editor) return;
+  if(!editorEl || !editorEl.editor || !editorEl.editor.composition) return;
   let fs = '22px', ff = 'Lora';
   try{
-    const range = editorEl.editor.getSelectedRange();
-    const piece = editorEl.editor.getDocument().getPieceAtPosition(range[0]);
-    const pfs = piece && piece.getAttribute && piece.getAttribute('fontSize');
-    const pff = piece && piece.getAttribute && piece.getAttribute('fontFamily');
-    if(pfs) fs = pfs;
-    if(pff) ff = pff;
+    const attrs = editorEl.editor.composition.getCurrentTextAttributes() || {};
+    if(attrs.fontSize) fs = attrs.fontSize;
+    // El navegador normaliza font-family con espacio (Patrick Hand, Bebas
+    // Neue…) a comillas DOBLES al releerlo del DOM/CSSOM — solo pasa con
+    // documentos ya CARGADOS (reeditar una obra guardada), no al elegir la
+    // fuente desde este mismo menú en la sesión actual. Mismo patrón de
+    // limpieza que _tdSanitizePastedHTML/runsFromInline, ya usado en este
+    // archivo para el mismo motivo.
+    if(attrs.fontFamily) ff = attrs.fontFamily.replace(/^['"]|['"]$/g, '');
   }catch(_e){}
   document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.value === ff);

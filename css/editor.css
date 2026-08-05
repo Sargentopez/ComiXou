@@ -1855,9 +1855,6 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   overflow: hidden;
   margin: 4px 0 2px;
   height: 36px;
-  position: sticky;
-  top: 0;
-  z-index: 10;
   flex-shrink: 0;
 }
 .ed-ly-mode-row .ed-menu-btn {
