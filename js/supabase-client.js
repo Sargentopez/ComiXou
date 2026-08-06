@@ -946,7 +946,9 @@ const SupabaseClient = (() => {
       try {
         const _raw = await _czDecompress(row.layer_data);
         layerObj = JSON.parse(_raw);
-      } catch(e) {}
+      } catch(e) {
+        console.warn('downloadDraftAsEditorData: capa descartada (no se pudo decodificar)', 'panel', pi, 'layer_order', li, e);
+      }
       if (!layerObj) return null;
       // APNG animado — patrón idéntico al GIF:
       // APNG: descargar si hay anim_url — sin depender de animKey
@@ -1255,10 +1257,14 @@ const SupabaseClient = (() => {
           ...(entry.orientation   ? { _orientation:   entry.orientation   } : {}),
           ...(entry.isGroup       ? { _isGroup: true, _layers: entry.layers } : {}),
         };
-        // Solo comprimir items animados (gcpLayersData grandes) — resto JSON directo
-        const _ld = entry.isGifAnim
-          ? await _czCompress(JSON.stringify(_payload))
-          : JSON.stringify(_payload);
+        // Comprimir cualquier payload >=512 bytes antes de subir — mismo criterio
+        // que _uploadPanels() para panel_layers (ver supabase-client.js ~línea 590).
+        // Antes solo se comprimían las animaciones (isGifAnim); los grupos (que
+        // pueden incluir varias capas con dataUrl de trazo/relleno/acuarela) se
+        // subían siempre sin comprimir, con riesgo real de exceder el límite
+        // práctico de tamaño de petición y fallar la sincronización sin avisar.
+        const _ldRaw = JSON.stringify(_payload);
+        const _ld = _ldRaw.length >= _CZ_MIN ? await _czCompress(_ldRaw) : _ldRaw;
         rows.push({
           id:          entry.id,
           author_id:   authorId,

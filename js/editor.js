@@ -23024,7 +23024,14 @@ async function _edCloudSaveInner() {
             _edShowIncognitoWarning(I18n.t('ed_bibSyncedCloud', { n: _bibItems }));
           }
         }
-      } catch(e) { console.warn('bibSync error:', e); }
+      } catch(e) {
+        console.warn('bibSync error:', e);
+        // La obra (páginas) ya se guardó bien en este punto — no reventar el
+        // flujo de guardado en nube por esto, pero avisar: antes este error se
+        // tragaba en silencio y la biblioteca de la nube podía quedar
+        // incompleta (bibSync borra-y-reinserta) sin que Alberto se enterara.
+        edToast(I18n.t('ed_bibSyncFailedWarn'), 4500);
+      }
     }
   } catch(err) {
     _edSaveOverlayHide();
