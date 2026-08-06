@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v37-06';
+const CACHE = 'comxow-v37-07';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -87,9 +87,15 @@ self.addEventListener('fetch', e => {
   // HTML, JS, CSS y textos legales editables (legal/*.md): network-first
   // siempre — nunca servir versión antigua. Los .md viven en legal/ y Alberto
   // los edita directamente sin pasar por el proceso de versión de la app.
+  // cache:'no-store' es imprescindible aquí: sin él, fetch() puede seguir
+  // resolviéndose contra la caché HTTP normal del navegador (la que respeta
+  // Cache-Control del servidor) sin llegar a tocar la red — GitHub Pages
+  // sirve los ficheros con cabeceras de caché de varios minutos, así que
+  // justo después de subir una versión nueva el navegador podía seguir
+  // devolviendo la copia vieja aunque este código "pidiera red siempre".
   if (url.match(/\.(html|js|css|md)(\?|$)/) || e.request.mode === 'navigate') {
     e.respondWith(
-      fetch(e.request)
+      fetch(e.request, { cache: 'no-store' })
         .then(r => {
           if (r.ok) {
             const clone = r.clone();
