@@ -41,22 +41,20 @@
   <meta name="theme-color" content="#111111">
 
   <!-- Open Graph / WhatsApp / Telegram / Twitter preview -->
-  <!-- Sin og:site_name/og:title/twitter:title a propósito (petición de
-       Alberto): "Comxow" ya aparece dentro de la propia imagen (og:image),
-       repetirlo como texto aparte es redundante. AVISO conocido (documentación
-       de Meta/WhatsApp): sin ningún título/descripción, algunos clientes de
-       WhatsApp podrían no mostrar la tarjeta en absoluto, o caer al <title>
-       de esta página ("Comxow — Lector") como resguardo — no hay forma de
-       evitar ese resguardo concreto sin quitar también el <title>. Probar en
-       dispositivo real tras este cambio para confirmar que la tarjeta se
-       sigue viendo bien. -->
+  <!-- CONFIRMADO EN DISPOSITIVO REAL: sin og:title, WhatsApp NO muestra la
+       imagen en absoluto — cae directamente a texto plano (título de la
+       pestaña + dominio + mensaje), sin tarjeta. No es opcional: hace falta
+       algún og:title para que la imagen aparezca. Se deja con el mínimo de
+       texto posible (el propio nombre, sin eslogan ni descripción añadida)
+       en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=37.11">
+  <meta property="og:title"       content="Comxow">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=37.12">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=37.11">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=37.12">
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/fonts.css">
