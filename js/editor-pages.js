@@ -224,6 +224,10 @@ function _pgBuildCard(page, idx) {
     if (_pgActionLocked()) return;
     if (edPages.length <= 1) { edToast(I18n.t('ed_pageDeleteLastErr')); return; }
     edConfirm(I18n.t('ed_pageDeleteConfirm'), () => {
+      // Ver _tdMigrateFlowSourceHTMLIfNeeded (editor-textdoc.js) — si esta
+      // hoja es la que guarda el sourceHTML del flujo de texto, lo traslada
+      // antes de borrarla.
+      if (typeof _tdMigrateFlowSourceHTMLIfNeeded === 'function') _tdMigrateFlowSourceHTMLIfNeeded(idx);
       edPages.splice(idx, 1);
       if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
       edLoadPage(Math.min(edCurrentPage, edPages.length - 1));

@@ -6740,6 +6740,10 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
 function edDeletePage(){
   if(edPages.length<=1){edToast(I18n.t('ed_needAtLeastOnePage'));return;}
   edConfirm(I18n.t('ed_confirmDeletePage'), ()=>{
+    // Ver _tdMigrateFlowSourceHTMLIfNeeded (editor-textdoc.js) — si esta
+    // hoja es la que guarda el sourceHTML del flujo de texto, lo traslada
+    // antes de borrarla.
+    if(typeof _tdMigrateFlowSourceHTMLIfNeeded === 'function') _tdMigrateFlowSourceHTMLIfNeeded(edCurrentPage);
     edPages.splice(edCurrentPage,1);
     _edMarkPagesStructureDirty();
     edLoadPage(Math.min(edCurrentPage,edPages.length-1));
@@ -23567,6 +23571,51 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
       let hasAlpha = false;
       for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
       if(hasAlpha) return cv.toDataURL('image/png'); // preservar transparencia
+    }
+    return cv.toDataURL('image/jpeg', quality);
+  } catch(e) { return src; }
+}
+// Misma lógica EXACTA que _edCompressImageSrc (mismo maxPx/quality por
+// defecto, mismo criterio "PNG solo si hay transparencia real" — pedido
+// explícito de Alberto para el flujo de texto: "tiene fondo transparente por
+// defecto, pon lo que PNG tiene sentido"), pero para cuando YA se dispone de
+// un Image() realmente cargado (evento onload ya disparado) en vez de crear
+// uno nuevo y asumir que decodifica en el mismo tick.
+//
+// POR QUÉ HACE FALTA UNA VERSIÓN DISTINTA (comprobado con Playwright, no
+// asumido): _edCompressImageSrc crea su propio `new Image(); img.src=src` y
+// comprueba img.complete de inmediato — funciona en su único punto de uso
+// actual (edSerLayer, al guardar) porque para ENTONCES esa imagen ya lleva
+// rato pintándose en el lienzo. Para un dataUrl RECIÉN leído con FileReader
+// (insertar una foto nueva en el editor de textos — nunca decodificado antes
+// en ningún <img> de la página), esa misma comprobación síncrona falla:
+// img.complete da false y la función devuelve el original sin tocar,
+// silenciosamente. Verificado con un arnés real en Chromium: sobre un PNG de
+// 3000×2000 recién creado, _edCompressImageSrc(src) no lo tocaba (0%
+// reducción); esta versión, recibiendo el mismo Image() ya cargado vía
+// onload, sí comprime correctamente (93% menos en el caso opaco, 85% menos
+// en el caso con transparencia real, conservando PNG en ese caso).
+function _edCompressLoadedImage(img, src, maxPx=1080, quality=0.82){
+  if(!src) return src;
+  if(src.startsWith('data:image/svg+xml')) return src; // vectorial — nunca rasterizar
+  const isPng  = src.startsWith('data:image/png');
+  const isWebp = src.startsWith('data:image/webp');
+  const isGif  = src.startsWith('data:image/gif');
+  if(!isPng && !isWebp && !isGif && src.startsWith('data:image/jpeg') && src.length < 200000) return src;
+  try {
+    if(!img || !img.complete || img.naturalWidth === 0) return src; // no cargada — no forzar nada
+    const ratio = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth  * ratio);
+    const h = Math.round(img.naturalHeight * ratio);
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const cctx = cv.getContext('2d');
+    cctx.drawImage(img, 0, 0, w, h);
+    if(isPng || isWebp || isGif){
+      const d = cctx.getImageData(0, 0, w, h).data;
+      let hasAlpha = false;
+      for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
+      if(hasAlpha) return cv.toDataURL('image/png'); // transparencia real — conservar PNG
     }
     return cv.toDataURL('image/jpeg', quality);
   } catch(e) { return src; }

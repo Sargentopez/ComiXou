@@ -134,12 +134,17 @@ function edOpenTextDoc(editLayer){
   const applyBtn = document.getElementById('tdApplyBtn');
   const _tdSpacer = document.getElementById('tdSelTopSpacer');
   if(_tdSpacer) _tdSpacer.style.height = '0px'; // el hueco crecido en una sesión anterior no pinta nada aquí
-  if(editLayer && editLayer.richLines && editLayer.sourceHTML){
+  // sourceHTML puede no estar en ESTA hoja concreta — desde la optimización
+  // que evita duplicarlo en cada hoja del flujo (ver _tdFindFlowSourceHTML),
+  // solo UNA hoja del flujo lo guarda. Se busca aquí por si la hoja desde la
+  // que se abrió (doble tap) no es esa.
+  const _tdOwnerHTML = editLayer && editLayer._tdFlowId ? _tdFindFlowSourceHTML(editLayer._tdFlowId) : '';
+  if(editLayer && editLayer.richLines && (editLayer.sourceHTML || _tdOwnerHTML)){
     // Reeditar un texto ya aplicado: cargar su HTML de origen y recordar su flowId
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
-    if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML);
+    if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML || _tdOwnerHTML);
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_saveChanges'); }
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
   } else {
@@ -208,6 +213,51 @@ function _tdFindFlowLayer(flowId){
     if(l) return l;
   }
   return null;
+}
+// OPTIMIZACIÓN DE MEMORIA/TRÁFICO: un flujo de N hojas guardaba el HTML de
+// origen COMPLETO (sourceHTML) N veces — una copia idéntica por cada hoja,
+// ver _tdMakeTextLayer — incluidas todas las imágenes insertadas en
+// cualquier punto del flujo, no solo las de esa hoja. Con imágenes de por
+// medio (ver _tdProcessNewImageAttachment) esto multiplicaba por N tanto el
+// tamaño guardado (local y nube) como lo descargado — y sourceHTML no lo lee
+// NUNCA reader/reader.js ni js/reader.js (comprobado por grep: cero
+// referencias), solo lo usa este propio editor para reabrir Trix al
+// reeditar — así que cualquier lector de la obra publicada se lo descargaba
+// sin usarlo jamás. Desde ahora solo UNA hoja del flujo guarda sourceHTML —
+// las demás lo dejan sin definir (ver el borrado explícito en el punto 1 de
+// _tdReflowFlowInPlace) — y esta función lo busca por CONTENIDO (qué hoja lo
+// tiene de verdad), no por posición en el array, para que sobreviva a
+// reordenar páginas (mover una página no cambia qué objeto de capa es, solo
+// su índice — buscar "la primera por posición" se habría desincronizado; ver
+// la nota de _tdFindFlowLayer arriba, que si se reutilizara tal cual para
+// esto sería justo ese mismo fallo).
+function _tdFindFlowSourceHTML(flowId){
+  if(!flowId) return '';
+  for(let i = 0; i < edPages.length; i++){
+    const l = (edPages[i].layers || []).find(l => l && l._tdFlowId === flowId && l.sourceHTML);
+    if(l) return l.sourceHTML;
+  }
+  return '';
+}
+// Llamada ANTES de borrar una hoja (desde cualquier botón "eliminar hoja" de
+// la app — editor.js/edDeletePage y editor-pages.js/delBtn) — si esa hoja es
+// la que guarda el sourceHTML del flujo (ver optimización de arriba) y
+// quedan más hojas del mismo flujo, lo traslada a otra ANTES de perderlo. Si
+// no, el flujo entero se quedaría sin HTML de origen y no se podría volver a
+// reabrir para reeditar — aunque las demás hojas siguieran viéndose bien
+// (richLines no depende de esto). Si no queda ninguna otra hoja del flujo,
+// no hay nada que migrar: el flujo entero desaparece con esta hoja, como ya
+// pasaba antes de esta optimización.
+function _tdMigrateFlowSourceHTMLIfNeeded(pageIdx){
+  const pg = edPages[pageIdx];
+  if(!pg || !pg.layers) return;
+  const owner = pg.layers.find(l => l && l._tdFlowId && l.sourceHTML);
+  if(!owner) return;
+  for(let i = 0; i < edPages.length; i++){
+    if(i === pageIdx) continue;
+    const target = (edPages[i].layers || []).find(l => l && l._tdFlowId === owner._tdFlowId);
+    if(target){ target.sourceHTML = owner.sourceHTML; return; }
+  }
 }
 // true justo antes de un history.back() AUTOPROVOCADO por nosotros mismos
 // (al cerrar el editor de textos normalmente, para consumir la entrada de
@@ -1857,8 +1907,24 @@ function _tdProcessNewImageAttachment(att, file, opts){
         if(h > maxH){ h = maxH; w = Math.round(h * (natW / natH)); }
         _tdLogImg('calculado tamaño destino', 'colW=' + colW + ' → w=' + w + ' h=' + h);
       }
+      // Comprimir/redimensionar ANTES de guardar la URL persistente — mismo
+      // criterio que cualquier ImageLayer del lienzo (_edCompressImageSrc:
+      // máx. 1080px, JPEG calidad 0.82), pero con _edCompressLoadedImage
+      // porque aquí el dataUrl es recién leído del FileReader y aún no ha
+      // decodificado en ningún <img> previo (ver comentario junto a esa
+      // función en editor.js — comprobado con Playwright que la versión
+      // síncrona normal no lo detecta a tiempo y se queda sin comprimir).
+      // Usa el `img` que YA tenemos cargado aquí mismo (este handler solo se
+      // ejecuta tras su propio evento onload). El flujo de texto tiene fondo
+      // transparente por defecto, así que se conserva PNG cuando la imagen
+      // tiene transparencia real — la propia función ya distingue esto igual
+      // que en el resto de la app, no es un caso especial nuevo.
+      const compressedDataUrl = (typeof _edCompressLoadedImage === 'function')
+        ? _edCompressLoadedImage(img, dataUrl)
+        : dataUrl;
+      _tdLogImg('compresión de imagen para el flujo de texto', 'original=' + dataUrl.length + ' comprimido=' + compressedDataUrl.length + ' formato=' + (compressedDataUrl.slice(11, compressedDataUrl.indexOf(';'))));
       try{
-        att.setAttributes({ width: w, height: h, url: dataUrl, href: dataUrl });
+        att.setAttributes({ width: w, height: h, url: compressedDataUrl, href: compressedDataUrl });
         _tdLogImg('att.setAttributes() ejecutado sin lanzar excepción', 'att.getWidth()=' + att.getWidth() + ' att.getHeight()=' + att.getHeight() + ' att.getURL().length=' + (att.getURL()||'').length);
       }catch(_e){
         _tdLogImg('EXCEPCIÓN en att.setAttributes', (_e && _e.message) || String(_e));
@@ -3759,20 +3825,29 @@ function _tdApplyToCanvas(){
       const { pages } = _tdLayoutPages(blocks, frames, lineHeightMult, undefined, []);
       const existingCount = Math.min(pages.length, edPages.length - startIdx);
 
+      // Solo la primera hoja del flujo guarda sourceHTML íntegro — las
+      // demás lo dejan sin definir (ver _tdFindFlowSourceHTML): un flujo
+      // largo no necesita N copias idénticas del mismo HTML de origen.
+      let _tdNewFlowOwnerAssigned = false;
       for(let i = 0; i < existingCount; i++){
         const pg = edPages[startIdx + i];
         pg.layers = pg.layers || [];
-        pg.layers.push(_tdMakeTextLayer(pages[i], html, flowId, lineHeightMult, undefined, []));
+        pg.layers.push(_tdMakeTextLayer(pages[i], _tdNewFlowOwnerAssigned ? '' : html, flowId, lineHeightMult, undefined, []));
+        _tdNewFlowOwnerAssigned = true;
       }
       // Si el texto sigue más allá de las hojas ya existentes, las que faltan
       // se crean nuevas al final — con la orientación de la última hoja de la obra.
       const lastOrient = edPages.length ? (edPages[edPages.length - 1].orientation || edOrientation) : edOrientation;
-      const newPages = pages.slice(existingCount).map(pageLines => ({
-        layers: [_tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, undefined, [])],
-        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
-        _dirtyCountLocal: 1,
-        _dirtyCountCloud: 1,
-      }));
+      const newPages = pages.slice(existingCount).map(pageLines => {
+        const tlNew = _tdMakeTextLayer(pageLines, _tdNewFlowOwnerAssigned ? '' : html, flowId, lineHeightMult, undefined, []);
+        _tdNewFlowOwnerAssigned = true;
+        return {
+          layers: [tlNew],
+          drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: lastOrient,
+          _dirtyCountLocal: 1,
+          _dirtyCountCloud: 1,
+        };
+      });
       if(newPages.length) { edPages.push(...newPages); if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty(); }
       // Nombre del flujo (ver _tdComputeFlowName) en todas sus hojas, tanto
       // las ya existentes reutilizadas como las nuevas recién creadas.
@@ -3836,8 +3911,18 @@ function _tdReflowAfterMarginChange(la){
 
 function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
   const flowId = _tdEnsureFlowId(la); // migra capas de v32.70 sin _tdFlowId
-  const html = la.sourceHTML || '';
+  // `la` (la hoja concreta que disparó el redimensionado/margen/exceptuar)
+  // puede no ser la que guarda el sourceHTML del flujo — ver
+  // _tdFindFlowSourceHTML. Solo UNA hoja lo guarda desde la optimización que
+  // evita duplicarlo en cada hoja.
+  const html = la.sourceHTML || _tdFindFlowSourceHTML(flowId) || '';
   if(!html) return;
+  // Solo la PRIMERA hoja reconstruida en esta pasada guarda sourceHTML
+  // íntegro — ver _tdFindFlowSourceHTML. Se recalcula de cero en cada
+  // llamada (no es una caché que pueda quedarse desincronizada si se
+  // reordenan páginas entre una reedición y otra: cada reflujo reasigna la
+  // propiedad a la hoja que le toque HOY).
+  let _tdOwnerAssigned = false;
   // Los saltos fijados a mano en el editor de textos solo deben seguir
   // forzando un corte cuando ESTA llamada viene con deriveBoxFromContent
   // (Guardar cambios / Exceptuar en esta hoja — ver más abajo). Si viene de
@@ -3874,12 +3959,18 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
       effectiveManualBreaks
     );
-    const newPages0 = pages0.map(pageLines => ({
-      layers: [_tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks)],
-      drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient,
-      _dirtyCountLocal: 1,
+    const newPages0 = pages0.map(pageLines => {
+      // Solo la primera hoja nueva guarda sourceHTML íntegro — ver
+      // _tdFindFlowSourceHTML.
+      const tl0 = _tdMakeTextLayer(pageLines, _tdOwnerAssigned ? '' : html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+      _tdOwnerAssigned = true;
+      return {
+        layers: [tl0],
+        drawData: null, textLayerOpacity: 1, textMode: 'sequential', orientation: orient,
+        _dirtyCountLocal: 1,
         _dirtyCountCloud: 1,
-    }));
+      };
+    });
     edPages.splice(afterIdx, 0, ...newPages0);
     if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
     if(typeof edFitCanvas === 'function') edFitCanvas(true);
@@ -3999,7 +4090,13 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       layer.y = oldTopEdge + newHeightFrac / 2;
     }
     layer.richLines = pages[i];
-    layer.sourceHTML = html;
+    // Solo la primera hoja del flujo (en esta reconstrucción) guarda
+    // sourceHTML íntegro — ahorra guardarlo/subirlo/descargarlo N veces (ver
+    // _tdFindFlowSourceHTML). Se borra explícitamente en las demás por si
+    // esta capa concreta lo llevaba de una reconstrucción anterior en la que
+    // sí le tocó ser la primera (p.ej. si se han reordenado páginas).
+    if(!_tdOwnerAssigned){ layer.sourceHTML = html; _tdOwnerAssigned = true; }
+    else { delete layer.sourceHTML; }
     layer.lineHeightMult = la.lineHeightMult;
     layer.marginXFrac = la.marginXFrac;
     layer.manualBreakChars = effectiveManualBreaks;
@@ -4046,7 +4143,11 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       const orient = pg.orientation || edOrientation;
       const sv = orient === 'vertical';
       const pgPh = sv ? ED_PAGE_H : ED_PAGE_W;
-      const tl = _tdMakeTextLayer(overflow[oi], html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+      // Solo la primera hoja de todo el reflujo guarda sourceHTML íntegro —
+      // ver _tdFindFlowSourceHTML. Si ya se asignó en el paso 1 (slots
+      // reutilizados), aquí siempre toca cadena vacía.
+      const tl = _tdMakeTextLayer(overflow[oi], _tdOwnerAssigned ? '' : html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+      _tdOwnerAssigned = true;
       if(deriveBoxFromContent){
         const newHeightFrac = boxHeightFracFor(reused + oi, pgPh);
         tl.height = newHeightFrac;
@@ -4063,7 +4164,10 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     if(oi < overflow.length){
       const pgPhNew = svLast ? ED_PAGE_H : ED_PAGE_W;
       const extraPages = overflow.slice(oi).map((pageLines, j) => {
-        const tl = _tdMakeTextLayer(pageLines, html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+        // Solo la primera hoja de todo el reflujo guarda sourceHTML íntegro
+        // — ver _tdFindFlowSourceHTML.
+        const tl = _tdMakeTextLayer(pageLines, _tdOwnerAssigned ? '' : html, flowId, la.lineHeightMult, la.marginXFrac, effectiveManualBreaks);
+        _tdOwnerAssigned = true;
         // Página nueva, sin posición previa que conservar. Con
         // deriveBoxFromContent (Guardar cambios o Exceptuar en esta hoja), se
         // ancla al borde superior con el alto justo para su contenido; si no
