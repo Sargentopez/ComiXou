@@ -420,6 +420,77 @@ function _closeLanguageModal() {
   document.getElementById('langModal')?.classList.remove('open');
 }
 
+// ── Modal propio de "Compartir" — con dos acciones DISTINTAS a propósito ──
+// Petición explícita de Alberto: "Copiar enlace" debe copiar SOLO la URL
+// (nada de "Mira *la obra* en Comxow..."), pero al enviar por WhatsApp o
+// cualquier otra red sí debe ir ese mensaje.
+//
+// POR QUÉ HACE FALTA UN MODAL PROPIO (no se puede arreglar solo con
+// navigator.share): el botón "Copiar" que Android añade dentro de SU PROPIA
+// ventana de compartir nativa no es controlable desde esta app — Chromium
+// traduce navigator.share({title, text, url}) a un Intent Android donde
+// `text` y `url` se concatenan en el MISMO campo (EXTRA_TEXT: text+"\n"+url
+// si se pasan los dos, según su propia implementación), y tanto el botón
+// "Copiar" nativo como cualquier app de la lista (WhatsApp incluida) leen
+// ESE MISMO campo — no hay forma de darle al botón "Copiar" un contenido
+// distinto del que reciben las apps, son la misma pieza de información. Por
+// eso el enlace "se copiaba con el texto pegado" incluso queriendo copiar
+// solo eso. La única forma real de separar ambos comportamientos es no
+// depender de ese botón nativo: dar un botón PROPIO de "Copiar enlace" (que
+// sí puede copiar solo la URL) y dejar "Enviar" para lo que sí debe llevar
+// mensaje — patrón habitual en apps web por esta misma limitación de la Web
+// Share API, no una solución inventada para esto.
+const _SHARE_MODAL_ID = '_shareModal';
+
+function _shareModalGetEl() {
+  let el = document.getElementById(_SHARE_MODAL_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = _SHARE_MODAL_ID;
+    el.style.cssText = [
+      'position:fixed;inset:0;z-index:99999',
+      'background:rgba(0,0,0,.55)',
+      'backdrop-filter:blur(3px)',
+      'display:flex;align-items:center;justify-content:center',
+      'opacity:0;pointer-events:none;transition:opacity .18s'
+    ].join(';');
+    el.innerHTML = `
+      <div style="background:#fff;border:2.5px solid #000;border-radius:16px;
+                  padding:24px 20px 16px;width:calc(100% - 48px);max-width:340px;
+                  box-shadow:4px 4px 0 #000">
+        <p id="${_SHARE_MODAL_ID}_title"
+           style="font-family:sans-serif;font-size:1rem;font-weight:700;
+                  text-align:center;margin:0 0 20px;line-height:1.4;color:#000;
+                  overflow-wrap:break-word"></p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button id="${_SHARE_MODAL_ID}_copy"
+                  style="padding:12px;border:2px solid #000;border-radius:10px;
+                         font-weight:900;font-size:.9rem;cursor:pointer;
+                         background:#fff;box-shadow:2px 2px 0 #000"></button>
+          <button id="${_SHARE_MODAL_ID}_send"
+                  style="padding:12px;border:2px solid #000;border-radius:10px;
+                         font-weight:900;font-size:.9rem;cursor:pointer;
+                         background:#ffe566;box-shadow:2px 2px 0 #000"></button>
+          <button id="${_SHARE_MODAL_ID}_cancel"
+                  style="padding:8px;border:none;border-radius:10px;
+                         font-weight:700;font-size:.85rem;cursor:pointer;
+                         background:transparent;color:#666"></button>
+        </div>
+      </div>`;
+    document.body.appendChild(el);
+    // Cerrar tocando fuera de la tarjeta (mismo hábito que el resto de modales)
+    el.addEventListener('click', e => { if (e.target === el) _shareModalClose(); });
+  }
+  return el;
+}
+
+function _shareModalClose() {
+  const overlay = document.getElementById(_SHARE_MODAL_ID);
+  if (!overlay) return;
+  overlay.style.opacity = '0';
+  overlay.style.pointerEvents = 'none';
+}
+
 function openShareModal(comic) {
 
   if (!comic.supabaseId) {
@@ -437,20 +508,61 @@ function openShareModal(comic) {
   // no HTML). En apps sin ese formato (SMS, email) se verán los asteriscos
   // literalmente, pero el texto sigue siendo perfectamente legible.
   const shareText = I18n.t('share_text', { title });
+  const draftNote = isDraft ? I18n.t('share_draftNote') : '';
 
-  if ('share' in navigator) {
-    navigator.share({ title, text: shareText, url }).catch(e => {
-      if (e.name !== 'AbortError') console.warn('share:', e);
-    });
-  } else {
-    // Fallback: copiar enlace al portapapeles
-    const _nota = isDraft ? I18n.t('share_draftNote') : '';
-    navigator.clipboard.writeText(shareText + '\n' + url).then(() => {
-      appAlert(I18n.t('share_copiedPrefix') + shareText + '\n' + url + _nota);
+  const overlay   = _shareModalGetEl();
+  const titleEl   = document.getElementById(`${_SHARE_MODAL_ID}_title`);
+  const copyBtn   = document.getElementById(`${_SHARE_MODAL_ID}_copy`);
+  const sendBtn   = document.getElementById(`${_SHARE_MODAL_ID}_send`);
+  const cancelBtn = document.getElementById(`${_SHARE_MODAL_ID}_cancel`);
+
+  titleEl.textContent = I18n.t('share_modalTitle', { title });
+  copyBtn.textContent = '🔗 ' + I18n.t('share_copyLinkBtn');
+  sendBtn.textContent = '📤 ' + I18n.t('share_sendBtn');
+  cancelBtn.textContent = I18n.t('cancel');
+
+  const cleanup = () => {
+    copyBtn.removeEventListener('click', onCopy);
+    sendBtn.removeEventListener('click', onSend);
+    cancelBtn.removeEventListener('click', onCancel);
+  };
+
+  const onCopy = () => {
+    cleanup(); _shareModalClose();
+    // SOLO la URL — sin título ni mensaje, tal cual pedido.
+    navigator.clipboard.writeText(url).then(() => {
+      showToast(I18n.t('share_linkCopied'));
     }).catch(() => {
-      appAlert(I18n.t('share_copyManualPrefix') + url + _nota);
+      appAlert(I18n.t('share_copyManualPrefix') + url + draftNote);
     });
-  }
+  };
+
+  const onSend = () => {
+    cleanup(); _shareModalClose();
+    if ('share' in navigator) {
+      navigator.share({ title, text: shareText, url }).catch(e => {
+        if (e.name !== 'AbortError') console.warn('share:', e);
+      });
+    } else {
+      // Sin Web Share API (p.ej. PC sin soporte): no hay "enviar a una app"
+      // posible, así que aquí sí se copia el mensaje completo (título +
+      // enlace) para pegarlo donde haga falta — comportamiento de siempre.
+      navigator.clipboard.writeText(shareText + '\n' + url).then(() => {
+        appAlert(I18n.t('share_copiedPrefix') + shareText + '\n' + url + draftNote);
+      }).catch(() => {
+        appAlert(I18n.t('share_copyManualPrefix') + url + draftNote);
+      });
+    }
+  };
+
+  const onCancel = () => { cleanup(); _shareModalClose(); };
+
+  copyBtn.addEventListener('click', onCopy);
+  sendBtn.addEventListener('click', onSend);
+  cancelBtn.addEventListener('click', onCancel);
+
+  overlay.style.opacity = '1';
+  overlay.style.pointerEvents = 'all';
 }
 
 // ── Modal de confirmación global (evita confirm()/alert() nativos que rompen fullscreen) ──

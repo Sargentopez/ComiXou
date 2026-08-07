@@ -312,6 +312,10 @@ const TRANSLATIONS = {
     share_draftNote:       "\n\n⚠️ Es un borrador — cualquier persona con el enlace podrá verlo.",
     share_copiedPrefix:    "✅ Enlace copiado al portapapeles:\n",
     share_copyManualPrefix:"Copia este enlace para compartirlo:\n",
+    share_modalTitle:      "Compartir «{title}»",
+    share_copyLinkBtn:     "Copiar enlace",
+    share_sendBtn:         "Enviar",
+    share_linkCopied:      "✅ Enlace copiado",
 
     // Créditos — utils.js (openCreditsModal)
     credits_title:          "Créditos",
@@ -1239,6 +1243,10 @@ const TRANSLATIONS = {
     share_draftNote:       "\n\n⚠️ This is a draft — anyone with the link will be able to view it.",
     share_copiedPrefix:    "✅ Link copied to clipboard:\n",
     share_copyManualPrefix:"Copy this link to share it:\n",
+    share_modalTitle:      "Share \u201c{title}\u201d",
+    share_copyLinkBtn:     "Copy link",
+    share_sendBtn:         "Send",
+    share_linkCopied:      "✅ Link copied",
 
     // Credits — utils.js (openCreditsModal)
     credits_title:          "Credits",
