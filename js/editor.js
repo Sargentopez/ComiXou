@@ -35812,14 +35812,28 @@ function _gcpMergeLayersToImage(items, cb) {
   const wsH = ph + my*2 + extra*2;
   const offX = extra, offY = extra;
 
-  // Cargar dataUrls en paralelo; capas vectoriales resuelven con img=null
+  // Cargar dataUrls en paralelo; capas vectoriales resuelven con img=null.
+  // BUG REAL (v37.13): las capas type='image' guardan su contenido en el
+  // campo `src` (ver edSerLayer, ~línea 24333), NO en `dataUrl` — ese nombre
+  // solo lo usan StrokeLayer/FillLayer/PencilLayer/WatercolorLayer/DrawLayer.
+  // Al comprobar solo `ld.dataUrl`, cualquier ImageLayer dentro de un grupo
+  // se trataba como "capa vectorial sin imagen" y se intentaba pintar con
+  // la.draw() de forma síncrona — pero edDeserLayer NUNCA carga la.img de
+  // forma síncrona para type='image' (crea un Image() y lo asigna en su
+  // propio img.onload asíncrono, ver ~línea 24944), así que en el momento
+  // de dibujar la.img seguía siendo null y no se pintaba nada: esa imagen
+  // desaparecía del grupo insertado en el editor de animaciones sin ningún
+  // aviso. Con el mismo dataUrl/src ya cargado aquí en su propio Promise,
+  // el resto de la función pinta con esa imagen local (`img`), nunca con
+  // la.img — no hace falta ningún otro cambio.
   const promises = items.map(({ ld, la }) => {
-    if (!ld.dataUrl) return Promise.resolve({ la, img: null, type: ld.type });
+    const _srcUrl = ld.dataUrl || ld.src;
+    if (!_srcUrl) return Promise.resolve({ la, img: null, type: ld.type });
     return new Promise(resolve => {
       const img = new Image();
       img.onload  = () => resolve({ la, img, type: ld.type });
       img.onerror = () => resolve({ la, img: null, type: ld.type });
-      img.src = ld.dataUrl;
+      img.src = _srcUrl;
     });
   });
 
