@@ -88,6 +88,42 @@ let _tdEditingFlowId = null;
 // a petición de Alberto: al tocar la X, si hay cambios, preguntar si
 // guardar o no, igual que ya hace el editor de animaciones (gcpClose).
 let _tdDirty = false;
+// Tamaño/tipo de letra "de todo el documento" actualmente cargado — pedido
+// explícito de Alberto: si se fijó un tamaño/tipo sin selección (afecta a
+// todo el flujo, ver _tdApplyScoped), escribir texto nuevo debe seguir
+// heredando ese mismo tamaño/tipo, también al reeditar más tarde, no solo
+// mientras dura la sesión de edición en curso. null = documento nuevo/vacío
+// o con tamaños/tipos mezclados — en ese caso no se fuerza nada (ver
+// _tdDetectUniformFont y el refuerzo por trix-selection-change en _tdInitOnce).
+let _tdDocFontSize = null;
+let _tdDocFontFamily = null;
+// Analiza un HTML de Trix ya guardado (como STRING, sin tocar el editor en
+// vivo — evita el problema de que setSelectedRange no surte efecto de
+// inmediato tras loadHTML, comprobado con pruebas reales) y determina si
+// TODO el texto comparte el mismo tamaño/tipo de letra. Con tamaños/tipos
+// mezclados, o documento vacío, devuelve null para esa propiedad — nunca se
+// fuerza nada en esos casos, se respeta el comportamiento nativo de Trix.
+function _tdDetectUniformFont(html){
+  if(!html) return { fontSize: null, fontFamily: null };
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  let fs, ff, mixedFs = false, mixedFf = false, any = false;
+  const walker = document.createTreeWalker(tmp, NodeFilter.SHOW_TEXT);
+  let node;
+  while((node = walker.nextNode())){
+    if(!node.textContent || !node.textContent.trim()) continue;
+    any = true;
+    let el = node.parentElement, curFs = null, curFf = null;
+    while(el && el !== tmp){
+      if(curFs === null && el.style && el.style.fontSize) curFs = el.style.fontSize;
+      if(curFf === null && el.style && el.style.fontFamily) curFf = el.style.fontFamily.replace(/^['"]|['"]$/g, '');
+      el = el.parentElement;
+    }
+    if(fs === undefined) fs = curFs; else if(fs !== curFs) mixedFs = true;
+    if(ff === undefined) ff = curFf; else if(ff !== curFf) mixedFf = true;
+  }
+  return { fontSize: (any && !mixedFs) ? (fs || null) : null, fontFamily: (any && !mixedFf) ? (ff || null) : null };
+}
 
 function edOpenTextDoc(editLayer){
   if(typeof edCloseMenus === 'function') edCloseMenus();
@@ -144,7 +180,11 @@ function edOpenTextDoc(editLayer){
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
-    if(editorEl && editorEl.editor) editorEl.editor.loadHTML(editLayer.sourceHTML || _tdOwnerHTML);
+    const _tdHtmlToLoad = editLayer.sourceHTML || _tdOwnerHTML;
+    if(editorEl && editorEl.editor) editorEl.editor.loadHTML(_tdHtmlToLoad);
+    const _tdDetected = _tdDetectUniformFont(_tdHtmlToLoad);
+    _tdDocFontSize = _tdDetected.fontSize;
+    _tdDocFontFamily = _tdDetected.fontFamily;
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_saveChanges'); }
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
   } else {
@@ -155,6 +195,8 @@ function edOpenTextDoc(editLayer){
     // sesiones anteriores (el único texto editable es el que ya está
     // aplicado al lienzo, y a ese solo se llega con doble tap sobre él).
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML('');
+    _tdDocFontSize = null;
+    _tdDocFontFamily = null;
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     _tdDirty = false; // recién abierto — sin cambios todavía (ver edCloseTextDoc)
@@ -572,6 +614,31 @@ function _tdInitOnce(){
       // comprueba en el frame siguiente para medir ya con la selección
       // asentada (ver _tdEnsureSelectionClearance).
       requestAnimationFrame(_tdEnsureSelectionClearance);
+    });
+    // Refuerzo de tamaño/tipo de letra "de todo el documento" (ver
+    // _tdDocFontSize/_tdDocFontFamily y _tdDetectUniformFont). Sin esto,
+    // escribir justo al principio del texto — o en cualquier punto donde
+    // Trix no tenga un carácter previo del que heredar el atributo, p.ej.
+    // recién reeditado — volvía al tamaño/tipo por defecto en vez de
+    // mantener el elegido (comprobado con Trix real: es un límite genuino
+    // de su herencia de atributos, no un fallo de guardado). Solo actúa con
+    // el cursor colapsado (sin selección real) Y sin que YA haya un
+    // tamaño/tipo activo en ese punto — así nunca pisa una selección local
+    // con un tamaño distinto a propósito (p.ej. una palabra puesta más
+    // grande a mano).
+    editorEl.addEventListener('trix-selection-change', () => {
+      const editor = editorEl.editor;
+      if(!editor) return;
+      const range = editor.getSelectedRange();
+      if(!range || range[0] !== range[1]) return;
+      let cur = {};
+      try{ cur = editor.composition.getCurrentTextAttributes() || {}; }catch(_e){}
+      if(_tdDocFontSize && !cur.fontSize){
+        try{ editor.activateAttribute('fontSize', _tdDocFontSize); }catch(_e){}
+      }
+      if(_tdDocFontFamily && !cur.fontFamily){
+        try{ editor.activateAttribute('fontFamily', _tdDocFontFamily); }catch(_e){}
+      }
     });
   }
   // Desplazamiento continuo: scroll nativo de #tdPageArea (rueda del ratón
@@ -1332,17 +1399,18 @@ function _tdWireFontControls(){
   // no llega a pintarse ningún parpadeo de "todo seleccionado" en pantalla.
   function _tdApplyScoped(fn){
     const editor = editorEl.editor;
-    if(!editor){ fn(); return; }
+    if(!editor){ fn(); return false; }
     const range = editor.getSelectedRange();
     if(range && range[0] === range[1]){
       const len = editor.getDocument().toString().length;
       if(len > 0){
         editor.setSelectedRange([0, len]);
         try{ fn(); } finally { editor.setSelectedRange(range); }
-        return;
+        return true; // se aplicó a TODO el documento (sin selección)
       }
     }
     fn();
+    return false;
   }
 
   // CRÍTICO — por qué estos 4 desplegables van por "pointerdown" y no por
@@ -1364,9 +1432,15 @@ function _tdWireFontControls(){
   document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      _tdApplyScoped(() => {
+      const _appliedToWhole = _tdApplyScoped(() => {
         try{ editorEl.editor?.activateAttribute('fontFamily', btn.dataset.value); }catch(_e){}
       });
+      // Petición explícita de Alberto: si se aplicó a todo el documento (sin
+      // selección), este tipo de letra debe seguir usándose para lo próximo
+      // que se escriba — también al reeditar más tarde, no solo en esta
+      // sesión (ver _tdDocFontFamily y su refuerzo por trix-selection-change
+      // más abajo en _tdInitOnce).
+      if(_appliedToWhole) _tdDocFontFamily = btn.dataset.value;
       finishChoice();
       _tdSyncFontMenuActive();
     });
@@ -1374,9 +1448,10 @@ function _tdWireFontControls(){
   document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
-      _tdApplyScoped(() => {
+      const _appliedToWhole = _tdApplyScoped(() => {
         try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
       });
+      if(_appliedToWhole) _tdDocFontSize = btn.dataset.value;
       finishChoice();
       _tdSyncFontMenuActive();
     });
