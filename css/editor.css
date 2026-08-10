@@ -2858,6 +2858,25 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   height: 0;
   flex-shrink: 0;
 }
+/* CAUSA RAÍZ del bug "Enter salta la cámara al último salto de página"
+   (reportado por Alberto, confirmado con pruebas reales): _tdCenterActiveLine
+   intenta desplazar la hoja para que la línea activa quede siempre a media
+   pantalla — pero cerca del FINAL del texto eso es físicamente imposible sin
+   este hueco: no hay más contenido debajo de la última línea que "empujar"
+   hacia arriba, así que el scroll se topa con su límite máximo (scrollHeight
+   - clientHeight) antes de poder centrarla. En ese límite, lo que queda
+   centrado de verdad es lo que hubiera ahí sin este hueco — el final del
+   texto anterior, con su último salto de página — mientras la línea que se
+   está escribiendo de verdad quedaba más abajo, fuera de la vista. Mismo
+   papel que #tdSelTopSpacer pero por abajo, y SIEMPRE presente a media
+   pantalla (ver _tdSyncViewportHeight) en vez de solo crecer cuando hace
+   falta — así CUALQUIER línea, incluida la última del documento, tiene
+   sitio de sobra para poder subir hasta el centro.
+*/
+#tdBottomSpacer {
+  height: 0;
+  flex-shrink: 0;
+}
 /* Líneas discontinuas de cambio de página — puramente visuales (no forman
    parte del documento de Trix), superpuestas dentro de la propia hoja para
    que se muevan con ella. Posicionadas en JS (_tdRecomputeViewPagination)

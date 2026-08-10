@@ -921,6 +921,14 @@ function _tdSyncViewportHeight(){
   _tdLastSyncedAvailH = availH;
   pageArea.style.flex = 'none';
   pageArea.style.height = availH + 'px';
+  // Hueco reservado bajo el texto para que CUALQUIER línea, incluida la
+  // última del documento, pueda subir hasta el centro de la pantalla — ver
+  // #tdBottomSpacer en editor.css. La mitad del alto visible es lo mínimo
+  // que hace falta: en el peor caso (escribiendo justo en la última línea,
+  // con el scroll ya en su tope), su borde inferior queda exactamente a
+  // media pantalla, ni un píxel más abajo.
+  const bottomSpacer = document.getElementById('tdBottomSpacer');
+  if(bottomSpacer) bottomSpacer.style.height = Math.round(availH / 2) + 'px';
   // La página cambia de tamaño — recalcular la paginación en vivo (con
   // retardo corto: el teclado tarda un poco en terminar de animarse).
   clearTimeout(_tdViewportSyncTimer);
@@ -1188,12 +1196,65 @@ async function _tdRunDiag(){
       const frameSizesDiag = editingFramesDiag || {pw: edPageW(), ph: edPageH()};
       L('_tdEditingFlowId: ' + _tdEditingFlowId);
       L('Marco usado (frameSizes): ' + JSON.stringify(frameSizesDiag) + (editingFramesDiag ? ' (por página: alto real solo si _tdBoxManualH, si no página completa)' : ' (página completa — sin flujo real)'));
+      // Nº de hojas REALES que ya tiene este flujo en edPages (lo que hay
+      // aplicado de verdad en el lienzo) frente a las que predice esta
+      // recarga de la vista previa — si no coinciden, la vista previa está
+      // calculando un reparto distinto al que existe de verdad ahora mismo.
+      const _tdRealPageCount = _tdEditingFlowId
+        ? edPages.filter(p => (p.layers || []).some(l => l && l._tdFlowId === _tdEditingFlowId)).length
+        : null;
+      L('Nº de hojas REALES ya existentes en edPages para este flujo: ' + _tdRealPageCount);
       const { pageStartChars: pscDiag } = _tdLayoutPages(
         blocksDiag, frameSizesDiag, lineHeightMultDiag,
         { marginFracX: marginFracXDiag, marginFracY: TD_MARGIN_FRAC, bodySize: TD_BODY_SIZE, h1Size: TD_H1_SIZE },
         []
       );
+      L('Nº de hojas que PREDICE la vista previa ahora mismo (pageStartChars.length): ' + pscDiag.length);
       L('pageStartChars: ' + JSON.stringify(pscDiag));
+
+      // Tamaño de letra base usado para las imágenes (heightEm × este valor
+      // = alto real en el lienzo, ver _tdLayoutPages) y el de la vista en
+      // vivo usado para MEDIR esas imágenes al insertarlas (ver
+      // _tdParseBlocks) — si uno cambia y el otro no, el alto calculado deja
+      // de corresponder a la proporción real vista en el editor.
+      let _editorFontPxDiag = 16;
+      try{ _editorFontPxDiag = parseFloat(getComputedStyle(editorEl).fontSize) || 16; }catch(_e){}
+      L('editorFontPx (usado para medir heightEm de imágenes): ' + _editorFontPxDiag);
+      L('TD_BODY_SIZE (usado como baseFontSize por defecto en el lienzo): ' + TD_BODY_SIZE);
+
+      // Todas las imágenes encontradas en los bloques, con su heightEm ya
+      // calculado (ver _tdParseBlocks) y el imgW/imgH que resultaría de
+      // aplicar EXACTAMENTE la misma fórmula que _tdLayoutPages, para el
+      // marco de CADA página del flujo (el ancho de columna varía si alguna
+      // hoja se redimensionó a mano).
+      L('');
+      L('── Imágenes encontradas en los bloques (heightEm ya calculado) ──');
+      let _imgCountDiag = 0;
+      blocksDiag.forEach((block, bi) => {
+        (block.runs || []).forEach(run => {
+          if(!run.isImage) return;
+          _imgCountDiag++;
+          L(`  imagen ${_imgCountDiag} (bloque ${bi}): heightEm=${run.heightEm} aspect=${run.aspect} widthFrac=${run.widthFrac}`);
+          frameSizesDiag && (Array.isArray(frameSizesDiag) ? frameSizesDiag : [frameSizesDiag]).forEach((f, fi) => {
+            const mxF = f.pw * marginFracXDiag;
+            const textWF = f.pw - mxF * 2;
+            const availImgF = Math.max(20, textWF);
+            let imgHF = Math.max(1, Math.round((run.heightEm || 5) * TD_BODY_SIZE));
+            let imgWF = Math.max(1, Math.round(imgHF * (run.aspect || 1)));
+            if(imgWF > availImgF){ imgWF = availImgF; imgHF = Math.max(1, Math.round(imgWF / (run.aspect || 1))); }
+            L(`    solo heightEm -> imgW=${imgWF} imgH=${imgHF} (${Math.round(100*imgHF/f.ph)}% del alto de página)`);
+            if(run.widthFrac){
+              const imgWF2 = Math.max(1, Math.round(run.widthFrac * availImgF));
+              const imgHF2 = Math.max(1, Math.round(imgWF2 / (run.aspect || 1)));
+              L(`    solo widthFrac -> imgW=${imgWF2} imgH=${imgHF2} (${Math.round(100*imgHF2/f.ph)}% del alto de página)`);
+              const finalH = Math.min(imgHF, imgHF2);
+              L(`    FINAL (la más pequeña de las dos) -> imgH=${finalH} (${Math.round(100*finalH/f.ph)}% del alto de página)`);
+            }
+          });
+        });
+      });
+      if(!_imgCountDiag) L('  (ninguna imagen encontrada en los bloques)');
+
       const innerRectDiag = innerDiag.getBoundingClientRect();
       L('innerRect (tdPage): ' + JSON.stringify({left: innerRectDiag.left, top: innerRectDiag.top, width: innerRectDiag.width}));
 
@@ -3146,7 +3207,37 @@ function _tdParseBlocks(html){
             try{ if(liveEditorImg) editorFontPx = parseFloat(getComputedStyle(liveEditorImg).fontSize) || editorFontPx; }catch(_e){}
             const heightEm = Math.max(0.5, natH / editorFontPx);
             const aspect = natH > 0 ? (natW / natH) : 1;
-            runs.push({ isImage: true, src: imgEl.getAttribute('src'), heightEm, aspect });
+            // widthFrac: ancho de la imagen como fracción del ancho de
+            // columna disponible AQUÍ MISMO (columna ancha del editor de
+            // texto, .td-page menos su relleno lateral) — segunda señal,
+            // independiente de heightEm, para el tope en _tdLayoutPages.
+            // POR QUÉ HACE FALTA (bug real, confirmado con el panel de
+            // diagnóstico 🩺 sobre un caso con dos imágenes reales): heightEm
+            // por sí solo puede disparar el alto real del lienzo muy por
+            // encima de lo razonable para cualquier imagen que NO sea muy
+            // panorámica — el tope de ANCHO ya existente en _tdLayoutPages
+            // apenas actúa sobre una imagen más cuadrada/vertical (su ancho
+            // ya "cabía"), así que su alto se queda anclado al valor inflado
+            // que heightEm calculó a partir de cómo de grande decidió Trix
+            // mostrarla en su columna ancha — nada que ver con cuánto debería
+            // ocupar en la hoja estrecha real. Ejemplo real medido: una
+            // imagen de proporción ~0.84 (poco más alta que ancha) se
+            // calculaba con heightEm=35 → 389px de alto real, la MITAD de
+            // toda la página, para una sola imagen. _tdLayoutPages usa la
+            // MÁS PEQUEÑA de las dos estimas (heightEm y esta), nunca la
+            // mayor — ninguna imagen puede acabar más grande de lo que
+            // sugiere CUALQUIERA de las dos señales.
+            const pageColEl = document.getElementById('tdPage');
+            let widthFrac = 1;
+            try{
+              if(pageColEl){
+                const cs = getComputedStyle(pageColEl);
+                const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+                const colW = Math.max(1, pageColEl.clientWidth - padX);
+                widthFrac = Math.min(1, natW / colW);
+              }
+            }catch(_e){}
+            runs.push({ isImage: true, src: imgEl.getAttribute('src'), heightEm, aspect, widthFrac });
           }
           return;
         }
@@ -3517,7 +3608,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // Imagen intercalada en mitad del párrafo (ver runsFromInline) — pasa
       // como una "palabra" especial más; el bucle de más abajo la reconoce
       // por w.isImage y corta la línea de texto en ese punto.
-      if(run.isImage){ words.push({isImage:true, src:run.src, heightEm:run.heightEm, aspect:run.aspect}); return; }
+      if(run.isImage){ words.push({isImage:true, src:run.src, heightEm:run.heightEm, aspect:run.aspect, widthFrac:run.widthFrac}); return; }
       const parts = (run.text || '').split(/(\s+)/).filter(s => s.length);
       parts.forEach(p => words.push({
         text:p, bold: isHeading ? true : !!run.bold, italic:!!run.italic, strike:!!run.strike, mono:!!run.mono,
@@ -3573,20 +3664,33 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         // nueva — pedido explícito de Alberto: "tener en cuenta las
         // imágenes insertadas para el cálculo de inserción en el canvas".
         //
-        // Tamaño: heightEm × tamaño de letra REAL de este bloque en el
-        // lienzo (baseFontSize) — conserva la relación "esta imagen mide
-        // tantas veces el tamaño de letra" tal como se veía en el editor de
-        // textos, en vez de una fracción del ancho de columna que ignoraba
-        // la diferencia entre el tamaño de letra de edición (~16.8px) y el
-        // real del lienzo (22px) — pedido explícito de Alberto: "la
-        // relación del tamaño de la imagen con el tamaño del texto... se
-        // respete". Tope al ancho de columna disponible: si aun así no
-        // cupiera de ancho (imagen muy panorámica), se reduce sin perder la
-        // proporción propia de la imagen.
+        // Tamaño: DOS estimas independientes, se usa la MÁS PEQUEÑA de las
+        // dos — nunca la mayor. 1) heightEm × tamaño de letra real del
+        // lienzo: conserva "esta imagen mide tantas veces el tamaño de
+        // letra" tal como se veía en el editor de textos (pedido explícito
+        // de Alberto: "la relación del tamaño de la imagen con el tamaño
+        // del texto... se respete"). 2) widthFrac × ancho disponible:
+        // conserva qué fracción de la columna ocupaba en el editor de
+        // textos. CUALQUIERA de las dos, sola, falla en algún caso: la (1)
+        // sola dispara el alto muy por encima de lo razonable para
+        // cualquier imagen que no sea muy panorámica (el tope de ancho de
+        // más abajo apenas la reduce si ya "cabía" de ancho — bug real,
+        // confirmado con el panel de diagnóstico: una imagen de proporción
+        // ~0.84 se calculaba en 389px, la MITAD de toda la página); la (2)
+        // sola ignora la diferencia de tamaño de letra entre editor y
+        // lienzo (el motivo original de introducir heightEm). Quedarse con
+        // la más pequeña de las dos acota el problema de la (1) sin
+        // resucitar el de la (2): nunca puede dispararse por encima de lo
+        // que sugiere NINGUNA de las dos señales.
         const availImg = Math.max(20, textW - indentPx);
         let imgH = Math.max(1, Math.round((w.heightEm || 5) * baseFontSize));
         let imgW = Math.max(1, Math.round(imgH * (w.aspect || 1)));
         if(imgW > availImg){ imgW = availImg; imgH = Math.max(1, Math.round(imgW / (w.aspect || 1))); }
+        if(w.widthFrac){
+          const imgW2 = Math.max(1, Math.round(w.widthFrac * availImg));
+          const imgH2 = Math.max(1, Math.round(imgW2 / (w.aspect || 1)));
+          if(imgH2 < imgH){ imgH = imgH2; imgW = imgW2; }
+        }
         if(lineRuns.length) flushLine();
         // Las imágenes siempre centradas, sea cual sea la alineación del
         // párrafo (izquierda/derecha/justificado/centrado) — pedido

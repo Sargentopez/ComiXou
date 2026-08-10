@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v37.14</footer>
+    <footer class="app-version">v37.16</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1246,6 +1246,7 @@ Router.register('editor', {
           <input type="hidden" id="tdHiddenInput">
           <trix-editor id="tdEditor" toolbar="tdToolbar" input="tdHiddenInput" class="td-editor" data-i18n-placeholder="td_placeholder" placeholder="Escribe o pega aquí tu texto" virtualkeyboardpolicy="manual"></trix-editor>
           <div id="tdPageBreaks" aria-hidden="true"></div>
+          <div id="tdBottomSpacer" aria-hidden="true"></div>
         </div>
       </div>
       <!-- Caja de redimensionado de imágenes insertadas en el texto — mismo
