@@ -3489,6 +3489,19 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   let curLines = [];
   let curY = 0; // relativo al margen superior (0..textH)
   let charsSoFar = 0;
+  // Offset donde empieza la línea que se está formando AHORA MISMO en
+  // lineRuns — se actualiza en el momento exacto en que lineRuns pasa de
+  // vacía a tener su primera palabra (ver el bucle de palabras, más abajo).
+  // Es la fuente correcta para "dónde empieza la hoja nueva" en un salto
+  // reactivo: a diferencia de restarle a endChars la longitud de las
+  // runs ya formadas de "entry" (que falla cuando flushLine ha recortado
+  // algún espacio final de esas runs — ese espacio sí se contó en
+  // charsSoFar en su momento, pero ya no está en el texto de la línea, así
+  // que la resta se quedaba corta en esa misma cantidad — comprobado con
+  // un caso real: aparecía a mitad de la primera palabra de la hoja
+  // nueva), este valor no necesita reconstruirse a partir de nada: es
+  // literalmente el offset real en el instante en que la línea arrancó.
+  let curLineStartOffset = 0;
 
   // Efectos de cortar página: extraído para poder dispararse tanto de forma
   // REACTIVA (dentro de pushLine, cuando una línea YA decidida no cabe
@@ -3496,7 +3509,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   // (antes de decidir las palabras de la línea siguiente — ver más abajo en
   // el bucle de palabras, arreglo del bug "primera línea de la hoja
   // vertical se sale de la hoja").
-  function _tdDoBreak(reason, nextPreview){
+  function _tdDoBreak(reason, nextPreview, newPageStartOffset){
     // Traza de cada salto real (window._tdBreakLog) — pedido para localizar
     // el bug "párrafo duplicado entre hojas" con el contenido real de
     // Alberto, tras varios intentos fallidos de reproducirlo con casos
@@ -3512,7 +3525,8 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         charsSoFar, curY: Math.round(curY), textH: Math.round(textH), frameIdx,
         nLineasHojaCerrada: curLines.length,
         ultimaLineaHojaCerrada: lastLine ? (lastLine.runs||[]).map(r=>r.text||'').join('') : (lastLine && lastLine.kind==='image' ? '(imagen)' : null),
-        siguienteContenido: nextPreview || null
+        siguienteContenido: nextPreview || null,
+        newPageStartOffset
       });
     }
     pages.push(curLines);
@@ -3522,10 +3536,21 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     frameIdx++;
     loadFrame();
     const endChars = charsSoFar;
-    // Ver comentario largo más abajo (dentro de pushLine, donde vivía este
-    // código) sobre por qué se usa el último lineStartChars y no charsSoFar
-    // directamente.
-    pageStartChars.push(lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0);
+    // BUG REAL (localizado con el contenido real de Alberto, ver panel de
+    // diagnóstico): lineStartChars[length-1] asume que la línea que se
+    // acaba de cerrar en curLines es SIEMPRE la fuente correcta de "dónde
+    // empieza la hoja nueva" — pero para un salto REACTIVO (dentro de
+    // pushLine, cuando la línea "entry" que desborda ya se ha formado
+    // entera) esa línea entry TODAVÍA no se ha empujado a lineStartChars
+    // (eso pasa después, al final de pushLine) — así que el valor usado
+    // aquí no era el arranque de la hoja nueva, sino el de una línea
+    // ANTERIOR, cada vez más desincronizado según cuántas líneas llevara
+    // acumuladas curLines. Con el texto real de Alberto esto llegó a caer
+    // a mitad de la palabra "SIGUIENTE" (línea discontinua partiendo la
+    // palabra por la mitad en la vista previa). Ahora cada punto de llamada
+    // pasa su propio newPageStartOffset, calculado directamente sin
+    // depender de ningún estado acumulado que pueda quedarse atrás.
+    pageStartChars.push(newPageStartOffset != null ? newPageStartOffset : (lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0));
     while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
   }
 
@@ -3551,16 +3576,16 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       breakReason = 'reactivo:forzado';
     }
     if(shouldBreak){
-      // OJO: charsSoFar en este punto YA incluye los caracteres de "entry"
-      // (la línea que se está a punto de añadir a la página NUEVA) — sus
-      // palabras se contaron en charsSoFar ANTES de que overflow disparara
-      // este pushLine (ver el bucle de palabras, más abajo en la función).
-      // Por eso NO sirve como "aquí empieza la página nueva": se usa en su
-      // lugar el último valor ya registrado en lineStartChars — el final de
-      // la línea ANTERIOR, que es exactamente donde arranca esta página —
-      // sin él, el punto de corte quedaba una línea entera de más tarde de
-      // lo real, el bug reportado ("las rectas un renglón por debajo").
-      _tdDoBreak(breakReason, (entry.runs||[]).map(r=>r.text||'').join('') || (entry.kind==='image' ? '(imagen)' : null));
+      // newPageStartOffset: dónde empieza de verdad la hoja nueva —
+      // curLineStartOffset, capturado en el instante exacto en que "entry"
+      // arrancó como línea nueva (ver el bucle de palabras) — no una resta
+      // reconstruida a partir de endChars y la longitud de las runs ya
+      // formadas: esa resta fallaba en cuanto flushLine recortaba algún
+      // espacio final de esas runs (el espacio SÍ se contó en charsSoFar en
+      // su momento, pero ya no está en el texto de la línea), quedándose
+      // corta exactamente en esa cantidad — comprobado con un caso real:
+      // el offset caía a mitad de la primera palabra de la hoja nueva.
+      _tdDoBreak(breakReason, (entry.runs||[]).map(r=>r.text||'').join('') || (entry.kind==='image' ? '(imagen)' : null), curLineStartOffset);
     }
     const baseline = curY + (entry.kind === 'image' ? 0 : entry.height * 0.78);
     const lineObj = {
@@ -3712,6 +3737,12 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
           if(imgH2 < imgH){ imgH = imgH2; imgW = imgW2; }
         }
         if(lineRuns.length) flushLine();
+        // La imagen no consume caracteres (no tiene texto propio) — su
+        // punto de partida real es charsSoFar tal cual está ahora mismo,
+        // sin cambios. Necesario para que un salto reactivo que la afecte
+        // directamente a ELLA (no al texto que la precede) registre el
+        // offset correcto — ver curLineStartOffset arriba.
+        curLineStartOffset = charsSoFar;
         // Las imágenes siempre centradas, sea cual sea la alineación del
         // párrafo (izquierda/derecha/justificado/centrado) — pedido
         // explícito de Alberto: "que las imágenes siempre estén centradas
@@ -3738,7 +3769,11 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // líneas con tamaños de letra dispares que la estimación no acierte.
       if(lineRuns.length === 0 && curLines.length > 0){
         const estHeight = baseFontSize * lhMult;
-        if(curY + estHeight > textH) _tdDoBreak('anticipado', w.text || null);
+        // Aquí charsSoFar SÍ es directamente correcto como inicio de la
+        // hoja nueva: todavía no se ha sumado la palabra w (eso pasa más
+        // abajo, tras esta comprobación) — no hace falta restar nada, a
+        // diferencia del salto reactivo de pushLine.
+        if(curY + estHeight > textH) _tdDoBreak('anticipado', w.text || null, charsSoFar);
       }
       ctx.font = _tdFontStr(w.fontSize, w.bold, w.italic, w.mono, w.fontFamily);
       const width = ctx.measureText(w.text).width;
@@ -3746,6 +3781,13 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       if(lineWidth + width > avail && lineRuns.length > 0 && !w.isSpace){
         flushLine();
       }
+      // Aquí, justo antes de añadir la palabra — tanto si lineRuns ya
+      // estaba vacía al entrar en esta iteración como si acaba de vaciarla
+      // flushLine() dos líneas más arriba — es el momento exacto en que
+      // arranca una línea nueva. Ver curLineStartOffset arriba: es la
+      // fuente correcta para el salto reactivo de pushLine, sin tener que
+      // reconstruirlo después.
+      if(lineRuns.length === 0) curLineStartOffset = charsSoFar;
       lineRuns.push({
         text:w.text, bold:w.bold, italic:w.italic, strike:w.strike, mono:w.mono,
         fontSize:w.fontSize, fontFamily:w.fontFamily, isSpace:w.isSpace, width, x:0
