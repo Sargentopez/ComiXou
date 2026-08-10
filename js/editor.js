@@ -38754,6 +38754,25 @@ async function _edRunDiag() {
     }
   } catch (e) { L('  Error en diagnóstico de flujos de texto: ' + e.message + '\n' + e.stack); }
 
+  // ── TRAZA DE SALTOS DE PÁGINA (último reflujo real de texto) — pedido
+  // para localizar el bug "párrafo duplicado" con el contenido real de
+  // Alberto: cada salto real (window._tdBreakLog, ver _tdDoBreak en
+  // editor-textdoc.js) queda registrado con su motivo, cuántos caracteres
+  // llevaba acumulados, y la última línea de la hoja que cierra + qué
+  // contenido sigue justo después — si hay duplicación, debe verse aquí
+  // como el mismo texto en dos entradas consecutivas.
+  L('');
+  L('── TRAZA DE SALTOS DE PÁGINA (último "Guardar cambios"/"Exceptuar"/redimensionado de un flujo de texto) ──');
+  if (window._tdBreakLog && window._tdBreakLog.length) {
+    window._tdBreakLog.forEach((e, i) => {
+      L(`  [${i}] tras hoja→${e.pageIdx} motivo=${e.reason} charsSoFar=${e.charsSoFar} curY=${e.curY}/${e.textH} frameIdx=${e.frameIdx} nLíneas=${e.nLineasHojaCerrada}`);
+      L(`      última línea de la hoja que cierra: ${JSON.stringify((e.ultimaLineaHojaCerrada||'').slice(0,70))}`);
+      L(`      contenido que sigue justo después:  ${JSON.stringify((e.siguienteContenido||'').slice(0,70))}`);
+    });
+  } else {
+    L('  (vacío — no se ha hecho "Guardar cambios"/"Exceptuar"/redimensionado de ningún flujo de texto todavía en esta carga de página; hace falta repetir la acción que produce la duplicación para que quede registrada aquí)');
+  }
+
   // Mostrar panel
   let p = document.getElementById('_edDiagPanel');
   if (!p) {

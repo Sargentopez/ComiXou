@@ -3496,7 +3496,25 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   // (antes de decidir las palabras de la línea siguiente — ver más abajo en
   // el bucle de palabras, arreglo del bug "primera línea de la hoja
   // vertical se sale de la hoja").
-  function _tdDoBreak(){
+  function _tdDoBreak(reason, nextPreview){
+    // Traza de cada salto real (window._tdBreakLog) — pedido para localizar
+    // el bug "párrafo duplicado entre hojas" con el contenido real de
+    // Alberto, tras varios intentos fallidos de reproducirlo con casos
+    // sintéticos. Vuelca en qué línea de curLines termina la hoja que se
+    // cierra, y con qué línea/palabra sigue el bucle justo después — si hay
+    // duplicación, debe verse aquí como el mismo texto apareciendo tanto en
+    // "últimaLineaHojaCerrada" de un salto como en "primeraLineaHojaNueva"
+    // del siguiente.
+    if(window._tdBreakLog){
+      const lastLine = curLines.length ? curLines[curLines.length-1] : null;
+      window._tdBreakLog.push({
+        pageIdx: pages.length, reason,
+        charsSoFar, curY: Math.round(curY), textH: Math.round(textH), frameIdx,
+        nLineasHojaCerrada: curLines.length,
+        ultimaLineaHojaCerrada: lastLine ? (lastLine.runs||[]).map(r=>r.text||'').join('') : (lastLine && lastLine.kind==='image' ? '(imagen)' : null),
+        siguienteContenido: nextPreview || null
+      });
+    }
     pages.push(curLines);
     pageBoxHeights.push(pageBoxHeightFor());
     curLines = [];
@@ -3514,6 +3532,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   function pushLine(entry){
     const endChars = charsSoFar; // caracteres acumulados hasta el final de ESTA línea
     let shouldBreak = curY + entry.height > textH && curLines.length > 0;
+    let breakReason = shouldBreak ? 'reactivo:overflow' : null;
     // Salto forzado a mano (arrastre): si ya se ha PASADO el punto fijado
     // (estrictamente más allá, no con "="), cortar aquí también, haya sitio
     // o no — pero solo si esta página ya tiene algo (si no, dejaría una
@@ -3529,6 +3548,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     // asentarse en uno solo.
     if(!shouldBreak && curLines.length > 0 && forcedIdx < forced.length && endChars > forced[forcedIdx]){
       shouldBreak = true;
+      breakReason = 'reactivo:forzado';
     }
     if(shouldBreak){
       // OJO: charsSoFar en este punto YA incluye los caracteres de "entry"
@@ -3540,7 +3560,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // la línea ANTERIOR, que es exactamente donde arranca esta página —
       // sin él, el punto de corte quedaba una línea entera de más tarde de
       // lo real, el bug reportado ("las rectas un renglón por debajo").
-      _tdDoBreak();
+      _tdDoBreak(breakReason, (entry.runs||[]).map(r=>r.text||'').join('') || (entry.kind==='image' ? '(imagen)' : null));
     }
     const baseline = curY + (entry.kind === 'image' ? 0 : entry.height * 0.78);
     const lineObj = {
@@ -3718,7 +3738,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // líneas con tamaños de letra dispares que la estimación no acierte.
       if(lineRuns.length === 0 && curLines.length > 0){
         const estHeight = baseFontSize * lhMult;
-        if(curY + estHeight > textH) _tdDoBreak();
+        if(curY + estHeight > textH) _tdDoBreak('anticipado', w.text || null);
       }
       ctx.font = _tdFontStr(w.fontSize, w.bold, w.italic, w.mono, w.fontFamily);
       const width = ctx.measureText(w.text).width;
@@ -4222,6 +4242,13 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
   frames.push({ pw: svLast ? ED_PAGE_W : ED_PAGE_H, ph: svLast ? ED_PAGE_H : ED_PAGE_W });
 
   const blocks = _tdParseBlocks(html);
+  // Traza de saltos de página real (window._tdBreakLog) — investigación del
+  // bug "párrafo duplicado entre hojas". Se reinicia en CADA reflujo real
+  // (el único sitio que de verdad decide el contenido final de cada hoja),
+  // así el diagnóstico (🩺, en el editor de textos o en el general) siempre
+  // refleja el ÚLTIMO "Guardar cambios"/"Exceptuar"/redimensionado, no una
+  // mezcla de varios.
+  window._tdBreakLog = [];
   const { pages, pageBoxHeights } = _tdLayoutPages(
     blocks, frames, la.lineHeightMult,
     { marginFracX: la.marginXFrac || TD_MARGIN_FRAC, marginFracY: TD_MARGIN_FRAC },
