@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="comicsGrid">
     </main>
-    <footer class="app-version">v37.16</footer>
+    <footer class="app-version">v37.17</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -398,15 +398,19 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico oculto como comentario (a petición de Alberto).
-             Para volver a mostrarlo, descomentar la línea siguiente. La función de
-             reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs dentro de este
-             panel) sigue activa aunque el botón que abre el panel esté oculto. El
-             log de creación de dibujo/relleno (_edFCL/window._edFCLog, investigando
-             el relleno que desaparecía al crear) sigue instrumentado en editor.js
-             aunque este botón esté oculto — solo hace falta descomentar para verlo.
+        <!-- Botón de diagnóstico — reactivado temporalmente para investigar el
+             bug de párrafos duplicados al aplicar un flujo de texto al
+             lienzo (petición explícita de Alberto: necesita copiar el
+             diagnóstico del editor general, no solo el del editor de
+             textos). Para volver a ocultarlo cuando ya no haga falta,
+             comentar la línea siguiente igual que estaba. La función de
+             reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs dentro de
+             este panel) sigue activa aunque el botón que abre el panel esté
+             oculto. El log de creación de dibujo/relleno (_edFCL/
+             window._edFCLog, investigando el relleno que desaparecía al
+             crear) sigue instrumentado en editor.js aunque este botón esté
+             oculto — solo hace falta descomentar para verlo. -->
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
-        -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 

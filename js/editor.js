@@ -38686,6 +38686,74 @@ async function _edRunDiag() {
     });
   });
 
+  // ── FLUJOS DE TEXTO: estructura real en edPages + detección directa de
+  // párrafos duplicados entre hojas — pedido explícito de Alberto tras
+  // reportar que "el último párrafo de una hoja se repite al inicio de la
+  // siguiente" al aplicar un flujo con excepciones/cambios de orientación.
+  // Recorre TODAS las hojas de la obra, agrupa por _tdFlowId, y para cada
+  // flujo compara el texto de cada hoja con el de la ANTERIOR: si comparten
+  // el mismo párrafo completo, lo señala explícitamente (no hace falta que
+  // Alberto lo busque a ojo en cientos de líneas de richLines).
+  L('');
+  L('── FLUJOS DE TEXTO (estructura real + duplicados entre hojas) ──');
+  try {
+    const _flowGroups = new Map(); // flowId -> [{pageIdx, layer}]
+    const _exceptGroups = new Map(); // flowId -> [pageIdx]
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach(l => {
+        if (!l) return;
+        if (l._tdFlowId) {
+          if (!_flowGroups.has(l._tdFlowId)) _flowGroups.set(l._tdFlowId, []);
+          _flowGroups.get(l._tdFlowId).push({ pageIdx: pi, layer: l, orientation: p.orientation || edOrientation });
+        }
+        if (l._tdExceptFlow) {
+          if (!_exceptGroups.has(l._tdExceptFlow)) _exceptGroups.set(l._tdExceptFlow, []);
+          _exceptGroups.get(l._tdExceptFlow).push(pi);
+        }
+      });
+    });
+    if (!_flowGroups.size) {
+      L('  (no hay ningún flujo de texto en esta obra ahora mismo)');
+    }
+    for (const [flowId, entries] of _flowGroups.entries()) {
+      entries.sort((a, b) => a.pageIdx - b.pageIdx);
+      const exceptPages = _exceptGroups.get(flowId) || [];
+      L('');
+      L(`  Flujo ${flowId}: ${entries.length} hojas [${entries.map(e => e.pageIdx).join(', ')}]` +
+        (exceptPages.length ? ` · exceptuadas: [${exceptPages.join(', ')}]` : ''));
+      // Párrafo COMPLETO = texto entre dos saltos de línea "reales" dentro de
+      // richLines (una línea con kind!=='image' que no continúa la anterior
+      // se trata como aproximación razonable: primer/último párrafo visible
+      // de cada hoja, que es justo lo que Alberto describe que se repite).
+      const pageFirstLast = entries.map(({ pageIdx, layer, orientation }) => {
+        const lines = (layer.richLines || []).filter(l => l.kind !== 'image');
+        const firstText = lines.length ? (lines[0].runs || []).map(r => r.text || '').join('') : '';
+        const lastText = lines.length ? (lines[lines.length - 1].runs || []).map(r => r.text || '').join('') : '';
+        return { pageIdx, orientation, nLines: (layer.richLines || []).length, firstText, lastText, boxManualH: !!layer._tdBoxManualH, width: layer.width, height: layer.height };
+      });
+      pageFirstLast.forEach(pf => {
+        L(`    hoja ${pf.pageIdx}: orientación=${pf.orientation} nLíneas=${pf.nLines} _tdBoxManualH=${pf.boxManualH} width=${pf.width} height=${pf.height}`);
+        L(`      primera línea: ${JSON.stringify(pf.firstText.slice(0, 60))}`);
+        L(`      última línea:  ${JSON.stringify(pf.lastText.slice(0, 60))}`);
+      });
+      // Comparación directa hoja[i] vs hoja[i-1]: ¿la última línea de la
+      // anterior es EXACTAMENTE la primera (o alguna) línea de esta?
+      for (let i = 1; i < pageFirstLast.length; i++) {
+        const prevLines = (entries[i-1].layer.richLines || []).filter(l => l.kind !== 'image').map(l => (l.runs||[]).map(r=>r.text||'').join(''));
+        const curLines = (entries[i].layer.richLines || []).filter(l => l.kind !== 'image').map(l => (l.runs||[]).map(r=>r.text||'').join(''));
+        const prevLast3 = prevLines.slice(-3).join(' / ');
+        const curFirst3 = curLines.slice(0, 3).join(' / ');
+        const overlap = prevLines.filter(pl => pl.trim().length > 10 && curLines.includes(pl));
+        if (overlap.length) {
+          L(`    ⚠️⚠️⚠️ DUPLICADO entre hoja ${entries[i-1].pageIdx} y hoja ${entries[i].pageIdx}: ` +
+            overlap.map(t => JSON.stringify(t.slice(0,50))).join(' | '));
+        }
+        L(`    (hoja ${entries[i-1].pageIdx} últimas 3 líneas → hoja ${entries[i].pageIdx} primeras 3 líneas):`);
+        L(`      "${prevLast3}" → "${curFirst3}"`);
+      }
+    }
+  } catch (e) { L('  Error en diagnóstico de flujos de texto: ' + e.message + '\n' + e.stack); }
+
   // Mostrar panel
   let p = document.getElementById('_edDiagPanel');
   if (!p) {
