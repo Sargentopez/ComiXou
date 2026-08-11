@@ -77,6 +77,10 @@ const TD_PARA_GAP_MULT = 0.55;   // espacio extra tras cada bloque (× fontSize 
 const TD_LIST_INDENT   = 30;     // sangría de listas
 const TD_QUOTE_INDENT  = 24;     // sangría de citas (por nivel de anidamiento)
 const TD_FONT_FAMILY   = 'Lora'; // serif autoalojada — pensada para lectura en página completa
+// Tope de alto para imágenes insertadas en el flujo de texto, como fracción
+// del alto de texto disponible de la página — ver el comentario largo en
+// _tdLayoutPages (búsqueda: TD_IMG_MAX_HEIGHT_FRAC) para el porqué completo.
+const TD_IMG_MAX_HEIGHT_FRAC = 0.40;
 
 // ── Apertura / cierre del shell ──────────────────────────────────
 let _tdFlowSeq = 0;
@@ -1224,9 +1228,12 @@ async function _tdRunDiag(){
 
       // Todas las imágenes encontradas en los bloques, con su heightEm ya
       // calculado (ver _tdParseBlocks) y el imgW/imgH que resultaría de
-      // aplicar EXACTAMENTE la misma fórmula que _tdLayoutPages, para el
+      // aplicar EXACTAMENTE la misma fórmula que _tdLayoutPages (heightEm
+      // con tope TD_IMG_MAX_HEIGHT_FRAC — ver ese comentario), para el
       // marco de CADA página del flujo (el ancho de columna varía si alguna
-      // hoja se redimensionó a mano).
+      // hoja se redimensionó a mano). widthFrac se sigue mostrando como
+      // referencia aunque ya no participa en el tamaño final (ver historial
+      // en el comentario de _tdLayoutPages).
       L('');
       L('── Imágenes encontradas en los bloques (heightEm ya calculado) ──');
       let _imgCountDiag = 0;
@@ -1234,22 +1241,23 @@ async function _tdRunDiag(){
         (block.runs || []).forEach(run => {
           if(!run.isImage) return;
           _imgCountDiag++;
-          L(`  imagen ${_imgCountDiag} (bloque ${bi}): heightEm=${run.heightEm} aspect=${run.aspect} widthFrac=${run.widthFrac}`);
+          L(`  imagen ${_imgCountDiag} (bloque ${bi}): heightEm=${run.heightEm} aspect=${run.aspect} widthFrac=${run.widthFrac} (ya no se usa para el tamaño, solo referencia)`);
           frameSizesDiag && (Array.isArray(frameSizesDiag) ? frameSizesDiag : [frameSizesDiag]).forEach((f, fi) => {
             const mxF = f.pw * marginFracXDiag;
             const textWF = f.pw - mxF * 2;
             const availImgF = Math.max(20, textWF);
+            const textHF = f.ph - (f.ph * TD_MARGIN_FRAC * 2);
             let imgHF = Math.max(1, Math.round((run.heightEm || 5) * TD_BODY_SIZE));
             let imgWF = Math.max(1, Math.round(imgHF * (run.aspect || 1)));
             if(imgWF > availImgF){ imgWF = availImgF; imgHF = Math.max(1, Math.round(imgWF / (run.aspect || 1))); }
-            L(`    solo heightEm -> imgW=${imgWF} imgH=${imgHF} (${Math.round(100*imgHF/f.ph)}% del alto de página)`);
-            if(run.widthFrac){
-              const imgWF2 = Math.max(1, Math.round(run.widthFrac * availImgF));
-              const imgHF2 = Math.max(1, Math.round(imgWF2 / (run.aspect || 1)));
-              L(`    solo widthFrac -> imgW=${imgWF2} imgH=${imgHF2} (${Math.round(100*imgHF2/f.ph)}% del alto de página)`);
-              const finalH = Math.min(imgHF, imgHF2);
-              L(`    FINAL (la más pequeña de las dos) -> imgH=${finalH} (${Math.round(100*finalH/f.ph)}% del alto de página)`);
+            const maxImgHF = Math.max(1, Math.round(textHF * TD_IMG_MAX_HEIGHT_FRAC));
+            const cappedF = imgHF > maxImgHF;
+            if(cappedF){
+              imgHF = maxImgHF;
+              imgWF = Math.max(1, Math.round(imgHF * (run.aspect || 1)));
+              if(imgWF > availImgF){ imgWF = availImgF; imgHF = Math.max(1, Math.round(imgWF / (run.aspect || 1))); }
             }
+            L(`    FINAL -> imgW=${imgWF} imgH=${imgHF} (${Math.round(100*imgHF/f.ph)}% del alto de página)${cappedF ? '  [tope ' + Math.round(TD_IMG_MAX_HEIGHT_FRAC*100) + '% aplicado]' : ''}`);
           });
         });
       });
@@ -3871,32 +3879,44 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         // nueva — pedido explícito de Alberto: "tener en cuenta las
         // imágenes insertadas para el cálculo de inserción en el canvas".
         //
-        // Tamaño: DOS estimas independientes, se usa la MÁS PEQUEÑA de las
-        // dos — nunca la mayor. 1) heightEm × tamaño de letra real del
-        // lienzo: conserva "esta imagen mide tantas veces el tamaño de
-        // letra" tal como se veía en el editor de textos (pedido explícito
-        // de Alberto: "la relación del tamaño de la imagen con el tamaño
-        // del texto... se respete"). 2) widthFrac × ancho disponible:
-        // conserva qué fracción de la columna ocupaba en el editor de
-        // textos. CUALQUIERA de las dos, sola, falla en algún caso: la (1)
-        // sola dispara el alto muy por encima de lo razonable para
-        // cualquier imagen que no sea muy panorámica (el tope de ancho de
-        // más abajo apenas la reduce si ya "cabía" de ancho — bug real,
-        // confirmado con el panel de diagnóstico: una imagen de proporción
-        // ~0.84 se calculaba en 389px, la MITAD de toda la página); la (2)
-        // sola ignora la diferencia de tamaño de letra entre editor y
-        // lienzo (el motivo original de introducir heightEm). Quedarse con
-        // la más pequeña de las dos acota el problema de la (1) sin
-        // resucitar el de la (2): nunca puede dispararse por encima de lo
-        // que sugiere NINGUNA de las dos señales.
+        // Tamaño: heightEm × tamaño de letra real del lienzo — conserva
+        // "esta imagen mide tantas veces el tamaño de letra" tal como se
+        // veía en el editor de textos (pedido explícito de Alberto: "la
+        // relación del tamaño de la imagen con el tamaño del texto... se
+        // respete"). Tope: nunca más de TD_IMG_MAX_HEIGHT_FRAC del alto de
+        // texto disponible — bug real que motivó tener un tope, confirmado
+        // con el panel de diagnóstico: una imagen de proporción ~0.84 se
+        // calculaba en 389px, la MITAD de toda la página, sin ningún límite.
+        //
+        // HISTORIAL — hasta v37.23 el tope no era directo: se calculaba una
+        // SEGUNDA estimación independiente (widthFrac × ancho disponible) y
+        // se usaba la más pequeña de las dos. Eso sí evitaba el caso del
+        // 50%, pero esa segunda estimación usa una escala completamente
+        // distinta (ancho editor→lienzo, ~0.46×, frente al tamaño de letra
+        // editor→lienzo de heightEm, ~1.3×), así que en la práctica encogía
+        // TAMBIÉN imágenes que nunca fueron el problema — confirmado con el
+        // diagnóstico de Alberto sobre su propia obra: una captura de
+        // pantalla perfectamente razonable (182px, 23% de la página) se
+        // quedaba en 59px (8%) en cuanto se recalculaba. Y como esta función
+        // es la ÚNICA fuente de la verdad tanto para la vista previa como
+        // para "Aplicar al lienzo" (ver cabecera del fichero), cualquier
+        // cambio de fórmula aquí hace que las hojas YA aplicadas con la
+        // fórmula anterior dejen de coincidir con lo que la vista previa
+        // recalcula con la fórmula nueva la próxima vez que se reeditan —
+        // que es exactamente el bug de "el salto de página no coincide"
+        // reportado por Alberto. Un tope directo sobre el propio heightEm
+        // ataja el caso real (imagen desproporcionada) sin encoger de más
+        // el caso normal, y dado que ninguna imagen "normal" se acerca al
+        // límite, es mucho más estable frente a futuros cambios de fórmula.
         const availImg = Math.max(20, textW - indentPx);
         let imgH = Math.max(1, Math.round((w.heightEm || 5) * baseFontSize));
         let imgW = Math.max(1, Math.round(imgH * (w.aspect || 1)));
         if(imgW > availImg){ imgW = availImg; imgH = Math.max(1, Math.round(imgW / (w.aspect || 1))); }
-        if(w.widthFrac){
-          const imgW2 = Math.max(1, Math.round(w.widthFrac * availImg));
-          const imgH2 = Math.max(1, Math.round(imgW2 / (w.aspect || 1)));
-          if(imgH2 < imgH){ imgH = imgH2; imgW = imgW2; }
+        const maxImgH = Math.max(1, Math.round(textH * TD_IMG_MAX_HEIGHT_FRAC));
+        if(imgH > maxImgH){
+          imgH = maxImgH;
+          imgW = Math.max(1, Math.round(imgH * (w.aspect || 1)));
+          if(imgW > availImg){ imgW = availImg; imgH = Math.max(1, Math.round(imgW / (w.aspect || 1))); }
         }
         if(lineRuns.length) flushLine();
         // La imagen no consume caracteres (no tiene texto propio) — su
