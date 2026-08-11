@@ -1255,61 +1255,6 @@ async function _tdRunDiag(){
       });
       if(!_imgCountDiag) L('  (ninguna imagen encontrada en los bloques)');
 
-      // NUEVO — comparación DIRECTA del recuento de caracteres: el que da
-      // _tdBlocksFlatText (usado por _tdLayoutPages para pageStartChars) vs.
-      // el que da recorrer el DOM vivo directamente con el MISMO filtro que
-      // usa _tdCharOffsetToPoint (_tdIsInternalTrixTextNode) para
-      // encontrarle sitio en pantalla a cada offset — si estos dos NUNCA
-      // deberían diferir (son, en teoría, el mismo criterio de recuento
-      // aplicado dos veces), pero si alguna imagen antigua (insertada con
-      // una versión anterior de la app) dejó una estructura HTML que uno de
-      // los dos criterios cuenta distinto del otro, aquí debe verse
-      // exactamente en qué imagen empieza el desajuste — recorriendo el DOM
-      // nodo a nodo y comparando, tras CADA nodo, contra dónde debería
-      // estar según flatTextDiag en ese mismo punto.
-      L('');
-      L('── Recuento DOM directo vs flatText (deben coincidir SIEMPRE) ──');
-      try{
-        const walkerCmp = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, {
-          acceptNode: n => _tdIsInternalTrixTextNode(n, editorEl) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
-        });
-        let domCount = 0, nodeCmp, firstDivergence = null, nodeIdx = 0;
-        while(nodeCmp = walkerCmp.nextNode()){
-          const len = nodeCmp.textContent.length;
-          // Comparar el FRAGMENTO que este nodo aporta contra lo que
-          // flatTextDiag tiene en esa misma franja [domCount, domCount+len).
-          const expected = flatTextDiag.slice(domCount, domCount + len);
-          const got = nodeCmp.textContent;
-          if(expected !== got && firstDivergence === null){
-            firstDivergence = {
-              nodeIdx, domCount, len,
-              got: JSON.stringify(got.slice(0, 40)),
-              expected: JSON.stringify(expected.slice(0, 40)),
-              parentTag: nodeCmp.parentElement ? nodeCmp.parentElement.tagName : '?',
-              parentClass: nodeCmp.parentElement ? nodeCmp.parentElement.className : '',
-              grandParentTag: nodeCmp.parentElement && nodeCmp.parentElement.parentElement ? nodeCmp.parentElement.parentElement.tagName : '?',
-              grandParentClass: nodeCmp.parentElement && nodeCmp.parentElement.parentElement ? nodeCmp.parentElement.parentElement.className : ''
-            };
-          }
-          domCount += len;
-          nodeIdx++;
-        }
-        L('  longitud según flatText (_tdBlocksFlatText): ' + flatTextDiag.length);
-        L('  longitud recorriendo el DOM directamente (mismo filtro que _tdCharOffsetToPoint): ' + domCount);
-        if(domCount === flatTextDiag.length && !firstDivergence){
-          L('  ✓ Coinciden exactamente — el problema no está en un desajuste de recuento global.');
-        } else {
-          L('  ⚠️⚠️⚠️ NO COINCIDEN (diferencia: ' + (domCount - flatTextDiag.length) + ' caracteres)');
-          if(firstDivergence){
-            L('  Primer nodo del DOM donde diverge (nº ' + firstDivergence.nodeIdx + ', empieza en offset ' + firstDivergence.domCount + ' según el recuento del DOM):');
-            L('    contenido real del nodo: ' + firstDivergence.got);
-            L('    lo que flatText tiene ahí: ' + firstDivergence.expected);
-            L('    elemento padre: <' + firstDivergence.parentTag + ' class="' + firstDivergence.parentClass + '">');
-            L('    elemento abuelo: <' + firstDivergence.grandParentTag + ' class="' + firstDivergence.grandParentClass + '">');
-          }
-        }
-      }catch(e){ L('  Error en la comparación: ' + e.message + '\n' + e.stack); }
-
       const innerRectDiag = innerDiag.getBoundingClientRect();
       L('innerRect (tdPage): ' + JSON.stringify({left: innerRectDiag.left, top: innerRectDiag.top, width: innerRectDiag.width}));
 
@@ -1355,36 +1300,6 @@ async function _tdRunDiag(){
             }
           }catch(e){ L('  Error construyendo el tramo: ' + e.message); }
         }
-        // NUEVO — comprobación directa de nodos de texto del DOM real
-        // alrededor de este punto: si la MISMA palabra visual está partida
-        // en dos (o más) nodos de texto DISTINTOS sin ningún espacio entre
-        // ellos (p. ej. restos de una corrección/autocorrección), el
-        // tokenizador (_tdParseBlocks, que separa "palabras" run por run —
-        // ver el bucle de palabras en _tdLayoutPages) las trataría como dos
-        // palabras independientes, permitiendo un salto de línea justo
-        // ENTRE ellas — la palabra se vería partida en la vista previa
-        // aunque el cálculo del offset en sí sea correcto. Aquí se listan
-        // todos los nodos de texto del editor cuyo contenido cae dentro de
-        // una ventana de 40 caracteres alrededor de c, con su longitud y un
-        // fragmento — si aparecen dos nodos consecutivos que juntos forman
-        // una palabra sin espacio entre ellos, esa es la causa.
-        try{
-          const walkerDiag = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
-          let nodeDiag, idxDiag = 0, foundAny = false;
-          const winStart = Math.max(0, c - 20), winEnd = c + 20;
-          while(nodeDiag = walkerDiag.nextNode()){
-            const len = nodeDiag.textContent.length;
-            if(idxDiag + len > winStart && idxDiag < winEnd){
-              foundAny = true;
-              const parentTag = nodeDiag.parentElement ? nodeDiag.parentElement.tagName : '?';
-              const parentClass = nodeDiag.parentElement ? nodeDiag.parentElement.className : '';
-              L(`  nodo DOM en [${idxDiag},${idxDiag+len}): ${JSON.stringify(nodeDiag.textContent)} (padre=<${parentTag} class="${parentClass}">)`);
-            }
-            idxDiag += len;
-            if(idxDiag >= winEnd) break;
-          }
-          if(!foundAny) L('  (ningún nodo de texto encontrado en esa ventana — raro, revisar)');
-        }catch(e){ L('  Error listando nodos DOM: ' + e.message); }
         // Punto de referencia CONOCIDO: el primer carácter del documento
         // (offset 0) — para comparar si SU rectángulo tiene sentido (cerca
         // del margen superior izquierdo de innerRect), y así saber si el
@@ -3312,34 +3227,14 @@ function _tdParseBlocks(html){
             // MÁS PEQUEÑA de las dos estimas (heightEm y esta), nunca la
             // mayor — ninguna imagen puede acabar más grande de lo que
             // sugiere CUALQUIERA de las dos señales.
-            //
-            // BUG REAL SEPARADO (localizado tras varias rondas de
-            // diagnóstico con Alberto): _tdParseBlocks también se llama con
-            // el editor de textos CERRADO — p. ej. "Exceptuar en esta hoja"
-            // se dispara desde el editor GENERAL, sin que #tdPage esté
-            // montado/visible en ese momento. Con #tdPage oculto,
-            // clientWidth da 0, colW se queda en el mínimo (1), y
-            // widthFrac sale SIEMPRE exactamente 1 — la señal queda
-            // completamente anulada justo en ese caso, sin avisar, y todo
-            // vuelve a depender solo de heightEm (el problema que este
-            // mismo bloque existe para evitar). Umbral 50px: cualquier
-            // valor por debajo es claramente "no renderizado", no un
-            // ancho real de columna estrecha.
             const pageColEl = document.getElementById('tdPage');
             let widthFrac = 1;
             try{
-              const measurable = pageColEl && pageColEl.clientWidth > 50;
-              if(measurable){
+              if(pageColEl){
                 const cs = getComputedStyle(pageColEl);
                 const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
                 const colW = Math.max(1, pageColEl.clientWidth - padX);
                 widthFrac = Math.min(1, natW / colW);
-              } else {
-                // #tdPage no medible ahora mismo: usar el ancho máximo real
-                // de esa columna tal como la fija editor.css (.td-page,
-                // width: min(100%, 760px); padding: 28px 24px) — 760-48=712
-                // — en vez de dejar que widthFrac se rompa en silencio.
-                widthFrac = Math.min(1, natW / 712);
               }
             }catch(_e){}
             runs.push({ isImage: true, src: imgEl.getAttribute('src'), heightEm, aspect, widthFrac });
@@ -3594,35 +3489,6 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   let curLines = [];
   let curY = 0; // relativo al margen superior (0..textH)
   let charsSoFar = 0;
-  // Offset donde empieza la línea que se está formando AHORA MISMO en
-  // lineRuns — se actualiza en el momento exacto en que lineRuns pasa de
-  // vacía a tener su primera palabra (ver el bucle de palabras, más abajo).
-  // Es la fuente correcta para "dónde empieza la hoja nueva" en un salto
-  // reactivo: a diferencia de restarle a endChars la longitud de las runs
-  // ya formadas de "entry" (que falla cuando flushLine ha recortado algún
-  // espacio final de esas runs — ese espacio sí se contó en charsSoFar en
-  // su momento, pero ya no está en el texto de la línea, así que la resta
-  // se quedaba corta en esa misma cantidad — comprobado con un caso real:
-  // aparecía a mitad de la primera palabra de la hoja nueva), este valor
-  // no necesita reconstruirse a partir de nada: es literalmente el offset
-  // real en el instante en que la línea arrancó.
-  //
-  // INTENTO ABANDONADO (sumar el texto de pages/curLines ya construidas en
-  // vez de llevar este contador): parecía más robusto al no depender de
-  // ningún contador aparte, pero falla por la razón opuesta — pages/
-  // curLines contienen las líneas YA RECORTADAS para mostrarse (sin los
-  // espacios finales que flushLine quita), mientras que pageStartChars
-  // tiene que dar offsets sobre flatText, el texto ORIGINAL SIN recortar
-  // (ver _tdBlocksFlatText) — cada línea ajustada que perdió su espacio
-  // final desincroniza la suma en 1 carácter más, acumulándose según
-  // avanza el documento. Comprobado con pruebas reales: bastantes más
-  // saltos a mitad de palabra que antes, no menos. charsSoFar SÍ sigue
-  // fielmente los offsets de flatText en todo momento (se incrementa por
-  // cada palabra/espacio tokenizado, recortado después o no) — el único
-  // problema real era capturar su valor en el momento exacto correcto,
-  // que es justo lo que hace esta variable.
-  let curLineStartOffset = 0;
-
 
   // Efectos de cortar página: extraído para poder dispararse tanto de forma
   // REACTIVA (dentro de pushLine, cuando una línea YA decidida no cabe
@@ -3630,7 +3496,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   // (antes de decidir las palabras de la línea siguiente — ver más abajo en
   // el bucle de palabras, arreglo del bug "primera línea de la hoja
   // vertical se sale de la hoja").
-  function _tdDoBreak(reason, nextPreview, newPageStartOffset){
+  function _tdDoBreak(reason, nextPreview){
     // Traza de cada salto real (window._tdBreakLog) — pedido para localizar
     // el bug "párrafo duplicado entre hojas" con el contenido real de
     // Alberto, tras varios intentos fallidos de reproducirlo con casos
@@ -3646,8 +3512,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         charsSoFar, curY: Math.round(curY), textH: Math.round(textH), frameIdx,
         nLineasHojaCerrada: curLines.length,
         ultimaLineaHojaCerrada: lastLine ? (lastLine.runs||[]).map(r=>r.text||'').join('') : (lastLine && lastLine.kind==='image' ? '(imagen)' : null),
-        siguienteContenido: nextPreview || null,
-        newPageStartOffset
+        siguienteContenido: nextPreview || null
       });
     }
     pages.push(curLines);
@@ -3657,10 +3522,10 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     frameIdx++;
     loadFrame();
     const endChars = charsSoFar;
-    // Ver el comentario largo de curLineStartOffset más arriba (razón
-    // completa). newPageStartOffset, cuando se pasa, viene ya calculado
-    // así por el punto de llamada — nunca reconstruido aquí.
-    pageStartChars.push(newPageStartOffset != null ? newPageStartOffset : (lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0));
+    // Ver comentario largo más abajo (dentro de pushLine, donde vivía este
+    // código) sobre por qué se usa el último lineStartChars y no charsSoFar
+    // directamente.
+    pageStartChars.push(lineStartChars.length ? lineStartChars[lineStartChars.length - 1] : 0);
     while(forcedIdx < forced.length && forced[forcedIdx] <= endChars) forcedIdx++;
   }
 
@@ -3686,13 +3551,16 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       breakReason = 'reactivo:forzado';
     }
     if(shouldBreak){
-      // newPageStartOffset: curLineStartOffset, capturado en el instante
-      // exacto en que "entry" arrancó como línea nueva (ver el bucle de
-      // palabras y su comentario largo, y el de curLineStartOffset arriba)
-      // — sigue fielmente los offsets de flatText en todo momento, a
-      // diferencia de intentar reconstruirlo a partir del texto YA
-      // recortado de las líneas.
-      _tdDoBreak(breakReason, (entry.runs||[]).map(r=>r.text||'').join('') || (entry.kind==='image' ? '(imagen)' : null), curLineStartOffset);
+      // OJO: charsSoFar en este punto YA incluye los caracteres de "entry"
+      // (la línea que se está a punto de añadir a la página NUEVA) — sus
+      // palabras se contaron en charsSoFar ANTES de que overflow disparara
+      // este pushLine (ver el bucle de palabras, más abajo en la función).
+      // Por eso NO sirve como "aquí empieza la página nueva": se usa en su
+      // lugar el último valor ya registrado en lineStartChars — el final de
+      // la línea ANTERIOR, que es exactamente donde arranca esta página —
+      // sin él, el punto de corte quedaba una línea entera de más tarde de
+      // lo real, el bug reportado ("las rectas un renglón por debajo").
+      _tdDoBreak(breakReason, (entry.runs||[]).map(r=>r.text||'').join('') || (entry.kind==='image' ? '(imagen)' : null));
     }
     const baseline = curY + (entry.kind === 'image' ? 0 : entry.height * 0.78);
     const lineObj = {
@@ -3844,12 +3712,6 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
           if(imgH2 < imgH){ imgH = imgH2; imgW = imgW2; }
         }
         if(lineRuns.length) flushLine();
-        // La imagen no consume caracteres (no tiene texto propio) — su
-        // punto de partida real es charsSoFar tal cual está ahora mismo,
-        // sin cambios. Necesario para que un salto reactivo que la afecte
-        // directamente a ELLA (no al texto que la precede) registre el
-        // offset correcto — ver curLineStartOffset arriba.
-        curLineStartOffset = charsSoFar;
         // Las imágenes siempre centradas, sea cual sea la alineación del
         // párrafo (izquierda/derecha/justificado/centrado) — pedido
         // explícito de Alberto: "que las imágenes siempre estén centradas
@@ -3876,11 +3738,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // líneas con tamaños de letra dispares que la estimación no acierte.
       if(lineRuns.length === 0 && curLines.length > 0){
         const estHeight = baseFontSize * lhMult;
-        // Aquí charsSoFar SÍ es directamente correcto como inicio de la
-        // hoja nueva: todavía no se ha sumado la palabra w (eso pasa más
-        // abajo, tras esta comprobación) — no hace falta restar nada, a
-        // diferencia del salto reactivo de pushLine.
-        if(curY + estHeight > textH) _tdDoBreak('anticipado', w.text || null, charsSoFar);
+        if(curY + estHeight > textH) _tdDoBreak('anticipado', w.text || null);
       }
       ctx.font = _tdFontStr(w.fontSize, w.bold, w.italic, w.mono, w.fontFamily);
       const width = ctx.measureText(w.text).width;
@@ -3888,13 +3746,6 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       if(lineWidth + width > avail && lineRuns.length > 0 && !w.isSpace){
         flushLine();
       }
-      // Aquí, justo antes de añadir la palabra — tanto si lineRuns ya
-      // estaba vacía al entrar en esta iteración como si acaba de vaciarla
-      // flushLine() dos líneas más arriba — es el momento exacto en que
-      // arranca una línea nueva. Ver curLineStartOffset arriba: es la
-      // fuente correcta para el salto reactivo de pushLine, sin tener que
-      // reconstruirlo después.
-      if(lineRuns.length === 0) curLineStartOffset = charsSoFar;
       lineRuns.push({
         text:w.text, bold:w.bold, italic:w.italic, strike:w.strike, mono:w.mono,
         fontSize:w.fontSize, fontFamily:w.fontFamily, isSpace:w.isSpace, width, x:0
