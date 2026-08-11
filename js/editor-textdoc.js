@@ -3312,14 +3312,34 @@ function _tdParseBlocks(html){
             // MÁS PEQUEÑA de las dos estimas (heightEm y esta), nunca la
             // mayor — ninguna imagen puede acabar más grande de lo que
             // sugiere CUALQUIERA de las dos señales.
+            //
+            // BUG REAL SEPARADO (localizado tras varias rondas de
+            // diagnóstico con Alberto): _tdParseBlocks también se llama con
+            // el editor de textos CERRADO — p. ej. "Exceptuar en esta hoja"
+            // se dispara desde el editor GENERAL, sin que #tdPage esté
+            // montado/visible en ese momento. Con #tdPage oculto,
+            // clientWidth da 0, colW se queda en el mínimo (1), y
+            // widthFrac sale SIEMPRE exactamente 1 — la señal queda
+            // completamente anulada justo en ese caso, sin avisar, y todo
+            // vuelve a depender solo de heightEm (el problema que este
+            // mismo bloque existe para evitar). Umbral 50px: cualquier
+            // valor por debajo es claramente "no renderizado", no un
+            // ancho real de columna estrecha.
             const pageColEl = document.getElementById('tdPage');
             let widthFrac = 1;
             try{
-              if(pageColEl){
+              const measurable = pageColEl && pageColEl.clientWidth > 50;
+              if(measurable){
                 const cs = getComputedStyle(pageColEl);
                 const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
                 const colW = Math.max(1, pageColEl.clientWidth - padX);
                 widthFrac = Math.min(1, natW / colW);
+              } else {
+                // #tdPage no medible ahora mismo: usar el ancho máximo real
+                // de esa columna tal como la fija editor.css (.td-page,
+                // width: min(100%, 760px); padding: 28px 24px) — 760-48=712
+                // — en vez de dejar que widthFrac se rompa en silencio.
+                widthFrac = Math.min(1, natW / 712);
               }
             }catch(_e){}
             runs.push({ isImage: true, src: imgEl.getAttribute('src'), heightEm, aspect, widthFrac });
