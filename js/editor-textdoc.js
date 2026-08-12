@@ -1030,6 +1030,18 @@ function _tdLogApply(kind, detail){
 async function _tdRunDiag(){
   const lines = [];
   const L = s => lines.push(s);
+  // Forzar un recálculo fresco de la paginación/vista previa ANTES de leer
+  // nada del DOM — sin esto, si se pulsa 🩺 justo después de escribir (antes
+  // de que el recálculo normal, con una pequeña demora, llegue a disparar),
+  // las líneas .td-pagebreak-line que se leen más abajo pueden ser de ANTES
+  // del último cambio, dando la falsa impresión de que el salto de página
+  // "va con retraso" cuando en realidad solo hacía falta esperar un
+  // instante. _tdRecomputeViewPagination no necesita argumentos (lee todo
+  // del DOM vivo por su cuenta) y es seguro llamarla aunque el editor de
+  // textos esté vacío o cerrado (comprueba sus propios elementos antes de
+  // hacer nada).
+  try{ if(typeof _tdRecomputeViewPagination === 'function') _tdRecomputeViewPagination(); }catch(_e){}
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   L('══ DIAGNÓSTICO EDITOR DE TEXTOS — acentos/IME/imágenes ══');
   L(new Date().toLocaleString());
 
@@ -1359,8 +1371,21 @@ async function _tdRunDiag(){
         });
         const _tdSummarizeLines = lns => (lns || []).map(l => l.kind === 'image'
           ? `[IMG ${l.imgW}x${l.imgH}]`
-          : JSON.stringify((l.runs || []).map(r => r.text || '').join('').slice(0, 50)));
+          : JSON.stringify((l.runs || []).map(r => r.text || '').join('').slice(0, 150)));
         L('Nº de hojas YA aplicadas: ' + _tdRealPages.length + '   Nº de hojas que predice la vista previa: ' + (pagesDiag ? pagesDiag.length : 0));
+        // NUEVO — texto COMPLETO reconstruido de todas las hojas YA aplicadas
+        // (concatenando el texto real de richLines, sin el límite de 60
+        // caracteres de _tdPlainSummary) frente a la longitud del HTML que
+        // hay cargado AHORA MISMO en el editor (flatTextDiag) — una
+        // diferencia grande de longitud aquí, sin haber escrito nada en esta
+        // sesión, apunta a que sourceHTML (lo que se cargó al reabrir) y
+        // richLines (lo que de verdad hay dibujado en el lienzo) vienen de
+        // dos versiones distintas del texto, no a un problema de fórmula.
+        const _tdRealFullText = _tdRealPages.map(rp => (rp.layer.richLines || [])
+          .map(l => l.kind === 'image' ? '' : (l.runs || []).map(r => r.text || '').join(''))
+          .join('')).join('');
+        L('Longitud del texto reconstruido de TODAS las hojas ya aplicadas: ' + _tdRealFullText.length + ' caracteres');
+        L('Longitud del texto plano cargado ahora mismo (flatTextDiag): ' + flatTextDiag.length + ' caracteres' + (flatTextDiag.length !== _tdRealFullText.length ? '  ⚠️⚠️⚠️ DISTINTA — sourceHTML y lo realmente aplicado no son el mismo texto' : '  ✓ misma longitud'));
         const _tdMaxCompare = Math.max(_tdRealPages.length, pagesDiag ? pagesDiag.length : 0);
         for(let i = 0; i < _tdMaxCompare; i++){
           const real = _tdRealPages[i];
