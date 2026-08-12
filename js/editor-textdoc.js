@@ -3987,7 +3987,27 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     }
 
     words.forEach(w => {
-      if(w.break){ flushLine(); return; }
+      if(w.break){
+        flushLine();
+        // BUG CORREGIDO (reportado por Alberto: el salto de página del
+        // editor de textos aparece cada vez más lejos del contenido real
+        // a medida que el documento crece — confirmado con ejecución real
+        // que el desvío es AUMULATIVO, nunca se corrige solo). Una línea
+        // en BLANCO (dos <br> seguidos sin ninguna palabra real entre
+        // ellos — el final habitual de cada párrafo, ver
+        // _tdSplitParagraphAroundAttachment) se maquetaba igual que
+        // cualquier otra línea (ver flushLine), pero curLineStartOffset —
+        // el carácter que _tdDoBreak usa como inicio de la hoja nueva SI
+        // esa línea concreta es la que no cabe — solo se actualizaba al
+        // procesar una palabra de texto real o una imagen, nunca al
+        // procesar un <br>. Si la línea en blanco resultaba ser la que
+        // desbordaba, el salto quedaba registrado en el carácter donde
+        // empezó la ÚLTIMA LÍNEA CON TEXTO anterior, no en el suyo propio
+        // — y como esa desviación nunca se corregía sola en los saltos
+        // siguientes, se iba arrastrando y creciendo página tras página.
+        curLineStartOffset = charsSoFar;
+        return;
+      }
       if(w.isImage){
         // Corta la línea de texto pendiente (si la había), inserta la
         // imagen como línea atómica propia (mismo pushLine que usan las
