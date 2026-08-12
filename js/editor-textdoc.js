@@ -370,9 +370,21 @@ function edCloseTextDoc(fromPopstate){
     return;
   }
   const finishClose = () => {
+    // Se captura ANTES de limpiarlo dos líneas más abajo: si este cierre
+    // corresponde a reeditar un texto YA aplicado al lienzo (llegado aquí
+    // desde el botón "Editar texto" del panel de propiedades), la cámara
+    // se quedó en el encuadre de zoom que puso ese panel al abrirse (doble
+    // tap) — el botón OK de ese panel la reajusta con _edResetCameraToFit,
+    // pero esta otra vía (propiedades -> editor de textos -> Aplicar/cerrar)
+    // no pasaba por ahí y el lienzo se quedaba pequeño (bug reportado por
+    // Alberto). Al crear un texto nuevo desde el "+" (_tdEditingFlowId
+    // nunca llegó a ponerse) no se toca la cámara — ahí no hubo zoom previo
+    // que deshacer, y forzarlo pisaría un zoom manual del usuario sin motivo.
+    const _tdWasReediting = !!_tdEditingFlowId;
     if(shell) shell.style.display = 'none';
     document.getElementById('editorShell')?.classList.remove('td-open');
     _tdEditingFlowId = null;
+    if(_tdWasReediting && typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
     const applyBtn = document.getElementById('tdApplyBtn');
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
     // Si se cierra por la X o por "Aplicar" (no por el botón atrás), hay que
