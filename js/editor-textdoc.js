@@ -1249,25 +1249,45 @@ async function _tdRunDiag(){
       // REAL que de verdad se reparte en cada hoja (lo que se dibuja en el
       // lienzo). Si el carácter de flatText en pscDiag[i] no corresponde de
       // verdad al principio de pagesDiag[i], la línea punteada se dibuja en
-      // un sitio que no es el salto real — el CONTENIDO de cada hoja seguiría
-      // siendo correcto (viene de pages, no de pageStartChars), pero la
-      // línea se vería desplazada. Comparación por substring (no por índice
-      // exacto): pageStartChars es sobre flatText SIN recortar y pages SÍ
-      // recorta espacios de línea — 1-2 espacios de diferencia es normal, lo
-      // que NO es normal es que el texto no tenga nada que ver.
+      // un sitio que no es el salto real.
+      //
+      // ANTES esta comprobación usaba una ventana de tolerancia ancha
+      // (±80 caracteres) para decidir "coincide" — bug propio detectado
+      // gracias a Alberto: dentro de esa ventana tan ancha, las 3 primeras
+      // palabras de la hoja real casi siempre APARECEN en algún punto
+      // cercano aunque pageStartChars esté desviado varias decenas de
+      // caracteres — dando "✓ coincide" en casos que en realidad NO
+      // coincidían, ocultando el desvío real. Ahora se busca la posición
+      // EXACTA donde aparecen esas primeras palabras (sin límite de
+      // ventana) y se informa la desviación real en caracteres — sin
+      // margen oculto de ningún tipo.
       L('');
-      L('── Verificación cruzada: pageStartChars vs primera línea REAL de cada hoja ──');
+      L('── Verificación cruzada: pageStartChars vs primera línea REAL de cada hoja (búsqueda EXACTA, sin margen de tolerancia) ──');
       for(let i = 1; i < pagesDiag.length; i++){
         const c = pscDiag[i];
         const primeraLineaReal = pagesDiag[i][0];
+        if(primeraLineaReal && primeraLineaReal.kind === 'image'){
+          L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → primera línea es una imagen, se posiciona por el elemento DOM real, no por este número — se omite.`);
+          continue;
+        }
         const primeraLineaTexto = primeraLineaReal
-          ? (primeraLineaReal.kind === 'image' ? '(imagen)' : (primeraLineaReal.runs || []).map(r => r.text || '').join('').trim().slice(0, 40))
-          : '(hoja vacía)';
-        const flatTextAqui = flatTextDiag.slice(Math.max(0, c - 5), c + 40);
-        const primerasPalabras = primeraLineaTexto.split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
-        const encontradoCerca = primerasPalabras && flatTextDiag.slice(Math.max(0, c - 30), c + 80).includes(primerasPalabras);
-        L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → flatText ahí: ${JSON.stringify(flatTextAqui)}`);
-        L(`    primera línea REAL de pages[${i}]: ${JSON.stringify(primeraLineaTexto)}` + (primeraLineaReal && primeraLineaReal.kind === 'image' ? '' : (encontradoCerca ? '  ✓ coincide' : '  ⚠️⚠️⚠️ NO SE ENCUENTRA cerca de c — pageStartChars desincronizado de pages')));
+          ? (primeraLineaReal.runs || []).map(r => r.text || '').join('').trim()
+          : '';
+        const primerasPalabras = primeraLineaTexto.split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+        if(!primerasPalabras){
+          L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → primera línea real vacía, no hay frase que buscar — se omite.`);
+          continue;
+        }
+        const posicionReal = flatTextDiag.indexOf(primerasPalabras);
+        const desvio = posicionReal === -1 ? null : (posicionReal - c);
+        L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) — buscando "${primerasPalabras}"`);
+        if(posicionReal === -1){
+          L(`    ⚠️⚠️⚠️ NO SE ENCUENTRA en todo el texto — algo más raro está pasando aquí.`);
+        } else if(desvio === 0){
+          L(`    ✓ Coincide EXACTO (aparece justo en c=${c}).`);
+        } else {
+          L(`    ⚠️⚠️⚠️ Aparece de verdad en el carácter ${posicionReal}, DESVIADO ${desvio > 0 ? '+' : ''}${desvio} caracteres respecto a pageStartChars[${i}]=${c}.`);
+        }
       }
 
       // NUEVO — Estado de persistencia de tamaño/tipo de letra "de todo el
