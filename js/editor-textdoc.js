@@ -2740,6 +2740,7 @@ function _tdWireImageResize(){
       function onUp(){
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
         const finalW = Math.round(parseFloat(_rzImg.style.width) || startW);
         const finalH = Math.round(finalW / _rzAspect);
         _rzImg.style.width = ''; _rzImg.style.height = ''; // Trix reaplica vía atributos width/height reales
@@ -2748,6 +2749,7 @@ function _tdWireImageResize(){
       }
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     });
   });
 
