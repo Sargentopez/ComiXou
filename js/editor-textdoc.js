@@ -630,7 +630,7 @@ function _tdInitOnce(){
     // tamaño/tipo activo en ese punto — así nunca pisa una selección local
     // con un tamaño distinto a propósito (p.ej. una palabra puesta más
     // grande a mano).
-    editorEl.addEventListener('trix-selection-change', () => {
+    function _tdReinforceDocFont(){
       const editor = editorEl.editor;
       if(!editor) return;
       const range = editor.getSelectedRange();
@@ -643,6 +643,21 @@ function _tdInitOnce(){
       if(_tdDocFontFamily && !cur.fontFamily){
         try{ editor.activateAttribute('fontFamily', _tdDocFontFamily); }catch(_e){}
       }
+    }
+    editorEl.addEventListener('trix-selection-change', _tdReinforceDocFont);
+    // BUG REAL encontrado con Trix real (no una suposición): mover el cursor
+    // solo con teclado (Home/flechas/clic sin escribir después) NO dispara
+    // 'trix-selection-change' — ese evento propio de Trix solo se observó
+    // disparándose junto con la propia inserción de texto, un paso tarde
+    // (el primer carácter escrito en un punto sin atributo activo se
+    // quedaba sin el tamaño/tipo elegido; el siguiente ya lo heredaba bien
+    // del refuerzo anterior). El evento NATIVO 'selectionchange' del
+    // documento sí se dispara de inmediato tras Home/flechas, con
+    // editor.getSelectedRange() ya actualizado en ese momento — así el
+    // refuerzo llega ANTES de que se escriba el primer carácter, no después.
+    document.addEventListener('selectionchange', () => {
+      if(document.activeElement !== editorEl) return;
+      _tdReinforceDocFont();
     });
   }
   // Desplazamiento continuo: scroll nativo de #tdPageArea (rueda del ratón
