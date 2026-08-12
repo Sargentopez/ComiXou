@@ -1215,6 +1215,78 @@ async function _tdRunDiag(){
       );
       L('Nº de hojas que PREDICE la vista previa ahora mismo (pageStartChars.length): ' + pscDiag.length);
       L('pageStartChars: ' + JSON.stringify(pscDiag));
+      // NUEVO — pageStartChars[i] DEBE avanzar siempre respecto al anterior.
+      // Confirmado con ejecución real (Playwright + funciones reales del
+      // proyecto): cuando varias imágenes seguidas no caben TODAS juntas en
+      // la misma hoja (alguna se va a la siguiente), como no consumen
+      // caracteres de texto, dos saltos de hoja DISTINTOS pueden terminar
+      // apuntando al mismo carácter — normalmente inofensivo si ambos lados
+      // de esos saltos concretos son imágenes (_tdImagesAtPageEdges usa la
+      // imagen real del DOM, no este número), pero si CUALQUIER cosa aguas
+      // abajo (arrastrar un salto a mano, u otra lógica) busca por posición
+      // en este array esperando valores únicos, un duplicado la confundiría.
+      for(let i = 1; i < pscDiag.length; i++){
+        if(pscDiag[i] === pscDiag[i - 1]){
+          L(`  ⚠️⚠️⚠️ pageStartChars[${i}] === pageStartChars[${i - 1}] (ambos ${pscDiag[i]}) — dos saltos de hoja distintos apuntan al mismo carácter, probablemente por varias imágenes/líneas en blanco seguidas sin texto real entre ellas.`);
+        }
+      }
+
+      // NUEVO — Verificación cruzada pageStartChars vs pages: pageStartChars[i]
+      // es el offset (sobre flatText) que se usa para dibujar la línea de
+      // salto visual (ver _tdComputeSplitGeometry); pages[i] es el contenido
+      // REAL que de verdad se reparte en cada hoja (lo que se dibuja en el
+      // lienzo). Si el carácter de flatText en pscDiag[i] no corresponde de
+      // verdad al principio de pagesDiag[i], la línea punteada se dibuja en
+      // un sitio que no es el salto real — el CONTENIDO de cada hoja seguiría
+      // siendo correcto (viene de pages, no de pageStartChars), pero la
+      // línea se vería desplazada. Comparación por substring (no por índice
+      // exacto): pageStartChars es sobre flatText SIN recortar y pages SÍ
+      // recorta espacios de línea — 1-2 espacios de diferencia es normal, lo
+      // que NO es normal es que el texto no tenga nada que ver.
+      L('');
+      L('── Verificación cruzada: pageStartChars vs primera línea REAL de cada hoja ──');
+      for(let i = 1; i < pagesDiag.length; i++){
+        const c = pscDiag[i];
+        const primeraLineaReal = pagesDiag[i][0];
+        const primeraLineaTexto = primeraLineaReal
+          ? (primeraLineaReal.kind === 'image' ? '(imagen)' : (primeraLineaReal.runs || []).map(r => r.text || '').join('').trim().slice(0, 40))
+          : '(hoja vacía)';
+        const flatTextAqui = flatTextDiag.slice(Math.max(0, c - 5), c + 40);
+        const primerasPalabras = primeraLineaTexto.split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        const encontradoCerca = primerasPalabras && flatTextDiag.slice(Math.max(0, c - 30), c + 80).includes(primerasPalabras);
+        L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → flatText ahí: ${JSON.stringify(flatTextAqui)}`);
+        L(`    primera línea REAL de pages[${i}]: ${JSON.stringify(primeraLineaTexto)}` + (primeraLineaReal && primeraLineaReal.kind === 'image' ? '' : (encontradoCerca ? '  ✓ coincide' : '  ⚠️⚠️⚠️ NO SE ENCUENTRA cerca de c — pageStartChars desincronizado de pages')));
+      }
+
+      // NUEVO — Estado de persistencia de tamaño/tipo de letra "de todo el
+      // documento" (_tdDocFontSize/_tdDocFontFamily, ver _tdDetectUniformFont
+      // y _tdApplyScoped). Si el valor detectado AHORA no coincide con lo que
+      // Alberto eligió, o si el desglose de abajo muestra más de un valor
+      // real cuando debería haber uno solo, aquí se ve por qué.
+      L('');
+      L('── Tamaño/tipo de letra "de todo el documento" ──');
+      L('_tdDocFontSize (variable en memoria ahora mismo): ' + _tdDocFontSize);
+      L('_tdDocFontFamily (variable en memoria ahora mismo): ' + _tdDocFontFamily);
+      const _detectedNowDiag = _tdDetectUniformFont(htmlDiag);
+      L('_tdDetectUniformFont(htmlDiag) → fontSize: ' + _detectedNowDiag.fontSize + '  fontFamily: ' + _detectedNowDiag.fontFamily);
+      const _tmpDiagFs = document.createElement('div');
+      _tmpDiagFs.innerHTML = htmlDiag;
+      const _sizesFoundDiag = {}, _familiesFoundDiag = {};
+      const _walkerDiagFs = document.createTreeWalker(_tmpDiagFs, NodeFilter.SHOW_TEXT);
+      let _nodeDiagFs;
+      while((_nodeDiagFs = _walkerDiagFs.nextNode())){
+        if(!_nodeDiagFs.textContent || !_nodeDiagFs.textContent.trim()) continue;
+        let el = _nodeDiagFs.parentElement, curFs = '(sin fontSize propio → tamaño por defecto)', curFf = '(sin fontFamily propio → tipo por defecto)';
+        while(el && el !== _tmpDiagFs){
+          if(curFs.startsWith('(') && el.style && el.style.fontSize) curFs = el.style.fontSize;
+          if(curFf.startsWith('(') && el.style && el.style.fontFamily) curFf = el.style.fontFamily;
+          el = el.parentElement;
+        }
+        _sizesFoundDiag[curFs] = (_sizesFoundDiag[curFs] || 0) + _nodeDiagFs.textContent.length;
+        _familiesFoundDiag[curFf] = (_familiesFoundDiag[curFf] || 0) + _nodeDiagFs.textContent.length;
+      }
+      L('Desglose real de fontSize (nº de caracteres por valor encontrado): ' + JSON.stringify(_sizesFoundDiag));
+      L('Desglose real de fontFamily (nº de caracteres por valor encontrado): ' + JSON.stringify(_familiesFoundDiag));
 
       // Tamaño de letra base usado para las imágenes (heightEm × este valor
       // = alto real en el lienzo, ver _tdLayoutPages) y el de la vista en
