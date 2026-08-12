@@ -35,7 +35,7 @@
    Android: OPFS silencioso, sin petición de permisos.
    ============================================================ */
 
-const ComicStore = (() => {
+const WorkStore = (() => {
   const KEY  = 'cs_comics';
   const CH   = 'cx_comics_change';
 
@@ -91,7 +91,7 @@ const ComicStore = (() => {
     } catch(e) {
       if (e.name === 'QuotaExceededError' || e.code === 22) {
         window.dispatchEvent(new CustomEvent('cx:storage:quota', { detail: { size: JSON.stringify(list).length } }));
-        console.error('[ComicStore] localStorage lleno:', e);
+        console.error('[WorkStore] localStorage lleno:', e);
       } else { throw e; }
     }
   }
@@ -143,7 +143,7 @@ const ComicStore = (() => {
 
     // Guardar editorData en OPFS — devolver Promise para que el llamador pueda hacer await
     const _opfsPromise = (comic.editorData || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl))
-      ? _opfsWrite(comic.id, comic).catch(e => console.warn('[ComicStore] OPFS write:', e))
+      ? _opfsWrite(comic.id, comic).catch(e => console.warn('[WorkStore] OPFS write:', e))
       : Promise.resolve();
 
     // Backup en carpeta visible PC (async, no bloquea)
@@ -240,7 +240,7 @@ const ComicStore = (() => {
     // Seguridad: verificar que la obra pertenece al usuario actual
     const _sess = (() => { try { return JSON.parse(localStorage.getItem('cs_session') || 'null'); } catch(_) { return null; } })();
     if (_sess && _sess.id && meta.userId && meta.userId !== '_anon_' && meta.userId !== _sess.id && meta.username !== _sess.username) {
-      console.warn('[ComicStore] Acceso denegado: obra pertenece a otro autor.');
+      console.warn('[WorkStore] Acceso denegado: obra pertenece a otro autor.');
       return null;
     }
     try {

@@ -65,7 +65,7 @@ const Header = (() => {
         + (user.role === 'admin' ? '⚙️ ' : '')
         + escHtml(user.username) + ' ▾</button>'
         + '<div class="dropdown-menu" id="avatarMenu">'
-        + '<a href="#editor" class="dropdown-item" data-route="my-comics">' + T('myComics') + '</a>'
+        + '<a href="#editor" class="dropdown-item" data-route="my-works">' + T('myWorks') + '</a>'
         + adminLink
         + '<div class="dropdown-divider"></div>'
         + '<a href="#" class="dropdown-item" id="avatarChangePassword">' + T('changePassword') + '</a>'
@@ -189,7 +189,7 @@ const Header = (() => {
         e.preventDefault();
         if (!confirm(T('confirmDeleteAccount'))) return;
         var u = Auth.currentUser();
-        if (u) ComicStore.getByUser(u.id).forEach(c => ComicStore.remove(c.id));
+        if (u) WorkStore.getByUser(u.id).forEach(c => WorkStore.remove(c.id));
         await Auth.deleteAccount();
         Header.refresh();
         Router.go('home');

@@ -53,9 +53,9 @@ Router.register('home', {
         <p id="emptyStateTitle" data-i18n="noComics">Aún no hay obras publicadas.</p>
         <p id="emptyStateSub" data-i18n="beFirst">¡Sé el primero en crear una!</p>
       </div>
-    <main class="home-list" id="comicsGrid">
+    <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v37.32</footer>
+    <footer class="app-version">v37.35</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -253,15 +253,15 @@ async function _termsViewInit() {
 // VISTA: EDITOR
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
-// VISTA: MIS CREACIONES (my-comics)
+// VISTA: MIS CREACIONES (my-works)
 // ══════════════════════════════════════════════
 
-Router.register('my-comics', {
+Router.register('my-works', {
   bodyClass: 'home-page',
   css: ['css/home.css'],
   html: () => `
     <!-- Barra de nav igual que home pero con sólo 2 opciones -->
-    <nav class="page-nav" id="myComicsNav">
+    <nav class="page-nav" id="myWorksNav">
       <div class="page-nav-item">
         <button class="page-nav-btn" id="mcBackBtn" data-i18n="mc_backToHome">← Expositor</button>
       </div>
@@ -275,13 +275,13 @@ Router.register('my-comics', {
       </div>
     </nav>
 
-    <div class="home-list" id="myComicsList">
+    <div class="home-list" id="myWorksList">
       <div id="mcContent"></div>
     </div>
 
   `,
-  init: () => MyComicsView_init(),
-  destroy: () => { if(typeof MyComicsView_destroy==='function') MyComicsView_destroy(); }
+  init: () => MyWorksView_init(),
+  destroy: () => { if(typeof MyWorksView_destroy==='function') MyWorksView_destroy(); }
 });
 
 Router.register('editor', {
@@ -398,19 +398,16 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — reactivado temporalmente para investigar el
-             bug de párrafos duplicados al aplicar un flujo de texto al
-             lienzo (petición explícita de Alberto: necesita copiar el
-             diagnóstico del editor general, no solo el del editor de
-             textos). Para volver a ocultarlo cuando ya no haga falta,
-             comentar la línea siguiente igual que estaba. La función de
-             reparación (_edRepairDuplicateIds, botón 🔧 Reparar IDs dentro de
-             este panel) sigue activa aunque el botón que abre el panel esté
-             oculto. El log de creación de dibujo/relleno (_edFCL/
-             window._edFCLog, investigando el relleno que desaparecía al
-             crear) sigue instrumentado en editor.js aunque este botón esté
-             oculto — solo hace falta descomentar para verlo. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto,
+             v37.32): usado durante la investigación del bug "salto de
+             página del editor de textos no coincide con el editor
+             general" (resuelto en v37.30-v37.32 — ver
+             CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo).
+             Para volver a mostrarlo, descomentar la línea siguiente; toda
+             la instrumentación (_edRepairDuplicateIds, _edFCL/
+             window._edFCLog) sigue activa en editor.js aunque el botón
+             esté oculto. -->
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -1150,11 +1147,17 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" data-i18n-title="td_nextPage" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn" data-i18n-title="td_applyToCanvas" title="Aplicar al lienzo">💾</button>
-        <!-- Botón de diagnóstico — vuelto a mostrar temporalmente a petición
-             de Alberto para investigar por qué no se ven las imágenes
-             insertadas en el editor de textos. Para volver a ocultarlo,
-             comentar la línea de nuevo (no borrar). -->
-        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button>
+        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto,
+             v37.32): usado durante la investigación del bug "salto de
+             página del editor de textos no coincide con el editor
+             general" (resuelto en v37.30-v37.32 — ver
+             CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo,
+             incluida la sección nueva "Comparación: hoja(s) YA APLICADAS"
+             y "Verificación cruzada" de este mismo panel). Para volver a
+             mostrarlo, descomentar la línea siguiente; toda la
+             instrumentación (window._tdBreakLog, window._tdImgLog) sigue
+             activa en editor-textdoc.js aunque el botón esté oculto. -->
+        <!-- <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button> -->
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
@@ -1282,7 +1285,7 @@ Router.register('reader', {
         </a>
       </div>
       <div class="reader-info">
-        <span class="reader-comic-title" id="readerComicTitle"></span>
+        <span class="reader-work-title" id="readerWorkTitle"></span>
         <span class="reader-panel-num" id="readerPanelNum">1 / 1</span>
       </div>
     </div>

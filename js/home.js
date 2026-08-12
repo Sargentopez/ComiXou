@@ -97,7 +97,7 @@ function _withTimeout(promise, ms) {
 }
 
 // Invalida el estado del expositor para forzar una recarga completa desde
-// cero la próxima vez que se entre a "home". Llamada desde my-comics.js
+// cero la próxima vez que se entre a "home". Llamada desde my-works.js
 // tras unpublish/delete.
 function homeInvalidateCache() {
   _homeWorks = [];
@@ -108,12 +108,12 @@ function homeInvalidateCache() {
 
 // ── Punto de entrada SPA ──
 
-/* Refresco reactivo cuando ComicStore emite cx:store — SOLO mientras no
+/* Refresco reactivo cuando WorkStore emite cx:store — SOLO mientras no
    haya datos remotos confirmados (ver _homeConfirmedRemote): en cuanto la
    primera página de Supabase llega bien, Supabase pasa a ser la única
    fuente de verdad y los cambios en localStorage se ignoran aquí. */
 function _onStoreChange(e) {
-  if (!document.getElementById('comicsGrid')) return;
+  if (!document.getElementById('worksGrid')) return;
   if (_homeConfirmedRemote) return;
   _homeRenderLocalFallback();
 }
@@ -123,10 +123,10 @@ function _onStoreChange(e) {
 // absoluto (ver _homeStartLoading). Al ser un caso degradado/excepcional
 // (no la vía normal con miles de obras), no necesita nada de lo anterior.
 function _homeRenderLocalFallback() {
-  const grid  = document.getElementById('comicsGrid');
+  const grid  = document.getElementById('worksGrid');
   const empty = document.getElementById('emptyState');
   if (!grid || !empty) return;
-  const source = typeof ComicStore !== 'undefined' ? ComicStore.getPublished() : [];
+  const source = typeof WorkStore !== 'undefined' ? WorkStore.getPublished() : [];
   let comics = [...source].sort((a, b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
   if (activeFilter.type === 'genre')  comics = comics.filter(c => c.genre === activeFilter.value);
   if (activeFilter.type === 'author') comics = comics.filter(c => c.username === activeFilter.value);
@@ -158,14 +158,14 @@ function HomeView_init() {
   // más ya recorridas, recargar desde cero le resetearía el scroll de
   // golpe, así que se deja para cuando vuelva a "Novedades" o reabra la app.
   _homeRefreshTimer = setInterval(() => {
-    if (!document.getElementById('comicsGrid')) { _homeStopRefresh(); return; }
+    if (!document.getElementById('worksGrid')) { _homeStopRefresh(); return; }
     if (_homeWorks.length <= _HOME_PAGE_SIZE) _homeStartLoading();
   }, _HOME_REFRESH_MS);
 
   // Al volver al foco: igual, solo si sigue en la primera página.
   window._homeVisibilityFn = () => {
     if (document.visibilityState !== 'visible') return;
-    if (!document.getElementById('comicsGrid')) return;
+    if (!document.getElementById('worksGrid')) return;
     if (Date.now() - _homeLastFetch > _HOME_REFRESH_MS && _homeWorks.length <= _HOME_PAGE_SIZE) {
       _homeStartLoading();
     }
@@ -220,7 +220,7 @@ async function _homeStartLoading() {
   _homeLoadError = false;
   _homeMoreError = false;
   _homeBatches = [];
-  const grid = document.getElementById('comicsGrid');
+  const grid = document.getElementById('worksGrid');
   if (grid) grid.innerHTML = '';
   _ensureSentinel();
   _ensureObservers();
@@ -272,7 +272,7 @@ function _homeScreenNeedsMore() {
 // cuantos px por debajo de la pantalla real, para pedir la página
 // siguiente ANTES de que la persona llegue a ver el hueco vacío.
 function _ensureSentinel() {
-  const grid = document.getElementById('comicsGrid');
+  const grid = document.getElementById('worksGrid');
   if (!grid) return;
   let sentinel = document.getElementById('homeSentinel');
   if (!sentinel) {
@@ -403,10 +403,10 @@ function _homeVisibilityCallback(entries) {
 }
 
 function _homeAppendBatch(items) {
-  const grid = document.getElementById('comicsGrid');
+  const grid = document.getElementById('worksGrid');
   if (!grid) return;
   const el = document.createElement('div');
-  el.className = 'comic-batch';
+  el.className = 'work-batch';
   const batch = { el, items, loaded: true, height: null };
   el._homeBatchRef = batch;
   _homeBatches.push(batch);
@@ -450,7 +450,7 @@ function _homeLoadBatch(batch) {
 // sin perder la paginación ya conseguida ni disparar una recarga completa.
 function _homeRerenderAll() {
   if (_homeVisObserver) _homeVisObserver.disconnect();
-  const grid = document.getElementById('comicsGrid');
+  const grid = document.getElementById('worksGrid');
   if (!grid) return;
   grid.innerHTML = '';
   _homeBatches = [];
@@ -514,8 +514,8 @@ function setupPageNav() {
 
   // Crear
   document.getElementById('createBtn')?.addEventListener('click', () => {
-    // Sin login: ir a my-comics de todas formas (modo anónimo)
-    Router.go('my-comics');
+    // Sin login: ir a my-works de todas formas (modo anónimo)
+    Router.go('my-works');
   });
 }
 
@@ -673,10 +673,10 @@ function buildRow(comic, currentUser) {
   const thumb   = comic.panels?.[0]?.dataUrl || null;
 
   const row = document.createElement('div');
-  row.className = 'comic-row';
+  row.className = 'work-row';
 
   const thumbEl = document.createElement('div');
-  thumbEl.className = 'comic-row-thumb';
+  thumbEl.className = 'work-row-thumb';
   if (thumb) {
     const img = document.createElement('img');
     img.src = thumb; img.alt = comic.title || '';
@@ -686,14 +686,14 @@ function buildRow(comic, currentUser) {
   }
 
   const info = document.createElement('div');
-  info.className = 'comic-row-info';
+  info.className = 'work-row-info';
 
   const title = document.createElement('div');
-  title.className = 'comic-row-title';
+  title.className = 'work-row-title';
   title.textContent = comic.title || I18n.t('noWork');
 
   const meta = document.createElement('div');
-  meta.className = 'comic-row-author';
+  meta.className = 'work-row-author';
   const genreBadge = comic.genre
     ? ` · <span class="genre-badge">${escHtml(genreLabel(comic.genre))}</span>` : '';
   if (comic.contactUrl) {
@@ -703,10 +703,10 @@ function buildRow(comic, currentUser) {
   }
 
   const actions = document.createElement('div');
-  actions.className = 'comic-row-actions';
+  actions.className = 'work-row-actions';
 
   const readBtn = document.createElement('a');
-  readBtn.className = 'comic-row-btn';
+  readBtn.className = 'work-row-btn';
   readBtn.href = '#';
   readBtn.onclick = (e) => {
     e.preventDefault();
@@ -727,7 +727,7 @@ function buildRow(comic, currentUser) {
   // Botón Enviar — solo para obras publicadas con supabaseId
   if (comic.supabaseId) {
     const shareBtn = document.createElement('a');
-    shareBtn.className = 'comic-row-btn';
+    shareBtn.className = 'work-row-btn';
     shareBtn.href = '#';
     shareBtn.textContent = '📤 ' + I18n.t('home_share');
     shareBtn.onclick = (e) => { e.preventDefault(); openShareModal(comic); };
@@ -736,13 +736,13 @@ function buildRow(comic, currentUser) {
 
   if (isOwner) {
     const editBtn = document.createElement('a');
-    editBtn.className = 'comic-row-btn edit';
+    editBtn.className = 'work-row-btn edit';
     editBtn.href = '#'; editBtn.onclick = (e) => { e.preventDefault(); Router.go('editor', { id: comic.id }); };
     editBtn.textContent = I18n.t('edit');
     actions.appendChild(editBtn);
 
     const unpubBtn = document.createElement('button');
-    unpubBtn.className = 'comic-row-btn unpub';
+    unpubBtn.className = 'work-row-btn unpub';
     unpubBtn.textContent = I18n.t('unpublish');
     unpubBtn.addEventListener('click', () => {
       appConfirm(I18n.t('confirmUnpublish'), async () => {
@@ -760,8 +760,8 @@ function buildRow(comic, currentUser) {
           } catch(err) { console.warn('unpublishWork:', err); }
         }
         // Actualizar entrada local si existe
-        const _local = ComicStore.getById(comic.id) || ComicStore.getById(comic.supabaseId);
-        if (_local) { _local.published = false; _local.approved = false; ComicStore.save(_local); }
+        const _local = WorkStore.getById(comic.id) || WorkStore.getById(comic.supabaseId);
+        if (_local) { _local.published = false; _local.approved = false; WorkStore.save(_local); }
         // Invalidar cache para que la próxima carga traiga datos frescos de Supabase
         if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
       }, I18n.t('unpublish') || 'Retirar');
@@ -769,7 +769,7 @@ function buildRow(comic, currentUser) {
     actions.appendChild(unpubBtn);
 
     const delBtn = document.createElement('button');
-    delBtn.className = 'comic-row-btn del';
+    delBtn.className = 'work-row-btn del';
     delBtn.style.color = '#e63030';
     delBtn.style.fontWeight = '900';
     delBtn.textContent = '✕';
@@ -778,7 +778,7 @@ function buildRow(comic, currentUser) {
         if (comic.supabaseId && typeof SupabaseClient !== 'undefined') {
           SupabaseClient.deleteWork(comic.supabaseId).catch(() => {});
         }
-        ComicStore.remove(comic.id);
+        WorkStore.remove(comic.id);
         _homeWorks = _homeWorks.filter(w => w.supabaseId !== comic.supabaseId && w.id !== comic.id);
         showFiltrosLevel1();
         _homeRerenderAll();

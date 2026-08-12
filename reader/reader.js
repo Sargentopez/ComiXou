@@ -864,11 +864,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const _doClose = () => {
     if (fromApp) {
-      // Abierto desde dentro de la app: volver a my-comics directamente.
+      // Abierto desde dentro de la app: volver a my-works directamente.
       // NO usar history.back() — en Android Chrome PWA lleva al inicio del
       // navegador en lugar de a la app.
       const base = window.location.href.replace(/\/reader\/.*$/, '/');
-      window.location.href = base + '#my-comics';
+      window.location.href = base + '#my-works';
       return;
     }
     // Acceso externo (enlace compartido): intentar cerrar la pestaña

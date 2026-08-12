@@ -3994,7 +3994,7 @@ function _cxSimpleHash(str) {
 // solo cuesta un poco de tiempo — exactamente lo que ya pasaba antes de este
 // cambio en TODAS las páginas.
 function _edMarkPageDirty(pageOrIdx) {
-  // Mientras la obra se esté cargando (contador bloqueante de my-comics
+  // Mientras la obra se esté cargando (contador bloqueante de my-works
   // activo), nada de lo que ocurra internamente puede ser una edición real
   // del usuario — ya existe un bloqueo que impide tocar nada hasta que
   // termine de cargar. Sin esto, el propio edLoadProject marcaba la página
@@ -22859,9 +22859,9 @@ async function _edCloudSaveInner() {
   await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloud'));
 
-  let comic = ComicStore.getByIdFull
-    ? (await ComicStore.getByIdFull(edProjectId))
-    : ComicStore.getById(edProjectId);
+  let comic = WorkStore.getByIdFull
+    ? (await WorkStore.getByIdFull(edProjectId))
+    : WorkStore.getById(edProjectId);
   if (!comic) { edToast(I18n.t('ed_workNotFound')); return; }
   // Fallback incógnito/OPFS: si editorData está vacío pero el editor tiene páginas en memoria,
   // construir editorData en línea para poder subirlo a la nube correctamente.
@@ -22934,7 +22934,7 @@ async function _edCloudSaveInner() {
   // Asignar supabaseId si aún no tiene
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
-    ComicStore.save(comic);
+    WorkStore.save(comic);
   }
 
   // Qué páginas hace falta subir de verdad — ver _edPageDirtyCloud (contador
@@ -22986,11 +22986,11 @@ async function _edCloudSaveInner() {
     await _edAutosaveClear(edProjectId);
     // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
-    const _comicAfter = ComicStore.getById(edProjectId);
+    const _comicAfter = WorkStore.getById(edProjectId);
     if (_comicAfter) {
       // cloudSavedAt marca el momento exacto de la última subida exitosa a la nube.
-      // Se usa en my-comics para saber si hay cambios locales sin subir antes de publicar.
-      ComicStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
+      // Se usa en my-works para saber si hay cambios locales sin subir antes de publicar.
+      WorkStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
     // Sincronizar biblioteca con la nube — solo si su contenido cambió de
@@ -23089,7 +23089,7 @@ async function _edCalcProjectBytes(forceRecalc) {
     if (!edPages || !edPages.length) {
       // Fallback: leer del disco si no hay estado en memoria
       if (!edProjectId) return 0;
-      const data = ComicStore.getById(edProjectId);
+      const data = WorkStore.getById(edProjectId);
       return data ? new Blob([JSON.stringify(data)]).size : 0;
     }
     // Serializar cada capa de cada página igual que edSaveProject.
@@ -23215,7 +23215,7 @@ async function _edSaveProjectInner(_keepOverlay){
   const _saveHistoryIdx = edHistoryIdx;
   if(!_keepOverlay) { _edSaveOverlayShow(I18n.t('ed_savingToDevice')); _edSaveOverlayForceOpen = true; }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
-  const existing=ComicStore.getById(edProjectId)||{};
+  const existing=WorkStore.getById(edProjectId)||{};
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
   const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
@@ -23367,7 +23367,7 @@ async function _edSaveProjectInner(_keepOverlay){
   _edSaveOverlayUpdate('Serializando capas…');
   const _savedAt = new Date().toISOString();
   // Al guardar localmente: restaurar la biblioteca local si existe un backup previo a la apertura de nube.
-  // cs_biblioteca_local_{id} se crea en my-comics.js cuando se abre una obra desde la nube.
+  // cs_biblioteca_local_{id} se crea en my-works.js cuando se abre una obra desde la nube.
   // Al guardar localmente el usuario confirma que quiere la versión local, incluyendo su biblioteca.
   if (edProjectId && !_bibIdbUnavailable) {
     // Restaurar backup local SOLO si _bibCache está vacío (sin items).
@@ -23401,7 +23401,7 @@ async function _edSaveProjectInner(_keepOverlay){
   if (edPages[0] && edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) {
     _coverDataUrl = edRenderPage(edPages[0], true);
   }
-  await ComicStore.save({
+  await WorkStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
@@ -23423,7 +23423,7 @@ async function _edSaveProjectInner(_keepOverlay){
   });
   // Verificar que OPFS guardó correctamente
   _edSaveOverlayUpdate(I18n.t('ed_verifyingIntegrity'));
-  const _verify = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
+  const _verify = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
   if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast(I18n.t('ed_savedOk'));
@@ -25160,19 +25160,19 @@ async function edLoadProject(id){
   _edLoadProjectInProgress = true;
   // Suprimir cualquier marcado de "sucio" mientras dure esta carga — ver
   // _edMarkPageDirty/_edInteractionTick. Se libera en EditorView_init, en el
-  // mismo punto donde se oculta el contador bloqueante de my-comics (cuando
+  // mismo punto donde se oculta el contador bloqueante de my-works (cuando
   // window._edFullyLoadedPromise se resuelve) — exactamente la misma ventana
   // en la que el usuario tiene la app bloqueada y no puede tocar nada real.
   window._edLoadingSuppressDirty = true;
   // Promesa de "carga COMPLETA" (capas pesadas + redraw final incluidos) — la usa
-  // el contador bloqueante que my-comics.js inicia al pulsar "editar" (ver
+  // el contador bloqueante que my-works.js inicia al pulsar "editar" (ver
   // EditorView_init) para saber cuándo puede desbloquear la app. Se resuelve
   // desde _edResolveFullyLoaded() en todos los caminos de salida de esta función,
   // nunca se deja sin resolver (evitaría un bloqueo permanente del contador).
   let _edResolveFullyLoaded;
   window._edFullyLoadedPromise = new Promise(res => { _edResolveFullyLoaded = res; });
-  const comic = ComicStore.getByIdFull
-    ? (await ComicStore.getByIdFull(id)) : ComicStore.getById(id);
+  const comic = WorkStore.getByIdFull
+    ? (await WorkStore.getByIdFull(id)) : WorkStore.getById(id);
   if(!comic){ _edLoadProjectInProgress = false; _edResolveFullyLoaded(); return; }
   // Declarado aquí (no dentro de if(edCanvas){...}) para que siga en alcance en
   // el resto de la función — antes se declaraba con `const` dentro de ese bloque
@@ -25192,7 +25192,7 @@ async function edLoadProject(id){
   // Cloud, por defecto, se deja conservador (true / sin establecer por
   // página): no hay garantía de que el local recién cargado ya coincida con
   // lo que hay en Supabase — pudiste guardar localmente en una sesión
-  // anterior sin llegar a guardar en nube. EXCEPCIÓN: si my-comics.js acaba
+  // anterior sin llegar a guardar en nube. EXCEPCIÓN: si my-works.js acaba
   // de descargar esta obra de la nube (señal cx_just_synced_cloud, puesta
   // justo después de escribir la descarga en OPFS), en ESE instante concreto
   // lo local SÍ coincide con la nube con total certeza — se puede tratar
@@ -25241,7 +25241,7 @@ async function edLoadProject(id){
       _edAutosaveClear(id);
     } else {
     // Mostrar diálogo de recuperación antes de cargar. IMPORTANTE: ocultar el
-    // contador bloqueante de my-comics mientras se muestra este diálogo — si
+    // contador bloqueante de my-works mientras se muestra este diálogo — si
     // se queda encima (z-index más alto), el usuario ve el spinner girando
     // sin poder tocar "Sí"/"No", como si la app estuviera colgada, cuando en
     // realidad solo está esperando esta respuesta.
@@ -25319,7 +25319,7 @@ async function edLoadProject(id){
               delete d._mcIncognitoKey;
             }
           }
-          // Si no hay store → la obra se abrió sin pasar por la descarga de my-comics
+          // Si no hay store → la obra se abrió sin pasar por la descarga de my-works
           // El layer quedará sin frames — es el caso esperado en incógnito sin descarga previa
         }
         return edDeserLayer(d, orient);
@@ -25426,7 +25426,7 @@ async function edLoadProject(id){
     // _edFullyLoadedPromise se resuelve cuando se cumplen DOS condiciones
     // independientes (la que tarde más manda): 1) capas pesadas cargadas +
     // historial inicial empujado, 2) el redraw/reset secundario a los 400ms.
-    // Antes solo se esperaba la (1); el contador bloqueante de my-comics podía
+    // Antes solo se esperaba la (1); el contador bloqueante de my-works podía
     // desbloquear la app justo antes del redraw final, mostrando un instante
     // de cámara/lienzo todavía sin encajar.
     let _edFullyLoadedGate = 2;
@@ -27000,7 +27000,7 @@ async function edSaveProjectModal(){
   // ── Comprobar duplicado de título al renombrar ──────────────────────────
   if (_titleChanged) {
     const _edUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-    const _edDup  = (typeof ComicStore !== 'undefined') && ComicStore.getAll().find(c =>
+    const _edDup  = (typeof WorkStore !== 'undefined') && WorkStore.getAll().find(c =>
       c.id !== edProjectId &&
       c.title === _newTitle &&
       (c.userId === _edUser?.id || c.username === _edUser?.username)
@@ -27085,7 +27085,7 @@ async function edSaveProjectModal(){
     // Pre-crear la entrada con userId correcto para que aparezca en la lista
     const _forkUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
     if (_forkUser) {
-      ComicStore.save({
+      WorkStore.save({
         id: _newId,
         userId:   _forkUser.id,
         username: _forkUser.username,
@@ -27362,7 +27362,7 @@ function EditorView_init(){
       return;
     }
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-    Router.go('my-comics');
+    Router.go('my-works');
     return;
   }
   sessionStorage.removeItem('cx_edit_id');
@@ -27378,10 +27378,10 @@ function EditorView_init(){
   edCurrentPage = 0;
   edSelectedIdx = -1;
   edHistory     = []; edHistoryIdx = -1; _edSavedHistoryIdx = -1;
-  // Pre-pintar el título con lo que ya tiene ComicStore (ligero, síncrono)
+  // Pre-pintar el título con lo que ya tiene WorkStore (ligero, síncrono)
   // para evitar el flash de "Sin título" mientras edLoadProject carga async.
   try {
-    const _preMeta = (typeof ComicStore !== 'undefined') ? ComicStore.getById(editId) : null;
+    const _preMeta = (typeof WorkStore !== 'undefined') ? WorkStore.getById(editId) : null;
     const _preTitle = _preMeta?.title || '';
     const _pt = document.getElementById('edProjectTitle');
     if (_pt && _preTitle) { _pt.textContent = _preTitle; _edUpdateTitlePill(); }
@@ -27394,7 +27394,7 @@ function EditorView_init(){
     // Aplicar orientación de la hoja 0 una vez los datos estén disponibles
     edSetOrientation(edPages[0]?.orientation || edOrientation, false);
   }).catch(err => { console.error('edLoadProject:', err); });
-  // Contador bloqueante iniciado en my-comics.js al pulsar "editar" (ver _cxLoadOverlayShow):
+  // Contador bloqueante iniciado en my-works.js al pulsar "editar" (ver _cxLoadOverlayShow):
   // no liberarlo con la parte síncrona de edLoadProject — esperar a la promesa de
   // carga REALMENTE completa (capas pesadas + redraw final), fijada dentro de
   // edLoadProject como window._edFullyLoadedPromise justo antes de su primer await.
@@ -27500,7 +27500,7 @@ function EditorView_init(){
         } else if (!_edCloudSaving) {
           clearInterval(_dlgTimer);
           dlgCloud.remove();
-          Router.go('my-comics');
+          Router.go('my-works');
         }
       }, 500);
       document.getElementById('_edCloudWait').onclick = () => {
@@ -27510,7 +27510,7 @@ function EditorView_init(){
       document.getElementById('_edCloudExitAnyway').onclick = () => {
         clearInterval(_dlgTimer);
         dlgCloud.remove();
-        Router.go('my-comics');
+        Router.go('my-works');
       };
       return;
     }
@@ -27518,14 +27518,14 @@ function EditorView_init(){
     const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
     if (!hasUnsaved) {
       // Esperar a que biblioteca IDB haya completado antes de salir
-      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-comics'));
-      else Router.go('my-comics');
+      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-works'));
+      else Router.go('my-works');
       return;
     }
 
     // Hay cambios sin guardar — preguntar
-    const isNew = !ComicStore.getById(edProjectId)?.updatedAt ||
-                  ComicStore.getById(edProjectId)?.updatedAt === ComicStore.getById(edProjectId)?.createdAt;
+    const isNew = !WorkStore.getById(edProjectId)?.updatedAt ||
+                  WorkStore.getById(edProjectId)?.updatedAt === WorkStore.getById(edProjectId)?.createdAt;
 
     const dlg = document.createElement('div');
     dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
@@ -27552,13 +27552,13 @@ function EditorView_init(){
       if (typeof _bibFlush === 'function') await _bibFlush();
       // La versión local es ahora la canónica — limpiar backup de versión de nube
       if (edProjectId) {
-        const _cSave = ComicStore.getById(edProjectId);
+        const _cSave = WorkStore.getById(edProjectId);
         if (_cSave && _cSave.localEditorData) {
-          ComicStore.save({ ..._cSave, localEditorData: null });
+          WorkStore.save({ ..._cSave, localEditorData: null });
         }
         try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
       }
-      Router.go('my-comics');
+      Router.go('my-works');
     };
     document.getElementById('_edExitNo').onclick = async () => {
       dlg.remove();
@@ -27576,7 +27576,7 @@ function EditorView_init(){
       }
       // Si era obra nueva sin guardado previo, eliminarla
       if (isNew && edProjectId) {
-        ComicStore.remove(edProjectId);
+        WorkStore.remove(edProjectId);
         // Borrar OPFS de la obra nueva si existe
         try {
           if (navigator.storage?.getDirectory) {
@@ -27598,9 +27598,9 @@ function EditorView_init(){
       // recarga completa (OPFS + deserialización + redraw) compitiendo por el hilo principal
       // justo durante la navegación a "Mis creaciones", que es la causa confirmada de la
       // lentitud al salir sin guardar. Se elimina la llamada.
-      // Navegar — el detector de huérfanos en my-comics se lanzará con delay normal
+      // Navegar — el detector de huérfanos en my-works se lanzará con delay normal
       // pero ya no habrá nada que detectar
-      Router.go('my-comics');
+      Router.go('my-works');
     };
   });
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
@@ -28252,7 +28252,7 @@ function EditorView_init(){
   function _edUpdateRecoverBtn() {
     const btn = $('dd-recoverlocal');
     if(!btn || !edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
+    const comic = WorkStore.getById(edProjectId);
     // Mostrar si hay backup local guardado (localEditorData)
     // Se guarda cuando se descarga la nube sobre un editorData local existente
     btn.style.display = (comic?.localEditorData?.pages?.length) ? '' : 'none';
@@ -28288,14 +28288,14 @@ function EditorView_init(){
   $('dd-recoverlocal')?.addEventListener('click', () => {
     edCloseMenus();
     if(!edProjectId) return;
-    const comic = ComicStore.getById(edProjectId);
+    const comic = WorkStore.getById(edProjectId);
     if(!comic?.localEditorData?.pages?.length) { edToast(I18n.t('ed_noLocalVersion')); return; }
     if(!confirm(I18n.t('ed_confirmRestoreLocal'))) return;
     comic.editorData      = comic.localEditorData;
     comic.localEditorData = null;
     comic.cloudNewer      = false;
     comic.cloudOnly       = false;
-    ComicStore.save(comic);
+    WorkStore.save(comic);
     edLoadProject(edProjectId);
     edToast(I18n.t('ed_deviceVersionRestored'));
   });
@@ -28304,13 +28304,13 @@ function EditorView_init(){
     edCloseMenus();
     if(!edProjectId){edToast(I18n.t('ed_noActiveProject'));return;}
     edConfirm(I18n.t('mc_confirmDeleteWork'), ()=>{
-      const _comic = ComicStore.getById(edProjectId);
-      ComicStore.remove(edProjectId);
+      const _comic = WorkStore.getById(edProjectId);
+      WorkStore.remove(edProjectId);
       if (_comic?.supabaseId && typeof SupabaseClient !== 'undefined') {
         SupabaseClient.deleteWork(_comic.supabaseId).catch(() => {});
       }
       edToast(I18n.t('workDeleted'));
-      setTimeout(()=>Router.go('my-comics'),600);
+      setTimeout(()=>Router.go('my-works'),600);
     });
   });
 
@@ -29984,11 +29984,11 @@ async function _bibWriteAttempt(key, data) {
   if (!verified) throw new Error('la relectura de verificación no coincide');
 }
 function _bibSave(data) {
-  // Sello de "última modificación LOCAL real" — se usa en my-comics.js para
+  // Sello de "última modificación LOCAL real" — se usa en my-works.js para
   // decidir, al abrir la obra, si la biblioteca local es más reciente que la
   // de la nube (y por tanto debe conservarse) en vez de sobreescribirla a
   // ciegas. Solo _bibSave() marca esto — _bibSaveWithKey() (usada por
-  // my-comics.js para escribir datos que VIENEN de la nube) sella con la
+  // my-works.js para escribir datos que VIENEN de la nube) sella con la
   // fecha de la nube en su lugar, no con "ahora".
   data._localModifiedAt = Date.now();
   _bibCache = data; // actualizar caché inmediatamente
@@ -30078,7 +30078,7 @@ async function _bibFlush() {
 // IMPORTANTE — evitar falsos positivos (Alberto detectó el aviso rojo
 // severo apareciendo pese a que el guardado local SÍ funcionaba):
 // 1. El guardado REAL de una obra usa localStorage (índice ligero) +
-//    OPFS (editorData/páginas completas) — ver ComicStore en storage.js.
+//    OPFS (editorData/páginas completas) — ver WorkStore en storage.js.
 //    La biblioteca (IndexedDB 'cxBiblioteca') es una función APARTE
 //    (recursos reutilizables): si falla solo ella, las obras se siguen
 //    guardando con total normalidad. Antes se trataban las tres pruebas
@@ -30143,7 +30143,7 @@ async function _cxTestOpfs() {
     return false;
   }
 }
-// localStorage: usado para el ÍNDICE ligero de obras (ComicStore.saveAll) —
+// localStorage: usado para el ÍNDICE ligero de obras (WorkStore.saveAll) —
 // parte crítica del guardado local, pero nunca se había comprobado en el
 // autotest de arranque.
 function _cxTestLocalStorage() {
@@ -30193,7 +30193,7 @@ window._cxCheckStorageReliability = _cxCheckStorageReliability;
 // una persona puede entrar a la app solo para LEER obras (no crear/editar),
 // y en ese caso el guardado local no le afecta en absoluto; mostrarle este
 // aviso sería confuso e irrelevante. Se dispara en su lugar desde
-// MyComicsView_init() (js/my-comics.js) — la vista "Mis creaciones", que es
+// MyWorksView_init() (js/my-works.js) — la vista "Mis creaciones", que es
 // donde el guardado local sí importa — una única vez por sesión.
 
 
@@ -30201,7 +30201,7 @@ window._bibSave = _bibSave;
 window._bibLoad = _bibLoad;
 window._bibKey  = _bibKey;
 // _bibSaveWithKey: igual que _bibSave pero con clave IDB explícita.
-// Usar desde my-comics para evitar race condition con edProjectId.
+// Usar desde my-works para evitar race condition con edProjectId.
 window._bibSaveWithKey = function(data, explicitKey) {
   _bibCache = data;
   if (_bibIdbUnavailable) return Promise.resolve();
@@ -30215,7 +30215,7 @@ window._bibSaveWithKey = function(data, explicitKey) {
   return _bibSavePromise;
 };
 // _bibLoadWithKey: lee directamente de IndexedDB con una clave explícita, SIN
-// pasar por _bibCache/edProjectId. Necesaria porque my-comics.js comprueba el
+// pasar por _bibCache/edProjectId. Necesaria porque my-works.js comprueba el
 // contenido de la biblioteca de la obra que se va a abrir ANTES de que
 // edLoadProject se ejecute — en ese momento edProjectId/_bibCache todavía
 // corresponden a la obra anterior (o están vacíos en una sesión recién
@@ -38206,7 +38206,7 @@ async function _edRunDiag() {
     // sí pero SÍ difieren respecto a la ejecución anterior de este mismo
     // diagnóstico (antes de guardar), la duplicación ocurrió al guardar.
     try {
-      const _rawComic = ComicStore.getByIdFull ? await ComicStore.getByIdFull(edProjectId) : null;
+      const _rawComic = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
       const _rawPages = _rawComic?.editorData?.pages || [];
       L('  Nº de páginas persistidas AHORA MISMO (OPFS, releído): ' + _rawPages.length);
       L('  localSavedAt: ' + (_rawComic?.localSavedAt || '∅') + ' | cloudSavedAt: ' + (_rawComic?.cloudSavedAt || '∅') + ' | cloudNewer: ' + (_rawComic?.cloudNewer ?? '∅'));
@@ -38405,10 +38405,10 @@ async function _edRunDiag() {
     L('localStorage: ' + (_bibIdbUnavailable ? 'modo incógnito' : Math.round(_lsSize/1024) + ' KB'));
   } catch(e) { L('localStorage ERROR: ' + e.message); }
 
-  // 2. Comic en ComicStore
-  const comic = ComicStore.getById(edProjectId);
+  // 2. Comic en WorkStore
+  const comic = WorkStore.getById(edProjectId);
   if (comic) {
-    L('ComicStore: OK supabaseId=' + (comic.supabaseId||'NO') + ' cloudOnly=' + comic.cloudOnly);
+    L('WorkStore: OK supabaseId=' + (comic.supabaseId||'NO') + ' cloudOnly=' + comic.cloudOnly);
     L('  updatedAt=' + (comic.updatedAt||'?') + ' localSavedAt=' + (comic.localSavedAt||'NULL'));
     const pages = comic.editorData?.pages || [];
     L('  páginas=' + pages.length);
@@ -38419,7 +38419,7 @@ async function _edRunDiag() {
         }
       });
     });
-  } else { L('ComicStore: NO ENCONTRADO'); }
+  } else { L('WorkStore: NO ENCONTRADO'); }
 
   // 3. IDB cxAnims — usar singleton _edAnimIdbOpen para evitar conflictos
   try {
@@ -38558,7 +38558,7 @@ async function _edRunDiag() {
     L('\n── Último bibSync ──');
     L(JSON.stringify(window._edLastBibSync));
   }
-  // Decisión tomada en my-comics.js al pulsar "Editar" para ESTA apertura —
+  // Decisión tomada en my-works.js al pulsar "Editar" para ESTA apertura —
   // permite ver si la biblioteca se sobrescribió desde la nube y por qué,
   // sin depender de lo que Alberto pueda observar en pantalla.
   L('\n── Última decisión al pulsar "Editar" (biblioteca) ──');
@@ -38585,7 +38585,7 @@ async function _edRunDiag() {
       L('  (sin comprobación de biblioteca en esta apertura — sin usuario/SupabaseClient)');
     }
   } else {
-    L('  Sin datos (no se pulsó "Editar" desde my-comics en esta sesión, o la app se recargó después)');
+    L('  Sin datos (no se pulsó "Editar" desde my-works en esta sesión, o la app se recargó después)');
   }
   // Estado actual de _bibCache
   L('\n── bibCache actual ──');

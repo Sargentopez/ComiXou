@@ -38,7 +38,7 @@ const TRANSLATIONS = {
     tagline:          "IDEA Y COMPARTE",
     register:         "Regístrate",
     login:            "Entrar",
-    myComics:         "Mis creaciones",
+    myWorks:         "Mis creaciones",
     logout:           "Cerrar sesión",
     adminPanel:       "⚙️ Panel admin",
     deleteAccount:    "Eliminar mi cuenta",
@@ -233,7 +233,7 @@ const TRANSLATIONS = {
     header_openAppTitle:    "Abrir app",
     header_installTip:      "Pulsa Compartir ↑ y luego \"Añadir a inicio\"",
 
-    // Mis Creaciones — my-comics.js + toolbar en views.js
+    // Mis Creaciones — my-works.js + toolbar en views.js
     mc_backToHome:       "← Expositor",
     mc_cloudLoadBtnLabel:"☁️ Cargar de nube",
     mc_cloudLoadBtnTitle:"Cargar borradores guardados en la nube",
@@ -975,7 +975,7 @@ const TRANSLATIONS = {
     tagline:          "CREATE & SHARE",
     register:         "Sign Up",
     login:            "Sign In",
-    myComics:         "My Works",
+    myWorks:         "My Works",
     logout:           "Sign Out",
     adminPanel:       "⚙️ Admin panel",
     deleteAccount:    "Delete my account",
@@ -1164,7 +1164,7 @@ const TRANSLATIONS = {
     header_openAppTitle:    "Open app",
     header_installTip:      "Tap Share ↑ then \"Add to Home Screen\"",
 
-    // My Works — my-comics.js + toolbar in views.js
+    // My Works — my-works.js + toolbar in views.js
     mc_backToHome:       "← Home",
     mc_cloudLoadBtnLabel:"☁️ Load from cloud",
     mc_cloudLoadBtnTitle:"Load drafts saved in the cloud",

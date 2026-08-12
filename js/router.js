@@ -104,12 +104,12 @@ const Router = (() => {
 
       const hh = header.getBoundingClientRect().height;
 
-      // my-comics tiene su propio pageNav con id myComicsNav
-      const myComicsNav = document.getElementById('myComicsNav');
-      if (myComicsNav) {
-        myComicsNav.style.top = hh + 'px';
-        const nh = myComicsNav.getBoundingClientRect().height;
-        const list = document.getElementById('myComicsList');
+      // my-works tiene su propio pageNav con id myWorksNav
+      const myWorksNav = document.getElementById('myWorksNav');
+      if (myWorksNav) {
+        myWorksNav.style.top = hh + 'px';
+        const nh = myWorksNav.getBoundingClientRect().height;
+        const list = document.getElementById('myWorksList');
         if (list) list.style.paddingTop = (hh + nh) + 'px';
         appView.style.paddingTop = '0';
         return;
@@ -119,8 +119,8 @@ const Router = (() => {
         // Home: pageNav debajo del header, appView debajo de ambos
         const nh = pageNav.getBoundingClientRect().height;
         pageNav.style.top = hh + 'px';
-        // El padding va al comicsGrid, no al appView
-        const list = document.getElementById('comicsGrid');
+        // El padding va al worksGrid, no al appView
+        const list = document.getElementById('worksGrid');
         if (list) list.style.paddingTop = (hh + nh) + 'px';
         appView.style.paddingTop = '0';
       } else {

@@ -54,7 +54,7 @@ const ReaderState = {
 function _readerUpdateTitlePill(){
   const bar   = document.getElementById('readerTopbar');
   const pill  = document.getElementById('readerTitlePill');
-  const title = document.getElementById('readerComicTitle');
+  const title = document.getElementById('readerWorkTitle');
   if(!bar || !pill || !title) return;
   const barRect   = bar.getBoundingClientRect();
   const titleRect = title.getBoundingClientRect();
@@ -73,7 +73,7 @@ function ReaderView_init(params) {
   const comicId = (params && params.id) ? params.id : new URLSearchParams(window.location.search).get('id');
   if (!comicId) { Router.go('home'); return; }
 
-  const comic = ComicStore.getById(comicId);
+  const comic = WorkStore.getById(comicId);
   if (!comic || !comic.panels || comic.panels.length === 0) {
     showToast(I18n.t('workNotFound'));
     setTimeout(() => Router.go('home'), 1500);
@@ -84,7 +84,7 @@ function ReaderView_init(params) {
   ReaderState.totalPanels = comic.panels.length + 1;
   ReaderState.creditsShown = false;
 
-  document.getElementById('readerComicTitle').textContent = comic.title || I18n.t('noWork');
+  document.getElementById('readerWorkTitle').textContent = comic.title || I18n.t('noWork');
   _readerUpdateTitlePill();
 
   buildPanelElements();

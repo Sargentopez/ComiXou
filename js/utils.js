@@ -51,7 +51,7 @@ function showToast(msg, duration = 2500) {
 
 /* ══════════════════════════════════════════
    MODAL READER — función global compartida
-   Usada por home.js, admin.js y my-comics.js
+   Usada por home.js, admin.js y my-works.js
    ══════════════════════════════════════════ */
 function openReaderModalGlobal(url) {
   const MODAL_ID = 'globalReaderModal';
@@ -626,13 +626,13 @@ function appConfirm(msg, onOk, okLabel) {
 }
 
 /* ══════════════════════════════════════════
-   CONTADOR DE CARGA BLOQUEANTE — my-comics → editor
-   Se inicia al tocar "editar" sobre cualquier obra (ver my-comics.js) y
+   CONTADOR DE CARGA BLOQUEANTE — my-works → editor
+   Se inicia al tocar "editar" sobre cualquier obra (ver my-works.js) y
    bloquea toda interacción con la app hasta que el editor general confirma
    que la obra está COMPLETAMENTE cargada (ver EditorView_init / edLoadProject
    en editor.js, a través de window._edFullyLoadedPromise).
    Vive en document.body (fuera de #appView) a propósito: el router SPA
-   reemplaza el innerHTML de #appView al navegar de my-comics a editor, así
+   reemplaza el innerHTML de #appView al navegar de my-works a editor, así
    que un overlay dentro de #appView desaparecería a mitad de la transición.
    ══════════════════════════════════════════ */
 let _cxLoadOverlayTimer  = null;

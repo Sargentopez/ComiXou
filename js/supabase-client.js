@@ -1155,7 +1155,7 @@ const SupabaseClient = (() => {
     return (rows || []).map(r => ({ genre: r.genre || '', username: r.author_name || '' }));
   }
 
-  // Convierte una fila de Supabase al formato compatible con home/admin/my-comics
+  // Convierte una fila de Supabase al formato compatible con home/admin/my-works
   function _workToComic(w, published, thumb) {
     return {
       id:            w.id,

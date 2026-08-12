@@ -115,49 +115,49 @@
 }
 
 /* ── FILA DE CÓMIC ── */
-.comic-row:first-child {
+.work-row:first-child {
   border-top: 1px solid var(--gray-300);
 }
-.comic-row {
+.work-row {
   display: flex; align-items: flex-start;
   gap: 12px; padding: 12px 14px;
   border-bottom: 1px solid var(--gray-300);
   background: var(--white);
   scroll-margin-top: var(--bars-h);
 }
-.comic-row-thumb {
+.work-row-thumb {
   width: 72px; height: 72px; min-width: 72px;
   flex-shrink: 0; background: var(--gray-100);
   overflow: hidden; display: flex;
   align-items: center; justify-content: center;
   font-size: 1.8rem; color: var(--gray-300);
 }
-.comic-row-thumb img {
+.work-row-thumb img {
   width: 72px; height: 72px; min-width: 72px; max-width: 72px;
   object-fit: contain; display: block;
 }
-.comic-row-info {
+.work-row-info {
   flex: 1; min-width: 0;
   display: flex; flex-direction: column; gap: 3px; padding-top: 1px;
 }
-.comic-row-title {
+.work-row-title {
   font-weight: 900; font-size: 0.95rem; color: var(--ink);
   line-height: 1.2; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
-.comic-row-author { font-size: 0.78rem; color: var(--gray-500); font-weight: 600; }
-.comic-row-author a { color: var(--blue); font-weight: 700; }
-.comic-row-actions { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
-.comic-row-btn {
+.work-row-author { font-size: 0.78rem; color: var(--gray-500); font-weight: 600; }
+.work-row-author a { color: var(--blue); font-weight: 700; }
+.work-row-actions { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
+.work-row-btn {
   background: none; border: none; padding: 0;
   font-family: var(--font-body); font-weight: 700;
   font-size: 0.82rem; color: var(--blue);
   cursor: pointer; text-decoration: none;
 }
-.comic-row-btn:hover { text-decoration: underline; }
-.comic-row-btn.edit  { color: var(--gray-700); }
-.comic-row-btn.unpub { color: var(--gray-500); }
-.comic-row-btn.del   { color: var(--red); }
+.work-row-btn:hover { text-decoration: underline; }
+.work-row-btn.edit  { color: var(--gray-700); }
+.work-row-btn.unpub { color: var(--gray-500); }
+.work-row-btn.del   { color: var(--red); }
 
 /* ── VACÍO ── */
 .home-empty {
@@ -187,14 +187,14 @@
    y se le fija esta altura en línea (style="height:Npx") para que el
    listado no dé ningún salto de scroll — sin position/overflow especiales,
    es simplemente un contenedor de filas normal. */
-.comic-batch { box-sizing: border-box; }
+.work-batch { box-sizing: border-box; }
 
 @media(min-width: 600px) {
   .page-nav { padding: 0 24px; }
-  .comic-row { padding: 14px 24px; gap: 16px; }
-  .comic-row-thumb     { width: 88px; height: 88px; min-width: 88px; }
-  .comic-row-thumb img { width: 88px; height: 88px; min-width: 88px; max-width: 88px; }
-  .comic-row-title { font-size: 1rem; }
+  .work-row { padding: 14px 24px; gap: 16px; }
+  .work-row-thumb     { width: 88px; height: 88px; min-width: 88px; }
+  .work-row-thumb img { width: 88px; height: 88px; min-width: 88px; max-width: 88px; }
+  .work-row-title { font-size: 1rem; }
 }
 
 /* ── BADGE DE GÉNERO ── */
@@ -229,7 +229,7 @@
   user-select: none;
 }
 
-/* ── MODAL MY-COMICS ── */
+/* ── MODAL MY-WORKS ── */
 .mc-modal-overlay {
   /* Idéntico a .auth-main: fixed overlay z:2000 por encima de todo */
   position: fixed;

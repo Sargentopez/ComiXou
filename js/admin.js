@@ -91,7 +91,7 @@ async function renderPublished(panel) {
 
 // ── TODAS (incluye no publicadas con supabaseId — en BD pero no visibles) ──
 function renderAll(panel) {
-  const comics = ComicStore.getAll().filter(c => c.supabaseId);
+  const comics = WorkStore.getAll().filter(c => c.supabaseId);
   if (!comics.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_noAll')}</p>`; return; }
   comics.forEach(c => panel.appendChild(buildAdminRow(c, 'all')));
 }
@@ -169,7 +169,7 @@ async function renderUsers(panel) {
             await SupabaseClient.deleteAuthorData(uid);
           }
           // Borrar obras locales
-          ComicStore.getByUser(uid).forEach(c => ComicStore.remove(c.id));
+          WorkStore.getByUser(uid).forEach(c => WorkStore.remove(c.id));
           showToast(I18n.t('userDeleted') + I18n.t('admin_deleteUserReminder'));
         } catch(e) {
           console.warn('deleteAuthorData error:', e);
@@ -284,7 +284,7 @@ function buildAdminRow(comic, mode) {
   // Aprobar
   row.querySelector(`#approve_${comic.id}`)?.addEventListener('click', async () => {
     // Intentar obtener de localStorage; si no existe, usar el objeto comic de Supabase
-    const c = ComicStore.getById(comic.id) || comic;
+    const c = WorkStore.getById(comic.id) || comic;
 
     if (!c.supabaseId) {
       showToast(I18n.t('admin_noDbIdErr'));
@@ -303,10 +303,10 @@ function buildAdminRow(comic, mode) {
     // Invalidar cache de portada para que la obra aparezca inmediatamente en el index
     if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     // Actualizar localStorage solo si existe entrada local
-    const local = ComicStore.getById(comic.id);
+    const local = WorkStore.getById(comic.id);
     if (local) {
       local.approved = true; local.published = true; local.pendingReview = false;
-      ComicStore.save(local);
+      WorkStore.save(local);
     }
     showToast(I18n.t('approveOk'));
     renderTab('pending');
@@ -319,8 +319,8 @@ function buildAdminRow(comic, mode) {
         await SupabaseClient.unpublishWork(comic.id, comic.supabaseId);
       } catch(err) { console.warn('Supabase unpublishWork:', err); }
     }
-    const local = ComicStore.getById(comic.id);
-    if (local) { local.published = false; local.approved = false; ComicStore.save(local); }
+    const local = WorkStore.getById(comic.id);
+    if (local) { local.published = false; local.approved = false; WorkStore.save(local); }
     // Invalidar cache del home para que la obra desaparezca inmediatamente del índice
     if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     showToast(I18n.t('retireOk'));
@@ -336,7 +336,7 @@ function buildAdminRow(comic, mode) {
           await SupabaseClient.deleteWork(comic.supabaseId);
         } catch(err) { console.warn('Supabase deleteWork:', err); }
       }
-      ComicStore.remove(comic.id);
+      WorkStore.remove(comic.id);
       showToast(I18n.t('workDeleted') || 'Obra eliminada');
       renderTab(mode); // refresco inmediato
     });
