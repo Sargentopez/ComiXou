@@ -3048,14 +3048,33 @@ function _tdEditingFlowFrames(flowId){
 function _tdImagesAtPageEdges(editorEl, pages){
   const imageEls = editorEl.querySelectorAll('.attachment--preview img');
   let imgIdx = 0;
+  // BUG CORREGIDO (pedido explícito de Alberto: "ten en cuenta las
+  // imágenes al inicio y fin de las hojas" — si una imagen está al final
+  // de la hoja, el salto debe ir después de ella). Antes esta función
+  // solo miraba la línea con índice EXACTO 0 o length-1 del array de la
+  // hoja. Si justo antes/después de la imagen hay una línea en BLANCO (el
+  // doble salto de línea con el que termina casi cualquier párrafo, ver
+  // el comentario sobre curLineStartOffset en el bucle de _tdLayoutPages),
+  // esa línea en blanco ocupa el índice 0 o length-1 en su lugar, y la
+  // imagen —aunque sea visualmente la primera o última cosa real de la
+  // hoja— nunca se detectaba como tal: el salto acababa posicionándose
+  // por carácter (_tdCharRect) en vez de anclarse a la imagen real. Ahora
+  // se busca la primera/última línea con contenido REAL (imagen, o texto
+  // que no quede vacío tras recortar espacios), ignorando líneas en
+  // blanco en los extremos.
   return pages.map(page => {
     if(!page.length) return { imgLastEl: null, imgFirstEl: null };
+    const esReal = l => l.kind === 'image' || (l.runs || []).some(r => (r.text || '').trim());
+    let firstRealIdx = -1;
+    for(let li = 0; li < page.length; li++){ if(esReal(page[li])){ firstRealIdx = li; break; } }
+    let lastRealIdx = -1;
+    for(let li = page.length - 1; li >= 0; li--){ if(esReal(page[li])){ lastRealIdx = li; break; } }
     let imgFirstEl = null, imgLastEl = null;
     page.forEach((line, li) => {
       if(line.kind !== 'image') return;
       const el = imageEls[imgIdx] || null;
-      if(li === 0) imgFirstEl = el;
-      if(li === page.length - 1) imgLastEl = el;
+      if(li === firstRealIdx) imgFirstEl = el;
+      if(li === lastRealIdx) imgLastEl = el;
       imgIdx++;
     });
     return { imgLastEl, imgFirstEl };
@@ -4224,26 +4243,51 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
   {
     const flatTextForCorrection = _tdBlocksFlatText(blocks);
     for(let i = 1; i < pages.length; i++){
-      const firstLine = pages[i][0];
-      // Imagen: no tiene texto que buscar — su posición se decide por el
-      // elemento real del DOM (ver _tdImagesAtPageEdges/_tdComputeSplitGeometry),
-      // no por este número, así que no hace falta corregirlo aquí.
-      if(!firstLine || firstLine.kind === 'image') continue;
-      const firstLineText = (firstLine.runs || []).map(r => r.text || '').join('').trim();
-      if(!firstLineText) continue; // línea en blanco real — nada que buscar
-      const searchPhrase = firstLineText.split(/\s+/).slice(0, 5).join(' ');
-      // Frase demasiado corta/genérica (menos de 8 caracteres): más riesgo
-      // de coincidir por casualidad en un sitio equivocado que de ayudar —
-      // se deja el valor original tal cual en vez de arriesgar.
-      if(searchPhrase.length < 8) continue;
+      // Recorre las líneas de la hoja hasta encontrar la primera con texto
+      // real, en vez de mirar solo pages[i][0] — pedido explícito de
+      // Alberto ("ten en cuenta las imágenes al inicio... de las hojas"):
+      // si la hoja empieza con una imagen (o con una imagen seguida de una
+      // línea en blanco), la línea 0 no tiene texto que buscar, pero la
+      // hoja SÍ puede tener texto un poco más abajo (p.ej. imagen, línea
+      // en blanco, texto) — y como las imágenes y líneas en blanco no
+      // ocupan ningún carácter de flatText, el primer texto real de la
+      // hoja (sea la línea 0 o la 3) sigue estando en el carácter correcto
+      // para pageStartChars[i], sin necesidad de ajuste alguno.
+      let searchPhrase = null;
+      for(const line of pages[i]){
+        if(line.kind === 'image') continue;
+        const t = (line.runs || []).map(r => r.text || '').join('').trim();
+        if(t){ searchPhrase = t.split(/\s+/).slice(0, 5).join(' '); break; }
+      }
+      if(!searchPhrase || searchPhrase.length < 8) continue;
       let realPos = flatTextForCorrection.indexOf(searchPhrase, pageStartChars[i]);
       if(realPos === -1) realPos = flatTextForCorrection.indexOf(searchPhrase); // red de seguridad
       if(realPos !== -1 && realPos !== pageStartChars[i]) pageStartChars[i] = realPos;
     }
   }
 
+  // NUEVO — Quitar una última hoja que se haya quedado enteramente en
+  // blanco (pedido explícito de Alberto: no debe aparecer un salto de
+  // hoja al final del flujo si no hace falta uno de verdad). Ocurre
+  // cuando el documento termina en un doble salto de línea (el patrón
+  // habitual con el que Alberto cierra casi cualquier párrafo) y esa
+  // línea en blanco final, por sí sola, no cabe ya en la hoja anterior —
+  // se le crea una hoja nueva solo para ella, aunque no tenga ningún
+  // contenido visible y la hoja anterior no estuviera llena. Una hoja así
+  // no aporta nada: se elimina sin más (no hace falta reubicar su
+  // contenido en ningún otro sitio, porque no tiene ninguno).
+  while(pages.length > 1){
+    const ultima = pages[pages.length - 1];
+    const estaVacia = ultima.every(l => l.kind !== 'image' && !(l.runs || []).some(r => (r.text || '').trim()));
+    if(!estaVacia) break;
+    pages.pop();
+    pageStartChars.pop();
+    pageBoxHeights.pop();
+  }
+
   return {pages, mx, my, pageStartChars, lineStartChars, pageBoxHeights};
 }
+
 
 // Resumen en texto plano por página (fallback/legacy — _hasText, panel_texts, etc.
 // Ver NORMAS/CARTA: el reader dibuja bocadillos/textos desde panel_texts, que no
