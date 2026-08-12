@@ -4188,6 +4188,60 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     });
   });
 
+  // NUEVO — Autocorrección de pageStartChars contra el contenido REAL de
+  // pages: pedido explícito de Alberto tras confirmar (con su propio
+  // documento real, no solo casos sintéticos) que el conteo incremental de
+  // caracteres que alimenta pageStartChars (charsSoFar/curLineStartOffset)
+  // puede desviarse en casos que no se han conseguido aislar del todo, y
+  // que esa desviación se arrastra de una hoja a la siguiente sin
+  // corregirse sola. En vez de seguir persiguiendo cada camino posible de
+  // desviación en el conteo, esta corrección da la vuelta al problema: usa
+  // el propio CONTENIDO ya decidido en pages (que SIEMPRE es correcto —
+  // es literalmente lo que se dibuja, ver _drawRichLines en editor.js, y
+  // está verificado con ejecución real que pages nunca se desincroniza de
+  // lo aplicado) como fuente de verdad, y ajusta pageStartChars para que
+  // apunte a donde ESE contenido aparece de verdad en flatText — en vez de
+  // confiar en el número que salió del conteo incremental.
+  //
+  // Búsqueda SIEMPRE hacia adelante desde el valor ya calculado (nunca
+  // .indexOf() simple desde el principio): si la misma frase aparece más
+  // de una vez en el documento (confirmado que pasa: "ojos abiertos, ojos
+  // cerrados" aparece dos veces en el texto real de Alberto), una
+  // búsqueda sin punto de partida podría encontrar una aparición ANTERIOR
+  // y equivocada. Buscando hacia adelante desde el valor ya calculado
+  // (que, por cómo se produce esta desviación, nunca ha resultado estar
+  // MÁS ADELANTE del punto real) se encuentra siempre la aparición
+  // correcta más cercana. Con un resultado nulo (frase no encontrada
+  // buscando hacia adelante) se reintenta sin punto de partida como red de
+  // seguridad, y si tampoco aparece así, se deja el valor original tal
+  // cual — nunca se sustituye por algo peor.
+  //
+  // Al volver a calcularse desde el contenido real en CADA ejecución de
+  // esta función (tanto para la vista previa como para "Aplicar al
+  // lienzo"), cualquier desviación queda corregida en el acto en vez de
+  // arrastrarse y crecer entre reediciones sucesivas — que es exactamente
+  // lo que pedía Alberto.
+  {
+    const flatTextForCorrection = _tdBlocksFlatText(blocks);
+    for(let i = 1; i < pages.length; i++){
+      const firstLine = pages[i][0];
+      // Imagen: no tiene texto que buscar — su posición se decide por el
+      // elemento real del DOM (ver _tdImagesAtPageEdges/_tdComputeSplitGeometry),
+      // no por este número, así que no hace falta corregirlo aquí.
+      if(!firstLine || firstLine.kind === 'image') continue;
+      const firstLineText = (firstLine.runs || []).map(r => r.text || '').join('').trim();
+      if(!firstLineText) continue; // línea en blanco real — nada que buscar
+      const searchPhrase = firstLineText.split(/\s+/).slice(0, 5).join(' ');
+      // Frase demasiado corta/genérica (menos de 8 caracteres): más riesgo
+      // de coincidir por casualidad en un sitio equivocado que de ayudar —
+      // se deja el valor original tal cual en vez de arriesgar.
+      if(searchPhrase.length < 8) continue;
+      let realPos = flatTextForCorrection.indexOf(searchPhrase, pageStartChars[i]);
+      if(realPos === -1) realPos = flatTextForCorrection.indexOf(searchPhrase); // red de seguridad
+      if(realPos !== -1 && realPos !== pageStartChars[i]) pageStartChars[i] = realPos;
+    }
+  }
+
   return {pages, mx, my, pageStartChars, lineStartChars, pageBoxHeights};
 }
 
