@@ -1781,7 +1781,11 @@ function _tdWireFontControls(){
       // que se escriba — también al reeditar más tarde, no solo en esta
       // sesión (ver _tdDocFontFamily y su refuerzo por trix-selection-change
       // más abajo en _tdInitOnce).
-      if(_appliedToWhole) _tdDocFontFamily = btn.dataset.value;
+      // Si se aplicó solo a una selección parcial (no a todo el documento),
+      // el documento deja de ser uniforme para este atributo: invalidar el
+      // valor rastreado para que _tdSyncFontMenuActive vuelva a fiarse del
+      // cursor en vez de asumir un tipo único que ya no es cierto.
+      _tdDocFontFamily = _appliedToWhole ? btn.dataset.value : null;
       finishChoice();
       _tdSyncFontMenuActive();
     });
@@ -1792,7 +1796,9 @@ function _tdWireFontControls(){
       const _appliedToWhole = _tdApplyScoped(() => {
         try{ editorEl.editor?.activateAttribute('fontSize', btn.dataset.value); }catch(_e){}
       });
-      if(_appliedToWhole) _tdDocFontSize = btn.dataset.value;
+      // Mismo motivo que arriba con el tipo de letra: una aplicación
+      // parcial invalida la uniformidad rastreada del tamaño.
+      _tdDocFontSize = _appliedToWhole ? btn.dataset.value : null;
       finishChoice();
       _tdSyncFontMenuActive();
     });
@@ -1996,18 +2002,36 @@ function _tdSyncParrafoMenuActive(){
 function _tdSyncFontMenuActive(){
   const editorEl = document.getElementById('tdEditor');
   if(!editorEl || !editorEl.editor || !editorEl.editor.composition) return;
-  let fs = '22px', ff = 'Lora';
-  try{
-    const attrs = editorEl.editor.composition.getCurrentTextAttributes() || {};
-    if(attrs.fontSize) fs = attrs.fontSize;
-    // El navegador normaliza font-family con espacio (Patrick Hand, Bebas
-    // Neue…) a comillas DOBLES al releerlo del DOM/CSSOM — solo pasa con
-    // documentos ya CARGADOS (reeditar una obra guardada), no al elegir la
-    // fuente desde este mismo menú en la sesión actual. Mismo patrón de
-    // limpieza que _tdSanitizePastedHTML/runsFromInline, ya usado en este
-    // archivo para el mismo motivo.
-    if(attrs.fontFamily) ff = attrs.fontFamily.replace(/^['"]|['"]$/g, '');
-  }catch(_e){}
+  let fs = _tdDocFontSize || '22px', ff = _tdDocFontFamily || 'Lora';
+  // _tdDocFontSize/_tdDocFontFamily solo tienen valor cuando TODO el
+  // documento comparte un único tamaño/tipo (ver _tdDetectUniformFont) —
+  // en ese caso mandan siempre, sin excepción: es el mismo valor que
+  // decide qué se sigue aplicando al escribir, así que el botón marcado y
+  // lo que realmente está aplicado nunca pueden desincronizarse. Antes se
+  // volvía a preguntar a Trix por los atributos justo en el punto del
+  // cursor (getCurrentTextAttributes()) incluso teniendo ya este valor de
+  // sobra — y ese punto exacto puede caer en un límite entre piezas donde
+  // Trix no refleja bien lo que hay alrededor (comprobado con Trix real),
+  // dejando marcado el botón equivocado aunque el tamaño/tipo SÍ se
+  // hubiera aplicado bien al texto (bug reportado por Alberto con
+  // capturas: "Pequeño" quedaba marcado con ✓ cuando el texto era
+  // Normal). Solo se vuelve a preguntar al cursor cuando el documento
+  // tiene tamaños/tipos mezclados (_tdDocFontSize/_tdDocFontFamily=null),
+  // que es precisamente el único caso en que de verdad depende de dónde
+  // esté el cursor.
+  if(!_tdDocFontSize || !_tdDocFontFamily){
+    try{
+      const attrs = editorEl.editor.composition.getCurrentTextAttributes() || {};
+      if(!_tdDocFontSize && attrs.fontSize) fs = attrs.fontSize;
+      // El navegador normaliza font-family con espacio (Patrick Hand, Bebas
+      // Neue…) a comillas DOBLES al releerlo del DOM/CSSOM — solo pasa con
+      // documentos ya CARGADOS (reeditar una obra guardada), no al elegir la
+      // fuente desde este mismo menú en la sesión actual. Mismo patrón de
+      // limpieza que _tdSanitizePastedHTML/runsFromInline, ya usado en este
+      // archivo para el mismo motivo.
+      if(!_tdDocFontFamily && attrs.fontFamily) ff = attrs.fontFamily.replace(/^['"]|['"]$/g, '');
+    }catch(_e){}
+  }
   document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.value === ff);
   });
