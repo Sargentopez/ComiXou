@@ -1596,7 +1596,9 @@ async function _tdRunDiag(){
         // fragmento — si aparecen dos nodos consecutivos que juntos forman
         // una palabra sin espacio entre ellos, esa es la causa.
         try{
-          const walkerDiag = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
+          const walkerDiag = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT, {
+            acceptNode: n => _tdIsInternalTrixTextNode(n, editorEl) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+          });
           let nodeDiag, idxDiag = 0, foundAny = false;
           const winStart = Math.max(0, c - 20), winEnd = c + 20;
           while(nodeDiag = walkerDiag.nextNode()){
@@ -2855,19 +2857,44 @@ function _tdEnsureSelectionClearance(){
 let _tdLineStartCharsCache = []; // último cálculo — para ajustar el arrastre a la línea más cercana
 
 // Nodo de texto interno de Trix sin equivalente en el recuento de
-// _tdParseBlocks (p.ej. los "cursor-target" \uFEFF a los lados de un
-// adjunto — ver el guard gemelo en runsFromInline, dentro de
-// _tdParseBlocks): cualquier texto cuyo ancestro más cercano (hasta
-// `container`) tenga data-trix-serialize="false" es invisible para el
-// recuento de caracteres y debe saltarse aquí también, o este TreeWalker
-// (que SÍ recorre el DOM entero sin filtrar) desalinearía la posición de la
-// línea de salto de página respecto a los offsets que calcula
-// _tdLayoutPages, para cualquier punto posterior a una imagen en el
-// documento — reintroduciría el mismo bug de otra forma.
+// _tdParseBlocks — dos casos reales encontrados, cada uno con su propio
+// marcador:
+//
+// 1) data-trix-serialize="false" — los "cursor-target" \uFEFF a los lados
+//    de un adjunto (ver el guard gemelo en runsFromInline, dentro de
+//    _tdParseBlocks).
+//
+// 2) data-trix-mutable="true" — BUG REAL reportado por Alberto y
+//    confirmado con el propio 🩺 (aviso "NO COINCIDEN" en "Recuento DOM
+//    directo vs flatText", primer nodo divergente: el texto "Remove" de
+//    <button class="trix-button trix-button--remove">). Al tocar una
+//    imagen para redimensionarla, el MISMO mousedown que activa nuestra
+//    caja de redimensionado (_tdWireImageResize/selectImage) también
+//    dispara el manejador NATIVO de Trix para adjuntos (mousedown sobre
+//    cualquier [data-trix-attachment]) — que instala su propia barra de
+//    herramientas (botón "Remove" circular; su texto queda oculto con
+//    text-indent, pero el nodo de texto sigue ahí) DENTRO del <figure>, y
+//    se queda insertada en el DOM el resto de la sesión de ese
+//    <trix-editor> (no la quita nada de lo nuestro; solo desaparece al
+//    volver a cargar el documento con loadHTML, que limpia el <figure>
+//    entero). Trix marca esa barra (y el editor de pie de foto) con
+//    data-trix-mutable="true" — el mismo marcador que su propio
+//    MutationObserver interno usa para "esto no es contenido real, no lo
+//    trates como tal" (ver trix.umd.min.js) — pero antes SOLO se
+//    comprobaba aquí data-trix-serialize="false", nunca este otro.
+//    _tdParseBlocks nunca contaba ese texto (no baja a los hijos de un
+//    <figure> salvo el <img>), así que pageStartChars seguía siendo
+//    correcto — pero este TreeWalker sí lo contaba, adelantando el
+//    recuento de caracteres del DOM real respecto al de flatText desde ese
+//    punto en adelante: cualquier salto de página POSTERIOR a una imagen
+//    tocada se dibujaba varios caracteres antes de tiempo (a veces partiendo
+//    una palabra por la mitad — el síntoma exacto descrito por Alberto:
+//    "el salto permanece donde estaba antes de redimensionar", aunque el
+//    contenido real de cada hoja fuera correcto desde el principio).
 function _tdIsInternalTrixTextNode(node, container){
   const el = node.parentElement;
   if(!el) return false;
-  const marked = el.closest('[data-trix-serialize="false"]');
+  const marked = el.closest('[data-trix-serialize="false"], [data-trix-mutable="true"]');
   return !!(marked && container.contains(marked));
 }
 
