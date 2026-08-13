@@ -552,11 +552,12 @@ function _tdInitOnce(){
       _tdLogIme('compositionend', 'data=' + JSON.stringify(e.data));
       // Al terminar, aplicar el reajuste/recentrado que se haya podido
       // saltar mientras estaba activa (mismo retardo que trix-change).
+      if(_tdRecomputeTimer) _tdLogScroll('cancela timer pendiente', 'origen=compositionend');
       clearTimeout(_tdRecomputeTimer);
       _tdRecomputeTimer = setTimeout(() => {
         if(typeof _tdSyncViewportHeight === 'function') _tdSyncViewportHeight();
         _tdRecomputeViewPagination();
-        _tdCenterActiveLine();
+        _tdCenterActiveLine('compositionend (220ms)');
       }, 220);
     });
     // 'input'/'beforeinput' no cambian ningún comportamiento (solo registran) —
@@ -603,10 +604,12 @@ function _tdInitOnce(){
       _tdDirty = true; // hay cambios sin guardar — ver edCloseTextDoc
       // Paginación en vivo: recalcular con retardo (evita rehacer el cálculo
       // en cada pulsación) y mantener centrada la línea que se está escribiendo.
+      if(_tdRecomputeTimer) _tdLogScroll('cancela timer pendiente', 'origen=trix-change');
       clearTimeout(_tdRecomputeTimer);
+      _tdLogScroll('trix-change → programa', 'recompute+center en 220ms');
       _tdRecomputeTimer = setTimeout(() => {
         _tdRecomputeViewPagination();
-        _tdCenterActiveLine();
+        _tdCenterActiveLine('trix-change (220ms)');
       }, 220);
     });
     // Cada salto de línea (Enter) cuenta como una línea más hacia el cálculo
@@ -616,15 +619,19 @@ function _tdInitOnce(){
     editorEl.addEventListener('keydown', e => {
       if(e.key !== 'Enter') return;
       _tdAutoFollow = true;
+      if(_tdRecomputeTimer) _tdLogScroll('cancela timer pendiente', 'origen=keydown Enter');
       clearTimeout(_tdRecomputeTimer);
+      _tdLogScroll('keydown Enter → programa', 'recompute+center en 30ms — scrollTop ahora mismo=' + (document.getElementById('tdPageArea')?.scrollTop));
       _tdRecomputeTimer = setTimeout(() => {
         _tdRecomputeViewPagination();
-        _tdCenterActiveLine();
+        _tdCenterActiveLine('keydown Enter (30ms)');
       }, 30);
     });
     editorEl.addEventListener('trix-selection-change', () => {
+      if(_tdFollowTimer) _tdLogScroll('cancela timer pendiente', 'origen=trix-selection-change (_tdFollowTimer)');
       clearTimeout(_tdFollowTimer);
-      _tdFollowTimer = setTimeout(_tdCenterActiveLine, 100);
+      _tdLogScroll('trix-selection-change → programa', 'center (sin recompute) en 100ms');
+      _tdFollowTimer = setTimeout(() => _tdCenterActiveLine('trix-selection-change (100ms, SIN recompute previo)'), 100);
       // rAF: el propio Android tarda un instante en decidir/mostrar su menú
       // nativo de selección (Copiar/Pegar) tras esta selección — se
       // comprueba en el frame siguiente para medir ya con la selección
@@ -963,7 +970,7 @@ function _tdSyncViewportHeight(){
   // La página cambia de tamaño — recalcular la paginación en vivo (con
   // retardo corto: el teclado tarda un poco en terminar de animarse).
   clearTimeout(_tdViewportSyncTimer);
-  _tdViewportSyncTimer = setTimeout(() => { _tdRecomputeViewPagination(); _tdCenterActiveLine(); }, 120);
+  _tdViewportSyncTimer = setTimeout(() => { _tdRecomputeViewPagination(); _tdCenterActiveLine('_tdSyncViewportHeight (120ms)'); }, 120);
 }
 let _tdFollowTimer = null;
 // Solo se sigue el cursor (recentrado automático) MIENTRAS SE ESCRIBE de
@@ -1151,6 +1158,23 @@ async function _tdRunDiag(){
   L(' un párrafo alineado con más de una línea)');
   if((window._tdApplyLog || []).length) window._tdApplyLog.forEach(l => L(l));
   else L('(vacío — no se ha pulsado "Aplicar al lienzo" todavía en esta carga de página)');
+
+  // Diagnóstico de seguimiento de cursor/centrado (_tdLogScroll, ver
+  // _tdCenterActiveLine/_tdSetScrollOffset/_tdInitOnce) — investigación del
+  // bug reportado por Alberto: al pulsar Intro, el cursor queda bien pero la
+  // pantalla se centra en el inicio de la hoja ANTERIOR. Reproducir el fallo
+  // (escribir hasta cerca de un cambio de hoja, pulsar Intro, ver la pantalla
+  // saltar mal) y pulsar 🩺 justo después — este historial muestra, en orden,
+  // qué disparador (keydown Intro/trix-change/trix-selection-change/
+  // _tdSyncViewportHeight) canceló a cuál, cuál llegó a ejecutarse de verdad,
+  // qué cursorY/targetY/delta midió cada uno, y si _tdSetScrollOffset tuvo
+  // que recortar el destino pedido (scrollHeight/clientHeight en ese
+  // instante) — la combinación de esos datos debería señalar directamente
+  // cuál de los tres temporizadores se equivoca y por qué.
+  L('');
+  L('── Seguimiento de cursor/centrado — historial (' + (window._tdScrollLog || []).length + ') ──');
+  if((window._tdScrollLog || []).length) window._tdScrollLog.forEach(l => L(l));
+  else L('(vacío — no se ha pulsado Intro ni escrito nada todavía en esta carga de página)');
 
   // Diagnóstico de inserción de imágenes — pedido explícito por Alberto tras
   // comprobar que ninguna imagen se ve en el editor de textos. Combina el
@@ -3392,6 +3416,9 @@ function _tdSetScrollOffset(px, animate){
   if(!areaEl) return;
   const maxScroll = Math.max(0, areaEl.scrollHeight - areaEl.clientHeight);
   const clamped = Math.max(0, Math.min(maxScroll, px));
+  if(Math.abs(clamped - px) > 1){
+    _tdLogScroll('_tdSetScrollOffset RECORTADO', 'pedido=' + px.toFixed(1) + ' clamped=' + clamped.toFixed(1) + ' scrollHeight=' + areaEl.scrollHeight + ' clientHeight=' + areaEl.clientHeight + ' maxScroll=' + maxScroll);
+  }
   areaEl.scrollTo({top: clamped, behavior: animate ? 'smooth' : 'instant'});
   _tdSyncPageNavFromOffset(clamped);
 }
@@ -3437,31 +3464,52 @@ function _tdScrollToViewPage(n, announce){
 // y el arrastre manual, ver _tdScrollToViewPage), aquí se mide la posición
 // REAL en pantalla del cursor (getClientRects) y se ajusta el desplazamiento
 // al milímetro.
-function _tdCenterActiveLine(){
+// Registro de seguimiento de cursor/centrado — mismo patrón que _tdLogImg,
+// para investigar el bug reportado por Alberto: al pulsar Intro, el cursor
+// queda bien colocado pero la pantalla se centra en el inicio de la hoja
+// ANTERIOR a la que se está escribiendo. Hay TRES disparadores independientes
+// que pueden terminar llamando a _tdCenterActiveLine tras un Intro (el propio
+// keydown de Intro a 30ms, trix-change a 220ms, y trix-selection-change a
+// 100ms — ver _tdInitOnce) — este registro deja constancia de CUÁL de ellos
+// corrió, con qué valores midió el cursor, y qué desplazamiento aplicó, para
+// poder ver en el propio 🩺 cuál de los tres se equivoca y por qué, en vez de
+// arreglar a ciegas el que parezca más sospechoso.
+window._tdScrollLog = window._tdScrollLog || [];
+function _tdLogScroll(kind, detail){
+  const t = new Date();
+  const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
+        ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
+  window._tdScrollLog.push(`${hh}:${mm}:${ss}.${ms}  ${kind}  ${detail || ''}`);
+  if(window._tdScrollLog.length > 150) window._tdScrollLog.shift();
+}
+function _tdCenterActiveLine(reason){
+  const _r = reason || '(sin origen indicado)';
   // No mover el scroll mientras hay una composición IME activa — ver
   // _tdComposing. Desplazar #tdPageArea (contenedor del <trix-editor>) en
   // ese instante es lo que hace que Android cancele la composición y se
   // pierda el carácter que se estaba formando (p.ej. el acento de "más").
-  if(_tdComposing) return;
-  if(!_tdAutoFollow) return; // el usuario se ha desplazado a mano para leer — no forzar hasta que vuelva a escribir
+  if(_tdComposing){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — _tdComposing activo'); return; }
+  if(!_tdAutoFollow){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — _tdAutoFollow=false'); return; } // el usuario se ha desplazado a mano para leer — no forzar hasta que vuelva a escribir
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
   if(!editorEl || !areaEl) return;
   const sel = window.getSelection();
-  if(!sel || sel.rangeCount === 0 || !sel.isCollapsed) return; // con texto seleccionado, no forzar
+  if(!sel || sel.rangeCount === 0 || !sel.isCollapsed){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin selección colapsada'); return; } // con texto seleccionado, no forzar
   const anchorNode = sel.focusNode;
-  if(!anchorNode || !editorEl.contains(anchorNode)) return;
+  if(!anchorNode || !editorEl.contains(anchorNode)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — focusNode fuera del editor'); return; }
 
   const range = sel.getRangeAt(0).cloneRange();
   range.collapse(true);
   let rect = range.getClientRects()[0];
+  let viaFallback = false;
   if(!rect){
     // Punto sin rectángulo propio (línea vacía, justo tras un salto, etc.):
     // el elemento contenedor más próximo sirve de aproximación razonable.
+    viaFallback = true;
     const el = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
     rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
   }
-  if(!rect || (rect.top === 0 && rect.bottom === 0)) return;
+  if(!rect || (rect.top === 0 && rect.bottom === 0)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin rect utilizable (viaFallback=' + viaFallback + ')'); return; }
   const cursorY = rect.top + rect.height / 2;
 
   const areaRect = areaEl.getBoundingClientRect();
@@ -3474,8 +3522,17 @@ function _tdCenterActiveLine(){
   const targetY = (safeTop + safeBottom) / 2;
 
   const delta = cursorY - targetY;
-  if(Math.abs(delta) < 3) return; // ya donde debe estar — evita micro-ajustes constantes
+  const _scrollTopAntes = areaEl.scrollTop;
+  if(Math.abs(delta) < 3){
+    _tdLogScroll('_tdCenterActiveLine sin cambio', _r + ' — delta=' + delta.toFixed(1) + ' cursorY=' + cursorY.toFixed(1) + ' targetY=' + targetY.toFixed(1) + ' viaFallback=' + viaFallback + ' scrollTop=' + _scrollTopAntes);
+    return; // ya donde debe estar — evita micro-ajustes constantes
+  }
+  _tdLogScroll('_tdCenterActiveLine APLICA scroll', _r + ' — delta=' + delta.toFixed(1) + ' cursorY=' + cursorY.toFixed(1) + ' targetY=' + targetY.toFixed(1) + ' viaFallback=' + viaFallback
+    + ' rect={top:' + rect.top.toFixed(1) + ',h:' + rect.height.toFixed(1) + '}'
+    + ' anchorNode=' + (anchorNode.nodeType === 3 ? ('texto:"' + (anchorNode.textContent||'').slice(0,20) + '"') : ('<' + anchorNode.tagName + '>'))
+    + ' scrollTopAntes=' + _scrollTopAntes + ' → pedido=' + (_scrollTopAntes + delta).toFixed(1));
   _tdSetScrollOffset(areaEl.scrollTop + delta, false);
+  _tdLogScroll('_tdCenterActiveLine scrollTop tras aplicar', _r + ' — scrollTop=' + areaEl.scrollTop + ' (clamp visible arriba si difiere del pedido)');
 }
 
 window.addEventListener('resize', () => {
