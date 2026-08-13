@@ -1292,28 +1292,48 @@ async function _tdRunDiag(){
       L('── Verificación cruzada: pageStartChars vs primera línea REAL de cada hoja (búsqueda EXACTA, sin margen de tolerancia) ──');
       for(let i = 1; i < pagesDiag.length; i++){
         const c = pscDiag[i];
-        const primeraLineaReal = pagesDiag[i][0];
-        if(primeraLineaReal && primeraLineaReal.kind === 'image'){
-          L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → primera línea es una imagen, se posiciona por el elemento DOM real, no por este número — se omite.`);
-          continue;
+        // BUG CORREGIDO en el propio diagnóstico (no en el algoritmo real):
+        // antes esta verificación solo miraba pagesDiag[i][0] y se rendía
+        // ("se omite") en cuanto la hoja empezaba con una imagen — dejando
+        // SIN COMPROBAR precisamente las hojas donde más falta hace, que es
+        // justo el caso reportado por Alberto (redimensionar una imagen del
+        // editor de textos). La autocorrección real de _tdLayoutPages SÍ
+        // recorre toda la hoja buscando la primera línea con texto real
+        // (las imágenes no consumen caracteres de flatText, así que el
+        // texto que sigue a una imagen al principio de hoja sigue estando
+        // en el carácter correcto) — este diagnóstico ahora hace exactamente
+        // lo mismo, para poder verificar también esas hojas.
+        let primerasPalabras = null;
+        let huboImagenAntes = false;
+        for(const linea of pagesDiag[i]){
+          if(linea.kind === 'image'){ huboImagenAntes = true; continue; }
+          const t = (linea.runs || []).map(r => r.text || '').join('').trim();
+          if(t){ primerasPalabras = t.split(/\s+/).filter(Boolean).slice(0, 4).join(' '); break; }
         }
-        const primeraLineaTexto = primeraLineaReal
-          ? (primeraLineaReal.runs || []).map(r => r.text || '').join('').trim()
-          : '';
-        const primerasPalabras = primeraLineaTexto.split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+        const etiquetaHoja = `pageStartChars[${i}]=${c} (hoja ${i + 1})${huboImagenAntes ? ' [empieza con imagen — verificando el primer texto real tras ella]' : ''}`;
         if(!primerasPalabras){
-          L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) → primera línea real vacía, no hay frase que buscar — se omite.`);
+          L(`  ${etiquetaHoja} → ninguna línea con texto real en toda la hoja (¿son solo imágenes?) — se omite.`);
           continue;
         }
-        const posicionReal = flatTextDiag.indexOf(primerasPalabras);
+        // Igual que la autocorrección real: primero busca HACIA ADELANTE
+        // desde c (evita coincidir con una aparición anterior si la frase
+        // se repite en el documento); si no aparece así, cae a una
+        // búsqueda simple desde el principio, dejándolo marcado para no
+        // confundir un desvío real con este caso.
+        let posicionReal = flatTextDiag.indexOf(primerasPalabras, c);
+        let viaBusquedaLibre = false;
+        if(posicionReal === -1){
+          posicionReal = flatTextDiag.indexOf(primerasPalabras);
+          viaBusquedaLibre = true;
+        }
         const desvio = posicionReal === -1 ? null : (posicionReal - c);
-        L(`  pageStartChars[${i}]=${c} (hoja ${i + 1}) — buscando "${primerasPalabras}"`);
+        L(`  ${etiquetaHoja} — buscando "${primerasPalabras}"`);
         if(posicionReal === -1){
           L(`    ⚠️⚠️⚠️ NO SE ENCUENTRA en todo el texto — algo más raro está pasando aquí.`);
         } else if(desvio === 0){
           L(`    ✓ Coincide EXACTO (aparece justo en c=${c}).`);
         } else {
-          L(`    ⚠️⚠️⚠️ Aparece de verdad en el carácter ${posicionReal}, DESVIADO ${desvio > 0 ? '+' : ''}${desvio} caracteres respecto a pageStartChars[${i}]=${c}.`);
+          L(`    ⚠️⚠️⚠️ Aparece de verdad en el carácter ${posicionReal}${viaBusquedaLibre ? ' (encontrado con búsqueda libre, no hacia adelante — la frase podría repetirse)' : ''}, DESVIADO ${desvio > 0 ? '+' : ''}${desvio} caracteres respecto a pageStartChars[${i}]=${c}.`);
         }
       }
 
@@ -2743,6 +2763,15 @@ function _tdWireImageResize(){
         document.removeEventListener('pointercancel', onUp);
         const finalW = Math.round(parseFloat(_rzImg.style.width) || startW);
         const finalH = Math.round(finalW / _rzAspect);
+        // NUEVO — registro del tamaño final tras soltar el tirador (antes no
+        // quedaba constancia de esto en ningún sitio: el diagnóstico 🩺 solo
+        // veía "selectImage OK" al empezar, nunca el resultado del arrastre).
+        // Necesario para poder comparar, en una próxima captura, el tamaño
+        // que de verdad se fijó aquí contra el que aparece al reeditar el
+        // flujo más tarde — investigación del bug reportado por Alberto
+        // ("el salto de hoja permanece donde estaba antes de redimensionar
+        // la imagen").
+        _tdLogImg('resize de imagen terminado (tirador soltado)', 'att.id=' + _rzAttachment.id + ' tamaño final=' + finalW + '×' + finalH);
         _rzImg.style.width = ''; _rzImg.style.height = ''; // Trix reaplica vía atributos width/height reales
         _rzAttachment.setAttributes({ width: finalW, height: finalH });
         requestAnimationFrame(syncBoxPosition);
