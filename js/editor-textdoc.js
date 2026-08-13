@@ -3508,6 +3508,26 @@ function _tdCenterActiveLine(reason){
     viaFallback = true;
     const el = anchorNode.nodeType === 3 ? anchorNode.parentElement : anchorNode;
     rect = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    // BUG CORREGIDO (reportado por Alberto — "al pulsar Intro la pantalla se
+    // centra al inicio de la hoja anterior"; confirmado con datos reales del
+    // propio 🩺): justo al crear una línea/párrafo nuevo vacío, además de no
+    // tener rectángulo propio, sel.focusNode puede resolver TRANSITORIAMENTE
+    // a un contenedor mucho más amplio de lo esperado — no el párrafo vacío
+    // recién creado, sino un ancestro con getBoundingClientRect().height de
+    // más de 1800px (buena parte del documento entero) — en vez de la altura
+    // de una sola línea. Usar ese rectángulo tal cual desplazaba la "línea
+    // activa" cientos de píxeles fuera de sitio: el salto exacto descrito.
+    // Un rectángulo más alto que el propio hueco visible NUNCA puede ser el
+    // de una sola línea de texto, así que se descarta aquí igual que "sin
+    // rectángulo utilizable" — el siguiente ciclo de centrado (trix-change o
+    // trix-selection-change, apenas décimas de segundo después, con el DOM
+    // ya asentado) vuelve a medir con datos fiables, como confirma el propio
+    // registro (el disparador de 220ms ya medía bien, pero para entonces el
+    // salto malo del de 100ms ya se había aplicado).
+    if(rect && rect.height > (areaEl.clientHeight || Infinity)){
+      _tdLogScroll('_tdCenterActiveLine descarta rect de fallback', _r + ' — height=' + rect.height.toFixed(1) + ' mayor que el hueco visible (' + areaEl.clientHeight + '), no puede ser una sola línea');
+      rect = null;
+    }
   }
   if(!rect || (rect.top === 0 && rect.bottom === 0)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin rect utilizable (viaFallback=' + viaFallback + ')'); return; }
   const cursorY = rect.top + rect.height / 2;
