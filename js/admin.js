@@ -31,7 +31,28 @@
    ============================================================ */
 
 function AdminView_init() {
-  if (!Auth.isAdmin()) { Router.go('home'); return; }
+  if (Auth.isAdmin()) { _adminViewStart(); return; }
+  // El role en caché puede estar desactualizado (ver Auth.refreshRole en
+  // auth.js) — p.ej. si "admin" acaba de ascender a esta persona a
+  // administrador mientras ya tenía la sesión iniciada, sin haber vuelto a
+  // recargar la app desde entonces. Antes de echarla a home, comprobar el
+  // role real contra el servidor una única vez — así #admin funciona sin
+  // necesitar cerrar sesión y volver a entrar.
+  if (typeof Auth.refreshRole === 'function') {
+    Auth.refreshRole().then(() => {
+      if (Auth.isAdmin()) {
+        _adminViewStart();
+        if (typeof Header !== 'undefined' && typeof Header.refresh === 'function') Header.refresh();
+      } else {
+        Router.go('home');
+      }
+    }).catch(() => Router.go('home'));
+  } else {
+    Router.go('home');
+  }
+}
+
+function _adminViewStart() {
   // Ajustar top del sticky tabs con la altura real del header
   const hdr = document.getElementById('siteHeader');
   const tabs = document.querySelector('.admin-tabs');
@@ -110,9 +131,20 @@ async function renderUsers(panel) {
   panel.innerHTML = '';
   if (!list.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`; return; }
 
-  const myId = Auth.currentUser()?.id;
+  const myId       = Auth.currentUser()?.id;
+  const myUsername = Auth.currentUser()?.username;
 
-  list.forEach(user => {
+  // NUEVO — Petición explícita de Alberto: la fila del usuario "admin" (la
+  // cuenta admin principal) no debe verla, ni por tanto poder tocarla,
+  // ningún OTRO administrador — solo el propio "admin". Se filtra aquí,
+  // ANTES de pintar nada, así ni siquiera aparece en el DOM para inspeccionar
+  // el botón/rol. Esto es solo la barrera de interfaz — el SQL que acompaña
+  // esta entrega añade la barrera real en el servidor (RLS), que es la que
+  // de verdad importa: cualquiera que hable directo con la API de Supabase
+  // sin pasar por esta pantalla se salta cualquier filtro solo de JS.
+  const visibleList = myUsername === 'admin' ? list : list.filter(u => u.username !== 'admin');
+
+  visibleList.forEach(user => {
     const isAdminUser = user.role === 'admin';
     const isSelf = user.id === myId;
     const row = document.createElement('div');

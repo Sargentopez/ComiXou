@@ -169,6 +169,17 @@ const Router = (() => {
       localStorage.setItem('cx_visited', '1');
       _render('home', {}); return;
     }
+    // NUEVO — Petición explícita de Alberto: comprobar el role real contra
+    // el servidor una vez al arrancar, no solo confiar en la caché de la
+    // sesión (ver Auth.refreshRole en auth.js para el porqué completo). Sin
+    // bloquear el arranque — si cambia algo, refrescar la cabecera para que
+    // el enlace "Panel de administrador" aparezca sin necesitar otra
+    // navegación.
+    if (typeof Auth !== 'undefined' && typeof Auth.refreshRole === 'function') {
+      Auth.refreshRole().then(changed => {
+        if (changed && typeof Header !== 'undefined' && typeof Header.refresh === 'function') Header.refresh();
+      }).catch(() => {});
+    }
     const hash = window.location.hash.replace('#', '');
     if (hash) {
       const [name, id] = hash.split('/');

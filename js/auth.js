@@ -398,8 +398,29 @@ const Auth = (() => {
         _clearSession();
         localStorage.removeItem('cs_refresh');
         if (typeof Header !== 'undefined') Header.refresh();
+        return;
       }
-      // 200 OK → sesión válida; no es necesario hacer nada más
+      // 200 OK → sesión válida.
+      //
+      // NUEVO — Petición explícita de Alberto (bug: un usuario recién hecho
+      // admin no podía entrar al panel hasta cerrar y volver a iniciar
+      // sesión): _tryRefresh() de arriba SOLO vuelve a consultar el perfil
+      // (rol incluido) cuando el token JWT ha caducado — con un token
+      // todavía válido (puede durar bastante), un cambio de rol hecho por
+      // otro admin no se reflejaba en la sesión YA ABIERTA de esa persona
+      // hasta que su token expirase por su cuenta o volviera a iniciar
+      // sesión a mano. Aquí, con la sesión ya confirmada válida en el
+      // servidor, se aprovecha para refrescar también el perfil (rol y
+      // nombre) por si ha cambiado desde el login — así el cambio se nota
+      // en la siguiente carga de la app (recargar/reabrir), sin esperar a
+      // que el token expire.
+      if (res.ok) {
+        const profile = await _fetchProfile(session.id, session.token);
+        if (profile && (profile.role !== session.role || profile.username !== session.username)) {
+          _saveSession(_buildSession(session.id, profile.username || session.username, session.email, profile.role, session.token));
+          if (typeof Header !== 'undefined') Header.refresh();
+        }
+      }
     } catch (_) {
       // Error de red (offline) → mantener sesión cacheada
     }
@@ -427,6 +448,32 @@ const Auth = (() => {
   }
   function isLogged()    { return !!currentUser(); }
   function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
+
+  // Vuelve a comprobar el ROLE real en el servidor y actualiza la sesión en
+  // caché si ha cambiado — NUEVO (pedido explícito de Alberto): getSession()
+  // guarda el role tal cual estaba AL INICIAR SESIÓN; si el admin asciende a
+  // alguien a administrador mientras esa persona sigue con la sesión ya
+  // iniciada, su caché local seguía diciendo 'user' hasta que volvía a
+  // iniciar sesión desde cero — no podía ni ver el enlace "Panel de
+  // administrador" en el menú, ni entrar al panel aunque escribiera #admin a
+  // mano. Se llama una vez al arrancar la app (Router.start(), vía
+  // router.js) y, como red de seguridad adicional para quien navegue
+  // directamente a #admin sin haber recargado, justo antes de decidir si se
+  // deja entrar al panel (ver AdminView_init en admin.js). Devuelve true si
+  // el role ha cambiado de verdad (para que quien llame sepa si merece la
+  // pena refrescar algo más, p.ej. el enlace del menú).
+  async function refreshRole() {
+    const s = getSession();
+    if (!s || !s.token) return false;
+    const profile = await _fetchProfile(s.id, s.token);
+    if (profile && profile.role && profile.role !== s.role) {
+      s.role = profile.role;
+      _saveSession(s);
+      return true;
+    }
+    return false;
+  }
+
   function canManage(comic) {
     const u = currentUser();
     if (!u) return false;
@@ -435,7 +482,7 @@ const Auth = (() => {
     return comic.userId === u.id || comic.username === u.username;
   }
 
-  return { login, register, logout, deleteAccount, changePassword, requestPasswordReset, currentUser, isLogged, isAdmin, canManage };
+  return { login, register, logout, deleteAccount, changePassword, requestPasswordReset, currentUser, isLogged, isAdmin, canManage, refreshRole };
 })();
 
 // Exponer _tryRefresh globalmente para que supabase-client pueda refrescar el token antes de escribir
