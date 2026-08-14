@@ -1366,6 +1366,7 @@ let _edMotionPathDrawing = false; // usuario arrastrando activamente
 let _edMotionPathClosed  = false; // recorrido cerrado
 let edMpRotating = false; // true mientras se arrastra el handle de rotación durante la edición del recorrido
 let _edMotionPathOrigRotation = 0; // rotación original del objeto al entrar en modo recorrido (para restaurar si se cancela)
+let _edMotionPathOrigX = 0.5, _edMotionPathOrigY = 0.5; // origen FIJO del recorrido (posición del objeto/grupo al abrir la ventana) — no se recalcula al arrastrar el objeto durante la edición
 let _edMotionPathSpeed   = 100;   // velocidad en píxeles del canvas por segundo (capas no animadas)
 let _edMotionPathCycles  = 1;     // ciclos de animación durante el recorrido (capas animadas)
 let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
@@ -5488,14 +5489,20 @@ function edApplyDeviceClass() {
 }
 
 function edDrawSel(){
-  // Durante edición de recorrido: no mostrar el marco ni los handles de resize
-  // (el pinch debe controlar solo la cámara), pero sí el handle de rotación,
-  // para poder orientar el objeto en su punto de partida con independencia
-  // de la forma del trazado.
+  // Durante edición de recorrido: además del handle de rotación propio (que
+  // funciona con independencia de edSelectedIdx), dejar caer también al
+  // dibujo normal del marco + handles de resize — edSelectedIdx ya está
+  // sincronizado con el objeto del recorrido (ver _edStartMotionPath), así
+  // que es el mismo objeto. Petición de Alberto: poder ver y usar también
+  // los handlers de arrastrar/redimensionar con la ventana de recorrido
+  // abierta, no solo el de rotar. Si el objeto está agrupado, el dibujo
+  // normal de más abajo ya se salta los handles individuales (mismo criterio
+  // que fuera de este modo) — el handle de rotación del recorrido se sigue
+  // mostrando igualmente (no depende de esa comprobación).
   if(_edMotionPathMode){
     const _mpLa = edLayers[_edMotionPathTarget];
     if(_mpLa) _edDrawMpRotateHandle(_mpLa);
-    return;
+    // sin return: continúa más abajo con el dibujo normal del marco/handles
   }
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
   const la=edLayers[edSelectedIdx];
@@ -8404,10 +8411,24 @@ function _edBezierSampleClosed(pts, numSamples) {
     const next  = (seg + 1) % n;
     const mp0x  = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
     const mp1x  = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
-    result.push({
-      x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
-      y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
-    });
+    if (pts[seg].sharp) {
+      // Ajuste a guía (petición de Alberto: debe prevalecer sobre el
+      // suavizado): pasar EXACTAMENTE por este punto — esquina dura, p.ej.
+      // un giro de 90° — en vez de la curva bezier suave, con dos tramos
+      // rectos (mismo criterio que en el overlay, ver _edDrawMotionPath).
+      if (u < 0.5) {
+        const uu = u / 0.5;
+        result.push({ x: mp0x + (pts[seg].x - mp0x) * uu, y: mp0y + (pts[seg].y - mp0y) * uu });
+      } else {
+        const uu = (u - 0.5) / 0.5;
+        result.push({ x: pts[seg].x + (mp1x - pts[seg].x) * uu, y: pts[seg].y + (mp1y - pts[seg].y) * uu });
+      }
+    } else {
+      result.push({
+        x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
+        y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
+      });
+    }
   }
   result.push({ x: result[0].x, y: result[0].y }); // cerrar el bucle
   return result;
@@ -9027,7 +9048,13 @@ function _edAlignPathToGuides(rawPts, bx, by) {
       const proj = (wx - r.x1) * rnx + (wy - r.y1) * rny;
       if (Math.abs(proj) < threshold) {
         pts[i] = { x: pts[i].x - proj * rnx / pw,
-                   y: pts[i].y - proj * rny / ph };
+                   y: pts[i].y - proj * rny / ph,
+                   // Petición de Alberto: el ajuste a guías debe prevalecer
+                   // sobre el suavizado — un punto ajustado a una guía marca
+                   // una esquina DURA (p.ej. un giro de 90°) que la curva
+                   // bezier del overlay/reproducción no debe redondear (ver
+                   // _edDrawMotionPath y _edBezierSampleClosed).
+                   sharp: true };
       }
     }
   }
@@ -9107,6 +9134,44 @@ function _edGrpPathRowHtml(la) {
         </div>` : ''}`;
 }
 
+// Parpadeo del punto central (botón de inicio) — rAF de bajo coste, limitado
+// a ~14fps (suficiente para un pulso visible, mucho más barato que 60fps)
+// mientras dure el modo recorrido. edRedraw() ya se llama en cada gesto del
+// usuario; esto añade los redibujados adicionales necesarios para animar el
+// marcador incluso con el dedo/ratón quieto.
+let _edMpBlinkRaf = null;
+function _edMpBlinkTick(ts) {
+  if (!_edMotionPathMode) { _edMpBlinkRaf = null; return; }
+  if (!_edMpBlinkTick._last || ts - _edMpBlinkTick._last > 70) {
+    _edMpBlinkTick._last = ts;
+    edRedraw();
+  }
+  _edMpBlinkRaf = requestAnimationFrame(_edMpBlinkTick);
+}
+function _edMpBlinkStart() {
+  if (_edMpBlinkRaf) return; // ya en marcha
+  _edMpBlinkTick._last = 0;
+  _edMpBlinkRaf = requestAnimationFrame(_edMpBlinkTick);
+}
+function _edMpBlinkStop() {
+  if (_edMpBlinkRaf) { cancelAnimationFrame(_edMpBlinkRaf); _edMpBlinkRaf = null; }
+}
+
+// Centro del objeto (o promedio del grupo) — misma lógica usada en varios
+// sitios del recorrido; centralizada aquí para no repetirla.
+function _edMpLiveCenter(la) {
+  if (!la) return { x: 0.5, y: 0.5 };
+  if (la.groupId) {
+    const _gm = _edGroupMemberIdxs(la.groupId).map(i => edLayers[i]).filter(Boolean);
+    if (!_gm.length) return { x: la.x, y: la.y };
+    return {
+      x: _gm.reduce((a,m)=>a+(m.x||0.5),0) / _gm.length,
+      y: _gm.reduce((a,m)=>a+(m.y||0.5),0) / _gm.length,
+    };
+  }
+  return { x: la.x, y: la.y };
+}
+
 // Inicia el modo dibujo de recorrido para la capa idx
 function _edStartMotionPath(idx) {
   const la = edLayers[idx]; if (!la) return;
@@ -9122,7 +9187,21 @@ function _edStartMotionPath(idx) {
   // Guardar la rotación de partida para poder restaurarla si se cancela (✕)
   edMpRotating = false;
   _edMotionPathOrigRotation = la.rotation || 0;
+  // Origen FIJO del recorrido: la posición del objeto/grupo AHORA, al abrir
+  // la ventana. Petición de Alberto: poder arrastrar el objeto durante la
+  // edición sin que el punto de inicio de la trayectoria se desplace con
+  // él — solo el objeto se mueve, el origen del trazado queda fijo hasta
+  // cerrar la ventana (ver _edMpLiveCenter/_edMpCenterHitTest/edOnMove y el
+  // reajuste al guardar en _edEndMotionPath).
+  const _origC = _edMpLiveCenter(la);
+  _edMotionPathOrigX = _origC.x; _edMotionPathOrigY = _origC.y;
   _edDrawLockUI();
+  // Marca específica del modo recorrido (además de "draw-active", que
+  // comparten dibujo a mano/vectorial/paneles de propiedades): permite
+  // excepcionar SOLO aquí el menú Guías, que debe seguir accesible porque
+  // los trayectos se ajustan a las guías (ver css/editor.css).
+  $('editorShell')?.classList.add('mp-active');
+  _edMpBlinkStart();
   edSelectedIdx = idx;
   if (edCanvas) edCanvas.style.cursor = 'crosshair';
   const bar = $('edMotionBar'); if (!bar) return;
@@ -9157,6 +9236,18 @@ function _edEndMotionPath(save) {
     const la = edLayers[_edMotionPathTarget];
     if (la) {
       if (_edMotionPathPts.length >= 2) {
+        // Los puntos se grabaron relativos al origen FIJO de la sesión de
+        // edición (ver _edStartMotionPath/_edMpCenterHitTest) — el primer
+        // punto es siempre (0,0), es decir "el propio origen". Guardarlos
+        // TAL CUAL (sin compensar la posición final del objeto) es lo
+        // correcto: en la reproducción, pathCurX = la.x + rel.x, así que en
+        // t=0 el objeto queda exactamente en su posición actual (la.x) —
+        // sin salto — y el resto de la forma dibujada se conserva relativa
+        // a esa posición, aunque el objeto se haya arrastrado durante la
+        // edición. (Antes se compensaba para mantener la forma en el mismo
+        // sitio ABSOLUTO de la pantalla, lo que provocaba que la animación
+        // "saltara" siempre al punto antiguo en vez de partir de la nueva
+        // posición del objeto — bug reportado por Alberto.)
         la._motionPath       = _edMotionPathPts.map(p => ({ x: p.x, y: p.y }));
         la._motionPathClosed = _edMotionPathClosed;
         la._motionSpeed      = _edMotionPathSpeed;
@@ -9207,6 +9298,8 @@ function _edEndMotionPath(save) {
   }
   // Detener preview play si estaba activo
   if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
+  _edMpBlinkStop();
+  $('editorShell')?.classList.remove('mp-active');
   _edMotionPathMode    = false;
   _edMotionPathTarget  = -1;
   _edMotionPathPts     = [];
@@ -9271,6 +9364,21 @@ function _edMpRotateHitTest(e) {
   const hitScreen = _isT ? 22 : 14;
   return distScreen < hitScreen;
 }
+// ¿El evento cae sobre el punto central del objeto (botón de inicio del
+// trazado)? Usa el origen FIJO (_edMotionPathOrigX/Y, fijado al abrir la
+// ventana), no la posición en vivo del objeto — así el botón no se desplaza
+// si el objeto se arrastra durante la edición (petición de Alberto).
+function _edMpCenterHitTest(e) {
+  const la = edLayers[_edMotionPathTarget];
+  if (!la) return false;
+  const c = edCoords(e);
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const _isT = e.pointerType === 'touch';
+  const _dpx = (c.nx - _edMotionPathOrigX) * pw, _dpy = (c.ny - _edMotionPathOrigY) * ph;
+  const distScreen = Math.hypot(_dpx, _dpy) * z;
+  const hitScreen = _isT ? 26 : 18; // a juego con el marcador, ahora más grande
+  return distScreen < hitScreen;
+}
 // Aplica el arrastre del handle de rotación (delta angular acumulado, igual
 // que la rotación normal — soporta giros de más de 180°).
 function _edMpRotateUpdate(e) {
@@ -9297,9 +9405,15 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const _la = (layerIdx != null && layerIdx >= 0) ? edLayers[layerIdx] : null;
-  // Si la capa pertenece a un grupo, usar el centro del grupo como origen del recorrido
+  // Origen del recorrido: mientras se está EDITANDO, el origen FIJO capturado
+  // al abrir la ventana (_edMotionPathOrigX/Y) — no la posición en vivo del
+  // objeto, para poder arrastrarlo sin que el trazado ya dibujado se desplace
+  // con él (petición de Alberto). Fuera de edición (vista previa de un
+  // recorrido ya guardado) se sigue usando la posición real de la capa/grupo.
   let bx, by;
-  if (_la && _la.groupId) {
+  if (editing) {
+    bx = _edMotionPathOrigX; by = _edMotionPathOrigY;
+  } else if (_la && _la.groupId) {
     const _gmbrs = _edGroupMemberIdxs(_la.groupId).map(i => edLayers[i]).filter(Boolean);
     const _gxs = _gmbrs.map(m => m.x || 0.5), _gys = _gmbrs.map(m => m.y || 0.5);
     bx = (_gxs.reduce((a,b)=>a+b,0) / _gxs.length);
@@ -9318,19 +9432,32 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   edCtx.lineJoin    = 'round';
 
   // ── Marcador de centro de la capa (origen del recorrido) ─────────────────
-  // Visible siempre en modo edición para indicar dónde empieza el trazado.
+  // Es el BOTÓN de inicio de trazado (ver _edMpCenterHitTest en edOnStart):
+  // más grande, semitransparente e intermitente para que se note que hay que
+  // tocarlo ahí (petición de Alberto). El parpadeo lo produce _edMpBlinkStart/
+  // Stop (rAF de bajo coste, ~14fps) llamando a edRedraw() mientras dure el
+  // modo recorrido — aquí solo se calcula la fase a partir de Date.now().
   if (editing && _la) {
     const cx = mx + bx * pw;
     const cy = my + by * ph;
-    const cr = 9 / edCamera.z;   // radio del círculo
-    const ca = 14 / edCamera.z;  // longitud de cada brazo del +
+    const cr = 17 / edCamera.z;   // radio del círculo — antes 9
+    const ca = 22 / edCamera.z;   // brazos del + — antes 14
+    // Oscila entre ~0.35 (mínimo) y ~0.9 (máximo) — nunca totalmente opaco
+    // ("cierta transparencia") ni invisible, parpadeo suave tipo pulso.
+    const _blink = 0.35 + 0.55 * (0.5 + 0.5 * Math.sin(Date.now() / 380));
     edCtx.save();
+    edCtx.globalAlpha = _blink;
+    // Relleno blanco semitransparente para visibilidad sobre fondo oscuro
+    edCtx.beginPath();
+    edCtx.arc(cx, cy, cr - 1.5 / edCamera.z, 0, Math.PI * 2);
+    edCtx.fillStyle = 'rgba(255,255,255,0.5)';
+    edCtx.fill();
     // Círculo exterior punteado
     edCtx.beginPath();
     edCtx.arc(cx, cy, cr, 0, Math.PI * 2);
-    edCtx.setLineDash([3 / edCamera.z, 3 / edCamera.z]);
+    edCtx.setLineDash([3.5 / edCamera.z, 3.5 / edCamera.z]);
     edCtx.strokeStyle = '#2563eb';
-    edCtx.lineWidth   = 1.8 / edCamera.z;
+    edCtx.lineWidth   = 2.2 / edCamera.z;
     edCtx.stroke();
     edCtx.setLineDash([]);
     // Cruz interior (+)
@@ -9338,13 +9465,8 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
     edCtx.moveTo(cx - ca, cy); edCtx.lineTo(cx + ca, cy);
     edCtx.moveTo(cx, cy - ca); edCtx.lineTo(cx, cy + ca);
     edCtx.strokeStyle = '#2563eb';
-    edCtx.lineWidth   = 1.5 / edCamera.z;
+    edCtx.lineWidth   = 2 / edCamera.z;
     edCtx.stroke();
-    // Relleno blanco semitransparente para visibilidad sobre fondo oscuro
-    edCtx.beginPath();
-    edCtx.arc(cx, cy, cr - 1 / edCamera.z, 0, Math.PI * 2);
-    edCtx.fillStyle = 'rgba(255,255,255,0.45)';
-    edCtx.fill();
     edCtx.restore();
   }
 
@@ -9370,19 +9492,26 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
         const next = toWs(allPts[i + 1]);
         const mx2  = (cur.x + next.x) / 2;
         const my2  = (cur.y + next.y) / 2;
-        if (i === 0) {
-          edCtx.quadraticCurveTo(cur.x, cur.y, mx2, my2);
-        } else {
-          const prev = toWs(allPts[i - 1]);
-          const mpx  = (prev.x + cur.x) / 2;
-          const mpy  = (prev.y + cur.y) / 2;
-          edCtx.quadraticCurveTo(cur.x, cur.y, mx2, my2);
-        }
+        // Ajuste a guía (petición de Alberto: debe prevalecer sobre el
+        // suavizado): forzar que la curva pase EXACTAMENTE por este punto
+        // — esquina dura, p.ej. un giro de 90° — en vez de solo usarlo
+        // como control de aproximación al punto medio (que la redondearía).
+        // i===0 no lo necesita: el moveTo inicial ya deja el trazo ahí.
+        if (allPts[i].sharp && i > 0) edCtx.lineTo(cur.x, cur.y);
+        edCtx.quadraticCurveTo(cur.x, cur.y, mx2, my2);
       }
       // Último tramo al punto final
       if (!closed) {
         const pFinal = toWs(allPts[allPts.length - 1]);
         const pPrev  = toWs(allPts[allPts.length - 2]);
+        // Mismo criterio que en el bucle: si el penúltimo punto está
+        // ajustado a guía, forzar que la curva pase EXACTAMENTE por él
+        // antes de curvar al final — este punto nunca se visita como "cur"
+        // en el bucle principal (solo como "next" en su última iteración),
+        // así que sin esto quedaba siempre redondeado aunque estuviera
+        // marcado sharp (bug reportado con captura: la curva se alejaba
+        // notablemente de las guías cerca del último tramo).
+        if (allPts[allPts.length - 2].sharp) edCtx.lineTo(pPrev.x, pPrev.y);
         edCtx.quadraticCurveTo(pPrev.x, pPrev.y, pFinal.x, pFinal.y);
       }
       if (closed) edCtx.closePath();
@@ -9699,54 +9828,142 @@ function edOnStart(e){
     // Si estaba reproduciendo preview, detenerlo antes de redibujar
     if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
 
-    // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
-    // En ratón/lápiz: iniciar inmediatamente.
-    if (e.pointerType === 'touch') {
-      // Registrar el puntero ANTES de cualquier return
-      if (!window._edActivePointers) window._edActivePointers = new Map();
-      window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-      e.preventDefault();
+    const c = edCoords(e); // reutilizado por los handlers de resize/mover de abajo
 
-      if (window._edActivePointers.size >= 2) {
-        // Segundo dedo (o más): cancelar el timer de dibujo y activar la cámara.
-        // Esto permite mover/zoom con dos dedos aunque la ventana de recorrido esté abierta.
+    // ── Handles de redimensionado del objeto ──────────────────────────────
+    // Mismo criterio que el bloque general de handles (más abajo en esta
+    // misma función, fuera de modo recorrido): 8 puntos de getControlPoints()
+    // sin contar 'rotate' (ya comprobado arriba). Petición de Alberto: poder
+    // redimensionar el objeto con la ventana de recorrido abierta, igual que
+    // ya se podía rotar.
+    {
+      const _laRz = edLayers[_edMotionPathTarget];
+      if (_laRz && _laRz.type !== 'bubble' && !_laRz.locked && !_laRz.groupId) {
+        const _isTRz = e.pointerType === 'touch';
+        const _pwRz = edPageW(), _phRz = edPageH(), _zRz = edCamera.z;
+        const _objMinHalfScreenRz = Math.min(_laRz.width * _pwRz, _laRz.height * _phRz) * _zRz / 2;
+        const _hitRz = Math.min(_isTRz ? 22 : 14, Math.max(4, _objMinHalfScreenRz * 0.7));
+        for (const p of _laRz.getControlPoints()) {
+          if (p.corner === 'rotate') continue;
+          const _dpxRz = (c.nx - p.x) * _pwRz, _dpyRz = (c.ny - p.y) * _phRz;
+          if (Math.hypot(_dpxRz, _dpyRz) * _zRz < _hitRz) {
+            edIsResizing = true; edResizeCorner = p.corner;
+            const _rot0 = (_laRz.rotation||0) * Math.PI/180;
+            const _hw0 = _laRz.width/2, _hh0 = _laRz.height/2;
+            const _anchorLocal = (corner) => {
+              const ax = corner==='ml'?_hw0 : corner==='mr'?-_hw0 : corner==='tl'||corner==='bl'?_hw0 : corner==='tr'||corner==='br'?-_hw0 : 0;
+              const ay = corner==='mt'?_hh0 : corner==='mb'?-_hh0 : corner==='tl'||corner==='tr'?_hh0 : corner==='bl'||corner==='br'?-_hh0 : 0;
+              const rx=ax*_pwRz, ry=ay*_phRz;
+              return { x: _laRz.x+(rx*Math.cos(_rot0)-ry*Math.sin(_rot0))/_pwRz,
+                       y: _laRz.y+(rx*Math.sin(_rot0)+ry*Math.cos(_rot0))/_phRz };
+            };
+            const _anch = _anchorLocal(p.corner);
+            edInitialSize = { width:_laRz.width, height:_laRz.height, cx:_laRz.x, cy:_laRz.y,
+                               asp:_laRz.height/_laRz.width, rot:(_laRz.rotation||0), ox:_laRz.x, oy:_laRz.y,
+                               anchorX:_anch.x, anchorY:_anch.y, _fillLayerId:_laRz._fillLayerId||null };
+            if (_laRz.type === 'line') {
+              edInitialSize._linePoints = _laRz.points.map(pp => pp ? ({...pp}) : null);
+              edInitialSize._subPaths = _laRz.subPaths && _laRz.subPaths.length
+                ? _laRz.subPaths.map(sp => { const _s = sp.map(pp => ({...pp})); if (sp.cornerRadii) _s.cornerRadii = {...sp.cornerRadii}; return _s; })
+                : null;
+              const _cr2 = _laRz.cornerRadii || {};
+              if (Object.keys(_cr2).some(k => (_cr2[k]||0) > 0)) {
+                const _xs = _laRz.points.map(pp=>pp.x), _ys = _laRz.points.map(pp=>pp.y);
+                const _ptW = Math.max(Math.max(..._xs)-Math.min(..._xs), 0.01);
+                const _ptH = Math.max(Math.max(..._ys)-Math.min(..._ys), 0.01);
+                _laRz.width = _ptW; _laRz.height = _ptH;
+                edInitialSize.width = _ptW; edInitialSize.height = _ptH;
+                edInitialSize.asp = _ptH/_ptW;
+              }
+            }
+            if (_laRz.cornerRadii) {
+              edInitialSize._cornerRadii = Array.isArray(_laRz.cornerRadii) ? [..._laRz.cornerRadii] : {..._laRz.cornerRadii};
+            } else { edInitialSize._cornerRadii = null; }
+            if (e.pointerId !== undefined) { try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {} }
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+    }
+
+    // ── Botón de inicio de trazado: el punto central del objeto ───────────
+    // Ya NO se dibuja al tocar cualquier parte del lienzo — solo este punto
+    // (petición de Alberto, para no chocar con los handlers de arrastrar/
+    // redimensionar de más abajo). Mismo tap: activa el dibujo Y coloca el
+    // primer punto del trazado, sin paso intermedio.
+    if (_edMpCenterHitTest(e)) {
+      // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
+      // En ratón/lápiz: iniciar inmediatamente.
+      if (e.pointerType === 'touch') {
+        // Registrar el puntero ANTES de cualquier return
+        if (!window._edActivePointers) window._edActivePointers = new Map();
+        window._edActivePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+        e.preventDefault();
+
+        if (window._edActivePointers.size >= 2) {
+          // Segundo dedo (o más): cancelar el timer de dibujo y activar la cámara.
+          // Esto permite mover/zoom con dos dedos aunque la ventana de recorrido esté abierta.
+          clearTimeout(window._edMpTouchTimer);
+          window._edMpTouchTimer = null;
+          _edMotionPathDrawing = false;
+          edPinchStart(e);   // iniciar pinch/pan de cámara igual que en el editor normal
+          return;
+        }
+
+        // Primer dedo: esperar 120ms por si llega segundo dedo (pinch vs dibujo)
         clearTimeout(window._edMpTouchTimer);
-        window._edMpTouchTimer = null;
-        _edMotionPathDrawing = false;
-        edPinchStart(e);   // iniciar pinch/pan de cámara igual que en el editor normal
+        const _eSavedMp = e;
+        window._edMpTouchTimer = setTimeout(() => {
+          window._edMpTouchTimer = null;
+          if (!_edMotionPathMode) return;
+          if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
+          _edMotionPathDrawing = true;
+          _edMotionPathClosed  = false;
+          _edMotionPathRaw = [{ x: 0, y: 0 }];
+          _edMotionPathPts = _edMotionPathRaw.slice();
+          if (_eSavedMp.pointerId !== undefined) {
+            try { edCanvas.setPointerCapture(_eSavedMp.pointerId); } catch(_) {}
+          }
+          edRedraw();
+        }, 120);
         return;
       }
 
-      // Primer dedo: esperar 120ms por si llega segundo dedo (pinch vs dibujo)
-      clearTimeout(window._edMpTouchTimer);
-      const _eSavedMp = e;
-      window._edMpTouchTimer = setTimeout(() => {
-        window._edMpTouchTimer = null;
-        if (!_edMotionPathMode) return;
-        if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
-        _edMotionPathDrawing = true;
-        _edMotionPathClosed  = false;
-        _edMotionPathRaw = [{ x: 0, y: 0 }];
-        _edMotionPathPts = _edMotionPathRaw.slice();
-        if (_eSavedMp.pointerId !== undefined) {
-          try { edCanvas.setPointerCapture(_eSavedMp.pointerId); } catch(_) {}
-        }
-        edRedraw();
-      }, 120);
+      // Ratón/lápiz: inicio inmediato
+      _edMotionPathDrawing = true;
+      _edMotionPathClosed  = false;
+      _edMotionPathRaw = [{ x: 0, y: 0 }];
+      _edMotionPathPts = _edMotionPathRaw.slice();
+      if (e.pointerId !== undefined) {
+        try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {}
+      }
+      e.preventDefault();
+      edRedraw();
       return;
     }
 
-    // Ratón/lápiz: inicio inmediato
-    _edMotionPathDrawing = true;
-    _edMotionPathClosed  = false;
-    _edMotionPathRaw = [{ x: 0, y: 0 }];
-    _edMotionPathPts = _edMotionPathRaw.slice();
-    if (e.pointerId !== undefined) {
-      try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {}
+    // ── Arrastrar (mover) el objeto ────────────────────────────────────────
+    {
+      const _laMv = edLayers[_edMotionPathTarget];
+      if (_laMv && !_laMv.locked && _laMv.contains(c.nx, c.ny)) {
+        edDragOffX = c.nx - _laMv.x;
+        edDragOffY = c.ny - _laMv.y;
+        edIsDragging = true;
+        window._edMoved = false;
+        if (e.pointerId !== undefined) { try { edCanvas.setPointerCapture(e.pointerId); } catch(_) {} }
+        e.preventDefault();
+        return;
+      }
     }
-    e.preventDefault();
-    edRedraw();
-    return;
+
+    // Nada de lo anterior: puede ser un tirador/línea de guía (las guías
+    // tienen prioridad máxima sobre cualquier bloqueo de UI, ver comentario
+    // más abajo junto a _edGuidesPassThroughActive) — dejar caer al bloque
+    // de guías que sigue a continuación en vez de ignorar aquí mismo.
+    // Si tampoco es una guía, el guard de después de ese bloque
+    // ("if (_edMotionPathMode) return;") corta antes de llegar a la
+    // selección general de objetos, para no romper la sesión de edición.
   }
   // Si el popup de sub-herramientas de la barra flotante está abierto,
   // este toque es para descartarlo — el outside-handler del popup gestiona la acción.
@@ -9868,7 +10085,11 @@ function edOnStart(e){
     }
   }
 
-  
+  // En modo recorrido, si nada de lo anterior (handles del objeto, guías)
+  // consumió el toque, ignorarlo aquí — no debe caer en la selección
+  // general de objetos (podría reasignar edSelectedIdx y romper la sesión
+  // de edición del recorrido, ver _edStartMotionPath).
+  if (_edMotionPathMode) return;
 
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
@@ -11762,18 +11983,10 @@ function edOnMove(e){
       return;
     }
     if (_edMotionPathDrawing) {
-      // Dibujo activo: acumular puntos del recorrido
+      // Dibujo activo: acumular puntos del recorrido, relativos al origen
+      // FIJO (no a la posición en vivo del objeto — ver _edStartMotionPath).
       const _mm = edCoords(e);
-      const _la1 = edLayers[_edMotionPathTarget];
-      // Si la capa pertenece a un grupo, usar el centro del grupo como base
-      let _bx, _by;
-      if (_la1 && _la1.groupId) {
-        const _gm1 = _edGroupMemberIdxs(_la1.groupId).map(i => edLayers[i]).filter(Boolean);
-        _bx = _gm1.reduce((a,m)=>a+(m.x||0.5),0) / _gm1.length;
-        _by = _gm1.reduce((a,m)=>a+(m.y||0.5),0) / _gm1.length;
-      } else {
-        _bx = _la1 ? _la1.x : 0.5; _by = _la1 ? _la1.y : 0.5;
-      }
+      const _bx = _edMotionPathOrigX, _by = _edMotionPathOrigY;
       const _last = _edMotionPathRaw[_edMotionPathRaw.length - 1];
       if (_last) {
         const _rx0 = (_mm.nx - _bx);
@@ -12698,10 +12911,7 @@ function edOnEnd(e){
     if (_edMotionPathDrawing) {
       _edMotionPathDrawing = false;
       if (_edMotionPathRaw.length >= 2) {
-        const _la0 = edLayers[_edMotionPathTarget];
-        const _bx0 = _la0 ? (_la0.x || 0.5) : 0.5;
-        const _by0 = _la0 ? (_la0.y || 0.5) : 0.5;
-        const _aligned = _edAlignPathToGuides(_edMotionPathRaw, _bx0, _by0);
+        const _aligned = _edAlignPathToGuides(_edMotionPathRaw, _edMotionPathOrigX, _edMotionPathOrigY);
         _edMotionPathPts = _edRdpSimplify(_aligned, 0.004);
       } else {
         _edMotionPathPts = _edMotionPathRaw.slice();
@@ -12715,7 +12925,15 @@ function edOnEnd(e){
       }
       edRedraw();
     }
-    return;
+    // Redimensionado/arrastre del objeto, o arrastre de una guía (handlers
+    // añadidos en edOnStart / el bloque de guías al que ahora se deja caer,
+    // ver más arriba): NO devolver aquí — dejar caer al final de gesto
+    // general de más abajo (misma función), que resetea edIsResizing/
+    // edIsDragging/_edRuleDrag y guarda en el historial exactamente igual
+    // que cualquier otro resize/drag/guía del editor. Solo se retorna ya
+    // (arriba) para rotar/dibujar, que son exclusivos del modo recorrido y
+    // no tienen equivalente general.
+    if (!edIsResizing && !edIsDragging && !_edRuleDrag) return;
   }
   // Zoom rect: aplicar zoom al rect seleccionado y restaurar herramienta
   if (_edZoomRectActive && _edZoomRectStart) {
@@ -20502,6 +20720,14 @@ function _edIsAnimLayer(la) {
 // rx, ry: coords relativas al centro de la capa (espacio de página, fracción).
 // bx, by: centro de la capa en espacio de página (fracción 0-1).
 // Misma lógica que _edSnapToRules pero para un punto individual.
+//
+// Cuando hay DOS guías (no paralelas) a distancia de snap SIMULTÁNEAMENTE,
+// se prioriza ajustar al VÉRTICE exacto de su intersección en vez de
+// combinar un ajuste de eje X tomado de una guía y de eje Y tomado de otra
+// — esa combinación por ejes (más abajo, caso de una sola guía) funciona
+// bien para guías ortogonales, pero cerca de un ángulo AGUDO entre guías no
+// ortogonales puede "saltar" hacia la guía más lejana en vez de formar el
+// vértice (petición de Alberto — el ajuste a guías debe prevalecer).
 function _edSnapMotionPathPt(rx, ry, bx, by) {
   if (!edRules.length || edRulesHidden) return { x: rx, y: ry };
   const pw = edPageW(), ph = edPageH();
@@ -20510,8 +20736,9 @@ function _edSnapMotionPathPt(rx, ry, bx, by) {
   // Convertir a coordenadas de workspace
   const wx = mx + (bx + rx) * pw;
   const wy = my + (by + ry) * ph;
-  let bestDistX = threshold, bestDistY = threshold;
-  let snapDx = 0, snapDy = 0;
+
+  // Candidatas: guías visibles a menos de "threshold" del punto
+  const cand = [];
   for (const r of edRules) {
     if (r.hidden) continue;
     const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
@@ -20519,17 +20746,48 @@ function _edSnapMotionPathPt(rx, ry, bx, by) {
     if (rlen < 1) continue;
     const rnx = -rdy / rlen, rny = rdx / rlen;
     const proj = (wx - r.x1) * rnx + (wy - r.y1) * rny;
-    const dist  = Math.abs(proj);
-    if (dist < threshold) {
-      const dx = -proj * rnx, dy = -proj * rny;
-      const isMoreVert = Math.abs(rdy) > Math.abs(rdx);
-      if (isMoreVert) { if (dist < bestDistX) { bestDistX = dist; snapDx = dx; } }
-      else            { if (dist < bestDistY) { bestDistY = dist; snapDy = dy; } }
-      // Diagonal (~45°): snap en ambos ejes
-      if (Math.abs(Math.abs(rdx) - Math.abs(rdy)) < rlen * 0.2) {
-        if (dist < bestDistX) { bestDistX = dist; snapDx = dx; }
-        if (dist < bestDistY) { bestDistY = dist; snapDy = dy; }
+    const dist = Math.abs(proj);
+    if (dist < threshold) cand.push({ r, rnx, rny, proj, dist, rdx, rdy, rlen });
+  }
+  if (!cand.length) return { x: rx, y: ry };
+
+  if (cand.length >= 2) {
+    let best = null;
+    for (let i = 0; i < cand.length; i++) {
+      for (let j = i + 1; j < cand.length; j++) {
+        const A = cand[i].r, B = cand[j].r;
+        const d1x = A.x2 - A.x1, d1y = A.y2 - A.y1;
+        const d2x = B.x2 - B.x1, d2y = B.y2 - B.y1;
+        const denom = d1x * d2y - d1y * d2x;
+        if (Math.abs(denom) < 1e-6) continue; // paralelas: no forman vértice
+        const t = ((B.x1 - A.x1) * d2y - (B.y1 - A.y1) * d2x) / denom;
+        const ix = A.x1 + d1x * t, iy = A.y1 + d1y * t;
+        const distToInter = Math.hypot(ix - wx, iy - wy);
+        // Umbral algo más generoso que el de una sola guía: el vértice
+        // puede estar un poco más lejos que cada guía individualmente.
+        if (distToInter < threshold * 1.5 && (!best || distToInter < best.dist)) {
+          best = { x: ix, y: iy, dist: distToInter };
+        }
       }
+    }
+    if (best) return { x: rx + (best.x - wx) / pw, y: ry + (best.y - wy) / ph };
+  }
+
+  // Una sola guía en juego (o varias sin intersección cercana): ajuste por
+  // eje según orientación de la guía, con caso especial para diagonales —
+  // comportamiento exactamente igual que antes.
+  let bestDistX = threshold, bestDistY = threshold;
+  let snapDx = 0, snapDy = 0;
+  for (const c of cand) {
+    const { rnx, rny, proj, dist, rdx, rdy, rlen } = c;
+    const dx = -proj * rnx, dy = -proj * rny;
+    const isMoreVert = Math.abs(rdy) > Math.abs(rdx);
+    if (isMoreVert) { if (dist < bestDistX) { bestDistX = dist; snapDx = dx; } }
+    else            { if (dist < bestDistY) { bestDistY = dist; snapDy = dy; } }
+    // Diagonal (~45°): snap en ambos ejes
+    if (Math.abs(Math.abs(rdx) - Math.abs(rdy)) < rlen * 0.2) {
+      if (dist < bestDistX) { bestDistX = dist; snapDx = dx; }
+      if (dist < bestDistY) { bestDistY = dist; snapDy = dy; }
     }
   }
   return { x: rx + snapDx / pw, y: ry + snapDy / ph };
@@ -28025,7 +28283,8 @@ function EditorView_init(){
   });
   $('mpb-undo')?.addEventListener('click', () => {
     // Borrar el trayecto dibujado para poder redibujarlo
-    _edMotionPathPts = []; _edMotionPathRaw = []; _edMotionPathDrawing = false; edRedraw();
+    _edMotionPathPts = []; _edMotionPathRaw = []; _edMotionPathDrawing = false;
+    edRedraw();
   });
   $('mpb-ok')?.addEventListener('click', () => _edEndMotionPath(true));
   $('mpb-cancel')?.addEventListener('click', () => _edEndMotionPath(false));

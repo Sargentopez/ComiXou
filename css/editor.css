@@ -1469,6 +1469,17 @@ body.ed-scale-tablet .ed-modal-sheet {
 #edQuickTools .ed-undo-redo-btn + .ed-undo-redo-btn {
   border-top: 1px solid var(--gray-200);
 }
+/* Ocultar mientras haya una sesión de dibujo a mano (#edDrawBar) o vectorial
+   (#edShapeBar) activa: ambas tienen su PROPIO deshacer/rehacer local
+   (edb-undo/edb-redo, esb-undo/esb-redo) — tener también el global visible
+   a la vez puede confundir sobre a cuál de los dos afecta cada uno (petición
+   de Alberto). No se usa la clase general "draw-active" porque esa también
+   se activa para paneles de propiedades sin deshacer propio (texto, imagen…),
+   donde el deshacer global SÍ debe seguir visible. */
+#editorShell:has(> #edDrawBar.visible) #edQuickTools,
+#editorShell:has(> #edShapeBar.visible) #edQuickTools {
+  display: none;
+}
 
 #edMultiSelBtn { display:flex; align-items:center; justify-content:center; }
 #edMultiSelBtn.active { color:var(--black); background:rgba(26,140,255,0.12); }
@@ -2006,6 +2017,23 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 }
 #editorShell.draw-active #edMenuBar #edMenuScroll {
   opacity: 0.35;
+}
+/* Excepción: durante la edición de un recorrido (trayectos), el menú Guías
+   permanece accesible y a opacidad completa — los trayectos se ajustan a
+   las guías, así que hace falta poder añadir/gestionar guías mientras se
+   edita. El resto del menú sigue bloqueado igual que en cualquier otro modo
+   draw-active (dibujo a mano, vectorial, paneles de propiedades). La
+   opacidad de un descendiente no puede "deshacer" la de su contenedor, así
+   que aquí se anula la del contenedor y se aplica individualmente a cada
+   hijo salvo el menú de Guías. */
+#editorShell.mp-active #edMenuBar #edMenuScroll {
+  opacity: 1;
+}
+#editorShell.mp-active #edMenuBar #edMenuScroll > *:not(.ed-menu-item:has([data-menu="rules"])) {
+  opacity: 0.35;
+}
+#editorShell.mp-active #edMenuBar .ed-menu-item:has([data-menu="rules"]) {
+  pointer-events: auto;
 }
 /* En modo texto/bocadillo (props-active) la barra de menús permanece accesible */
 #editorShell.props-active #edMenuBar {
