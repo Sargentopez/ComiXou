@@ -9884,6 +9884,7 @@ function edOnStart(e){
   }
   // Ignorar elementos de UI dentro del editor
   const isUI = tgt.closest('#edMenuBar')      ||
+               tgt.closest('#edQuickTools')   ||
                tgt.closest('#edTopbar')       ||
                tgt.closest('#edOptionsPanel') ||
                tgt.closest('.ed-fulloverlay') ||
@@ -11694,7 +11695,7 @@ function edOnStart(e){
   }
   // Clic/toque en vacío → iniciar rubber band (PC y táctil)
   // Condición: dentro del editor, sin objeto seleccionado, herramienta select
-  if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
+  if(tgt.closest('#editorShell') && !tgt.closest('#edMenuBar') && !tgt.closest('#edQuickTools') && !tgt.closest('#edTopbar') && !tgt.closest('#edOptionsPanel') && edSelectedIdx < 0 && edActiveTool === 'select'){
     if(e.pointerType === 'touch'){
       // Táctil: esperar 120ms por si llega segundo dedo (pinch/zoom).
       // Guardar como "pendiente" para poder confirmarlo antes por movimiento
@@ -20233,7 +20234,7 @@ function _edRulesOpenPanel(id, part, wx, wy) {
 
 function _edRulesPopOutside(e) {
   // No cerrar si se pulsa dentro del menú o sus dropdowns
-  if(e.target.closest('#edMenuBar') || e.target.closest('.ed-dropdown') ||
+  if(e.target.closest('#edMenuBar') || e.target.closest('#edQuickTools') || e.target.closest('.ed-dropdown') ||
      e.target.closest('.ed-submenu') || e.target.closest('#ed-rule-pop')) return;
   _edRulesClosePop();
 }
@@ -29121,6 +29122,7 @@ function EditorView_init(){
       const inCanvas   = e.target.closest('#editorCanvas') || e.target.closest('#editorCanvasWrap');
       const inPanel    = e.target.closest('#edOptionsPanel');
       const inMenu     = e.target.closest('#edMenuBar');
+      const inQuickTools = e.target.closest('#edQuickTools');
       const inTopbar   = e.target.closest('#edTopbar');
       const inFloat    = e.target.closest('#edFloatBtn');
       const inDrawBar  = e.target.closest('#edDrawBar');
@@ -29137,7 +29139,7 @@ function EditorView_init(){
     }
       // Guards: no cancelar si estamos pintando activamente o timer táctil pendiente
       const _drawSafe = edPainting || !!window._edDrawTouchTimer || !!window._edLineTouchTimer;
-      if(!inCanvas && !inPanel && !inMenu && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !inPanelTab && !_drawSafe){
+      if(!inCanvas && !inPanel && !inMenu && !inQuickTools && !inTopbar && !inFloat && !inDrawBar && !inShapeBar && !inPalPop && !inShapePop && !inHSL && !inPanelTab && !_drawSafe){
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
       }
     }
@@ -29150,11 +29152,12 @@ function EditorView_init(){
         const inShapeBar = e.target.closest('#edShapeBar');
         const inPanel    = e.target.closest('#edOptionsPanel');
         const inMenuBar  = e.target.closest('#edMenuBar');
+        const inQuickTools = e.target.closest('#edQuickTools');
         const inTopbar   = e.target.closest('#edTopbar');
         const inCurvePop = e.target.closest('#esb-curve-pop') || e.target.id==='esb-curve';
         const inHSLPop   = e.target.closest('#ed-hsl-picker');
         const curveOn=$('esb-curve')?.dataset.curveActive==='1';
-        if(!inCanvas && !inDrawBar && !inShapeBar && !inPanel && !inMenuBar && !inTopbar && !inCurvePop && !inHSLPop && !curveOn){
+        if(!inCanvas && !inDrawBar && !inShapeBar && !inPanel && !inMenuBar && !inQuickTools && !inTopbar && !inCurvePop && !inHSLPop && !curveOn){
           edSelectedIdx = -1;
           edActiveTool = 'select';
           edCanvas.className = '';
@@ -35136,8 +35139,8 @@ function _gcpBuildColActions(colActionsContent) {
     const anchorPx = b.px + cardW / 2;
 
     const cluster = document.createElement('div');
-    cluster.style.cssText = 'position:absolute;top:4px;left:' + Math.round(anchorPx) + 'px;' +
-      'transform:translateX(-50%);display:flex;align-items:center;gap:4px;' +
+    cluster.style.cssText = 'position:absolute;top:50%;left:' + Math.round(anchorPx) + 'px;' +
+      'transform:translate(-50%,-50%);display:flex;align-items:center;gap:4px;' +
       'background:var(--white);border:1px solid var(--gray-300);border-radius:12px;' +
       'padding:2px 4px;box-shadow:0 1px 2px rgba(0,0,0,.08);';
 
@@ -35202,8 +35205,8 @@ function _gcpBuildColActions(colActionsContent) {
       ? I18n.t(_interpCount > 1 ? 'gcp_interpTitlePlural' : 'gcp_interpTitleSingular', { n: _interpCount, blur: _hasBlur ? ' + blur' : '' })
       : I18n.t('gcp_addInterpolation');
     interpBtn.style.cssText = [
-      'position:absolute', 'top:2px', 'left:' + Math.round(gapAnchor) + 'px',
-      'transform:translateX(-50%)',
+      'position:absolute', 'top:50%', 'left:' + Math.round(gapAnchor) + 'px',
+      'transform:translate(-50%,-50%)',
       'width:20px', 'height:20px', 'border-radius:50%',
       'border:1.5px ' + (_hasInterp ? (_hasBlur ? 'dashed' : 'solid') : 'solid') +
         ' ' + (_hasInterp ? '#cc2200' : 'var(--gray-300)'),

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v37.48</footer>
+    <footer class="app-version">v37.52</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -471,12 +471,6 @@ Router.register('editor', {
           <div class="ed-menu-sep"></div>
           <button class="ed-menu-btn" id="edAnimacionesBtn" data-i18n="ed_animateBtn">Animar</button>
           <div class="ed-menu-sep"></div>
-
-          <!-- DESHACER / REHACER -->
-          <button class="ed-undo-redo-btn" id="edUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>↩</button>
-          <button class="ed-undo-redo-btn" id="edRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>↪</button>
-          <button class="ed-undo-redo-btn" id="edZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
-          <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" id="edMultiSelBtn" data-menu="select" data-i18n="ed_menuSelection">Selección ▾</button>
             <div class="ed-dropdown" id="dd-select">
@@ -619,6 +613,20 @@ Router.register('editor', {
 
         </div><!-- /edMenuScroll -->
 
+      </div>
+
+      <!-- ── BARRA VERTICAL DESHACER / REHACER / LUPA — fija, fuera de
+           edMenuBar (hermana suya dentro de editorShell) para que siga
+           visible incluso al pulsar OCULTAR, que oculta edTopbar+edMenuBar
+           por completo. Petición de Alberto: en táctil había que desplazar
+           mucho edMenuScroll para llegar a estos tres botones, los de uso
+           más frecuente. Mismos id que antes (edUndoBtn/edRedoBtn/
+           edZoomResetBtn) — solo cambia su posición en el HTML/CSS, toda
+           la lógica JS que los referencia sigue funcionando igual. ── -->
+      <div id="edQuickTools">
+        <button class="ed-undo-redo-btn" id="edUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>↩</button>
+        <button class="ed-undo-redo-btn" id="edRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>↪</button>
+        <button class="ed-undo-redo-btn" id="edZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
       </div>
 
       <!-- ── PANEL DE OPCIONES CONTEXTUAL ── -->
@@ -1005,10 +1013,6 @@ Router.register('editor', {
           <button class="ed-menu-btn" id="gcpSaveFrameBtn" data-i18n-title="gcp_saveCurrentFrameTitle" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
           <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
           <div class="ed-menu-sep"></div>
-          <!-- Deshacer / Rehacer -->
-          <button class="ed-undo-redo-btn" id="gcpUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>↩</button>
-          <button class="ed-undo-redo-btn" id="gcpRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>↪</button>
-          <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
           <!-- Botón de diagnóstico oculto de nuevo (T31) — se reactivó temporalmente
                para depurar el bug de subir/bajar capas en la Matriz, ya resuelto y
                confirmado por Alberto. Para volver a mostrarlo, descomentar la línea
@@ -1118,6 +1122,18 @@ Router.register('editor', {
           </div>
         </div>
       </div>
+
+      <!-- ── BARRA VERTICAL DESHACER / REHACER / LUPA — misma solución que
+           en edQuickTools del editor general (misma petición de Alberto,
+           misma justificación: evitar el scroll horizontal para llegar a
+           estos tres botones en táctil). Mismos id que antes (gcpUndoBtn/
+           gcpRedoBtn/gcpZoomResetBtn), la lógica JS no cambia. ── -->
+      <div id="gcpQuickTools">
+        <button class="ed-undo-redo-btn" id="gcpUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>↩</button>
+        <button class="ed-undo-redo-btn" id="gcpRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>↪</button>
+        <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
+      </div>
+
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->
       <div id="gcpFramesBar">
       </div>

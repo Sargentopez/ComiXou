@@ -1433,6 +1433,43 @@ body.ed-scale-tablet .ed-modal-sheet {
 }
 .ed-undo-redo-btn:hover:not(:disabled)  { color: var(--black); background: var(--gray-100); }
 .ed-undo-redo-btn:disabled { opacity: .28; cursor: default; }
+
+/* ══════════════════════════════════════════
+   BARRA VERTICAL DESHACER/REHACER/LUPA (edQuickTools)
+   Fija, fuera de edMenuBar — sigue visible aunque OCULTAR esconda
+   edTopbar+edMenuBar por completo (petición de Alberto: en táctil, llegar
+   a estos tres botones —los de uso más frecuente— exigía desplazar mucho
+   la barra de menú horizontal). Botones a 44×44px, tamaño táctil mínimo
+   recomendado, igual que #edFloatBtn.
+   ══════════════════════════════════════════ */
+#edQuickTools {
+  position: absolute;
+  top: 92px;   /* edTopbar (52px) + edMenuBar (40px) */
+  left: 0;
+  z-index: 150;   /* por DEBAJO de edOptionsPanel (200): los paneles de dibujo/propiedades
+                     deben cubrirlo cuando se abren (mismo criterio que gcpQuickTools=510
+                     bajo gcpPropsPanel=515 en el editor GCP) */
+  display: flex;
+  flex-direction: column;
+  background: var(--white);
+  border: 1.5px solid var(--gray-300);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: 2px 2px 6px rgba(0,0,0,.12);
+  overflow: hidden;
+}
+#edQuickTools .ed-undo-redo-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1.15rem;
+  display: flex; align-items: center; justify-content: center;
+}
+#edQuickTools .ed-undo-redo-btn + .ed-undo-redo-btn {
+  border-top: 1px solid var(--gray-200);
+}
+
 #edMultiSelBtn { display:flex; align-items:center; justify-content:center; }
 #edMultiSelBtn.active { color:var(--black); background:rgba(26,140,255,0.12); }
 .tool-multiselect { cursor: crosshair !important; }
@@ -2256,6 +2293,48 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   touch-action: pan-x pan-y;
 }
 #gcpMenuScroll::-webkit-scrollbar { display: none; }
+
+/* Barra vertical deshacer/rehacer/lupa — misma solución y misma
+   justificación que #edQuickTools en el editor general. pointer-events:auto
+   obligatorio: gcpShell (el contenedor raíz) tiene pointer-events:none. */
+#gcpQuickTools {
+  position: absolute;
+  top: 92px;   /* gcpTopbar (52px) + gcpMenuBar (40px) */
+  left: 0;
+  z-index: 510;
+  display: flex;
+  flex-direction: column;
+  background: var(--white);
+  border: 1.5px solid var(--gray-300);
+  border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: 2px 2px 6px rgba(0,0,0,.12);
+  overflow: hidden;
+  pointer-events: auto;
+}
+/* La Biblioteca (incluso abierta desde el editor GCP vía gcpBibBtn) se
+   renderiza dentro de #edOptionsPanel, que pertenece a #editorShell — un
+   contenedor de apilamiento (stacking context) totalmente distinto al de
+   #gcpShell (z-index:500 propio). Por eso NINGÚN z-index de #gcpQuickTools,
+   por bajo que sea, puede quedar "por detrás" de #edOptionsPanel: al vivir
+   dentro de #gcpShell, su cota de apilamiento real está sujeta a la de su
+   contenedor. La única forma correcta de que no tape la Biblioteca es
+   ocultarlo mientras esté abierta — no afecta al uso normal (con la
+   Biblioteca abierta la atención está en ella, no en deshacer/zoom). */
+body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
+  display: none;
+}
+#gcpQuickTools .ed-undo-redo-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1.15rem;
+  display: flex; align-items: center; justify-content: center;
+}
+#gcpQuickTools .ed-undo-redo-btn + .ed-undo-redo-btn {
+  border-top: 1px solid var(--gray-200);
+}
 
 /* Canvas GIF: mismo tamaño/posición que editorCanvas, gestionado por JS */
 #gcpCanvas {
