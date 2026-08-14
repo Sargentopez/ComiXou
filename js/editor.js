@@ -9221,6 +9221,7 @@ function _edStartMotionPath(idx) {
   const cdv = $('mpb-cycles-dur');
   if (cdv) cdv.textContent = (_cDurMs > 0) ? '≈' + (_edMotionPathCycles * _cDurMs / 1000).toFixed(1) + 's' : '';
   const pb = $('mpb-play'); if (pb) pb.textContent = '▶'; // asegurar estado inicial
+  showToast(I18n.t('ed_mpStartFromCenterToast'));
   edRedraw();
 }
 
