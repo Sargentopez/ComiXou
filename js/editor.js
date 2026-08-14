@@ -30359,10 +30359,50 @@ function edBibGuardar() {
   const isMultiGroup  = edActiveTool === 'multiselect' && edMultiSel.length > 1 &&
                         edMultiSel.every(i => edLayers[i]?.groupId && edLayers[i].groupId === edLayers[edMultiSel[0]]?.groupId);
 
-  if (isGroupActive || isMultiGroup) {
+  // NUEVO — Petición explícita de Alberto: varios objetos seleccionados que
+  // NO forman ya un único grupo uniforme (sueltos del todo, o una mezcla —
+  // p.ej. un subgrupo ya existente más un objeto suelto) no se podían
+  // guardar en la biblioteca en absoluto (ni isGroupActive ni isMultiGroup
+  // daban true, así que caía en la rama de "objeto individual" con
+  // edSelectedIdx=-1 y fallaba con "selecciona un objeto primero").
+  //
+  // Ahora: se agrupan TEMPORALMENTE solo para poder reutilizar la MISMA
+  // rama de guardado de grupo de abajo (que ya sabe recoger sub-capas
+  // vinculadas, hacer la miniatura conjunta, etc.) — se anota el groupId
+  // ORIGINAL exacto de cada capa (ausente, o el de un subgrupo que ya
+  // tuviera) ANTES de tocar nada, y se restaura justo después de serializar
+  // los datos para la biblioteca (edSerLayer ya ha copiado esos datos a un
+  // objeto plano en ese punto — restaurar el groupId en edLayers después no
+  // afecta en nada a lo que se va a guardar). El lienzo, con cualquier
+  // desenlace de la función (éxito, selector de carpeta, o un error a medio
+  // camino), queda EXACTAMENTE como estaba antes de pulsar "Guardar en
+  // biblioteca" — ni agrupados ni con ningún groupId previo alterado. Solo
+  // la biblioteca ve el conjunto como grupo, y al insertarlo desde ahí sale
+  // agrupado (mismo comportamiento que insertar cualquier otro grupo
+  // guardado).
+  let _bibTempGroupPrev = null;
+  function _bibRestoreTempGroup(){
+    if(!_bibTempGroupPrev) return;
+    _bibTempGroupPrev.forEach(({ i, groupId }) => {
+      const _l = edLayers[i];
+      if(!_l) return;
+      if(groupId) _l.groupId = groupId; else delete _l.groupId;
+    });
+    _bibTempGroupPrev = null;
+  }
+  if (!isGroupActive && !isMultiGroup && edMultiSel.length > 1) {
+    _bibTempGroupPrev = edMultiSel.map(i => ({ i, groupId: edLayers[i]?.groupId }));
+    const _bibTempGid = _edNewGroupId();
+    edMultiSel.forEach(i => {
+      const _l = edLayers[i];
+      if (_l && _l.type !== 'fill' && _l.type !== 'pencil' && _l.type !== 'watercolor') _l.groupId = _bibTempGid;
+    });
+  }
+
+  if (isGroupActive || isMultiGroup || _bibTempGroupPrev) {
     // Guardar grupo completo
     const idxs = edMultiSel.slice();
-    if (!idxs.length) { edToast(I18n.t('ed_selectObjectFirst')); return; }
+    if (!idxs.length) { _bibRestoreTempGroup(); edToast(I18n.t('ed_selectObjectFirst')); return; }
     // Incluir sub-capas (fill, pencil, watercolor) vinculadas a StrokeLayers del grupo.
     // edGroupSelected no asigna groupId a sub-capas, por eso no están en edMultiSel.
     const _bibSubSet = new Set(idxs);
@@ -30379,6 +30419,10 @@ function edBibGuardar() {
     // Mantener orden de edLayers (inferior → superior) para composición correcta
     const _bibAllIdxs = [..._bibSubSet].sort((a, b) => a - b);
     const layers = _bibAllIdxs.map(i => edSerLayer(edLayers[i])).filter(Boolean);
+    // Restaurar el agrupado temporal (si lo hubo) justo aquí: edSerLayer ya
+    // ha copiado todo lo necesario a `layers`, así que el lienzo puede
+    // volver a su estado real antes de seguir con la miniatura/guardado.
+    _bibRestoreTempGroup();
     if (!layers.length) { edToast(I18n.t('ed_errSerializeGroup')); return; }
     // Miniatura: renderizar todas las capas del grupo juntas
     const thumb = _bibThumbGroup(idxs);

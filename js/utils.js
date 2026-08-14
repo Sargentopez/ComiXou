@@ -491,6 +491,19 @@ function _shareModalClose() {
   overlay.style.pointerEvents = 'none';
 }
 
+// Abre el lector externo (reader/index.html) en una pestaña nueva — NUEVO,
+// pedido explícito de Alberto: así la app nunca se abandona al leer una
+// obra (no hace falta recargarla al volver) y pueden tenerse varias
+// lecturas abiertas a la vez. Si el navegador bloquea window.open (raro
+// estando dentro de un manejador de clic real, pero posible en algún
+// WebView/PWA), recurre a navegar en la MISMA pestaña como última opción —
+// ver el comentario de _doClose en reader/reader.js sobre por qué cerrar
+// el lector sigue volviendo bien a la vista de origen incluso en ese caso.
+function _openReaderTab(url) {
+  const w = window.open(url, '_blank');
+  if (!w) window.location = url;
+}
+
 function openShareModal(comic) {
 
   if (!comic.supabaseId) {

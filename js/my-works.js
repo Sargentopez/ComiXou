@@ -934,13 +934,19 @@ function _mcRenderList() {
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
         if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
         else sessionStorage.removeItem('cx_was_fs');
-        window.location = 'reader/index.html?id=' + comic.supabaseId + '&from=app' + (_isFs2 ? '&fs=1' : '');
+        // Pestaña nueva — ver _openReaderTab en utils.js (no window.location:
+        // la app no debe recargarse/abandonarse al leer una obra, y así
+        // pueden tenerse varias lecturas abiertas a la vez).
+        _openReaderTab('reader/index.html?id=' + comic.supabaseId + (_isFs2 ? '&fs=1' : ''));
       } else if (comic.supabaseId) {
         // Borrador o en revisión en nube: reader externo con JWT del autor
         const _isFs2 = !!(document.fullscreenElement || document.webkitFullscreenElement);
         if (_isFs2) sessionStorage.setItem('cx_was_fs', '1');
         else sessionStorage.removeItem('cx_was_fs');
-        window.location = 'reader/index.html?draft=' + comic.supabaseId + '&from=app' + (_isFs2 ? '&fs=1' : '');
+        // Pestaña nueva — ver _openReaderTab en utils.js (no window.location:
+        // la app no debe recargarse/abandonarse al leer una obra, y así
+        // pueden tenerse varias lecturas abiertas a la vez).
+        _openReaderTab('reader/index.html?draft=' + comic.supabaseId + (_isFs2 ? '&fs=1' : ''));
       } else {
         // Borrador local sin supabaseId: visor interno del SPA
         Router.go('reader', { id });

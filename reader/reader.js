@@ -860,18 +860,30 @@ document.addEventListener('DOMContentLoaded', () => {
   // Modo embed: incrustado en iframe desde admin/expositor
   RS.isEmbed = params.get('embed') === '1' || window.self !== window.top;
 
-  const fromApp = params.get('from') === 'app';
-
+  // Cerrar SIEMPRE intenta volver en el historial de ESTA pestaña/ventana y,
+  // si no hay nada a lo que volver, cerrarla — nunca navegar de vuelta a la
+  // app. NUEVO (pedido explícito de Alberto): el lector se abre ahora en
+  // una pestaña nueva (ver home.js/my-works.js/admin.js — window.open), así
+  // que la app nunca se abandona al leer una obra; cerrar el lector debe
+  // cerrar SOLO esa pestaña, no "volver" a ningún sitio de la app (que ni
+  // se ha movido de donde estaba).
+  //
+  // Antes esto navegaba con window.location.href = base + '#my-works'
+  // siempre que se abría "desde dentro de la app" (parámetro from=app, ya
+  // retirado) — además de forzar una recarga completa de index.html cada
+  // vez (repetía la animación de bienvenida, otro bug ya corregido antes),
+  // volvía SIEMPRE a "my-works" aunque la obra se hubiera abierto desde
+  // "index".
+  //
+  // Con pestaña nueva como vía principal, esta misma lógica (antes solo
+  // para "acceso externo por enlace compartido") ya vale también para el
+  // caso, más raro, de que el navegador bloquee window.open y la app tenga
+  // que recurrir a navegar en la MISMA pestaña como último recurso (ver
+  // _openReaderTab en utils.js): si eso pasa, history.length será > 1 (la
+  // app queda justo antes en el historial de esa pestaña) y "atrás" vuelve
+  // exactamente a la vista de la que se vino, fuera index o my-works — sin
+  // necesitar distinguir el origen a mano.
   const _doClose = () => {
-    if (fromApp) {
-      // Abierto desde dentro de la app: volver a my-works directamente.
-      // NO usar history.back() — en Android Chrome PWA lleva al inicio del
-      // navegador en lugar de a la app.
-      const base = window.location.href.replace(/\/reader\/.*$/, '/');
-      window.location.href = base + '#my-works';
-      return;
-    }
-    // Acceso externo (enlace compartido): intentar cerrar la pestaña
     if (history.length > 1) { history.back(); return; }
     window.close();
     setTimeout(() => {

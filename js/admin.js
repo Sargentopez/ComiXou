@@ -218,7 +218,9 @@ function buildAdminRow(comic, mode) {
   row.querySelector(`#read_${comic.id}`)?.addEventListener('click', () => {
     const sid = comic.supabaseId;
     const param = comic.published ? `id=${sid}` : `draft=${sid}`;
-    window.location = 'reader/index.html?' + param + '&from=app';
+    // Pestaña nueva — ver _openReaderTab en utils.js (no window.location: la
+    // app no debe recargarse/abandonarse al leer una obra).
+    _openReaderTab('reader/index.html?' + param);
   });
 
   // Diagnóstico Supabase
