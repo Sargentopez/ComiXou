@@ -883,7 +883,7 @@ function _mcRenderList() {
                 ? `<button class="work-row-btn unpub" data-action="unpublish" data-id="${comic.id}">${I18n.t('mc_unpubPending')}</button>`
                 : `<button class="work-row-btn" style="color:var(--blue)" data-action="publish" data-id="${comic.id}">${I18n.t('mc_publishBtn')}</button>`)
           }
-          <button class="work-row-btn" data-action="share" data-id="${comic.id}">${I18n.t('home_share')}</button>
+          <button class="work-row-btn" data-action="share" data-id="${comic.id}">${shareIconSvg()} ${I18n.t('home_share')}</button>
           <button class="work-row-btn del" data-action="delete" data-id="${comic.id}" style="color:#e63030;font-weight:900">✕</button>
         </div>
       </div>

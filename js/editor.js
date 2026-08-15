@@ -3725,7 +3725,7 @@ function _edSnapLayerFragment(l){
         groupId: l.groupId || undefined,
         _uid: l._uid || null, _fillLayerId: l._fillLayerId || null,
         _pencilLayerId: l._pencilLayerId || null, _watercolorLayerId: l._watercolorLayerId || null,
-        _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+        _motionPath: l._motionPath ? _edCopyMotionPathPts(l._motionPath) : undefined,
         _motionPathClosed: l._motionPathClosed||false,
         _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
         _motionPathEnd: l._motionPathEnd||undefined,
@@ -3739,7 +3739,7 @@ function _edSnapLayerFragment(l){
       groupId: l.groupId || undefined,
       _uid:l._uid||null, _fillLayerId:l._fillLayerId||null,
       _pencilLayerId:l._pencilLayerId||null, _watercolorLayerId:l._watercolorLayerId||null,
-      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPath: l._motionPath ? _edCopyMotionPathPts(l._motionPath) : undefined,
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
@@ -3752,7 +3752,7 @@ function _edSnapLayerFragment(l){
       hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
-      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPath: l._motionPath ? _edCopyMotionPathPts(l._motionPath) : undefined,
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
@@ -3767,7 +3767,7 @@ function _edSnapLayerFragment(l){
       groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
-      _motionPath: l._motionPath ? l._motionPath.map(p=>({x:p.x,y:p.y})) : undefined,
+      _motionPath: l._motionPath ? _edCopyMotionPathPts(l._motionPath) : undefined,
       _motionPathClosed: l._motionPathClosed||false,
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
@@ -3835,7 +3835,7 @@ function _edSnapLayerFragment(l){
       if(l._gcpRefH != null) o._gcpRefH = l._gcpRefH;
     }
     // Recorrido de animación — presente en cualquier tipo de capa
-    if(l._motionPath && l._motionPath.length >= 2) o._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath && l._motionPath.length >= 2) o._motionPath = _edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed) o._motionPathClosed = true;
     if(l._motionSpeed != null) o._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
@@ -8404,18 +8404,32 @@ function _edBezierSampleClosed(pts, numSamples) {
   const n = pts.length;
   const result = [];
   for (let s = 0; s < numSamples; s++) {
-    const tFull = (s / numSamples) * n;
+    // +0.5: sin este desplazamiento, s=0 caería en u=0 del segmento 0 — el
+    // límite ENTRE segmentos, que con la técnica de "punto medio" es el
+    // punto medio entre el último punto y pts[0], NUNCA pts[0] exacto (el
+    // punto solo se visita tal cual en u=0.5, sea cual sea su segmento).
+    // Como pts[0] es el origen del recorrido (debe coincidir con la.x/la.y
+    // al empezar/terminar cada vuelta), sin este ajuste la reproducción de
+    // un recorrido CERRADO arrancaba y cerraba en ese punto medio en vez
+    // del origen real — el salto "hacia la izquierda" reportado por
+    // Alberto. Con el desplazamiento, s=0 cae en u=0.5 del segmento 0, es
+    // decir, en pts[0] exacto.
+    const tFull = (s / numSamples) * n + 0.5;
     const seg   = Math.floor(tFull) % n;
     const u     = tFull - Math.floor(tFull);
     const prev  = (seg - 1 + n) % n;
     const next  = (seg + 1) % n;
     const mp0x  = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
     const mp1x  = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
-    if (pts[seg].sharp) {
+    if (pts[seg].sharp || seg === 0) {
       // Ajuste a guía (petición de Alberto: debe prevalecer sobre el
       // suavizado): pasar EXACTAMENTE por este punto — esquina dura, p.ej.
       // un giro de 90° — en vez de la curva bezier suave, con dos tramos
       // rectos (mismo criterio que en el overlay, ver _edDrawMotionPath).
+      // seg===0 SIEMPRE se trata así, tenga o no guía: es el origen del
+      // recorrido (debe coincidir exacto con la.x/la.y al empezar/cerrar
+      // cada vuelta) — la curva suave solo se APROXIMA al punto en u=0.5,
+      // no lo toca exacto, lo que seguía provocando el salto reportado.
       if (u < 0.5) {
         const uu = u / 0.5;
         result.push({ x: mp0x + (pts[seg].x - mp0x) * uu, y: mp0y + (pts[seg].y - mp0y) * uu });
@@ -8453,7 +8467,14 @@ function _edPathPositionAt(points, closed, t, pw, ph) {
     total += d;
   }
   if (total === 0) return { x: pts[0].x, y: pts[0].y };
-  const _t = ((t % 1) + 1) % 1;
+  // t=1 en un recorrido CERRADO equivale a t=0 (se completó la vuelta) — el
+  // envolvente módulo es correcto ahí. En uno ABIERTO, t=1 es el final real
+  // y NO debe envolver a t=0: en JS, 1 % 1 da 0, así que sin esta distinción
+  // pedir la posición justo en el final devolvía la del INICIO — de ahí el
+  // giro/salto extraño al llegar al final de trayectorias abiertas, más
+  // notorio aún al rebobinar (que sí llega a t=1 exacto en el pico del
+  // rebote, no solo de forma transitoria como el muestreo de la tangente).
+  const _t = closed ? (((t % 1) + 1) % 1) : Math.max(0, Math.min(1, t));
   const target = _t * total;
   let cum = 0;
   for (let i = 0; i < dists.length; i++) {
@@ -9029,36 +9050,93 @@ function _edMpPreviewStop() {
 // ── Alineación post-trazo a guías (mayor umbral que el snap durante el dibujo) ──
 // Proyecta TODOS los puntos crudos que estén dentro del umbral de release
 // exactamente sobre la guía, para que el RDP genere segmentos perfectamente rectos.
+// Ajusta cada punto de un trazo recién dibujado a las guías cercanas, punto a
+// punto (no guía a guía) — importante: si un punto tiene DOS guías no
+// paralelas dentro del umbral a la vez (cerca de donde se cruzan, p.ej. un
+// ángulo agudo), se ajusta al VÉRTICE de su intersección exacta en vez de
+// snapearlo a UNA sola guía. El código anterior recorría las guías en el
+// orden externo y, para cada una, snapeaba cualquier punto cercano — con dos
+// guías próximas eso podía reasignar de forma dependiente del orden puntos
+// que en realidad pertenecían al otro segmento, dando saltos al segmento
+// equivocado cerca del vértice (bug reportado por Alberto: la línea "salta"
+// al segundo segmento antes de llegar al vértice, luego llega al vértice por
+// el segmento equivocado, y después continúa bien). Mismo criterio que ya
+// usa el ajuste EN VIVO durante el dibujo (_edSnapMotionPathPt) — aquí se
+// aplica el mismo razonamiento al trazo completo, ya cerrado, al soltar.
+// Copia los puntos de un recorrido preservando la marca "sharp" (ajustado a
+// guía) — sin esto, cualquier copia (guardar, recargar el editor al reabrir
+// la ventana, duplicar el objeto, deshacer/rehacer, agrupar, exportar…)
+// perdía la marca y el trazado volvía a mostrarse suavizado visualmente
+// aunque la reproducción siguiera siendo correcta (los trayectos abiertos no
+// dependen de "sharp" para reproducirse, solo para dibujarse en pantalla —
+// bug reportado por Alberto: "el recorrido que se visualiza debe representar
+// fielmente el recorrido real"). Único punto de verdad para esta copia.
+function _edCopyMotionPathPts(pts) {
+  return pts.map(p => p.sharp ? { x: p.x, y: p.y, sharp: true } : { x: p.x, y: p.y });
+}
+
 function _edAlignPathToGuides(rawPts, bx, by) {
   if (!edRules.length || edRulesHidden) return rawPts;
   const ALIGN_PX = _ED_SNAP_THRESHOLD_PX * 3; // umbral de release = 3× el de drag
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const threshold = ALIGN_PX / edCamera.z;
-  const pts = rawPts.map(p => ({ x: p.x, y: p.y }));
-  for (const r of edRules) {
-    if (r.hidden) continue;
-    const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
-    const rlen = Math.hypot(rdx, rdy);
-    if (rlen < 1) continue;
-    const rnx = -rdy / rlen, rny = rdx / rlen;
-    for (let i = 0; i < pts.length; i++) {
-      const wx = mx + (bx + pts[i].x) * pw;
-      const wy = my + (by + pts[i].y) * ph;
+  const visibleRules = edRules.filter(r => !r.hidden);
+
+  return rawPts.map(p => {
+    const wx = mx + (bx + p.x) * pw;
+    const wy = my + (by + p.y) * ph;
+
+    // Candidatas: guías a menos de "threshold" de ESTE punto en concreto
+    const cand = [];
+    for (const r of visibleRules) {
+      const rdx = r.x2 - r.x1, rdy = r.y2 - r.y1;
+      const rlen = Math.hypot(rdx, rdy);
+      if (rlen < 1) continue;
+      const rnx = -rdy / rlen, rny = rdx / rlen;
       const proj = (wx - r.x1) * rnx + (wy - r.y1) * rny;
-      if (Math.abs(proj) < threshold) {
-        pts[i] = { x: pts[i].x - proj * rnx / pw,
-                   y: pts[i].y - proj * rny / ph,
-                   // Petición de Alberto: el ajuste a guías debe prevalecer
-                   // sobre el suavizado — un punto ajustado a una guía marca
-                   // una esquina DURA (p.ej. un giro de 90°) que la curva
-                   // bezier del overlay/reproducción no debe redondear (ver
-                   // _edDrawMotionPath y _edBezierSampleClosed).
-                   sharp: true };
+      const dist = Math.abs(proj);
+      if (dist < threshold) cand.push({ r, rnx, rny, proj, dist });
+    }
+    if (!cand.length) return { x: p.x, y: p.y };
+
+    if (cand.length >= 2) {
+      let best = null;
+      for (let i = 0; i < cand.length; i++) {
+        for (let j = i + 1; j < cand.length; j++) {
+          const A = cand[i].r, B = cand[j].r;
+          const d1x = A.x2 - A.x1, d1y = A.y2 - A.y1;
+          const d2x = B.x2 - B.x1, d2y = B.y2 - B.y1;
+          const denom = d1x * d2y - d1y * d2x;
+          if (Math.abs(denom) < 1e-6) continue; // paralelas: no forman vértice
+          const t = ((B.x1 - A.x1) * d2y - (B.y1 - A.y1) * d2x) / denom;
+          const ix = A.x1 + d1x * t, iy = A.y1 + d1y * t;
+          const distToInter = Math.hypot(ix - wx, iy - wy);
+          if (distToInter < threshold * 1.5 && (!best || distToInter < best.dist)) {
+            best = { x: ix, y: iy, dist: distToInter };
+          }
+        }
+      }
+      if (best) {
+        return { x: p.x + (best.x - wx) / pw, y: p.y + (best.y - wy) / ph, sharp: true };
       }
     }
-  }
-  return pts;
+
+    // Una sola guía en juego (o varias sin intersección cercana): quedarse
+    // con la más cercana y proyectar el punto sobre ella — mismo resultado
+    // que antes para el caso de una única guía.
+    let closest = cand[0];
+    for (const c of cand) if (c.dist < closest.dist) closest = c;
+    return {
+      x: p.x - closest.proj * closest.rnx / pw,
+      y: p.y - closest.proj * closest.rny / ph,
+      // Petición de Alberto: el ajuste a guías debe prevalecer sobre el
+      // suavizado — un punto ajustado a una guía marca una esquina DURA
+      // (p.ej. un giro de 90°) que la curva bezier del overlay/reproducción
+      // no debe redondear (ver _edDrawMotionPath y _edBezierSampleClosed).
+      sharp: true,
+    };
+  });
 }
 
 // ── Simplificación Ramer-Douglas-Peucker para trayectos ─────────────────────
@@ -9140,6 +9218,27 @@ function _edGrpPathRowHtml(la) {
 // usuario; esto añade los redibujados adicionales necesarios para animar el
 // marcador incluso con el dedo/ratón quieto.
 let _edMpBlinkRaf = null;
+// Referencia al listener global "el primer toque, donde sea, oculta el
+// toast" — petición de Alberto: no debe depender de tocar el punto central
+// en concreto (p.ej. si primero se quieren colocar guías, el toast no debe
+// seguir ocupando pantalla). Se arma en _edMpShowStartToast y se desarma en
+// _edEndMotionPath (o solo se consume una vez si llega a dispararse antes).
+let _edMpFirstTapListener = null;
+function _edMpShowStartToast() {
+  showToast(I18n.t('ed_mpStartFromCenterToast'), null); // fijo hasta el primer tap
+  if (_edMpFirstTapListener) document.removeEventListener('pointerdown', _edMpFirstTapListener, true);
+  _edMpFirstTapListener = () => { hideToast(); _edMpFirstTapListener = null; };
+  // capture:true — se dispara ANTES que cualquier otro handler (canvas,
+  // botones del menú, tiradores de guía…), así oculta el toast sin
+  // importar qué se haya tocado ni si algún otro handler detiene el evento.
+  document.addEventListener('pointerdown', _edMpFirstTapListener, { capture: true, once: true });
+}
+function _edMpCancelFirstTapListener() {
+  if (_edMpFirstTapListener) {
+    document.removeEventListener('pointerdown', _edMpFirstTapListener, true);
+    _edMpFirstTapListener = null;
+  }
+}
 function _edMpBlinkTick(ts) {
   if (!_edMotionPathMode) { _edMpBlinkRaf = null; return; }
   if (!_edMpBlinkTick._last || ts - _edMpBlinkTick._last > 70) {
@@ -9178,7 +9277,7 @@ function _edStartMotionPath(idx) {
   _edMotionPathMode    = true;
   _edMotionPathTarget  = idx;
   // Cargar el path existente si lo hay — solo se borra con el botón 🗑
-  _edMotionPathPts     = la._motionPath ? la._motionPath.map(p => ({x: p.x, y: p.y})) : [];
+  _edMotionPathPts     = la._motionPath ? _edCopyMotionPathPts(la._motionPath) : [];
   _edMotionPathRaw     = [];
   _edMotionPathDrawing = false;
   _edMotionPathClosed  = la._motionPathClosed || false;
@@ -9221,7 +9320,7 @@ function _edStartMotionPath(idx) {
   const cdv = $('mpb-cycles-dur');
   if (cdv) cdv.textContent = (_cDurMs > 0) ? '≈' + (_edMotionPathCycles * _cDurMs / 1000).toFixed(1) + 's' : '';
   const pb = $('mpb-play'); if (pb) pb.textContent = '▶'; // asegurar estado inicial
-  showToast(I18n.t('ed_mpStartFromCenterToast'));
+  _edMpShowStartToast();
   edRedraw();
 }
 
@@ -9249,7 +9348,7 @@ function _edEndMotionPath(save) {
         // sitio ABSOLUTO de la pantalla, lo que provocaba que la animación
         // "saltara" siempre al punto antiguo en vez de partir de la nueva
         // posición del objeto — bug reportado por Alberto.)
-        la._motionPath       = _edMotionPathPts.map(p => ({ x: p.x, y: p.y }));
+        la._motionPath       = _edCopyMotionPathPts(_edMotionPathPts);
         la._motionPathClosed = _edMotionPathClosed;
         la._motionSpeed      = _edMotionPathSpeed;
         la._motionCycles     = _edMotionPathCycles;
@@ -9266,7 +9365,7 @@ function _edEndMotionPath(save) {
       if (la.groupId) {
         const _gidProp = la.groupId;
         const _idxsProp = _edGroupMemberIdxs(_gidProp);
-        const _pathProp = la._motionPath ? la._motionPath.map(p => ({x:p.x, y:p.y})) : null;
+        const _pathProp = la._motionPath ? _edCopyMotionPathPts(la._motionPath) : null;
         _idxsProp.forEach(i => {
           const _m = edLayers[i]; if (!_m || _m === la) return;
           if (_pathProp) {
@@ -9300,6 +9399,8 @@ function _edEndMotionPath(save) {
   // Detener preview play si estaba activo
   if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
   _edMpBlinkStop();
+  hideToast();
+  _edMpCancelFirstTapListener();
   $('editorShell')?.classList.remove('mp-active');
   _edMotionPathMode    = false;
   _edMotionPathTarget  = -1;
@@ -13485,7 +13586,7 @@ function _vsSerLayer(l) {
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
-    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = l._motionPath.map(p => ({ x: p.x, y: p.y }));
+    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
@@ -13507,7 +13608,7 @@ function _vsSerLayer(l) {
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
-    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = l._motionPath.map(p => ({ x: p.x, y: p.y }));
+    if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
@@ -17821,7 +17922,7 @@ function _edTextToDrawing(idx) {
   if (la.locked)      sl.locked      = true;
   if (la.hidden)      sl.hidden      = true;
   if (la._motionPath) {
-    sl._motionPath       = la._motionPath.map(p => ({x:p.x, y:p.y}));
+    sl._motionPath       = _edCopyMotionPathPts(la._motionPath);
     sl._motionPathClosed = la._motionPathClosed || false;
     sl._motionSpeed      = la._motionSpeed || 100;
     if (la._motionPathEnd)    sl._motionPathEnd    = la._motionPathEnd;
@@ -24579,7 +24680,7 @@ function edSerLayer(l){
     const _g={type:'gif',gifKey:l.gifKey,x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation||0,...op};
     if(l.groupId) _g.groupId=l.groupId; if(l.locked) _g.locked=true; if(l.hidden) _g.hidden=true;
     if(l.name) _g.name=l.name;
-    if(l._motionPath && l._motionPath.length >= 2) _g._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath && l._motionPath.length >= 2) _g._motionPath = _edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed) _g._motionPathClosed = true;
     if(l._motionSpeed != null) _g._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _g._motionPathEnd   = l._motionPathEnd;
@@ -24622,7 +24723,7 @@ function edSerLayer(l){
     if(l._gcpInvisAtEnd)       _r._gcpInvisAtEnd       = true;
     if(l._gcpInvisGradual === false) _r._gcpInvisGradual = false;
     if(l._gcpCircularEnd)         _r._gcpCircularEnd  = true;
-    if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath && l._motionPath.length >= 2) _r._motionPath = _edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed) _r._motionPathClosed = true;
     if(l._motionSpeed != null) _r._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _r._motionPathEnd   = l._motionPathEnd;
@@ -24649,7 +24750,7 @@ function edSerLayer(l){
     if(l.lineHeightMult) _o.lineHeightMult=l.lineHeightMult;
     if(l.marginXFrac) _o.marginXFrac=l.marginXFrac;
     if(l.manualBreakChars && l.manualBreakChars.length) _o.manualBreakChars=l.manualBreakChars;
-    if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed)_o._motionPathClosed=true;
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _o._motionPathEnd  =l._motionPathEnd;
@@ -24728,7 +24829,7 @@ function edSerLayer(l){
         _bobj._renderH=_maxOY*2;
       }catch(e){}
     }
-    if(l._motionPath&&l._motionPath.length>=2)_bobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath&&l._motionPath.length>=2)_bobj._motionPath=_edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed)_bobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_bobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _bobj._motionPathEnd  =l._motionPathEnd;
@@ -24749,10 +24850,10 @@ function edSerLayer(l){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y})); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -24785,7 +24886,7 @@ function edSerLayer(l){
         _sobj._renderPad=_pad;
       }catch(e){}
     }
-    if(l._motionPath&&l._motionPath.length>=2)_sobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath&&l._motionPath.length>=2)_sobj._motionPath=_edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed)_sobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_sobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _sobj._motionPathEnd  =l._motionPathEnd;
@@ -24835,7 +24936,7 @@ function edSerLayer(l){
         _lobj._renderPad=_pad;
       }catch(e){}
     }
-    if(l._motionPath&&l._motionPath.length>=2)_lobj._motionPath=l._motionPath.map(p=>({x:p.x,y:p.y}));
+    if(l._motionPath&&l._motionPath.length>=2)_lobj._motionPath=_edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed)_lobj._motionPathClosed=true;
     if(l._motionSpeed!=null)_lobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _lobj._motionPathEnd  =l._motionPathEnd;
@@ -28285,6 +28386,7 @@ function EditorView_init(){
   $('mpb-undo')?.addEventListener('click', () => {
     // Borrar el trayecto dibujado para poder redibujarlo
     _edMotionPathPts = []; _edMotionPathRaw = []; _edMotionPathDrawing = false;
+    _edMpShowStartToast(); // hay que volver a tocar (donde sea) para ocultarlo otra vez
     edRedraw();
   });
   $('mpb-ok')?.addEventListener('click', () => _edEndMotionPath(true));

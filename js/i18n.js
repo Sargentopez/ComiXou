@@ -224,7 +224,7 @@ const TRANSLATIONS = {
     home_searchGenre:  "Género…",
     home_searchAuthor: "Autor…",
     home_contact:      "Contacto",
-    home_share:        "Enviar",
+    home_share:        "Comparte",
 
     // Cabecera — header.js (correcciones)
     header_fullscreenTitle: "Pantalla completa",
@@ -314,7 +314,7 @@ const TRANSLATIONS = {
     share_copyManualPrefix:"Copia este enlace para compartirlo:\n",
     share_modalTitle:      "Compartir «{title}»",
     share_copyLinkBtn:     "Copiar enlace",
-    share_sendBtn:         "Enviar",
+    share_sendBtn:         "Comparte",
     share_linkCopied:      "✅ Enlace copiado",
 
     // Créditos — utils.js (openCreditsModal)
@@ -544,7 +544,7 @@ const TRANSLATIONS = {
     ed_cyclesLabel:         "ciclos",
     ed_eraseTrailRedraw:    "Borrar recorrido y redibujar",
     ed_pathBehaviorTitle:   "Comportamiento del recorrido",
-    ed_mpStartFromCenterToast: "Para crear la trayectoria, empieza a dibujar desde el punto de inicio",
+    ed_mpStartFromCenterToast: "Inicia la trayectoria desde el punto central. Usa las guías para trayectorias rectas",
     gcp_behaviorTitle:      "⚙ Comportamiento",
     gcp_endOfPath:          "Al final del recorrido…",
     gcp_restart:            "🔄 Reiniciar",
@@ -1156,7 +1156,7 @@ const TRANSLATIONS = {
     home_searchGenre:  "Genre…",
     home_searchAuthor: "Author…",
     home_contact:      "Contact",
-    home_share:        "Send",
+    home_share:        "Share",
 
     // Header — header.js (fixes)
     header_fullscreenTitle: "Fullscreen",
@@ -1246,7 +1246,7 @@ const TRANSLATIONS = {
     share_copyManualPrefix:"Copy this link to share it:\n",
     share_modalTitle:      "Share \u201c{title}\u201d",
     share_copyLinkBtn:     "Copy link",
-    share_sendBtn:         "Send",
+    share_sendBtn:         "Share",
     share_linkCopied:      "✅ Link copied",
 
     // Credits — utils.js (openCreditsModal)
@@ -1472,7 +1472,7 @@ const TRANSLATIONS = {
     ed_cyclesLabel:         "cycles",
     ed_eraseTrailRedraw:    "Clear path and redraw",
     ed_pathBehaviorTitle:   "Path behavior",
-    ed_mpStartFromCenterToast: "To create the path, start drawing from the starting point",
+    ed_mpStartFromCenterToast: "Start the path from the center point. Use guides for straight paths",
     gcp_behaviorTitle:      "⚙ Behavior",
     gcp_endOfPath:          "At the end of the path…",
     gcp_restart:            "🔄 Restart",

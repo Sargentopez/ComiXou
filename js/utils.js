@@ -45,8 +45,33 @@ function showToast(msg, duration = 2500) {
   clearTimeout(t._tid);
   requestAnimationFrame(() => {
     t.classList.add('show');
-    t._tid = setTimeout(() => t.classList.remove('show'), duration);
+    // duration=null: sin autocierre — permanece visible hasta que se llame
+    // a hideToast() explícitamente (usado por el modo recorrido: petición
+    // de Alberto de que el aviso quede fijo hasta el primer tap).
+    if (duration !== null) t._tid = setTimeout(() => t.classList.remove('show'), duration);
   });
+}
+
+function hideToast() {
+  const t = document.getElementById('toast');
+  if (t) { t.classList.remove('show'); clearTimeout(t._tid); }
+}
+
+// Icono de "compartir" — no existe un emoji Unicode oficial para esto (solo
+// arrows/bandejas aproximados: 📤 🔗 ↗️); el símbolo que se reconoce
+// universalmente como "compartir" es el de Android/Material Design: tres
+// círculos (nodos) unidos por dos segmentos en ángulo agudo. Se reproduce
+// aquí como SVG en vez de con un emoji, para que sea el icono exacto.
+// currentColor: hereda el color del texto del botón donde se use.
+function shareIconSvg(px) {
+  const s = px || 14;
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true" style="vertical-align:-2px;flex-shrink:0">
+    <line x1="7" y1="12" x2="17" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    <line x1="7" y1="12" x2="17" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    <circle cx="6" cy="12" r="2.6" fill="currentColor"></circle>
+    <circle cx="18" cy="6" r="2.6" fill="currentColor"></circle>
+    <circle cx="18" cy="18" r="2.6" fill="currentColor"></circle>
+  </svg>`;
 }
 
 /* ══════════════════════════════════════════
@@ -531,7 +556,7 @@ function openShareModal(comic) {
 
   titleEl.textContent = I18n.t('share_modalTitle', { title });
   copyBtn.textContent = '🔗 ' + I18n.t('share_copyLinkBtn');
-  sendBtn.textContent = '📤 ' + I18n.t('share_sendBtn');
+  sendBtn.innerHTML = shareIconSvg() + ' ' + I18n.t('share_sendBtn');
   cancelBtn.textContent = I18n.t('cancel');
 
   const cleanup = () => {

@@ -296,7 +296,6 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius);
   font-weight: 700;
   font-size: 0.95rem;
-  box-shadow: var(--box-shadow-lg);
   z-index: 9999;
   transition: opacity .25s, visibility .25s;
   pointer-events: none;

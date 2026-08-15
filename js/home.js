@@ -732,18 +732,16 @@ function buildRow(comic, currentUser) {
     const shareBtn = document.createElement('a');
     shareBtn.className = 'work-row-btn';
     shareBtn.href = '#';
-    shareBtn.textContent = '📤 ' + I18n.t('home_share');
+    shareBtn.innerHTML = shareIconSvg() + ' ' + I18n.t('home_share');
     shareBtn.onclick = (e) => { e.preventDefault(); openShareModal(comic); };
     actions.appendChild(shareBtn);
   }
 
   if (isOwner) {
-    const editBtn = document.createElement('a');
-    editBtn.className = 'work-row-btn edit';
-    editBtn.href = '#'; editBtn.onclick = (e) => { e.preventDefault(); Router.go('editor', { id: comic.id }); };
-    editBtn.textContent = I18n.t('edit');
-    actions.appendChild(editBtn);
-
+    // Petición de Alberto: la ficha de obra en la página de inicio (home)
+    // ya NO debe tener la opción "Editar" — esa acción queda exclusivamente
+    // en Mis obras (my-works.js, botón independiente con data-action="edit",
+    // no se toca ni se comparte código con este fichero).
     const unpubBtn = document.createElement('button');
     unpubBtn.className = 'work-row-btn unpub';
     unpubBtn.textContent = I18n.t('unpublish');
