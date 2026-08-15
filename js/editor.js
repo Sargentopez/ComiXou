@@ -19242,7 +19242,7 @@ function edRenderOptionsPanel(mode){
     $('pp-text-to-draw')?.addEventListener('click',()=>{ if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx); });
     $('pp-btn-action')?.addEventListener('click',()=>{ const _la=edLayers[edSelectedIdx]; if(_la) _edOpenBtnModal(_la); });
     $('pp-del')?.addEventListener('click',()=>{
-      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); _edResetCameraToFit(); });
     });
     $('pp-dup')?.addEventListener('click',()=>{ edDuplicateSelected(); edCloseOptionsPanel(); });
     $('pp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -19834,7 +19834,7 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('pp-del')?.addEventListener('click',()=>{
-      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); });
+      edConfirm(I18n.t('ed_confirmDeleteThisObject'), ()=>{ edDeleteSelected(); edCloseOptionsPanel(); _edResetCameraToFit(); });
     });
     $('pp-td-except')?.addEventListener('click',()=>{
       if(typeof _tdExceptCurrentPage==='function') _tdExceptCurrentPage();
