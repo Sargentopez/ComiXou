@@ -2521,42 +2521,22 @@ function edSetOrientation(o, persist=true){
   edOrientation=o;
   // Persistir en la hoja actual (no al inicializar el editor)
   if(persist && edPages[edCurrentPage]) edPages[edCurrentPage].orientation=o;
-  // Recalcular height de ImageLayers y redimensionar FillLayers si la orientación cambió
+  // Recolocar todas las capas (misma lógica que _pgRotatePage, ver editor-pages.js)
+  // si la orientación cambió de verdad — antes esta ruta (menú "Hoja ▾ →
+  // Orientación") solo tocaba ImageLayer y el canvas de FillLayer, dejando
+  // trazos a mano, gifs, formas, texto, bocadillos y líneas deformados.
   if(persist && prevOrientation !== o){
-    _edMarkPageDirty(edCurrentPage); // el redimensionado de fills de abajo también cambia contenido guardable
-    const _isV  = o === 'vertical';
-    const _pw   = _isV ? ED_PAGE_W : ED_PAGE_H;
-    const _ph   = _isV ? ED_PAGE_H : ED_PAGE_W;
-    // Diagnóstico orientación — fills ANTES del resize
-    window._edOrientFillDiag = (edPages[edCurrentPage]?.layers||[])
-      .filter(l=>l.type==='fill')
-      .map(f=>({uid:f._uid,isWS:f._isWorkspaceCanvas,cw:f._canvas?.width,ch:f._canvas?.height,x:f.x?.toFixed(3),y:f.y?.toFixed(3),w:f.width?.toFixed(3),h:f.height?.toFixed(3)}));
-    (edPages[edCurrentPage]?.layers || []).forEach(l => {
-      if(l.type === 'image' && l.img && l.img.naturalWidth > 0){
-        l.height = l.width * (l.img.naturalHeight / l.img.naturalWidth) * (_pw / _ph);
-      }
-      // SF FillLayer de StrokeLayer: redimensionar canvas al nuevo tamaño en píxeles.
-      // x/y/width/height NO cambian (fracciones de página, igual que strokes).
-      // El canvas pasa de w*pwViejo×h*phViejo a w*pwNuevo×h*phNuevo.
-      if(l.type === 'fill' && !l._isWorkspaceCanvas){
-        l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
-        const _nWpx = Math.max(1, Math.round((l.width  || 1) * _pw));
-        const _nHpx = Math.max(1, Math.round((l.height || 1) * _ph));
-        if(l._canvas && (l._canvas.width !== _nWpx || l._canvas.height !== _nHpx)){
-          const _tmp = document.createElement('canvas');
-          _tmp.width = _nWpx; _tmp.height = _nHpx;
-          _tmp.getContext('2d').drawImage(l._canvas,
-            0, 0, l._canvas.width, l._canvas.height,
-            0, 0, _nWpx, _nHpx);
-          l._canvas = _tmp;
-          l._ctx    = _tmp.getContext('2d');
-        }
-      }
-      // Fill de DrawLayer (_isWorkspaceCanvas): canvas ED_CANVAS_W×H fijo, sin cambios.
-      if(l.type === 'fill' && l._isWorkspaceCanvas){
-        l._srcCanvas = null; l._previewSx = null; l._previewSy = null;
-      }
-    });
+    _edMarkPageDirty(edCurrentPage); // recolocar capas también cambia contenido guardable
+    if(typeof _edRelayoutLayersForOrientation === 'function'){
+      const _layersRef = edPages[edCurrentPage]?.layers || [];
+      const _snap = l => ({type:l.type, x:l.x?.toFixed(3), y:l.y?.toFixed(3), w:l.width?.toFixed(3), h:l.height?.toFixed(3), frames:(l._frames&&l._frames.length)||0});
+      // Diagnóstico: estado de las capas antes/después de recolocar por cambio
+      // de orientación — útil para verificar en dispositivo real (ver botón
+      // Diagnóstico) sin tener que reproducir el bug en el simulador.
+      window._edOrientRelayoutDiag = { from:prevOrientation, to:o, before:_layersRef.map(_snap) };
+      _edRelayoutLayersForOrientation(_layersRef, prevOrientation, o);
+      window._edOrientRelayoutDiag.after = _layersRef.map(_snap);
+    }
   }
   if(edViewerCanvas){ edViewerCanvas.width=edPageW(); edViewerCanvas.height=edPageH(); }
   requestAnimationFrame(()=>requestAnimationFrame(()=>{
@@ -31320,6 +31300,19 @@ function _bibRenderPanel(panel) {
       }
 
       // GIF animado guardado desde el editor GIF
+      // Tamaño físico (normW/normH) guardado relativo a la orientación ORIGINAL
+      // (entry.orientation) — si la hoja destino tiene otra orientación, hay que
+      // convertirlo antes de usarlo o la animación sale deformada (bug reportado
+      // por Alberto: esta rama devolvía antes de llegar al código de conversión
+      // de orientación que sí aplican las demás inserciones desde biblioteca,
+      // más abajo en esta misma función).
+      function _convAnimSize(w, h) {
+        const _o = entry.orientation || edOrientation;
+        if (_o === edOrientation || w == null || h == null) return { w, h };
+        const _pwS = _o === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+        const _phS = _o === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+        return { w: w * _pwS / edPageW(), h: h * _phS / edPageH() };
+      }
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
         // Si el APNG/frames están solo en IDB (dispositivo B — entry.pngFrames vacío)
         // NOTA: si entry.pngFrames ya tiene datos, saltar este branch directamente al path normal
@@ -31343,6 +31336,9 @@ function _bibRenderPanel(panel) {
                 const pw=edPageW(), ph=edPageH();
                 let fW=entry.normW||0.7, fH=entry.normH||fW*(_img2.naturalHeight/Math.max(_img2.naturalWidth,1))*(pw/ph);
                 // normW/normH ya refleja el tamaño real en el GCP — no reducir
+                if (entry.normW != null && entry.normH != null) {
+                  const _conv = _convAnimSize(fW, fH); fW = _conv.w; fH = _conv.h;
+                }
                 const la2=new ImageLayer(_img2,0.5,0.5,fW); la2.height=fH;
                 la2.src=entry.gifDataUrl||(entry.pngFrames&&entry.pngFrames[0])||_src2;
                 la2._keepSize=true; la2._isGcpImage=true;
@@ -31389,6 +31385,9 @@ function _bibRenderPanel(panel) {
           let finalW = entry.normW || 0.7;
           let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
           // normW/normH ya refleja el tamaño real en el GCP — no reducir
+          if (entry.normW != null && entry.normH != null) {
+            const _conv = _convAnimSize(finalW, finalH); finalW = _conv.w; finalH = _conv.h;
+          }
           const la = new ImageLayer(img, 0.5, 0.5, finalW);
           la.height = finalH;
           // src debe ser el primer frame PNG (pequeño) para layer_data en Supabase
@@ -39021,7 +39020,7 @@ async function _edRunDiag() {
     L('\n── Errores de guardado ──');
     _edSaveErrors.forEach(m => L('  ⚠️ ' + m));
   } else {
-    if(window._edOrientFillDiag){L('\n── Orient Fill Diag ──');L(JSON.stringify(window._edOrientFillDiag));}
+    if(window._edOrientRelayoutDiag){L('\n── Orient Relayout Diag ──');L(JSON.stringify(window._edOrientRelayoutDiag));}
   if(window._edLastBibSync){
     L('\n── Último bibSync ──');
     L(JSON.stringify(window._edLastBibSync));

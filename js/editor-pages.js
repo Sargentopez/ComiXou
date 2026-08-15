@@ -583,61 +583,76 @@ function _pgOrientIcon(currentOrient) {
   }
 }
 
-// Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos.
-// Estrategia: rotar cada objeto 90° en el espacio de página para compensar el giro del lienzo.
-// vertical→horizontal: lienzo gira -90°, objetos compensan +90°.
-// horizontal→vertical: lienzo gira +90°, objetos compensan -90°.
-function _pgRotatePage(idx) {
-  const page = edPages[idx];
-  if (!page) return;
+// Recoloca TODAS las capas de una página (y sus fotogramas de animación GCP,
+// si los tiene) al cambiar la orientación, preservando el aspecto visual y el
+// tamaño en píxeles absolutos de cada objeto — no importa si el objeto queda
+// parcialmente fuera de la página tras el cambio, su relación altura/anchura
+// nunca debe alterarse.
+// Compartida por _pgRotatePage() (icono ⟲ de la miniatura, panel Hojas) y por
+// edSetOrientation() (menú "Hoja ▾ → Orientación → Vertical/Horizontal") — antes
+// cada ruta tenía su propia lógica y solo esta primera cubría todos los tipos
+// de capa; la segunda dejaba trazos a mano, gifs, formas, texto, bocadillos y
+// líneas sin recalcular, deformándolos (bug reportado por Alberto — regresión
+// de un fix anterior que solo llegó a cubrir una de las dos rutas).
+// Estrategia: cada objeto conserva su tamaño y posición en PÍXELES ABSOLUTOS;
+// solo cambia su fracción respecto a la nueva página (que tiene w/h intercambiados).
+function _edRelayoutLayersForOrientation(layers, fromOrient, toOrient) {
+  if (!layers || !layers.length || fromOrient === toOrient) return;
 
-  const currentOrient = page.orientation || edOrientation;
-  const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
-
-  const sv = currentOrient === 'vertical';
+  const sv    = fromOrient === 'vertical';
   const pwOld = sv ? ED_PAGE_W : ED_PAGE_H;
   const phOld = sv ? ED_PAGE_H : ED_PAGE_W;
   const pwNew = sv ? ED_PAGE_H : ED_PAGE_W;
   const phNew = sv ? ED_PAGE_W : ED_PAGE_H;
 
-  // Delta de márgenes: constante para esta rotación, se invierte en la siguiente.
-  // Es el único desplazamiento necesario para que el fill siga al stroke.
-  const dxPx = (ED_CANVAS_W - pwNew) / 2 - (ED_CANVAS_W - pwOld) / 2;
-  const dyPx = (ED_CANVAS_H - phNew) / 2 - (ED_CANVAS_H - phOld) / 2;
+  // Recoloca un "box" (objeto o fotograma con x/y/width/height) preservando
+  // su tamaño en píxeles absolutos.
+  // isImage: recalcula height a partir del ratio real de la imagen (más preciso
+  //   que solo preservar píxeles — evita deriva por redondeos acumulados).
+  // x/y NUNCA se clampean a [0,1]: todos los tipos pueden quedar parcialmente
+  // fuera de la página tras el cambio de orientación (decisión de Alberto —
+  // antes solo 'stroke' e 'image' lo permitían y el resto se forzaba dentro,
+  // lo que podía separar visualmente a miembros de un mismo grupo).
+  function relayoutBox(box, isImage, imgAspect) {
+    const w_px = (box.width  || 0) * pwOld;
+    const h_px = (box.height || 0) * phOld;
 
-  page.layers.forEach(la => {
+    if (isImage && imgAspect > 0) {
+      box.width  = Math.min(1, w_px / pwNew);
+      box.height = box.width * imgAspect * (pwNew / phNew);
+      if (box.height > 1) { const s = 1 / box.height; box.height = 1; box.width = Math.min(1, box.width * s); }
+    } else {
+      const rawW = w_px / pwNew, rawH = h_px / phNew;
+      // Si alguna dimensión no cabe en la nueva página, escalar AMBAS por
+      // igual (no cada una por separado) para no deformar el objeto.
+      const clampScale = (rawW > 1 || rawH > 1)
+        ? Math.min(1 / Math.max(rawW, 1e-9), 1 / Math.max(rawH, 1e-9))
+        : 1;
+      box.width  = rawW * clampScale;
+      box.height = rawH * clampScale;
+    }
+    box.x = (box.x != null ? box.x : 0.5) * pwOld / pwNew;
+    box.y = (box.y != null ? box.y : 0.5) * phOld / phNew;
+  }
+
+  layers.forEach(la => {
     if (!la) return;
 
-    // draw: no tiene x/y/width/height significativos — skip
+    // draw: cubre todo el workspace fijo — no tiene x/y/width/height significativos
     if (la.type === 'draw') return;
 
-    // SF: el FillLayer sigue al stroke vinculado.
+    // SF: el FillLayer sigue al objeto vinculado (stroke/shape/línea).
     // Sus propiedades (x/y/w/h) se sincronizan después del loop.
     // El canvas local (SF, _isWorkspaceCanvas=false) no necesita mover píxeles
     // porque draw() usa las propiedades x/y/w/h para posicionarlo correctamente.
     if (la.type === 'fill') return;
 
-    // Reposicionar: x*pwOld/pwNew preserva posición relativa dentro de la página.
-    // Se permite x/y fuera de [0,1] para stroke (objeto parcialmente fuera de página),
-    // pero se clampea para el resto (texto, shapes, etc. deben estar dentro).
-    const w_px = (la.width  || 0) * pwOld;
-    const h_px = (la.height || 0) * phOld;
-    const _xNew = (la.x || 0.5) * pwOld / pwNew;
-    const _yNew = (la.y || 0.5) * phOld / phNew;
-    la.x = _xNew;
-    la.y = _yNew;
+    const isImg     = la.type === 'image' && la.img && la.img.naturalWidth > 0;
+    const imgAspect = isImg ? (la.img.naturalHeight / la.img.naturalWidth) : 0;
 
-    if (la.type === 'image' && la.img && la.img.naturalWidth > 0) {
-      la.width  = Math.min(1, w_px / pwNew);
-      la.height = la.width * (la.img.naturalHeight / la.img.naturalWidth) * (pwNew / phNew);
-      if (la.height > 1) { const s = 1 / la.height; la.height = 1; la.width = Math.min(1, la.width * s); }
-    } else if (la.type === 'stroke' && la._canvas) {
-      // Stroke: x/y puede quedar fuera de [0,1] si el dibujo estaba en zona que no cabe
-      // en la nueva orientación — es correcto, el bitmap se ve parcialmente fuera de página.
-      la.width  = Math.min(1, w_px / pwNew);
-      la.height = Math.min(1, h_px / phNew);
-      // SF: el fill se sincroniza con el stroke en el paso posterior al loop
-    } else if (la.type === 'line' && Array.isArray(la.points)) {
+    relayoutBox(la, isImg, imgAspect);
+
+    if (la.type === 'line' && Array.isArray(la.points)) {
       // LineLayer: reescalar puntos al nuevo sistema sin rotar
       const scW = pwOld / pwNew, scH = phOld / phNew;
       const scalePt = p => p ? { ...p, x: p.x * scW, y: p.y * scH,
@@ -646,31 +661,40 @@ function _pgRotatePage(idx) {
       la.points = la.points.map(scalePt);
       if (Array.isArray(la.subPaths))
         la.subPaths = la.subPaths.map(sp => sp.map(scalePt));
-      la.width  = Math.min(1, w_px / pwNew);
-      la.height = Math.min(1, h_px / phNew);
-      la.x = Math.max(0, Math.min(1, _xNew));
-      la.y = Math.max(0, Math.min(1, _yNew));
-    } else {
-      // gif, shape, text, bubble — clamp: deben estar dentro de la página
-      la.width  = Math.min(1, w_px / pwNew);
-      la.height = Math.min(1, h_px / phNew);
-      la.x = Math.max(0, Math.min(1, _xNew));
-      la.y = Math.max(0, Math.min(1, _yNew));
+    }
+
+    // Fotogramas de animación (editor GCP, ▶): cada uno guarda su propio
+    // x/y/width/height (ver _gcpApplyFrame) y hay que recolocarlos igual que
+    // la propiedad base, o la animación se ve deformada/desplazada en los
+    // fotogramas ya grabados aunque el objeto "en reposo" se vea bien.
+    if (Array.isArray(la._frames) && la._frames.length) {
+      la._frames.forEach(fr => { if (fr) relayoutBox(fr, isImg, imgAspect); });
     }
     // Sin cambio de rotation — el objeto no se gira
   });
 
-  // Sincronizar fills con sus strokes vinculados (mismas propiedades)
-  page.layers.forEach(l => {
+  // Sincronizar fills con su objeto vinculado (mismas propiedades)
+  layers.forEach(l => {
     if (l.type === 'fill' && l._drawLayerId) {
-      const _sl = page.layers.find(s => s._fillLayerId === l._drawLayerId);
-      if (_sl) {
-        l.x = _sl.x; l.y = _sl.y;
-        l.width = _sl.width; l.height = _sl.height;
-        l.rotation = _sl.rotation || 0;
+      const src = layers.find(s => s._fillLayerId === l._drawLayerId);
+      if (src) {
+        l.x = src.x; l.y = src.y;
+        l.width = src.width; l.height = src.height;
+        l.rotation = src.rotation || 0;
       }
     }
   });
+}
+
+// Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos.
+function _pgRotatePage(idx) {
+  const page = edPages[idx];
+  if (!page) return;
+
+  const currentOrient = page.orientation || edOrientation;
+  const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
+
+  _edRelayoutLayersForOrientation(page.layers, currentOrient, newOrient);
 
   page.orientation = newOrient;
   // Rotar SIEMPRE cambia el contenido guardable de esta página (orientación +
