@@ -1085,7 +1085,7 @@ let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
 const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16" width="20" height="14" style="display:block;pointer-events:none"><polygon points="1,1 9,1 9,15" fill="currentColor"/><line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.5 2"/><polygon points="15,1 23,1 15,15" fill="currentColor"/></svg>`;
-let edDrawColor = '#000000', edDrawSize = 4, edEraserSize = 20, edDrawOpacity = 100;
+let edDrawColor = '#000000', edDrawSize = 2, edEraserSize = 20, edDrawOpacity = 100;
 let edDrawBrushType = 'pen';   // 'pen' = estilógrafo (actual) | 'pencil' = lápiz
 let edFillBrushType = 'bucket'; // 'bucket' = bote de pintura (actual) | 'watercolor' = pincel acuarela
 // ── Degradado de relleno ─────────────────────────────────────────────────────
@@ -3160,7 +3160,7 @@ class ShapeLayer extends BaseLayer {
     this.shape     = shape;       // 'rect' | 'ellipse'
     this.color     = '#000000';   // color del borde
     this.fillColor = 'none';       // sin relleno por defecto
-    this.lineWidth = 3;
+    this.lineWidth = 2;
     this.opacity   = 1;
   }
   draw(ctx) {
@@ -3279,7 +3279,7 @@ class LineLayer extends BaseLayer {
     this.closed    = false;
     this.color     = '#000000';
     this.fillColor = 'none';       // sin relleno por defecto
-    this.lineWidth = 3;
+    this.lineWidth = 2;
     this.opacity   = 1;
     this.subPaths  = [];   // T1: sub-paths adicionales para huecos con even-odd fill rule
     // rotation heredado de BaseLayer
@@ -11040,7 +11040,7 @@ function edOnStart(e){
     _edShapePreview = new ShapeLayer(_edShapeType, c.nx, c.ny, 0.01, 0.01);
     _edShapePreview.color     = edDrawColor || '#000000';
     _edShapePreview.fillColor = 'none'; // sin relleno durante construcción
-    _edShapePreview.lineWidth = edDrawSize || 3;
+    _edShapePreview.lineWidth = edDrawSize || 2;
     _edInsertLayerAbove(_edShapePreview);
     edRedraw();
     return;
@@ -15456,7 +15456,7 @@ function _edLineAddPoint(nx, ny, isTouch=false){
     _edLineLayer = new LineLayer();
     _edLineLayer.color    = edDrawColor || '#000000';
     _edLineLayer.fillColor = 'none'; // sin relleno durante construcción; se aplica al OK o al fusionar
-    _edLineLayer.lineWidth = edDrawSize || 3;
+    _edLineLayer.lineWidth = edDrawSize || 2;
     _edLineLayer.x = nx; _edLineLayer.y = ny;
     _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
     _edInsertLayerAbove(_edLineLayer);
@@ -16995,7 +16995,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   const _sel = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
   const col     = _sel?.color     || edDrawColor  || '#000000';
   const fillCol = _sel ? (_sel.fillColor||'#ffffff') : (edDrawFillColor||'#ffffff');
-  const lw      = _sel?.lineWidth ?? edDrawSize ?? 3;
+  const lw      = _sel?.lineWidth ?? edDrawSize ?? 2;
   const opacity = _sel ? Math.round((_sel.opacity??1)*100) : 100;
   const hasFill = fillCol !== 'none';
   const fillVal = hasFill ? fillCol : '#ffffff';
@@ -17347,7 +17347,7 @@ function _edActivateLineTool(isNew, isCreating) {
   const _sel    = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='line') ? edLayers[edSelectedIdx] : null;
   const _cur    = _active || _sel;
   const col     = _cur?.color    || edDrawColor  || '#000000';
-  const lw      = _cur?.lineWidth ?? edDrawSize ?? 3;
+  const lw      = _cur?.lineWidth ?? edDrawSize ?? 2;
   const opacity = _cur ? Math.round((_cur.opacity??1)*100) : 100;
   const isSelectMode = _edLineType === 'select' && edActiveTool !== 'shape';
   const nPoints = _edLineLayer?.points?.length || 0;
@@ -18632,6 +18632,10 @@ function edRenderOptionsPanel(mode){
         edActiveTool = 'draw';
         edCanvas.className = 'tool-draw';
         _edDodgeBurnActive = false;
+        // Grosor de línea de tinta siempre a 2px al (re)entrar en dibujo a
+        // mano — petición de Alberto: se puede cambiar durante la sesión,
+        // pero no debe recordarse de una sesión a la siguiente.
+        edDrawSize = 2;
       }
     }
     const _actIsWc     = _edTmp.active === 'watercolor';
@@ -28255,6 +28259,11 @@ function EditorView_init(){
     edDrawFillColor = '#ffffff';
     // Si hay sesión vectorial activa (objetos ya creados), preservarla al cambiar de modo
     const _esbContSession = _vsHistory.length > 0;
+    // Grosor de línea siempre a 2px al entrar en dibujo vectorial DE NUEVO
+    // (no al cambiar de sub-herramienta dentro de una sesión ya activa) —
+    // petición de Alberto: se puede cambiar durante la sesión, pero no debe
+    // recordarse de una sesión a la siguiente (igual que en dibujo a mano).
+    if (!_esbContSession) edDrawSize = 2;
     if(shapeType) {
       _edShapeType = shapeType;
       edActiveTool = 'shape';
