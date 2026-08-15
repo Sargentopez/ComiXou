@@ -9321,6 +9321,20 @@ function _edStartMotionPath(idx) {
   if (cdv) cdv.textContent = (_cDurMs > 0) ? '≈' + (_edMotionPathCycles * _cDurMs / 1000).toFixed(1) + 's' : '';
   const pb = $('mpb-play'); if (pb) pb.textContent = '▶'; // asegurar estado inicial
   _edMpShowStartToast();
+  // En táctil, el menú queda bloqueado durante la edición de recorrido
+  // salvo el botón Guías (ver css/editor.css) — pero si ese botón está
+  // desplazado fuera de la pantalla, no hay forma de arrastrar la barra
+  // para alcanzarlo (también está bloqueada). Desplazar automáticamente
+  // el menú para dejarlo centrado y visible (petición de Alberto, probado
+  // en móvil). Solo en táctil: en PC la barra no suele desbordar.
+  if (window._edIsTouch) {
+    const _rulesBtn = document.querySelector('#edMenuBar [data-menu="rules"]');
+    if (_rulesBtn) {
+      requestAnimationFrame(() => {
+        _rulesBtn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      });
+    }
+  }
   edRedraw();
 }
 
