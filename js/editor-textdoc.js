@@ -88,6 +88,12 @@ function _tdNewFlowId(){ return 'tdflow_' + Date.now().toString(36) + '_' + (_td
 // Flujo que se está reeditando (null = "Aplicar" crea un texto nuevo al final;
 // con valor = "Aplicar" sustituye in situ las hojas de ese flujo — ver _tdApplyToCanvas)
 let _tdEditingFlowId = null;
+// Posición DENTRO del flujo (índice en _tdFlowIdxs(...).flowIdxs, NO en
+// edPages) de la hoja desde la que se abrió "Editar texto" — para centrar la
+// vista en esa hoja al abrir (ver edOpenTextDoc) y volver a ella al guardar
+// (ver _tdApplyToCanvas). null = no se abrió reeditando una hoja concreta
+// (texto nuevo, o abierto sin doble tap sobre una hoja del flujo).
+let _tdEditingSourcePageRelIdx = null;
 // true si hay cambios sin guardar desde la última apertura o aplicación —
 // a petición de Alberto: al tocar la X, si hay cambios, preguntar si
 // guardar o no, igual que ya hace el editor de animaciones (gcpClose).
@@ -184,6 +190,17 @@ function edOpenTextDoc(editLayer){
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
+    // Recordar DESDE QUÉ HOJA del flujo se abrió (doble tap) — no asume que
+    // el flujo empieza en la hoja 0 del editor general ni que sus hojas son
+    // consecutivas (puede haber huecos "Exceptuados" en medio, ver
+    // _tdFlowIdxs). Se usa para centrar la vista aquí abajo y para volver a
+    // esa misma hoja al guardar (ver _tdApplyToCanvas).
+    {
+      const _tdSrcPageIdx = edPages.findIndex(pg => (pg.layers || []).includes(editLayer));
+      const { flowIdxs: _tdSrcFlowIdxs } = _tdFlowIdxs(_tdEditingFlowId);
+      const _tdRelIdx = _tdSrcFlowIdxs.indexOf(_tdSrcPageIdx);
+      _tdEditingSourcePageRelIdx = _tdRelIdx >= 0 ? _tdRelIdx : null;
+    }
     const _tdHtmlToLoad = editLayer.sourceHTML || _tdOwnerHTML;
     if(editorEl && editorEl.editor) editorEl.editor.loadHTML(_tdHtmlToLoad);
     const _tdDetected = _tdDetectUniformFont(_tdHtmlToLoad);
@@ -193,6 +210,7 @@ function edOpenTextDoc(editLayer){
     _tdLineHeightMult = editLayer.lineHeightMult || TD_LINE_MULT;
   } else {
     _tdEditingFlowId = null;
+    _tdEditingSourcePageRelIdx = null;
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
     _tdLineHeightMult = TD_LINE_MULT;
     // Siempre en blanco al abrir desde el menú — no se restaura nada de
@@ -214,13 +232,17 @@ function edOpenTextDoc(editLayer){
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdRecomputeViewPagination();
     // Reeditar: centrar la vista en el texto que había en la hoja concreta
-    // desde la que se abrió el panel, no siempre al principio del documento.
-    // La maquetación real de la hoja (al aplicar) y la de esta vista en vivo
-    // (A4, mientras se escribe) son distintas, así que no se puede reutilizar
-    // directamente la posición —
-    // se usa el nº de caracteres que hay ANTES de esa hoja dentro del mismo
-    // flujo, y se busca a qué página de ESTA vista corresponde ese mismo punto.
-    if(editLayer && editLayer.richLines && editLayer._tdFlowId){
+    // desde la que se abrió el panel (doble tap), no siempre al principio
+    // del documento. _tdEditingSourcePageRelIdx (ver arriba) es exacto: la
+    // vista en vivo pagina con un marco POR HOJA REAL del flujo (mismo
+    // criterio que _tdEditingFlowFrames/_tdRecomputeViewPagination), así que
+    // "página N de la vista" es siempre la hoja _tdFlowIdxs(...)[N] — no
+    // hace falta aproximar por caracteres. Si por lo que sea no se pudo
+    // determinar (capa no encontrada en ninguna hoja), se cae al método
+    // anterior por caracteres como red de seguridad.
+    if(_tdEditingSourcePageRelIdx != null){
+      _tdScrollToViewPage(Math.min(_tdEditingSourcePageRelIdx, _tdViewPageStartChars.length - 1), false);
+    } else if(editLayer && editLayer.richLines && editLayer._tdFlowId){
       const targetChars = _tdCharsBeforeLayer(editLayer);
       if(targetChars > 0){
         let page = 0;
@@ -249,6 +271,26 @@ function _tdCharsBeforeLayer(la){
 function _tdEnsureFlowId(layer){
   if(!layer._tdFlowId) layer._tdFlowId = _tdNewFlowId();
   return layer._tdFlowId;
+}
+// Índices (en edPages) de las hojas de un flujo, en orden, y de sus "huecos"
+// (hojas exceptuadas dentro del mismo tramo — ver _tdMakeExceptMarker) —
+// mismo criterio que ya usan _tdReflowFlowInPlace/_tdEditingFlowFrames más
+// abajo. Traduce entre "posición DENTRO del flujo" (p.ej. "la 3ª hoja de
+// este texto") y el índice real de edPages, que no coincide 1:1 porque el
+// flujo puede empezar en cualquier hoja del editor general y tener huecos
+// exceptuados en medio. Usada por edOpenTextDoc/_tdApplyToCanvas para saber
+// a qué hoja concreta centrar la vista / volver al guardar.
+function _tdFlowIdxs(flowId){
+  const flowIdxs = [], exceptIdxs = [];
+  if(flowId){
+    edPages.forEach((p, i) => {
+      if((p.layers || []).some(l => l && l._tdFlowId === flowId)) flowIdxs.push(i);
+      else if((p.layers || []).some(l => l && l._tdExceptFlow === flowId)) exceptIdxs.push(i);
+    });
+    flowIdxs.sort((a, b) => a - b);
+    exceptIdxs.sort((a, b) => a - b);
+  }
+  return { flowIdxs, exceptIdxs };
 }
 // Localiza cualquier capa de un flujo dado (todas comparten sourceHTML/
 // lineHeightMult/marginXFrac) — usada para recuperar sus ajustes actuales
@@ -384,6 +426,7 @@ function edCloseTextDoc(fromPopstate){
     if(shell) shell.style.display = 'none';
     document.getElementById('editorShell')?.classList.remove('td-open');
     _tdEditingFlowId = null;
+    _tdEditingSourcePageRelIdx = null;
     if(_tdWasReediting && typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
     const applyBtn = document.getElementById('tdApplyBtn');
     if(applyBtn){ applyBtn.textContent = '💾'; applyBtn.title = I18n.t('td_applyToCanvas'); }
@@ -4629,7 +4672,6 @@ function _tdApplyToCanvas(){
       // explícito de Alberto): el contenido decide dónde caen, no al revés.
       existingLayer.sourceHTML = html;
       existingLayer.lineHeightMult = lineHeightMult;
-      const _wasPanelOpenBefore = !!(document.getElementById('editorShell')?.classList.contains('draw-active'));
       // Petición explícita de Alberto: al guardar cambios en un texto ya
       // existente, NO reabrir el panel de propiedades al volver (antes se
       // restauraba tal cual estaba — siempre abierto, porque la única forma
@@ -4645,7 +4687,18 @@ function _tdApplyToCanvas(){
       // reflejarlo. Puede abarcar varias páginas tras el reflujo, así que no
       // basta con existingLayer.
       edPages.forEach(pg => (pg.layers || []).forEach(l => { if (l && l._tdFlowId === _tdEditingFlowId) l.name = flowName; }));
-      if(!_wasPanelOpenBefore) edLoadPage(r.firstIdx); // mismo respaldo que había, por si no hubiera panel que cerrar
+      // Volver a la MISMA hoja del flujo desde la que se abrió "Editar
+      // texto" (pedido explícito de Alberto), no siempre a la primera del
+      // tramo. Se recalculan los índices AHORA — tras el reflujo, que puede
+      // haber añadido/quitado hojas — y se usa la misma posición DENTRO del
+      // flujo (_tdEditingSourcePageRelIdx, ver edOpenTextDoc), recortada si
+      // el flujo se ha quedado más corto que esa posición (p.ej. se borró
+      // texto suficiente como para que esa hoja ya no exista).
+      const { flowIdxs: _tdPostFlowIdxs } = _tdFlowIdxs(_tdEditingFlowId);
+      const _tdTargetRelIdx = _tdEditingSourcePageRelIdx != null
+        ? Math.min(_tdEditingSourcePageRelIdx, _tdPostFlowIdxs.length - 1)
+        : 0;
+      edLoadPage(_tdPostFlowIdxs.length ? _tdPostFlowIdxs[_tdTargetRelIdx] : r.firstIdx);
       if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
       if(typeof _edResetCameraToFit === 'function') _edResetCameraToFit();
       edToast(r.count === 1 ? I18n.t('td_textUpdatedOne') : I18n.t('td_textUpdatedMany', { n: r.count }));
