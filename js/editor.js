@@ -21806,6 +21806,18 @@ function _edbClosePalette() {
   $('edb-palette-pop')?.classList.remove('open');
   if (_edbDblTapTimer) { clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; }
   _edbDblTapIdx = -1;
+  // Cancelar explícitamente el listener pendiente de "clic fuera cierra"
+  // (window._edbPaletteClose, ver _edbTogglePalette) — normalmente ya se
+  // autoelimina solo ({once:true}) al primer pointerdown, pero si esta
+  // función se llama por otra vía (p.ej. el botón arcoíris cerrándola antes
+  // de abrir su propio picker) sin que ese pointerdown haya llegado a
+  // dispararlo, quedaría huérfano esperando el SIGUIENTE toque en cualquier
+  // parte — incluido uno dentro del picker recién abierto — y podría acabar
+  // cerrando algo que no le corresponde. Quitarlo aquí lo hace inofensivo.
+  if (window._edbPaletteClose) {
+    document.removeEventListener('pointerdown', window._edbPaletteClose);
+    window._edbPaletteClose = null;
+  }
 }
 
 function _edbBuildPalette() {
@@ -21828,7 +21840,10 @@ function _edbBuildPalette() {
       if (btn.dataset.custom) {
         // Slots 0 y 1 son negro/blanco fijos — no editables
         if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); _edbClosePalette(); return; }
-        _edbClosePalette();
+        // Abrir primero el picker y cerrar la paleta DESPUÉS (no antes): así
+        // el picker recién creado no puede verse afectado por nada que
+        // dispare _edbClosePalette() (y su limpieza del listener de "clic
+        // fuera") a mitad de su propia inicialización.
         if(window._edIsTouch){
           // Android: picker HSL propio (sin cuentagotas)
           _edShowColorPicker((hex, commit) => {
@@ -21836,8 +21851,10 @@ function _edbBuildPalette() {
             if(commit){ edColorPalette[edSelectedPaletteIdx]=hex; _edUpdatePaletteDots(); }
             _edbSyncColor();
           });
+          _edbClosePalette();
         } else {
           // PC: selector nativo del navegador (con cuentagotas)
+          _edbClosePalette();
           const _inp=document.createElement('input'); _inp.type='color'; _inp.value=edDrawColor;
           _inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
           document.body.appendChild(_inp);
