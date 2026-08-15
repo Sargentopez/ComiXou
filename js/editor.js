@@ -18485,7 +18485,17 @@ function _edShowColorPicker(onColorChange, initialColor){
     onColorChange(_startColor, true);
     overlay.remove();
   });
-  overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(_startColor,true); overlay.remove(); } });
+  // Aplazar un tick: en táctil, tras el pointerup que abre este picker, el
+  // navegador sintetiza un "click" posterior en las MISMAS coordenadas del
+  // toque original — como el picker se centra en pantalla, ese click
+  // sintético suele caer FUERA de la caja (sobre el fondo), y si el listener
+  // ya estuviera activo se cerraría solo, en el mismo gesto que lo abrió.
+  // Bug reportado por Alberto: el botón "no funcionaba" con un toque rápido
+  // y solo parecía responder tras mantener pulsado un buen rato (con una
+  // pulsación larga el navegador ya no sintetiza ese click posterior).
+  setTimeout(() => {
+    overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(_startColor,true); overlay.remove(); } });
+  }, 0);
   // Detener propagación de todos los eventos para no interferir con el canvas
   overlay.addEventListener('pointerdown', e=>e.stopPropagation(), true);
   overlay.addEventListener('touchstart',  e=>e.stopPropagation(), {passive:true, capture:true});
