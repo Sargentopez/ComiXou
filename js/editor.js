@@ -10077,9 +10077,10 @@ function edOnStart(e){
     // tienen prioridad máxima sobre cualquier bloqueo de UI, ver comentario
     // más abajo junto a _edGuidesPassThroughActive) — dejar caer al bloque
     // de guías que sigue a continuación en vez de ignorar aquí mismo.
-    // Si tampoco es una guía, el guard de después de ese bloque
-    // ("if (_edMotionPathMode) return;") corta antes de llegar a la
-    // selección general de objetos, para no romper la sesión de edición.
+    // Si tampoco es una guía, se deja caer más abajo hasta la detección de
+    // pinch de 2 dedos (para poder hacer zoom/pan de cámara con gestos) —
+    // el guard que ignora el toque de UN solo dedo sin consumir está junto
+    // a "if(window._edActivePointers.size > 1) return;", más abajo.
   }
   // Si el popup de sub-herramientas de la barra flotante está abierto,
   // este toque es para descartarlo — el outside-handler del popup gestiona la acción.
@@ -10202,10 +10203,10 @@ function edOnStart(e){
   }
 
   // En modo recorrido, si nada de lo anterior (handles del objeto, guías)
-  // consumió el toque, ignorarlo aquí — no debe caer en la selección
-  // general de objetos (podría reasignar edSelectedIdx y romper la sesión
-  // de edición del recorrido, ver _edStartMotionPath).
-  if (_edMotionPathMode) return;
+  // consumió el toque de UN solo dedo, se ignora más abajo (después de la
+  // detección de pinch de 2 dedos, para que sí pueda hacerse zoom/pan de
+  // cámara con gestos aunque no se haya tocado nada del recorrido — ver el
+  // guard junto a "if(window._edActivePointers.size > 1) return;").
 
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
   // Solo procesar si viene del canvas o de la zona de trabajo (editorShell)
@@ -10572,6 +10573,14 @@ function edOnStart(e){
     return;
   }
   if(window._edActivePointers.size > 1) return;
+  // Modo recorrido: si llegamos aquí es que el toque de UN solo dedo no
+  // coincidía con nada propio del recorrido (handles, botón central, guía)
+  // — ignorarlo, no debe caer en la selección general de objetos (podría
+  // reasignar edSelectedIdx y romper la sesión de edición, ver
+  // _edStartMotionPath). El pinch de 2 dedos SÍ ha podido procesarse justo
+  // arriba antes de llegar aquí, por eso el guard se puso después y no
+  // antes de la detección de pinch.
+  if (_edMotionPathMode) return;
   // Cerrar menús si están abiertos (clic en canvas o zona de trabajo)
   if(edMenuOpen){ edCloseMenus(); }
   edHideContextMenu();
