@@ -960,7 +960,16 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 // el candidato a drag hasta que se supera este umbral (ver edOnStart/edOnMove).
 // Ventana de doble tap/doble clic (táctil y objetos en general). Antes 350ms,
 // reducida a 200ms a petición del usuario (350 se sentía demasiado lento).
-const _edDoubleTapMs = 200;
+// Vuelto a subir a 300ms (bug reportado por Alberto: con 200ms el doble tap
+// fallaba muy a menudo, había que acertar dos toques casi simultáneos). No
+// tiene relación con el bug histórico "el panel se abre con un solo toque"
+// (v22.91, específico del editor GCP): aquella vez la causa era que el
+// índice de un objeto recién insertado coincidía por casualidad con el del
+// último toque registrado, y se arregló reseteando esas variables al
+// insertar (ver _gcpPushLayer) — no acortando esta ventana. 300ms coincide
+// con el estándar de Android (ViewConfiguration.getDoubleTapTimeout()),
+// la plataforma principal de la app.
+const _edDoubleTapMs = 300;
 const _edPenDragThreshold = 6;
 // Guard anti-arrastre tras doble tap: ventana de tiempo y umbral de movimiento
 // (mismo criterio de umbral que el resto de la app, p.ej. _edPenDragThreshold /
