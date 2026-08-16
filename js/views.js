@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v37.85</footer>
+    <footer class="app-version">v37.86</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -538,6 +538,9 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-biblioteca">
               <button class="ed-dropdown-item" id="dd-bib-save" data-i18n="ed_saveToLibrary">📥 Guardar en biblioteca</button>
               <button class="ed-dropdown-item" id="dd-bib-open" data-i18n="ed_openLibrary">📂 Abrir biblioteca</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="dd-bib-export" data-i18n="ed_exportLibrary">⬆ Exportar biblioteca</button>
+              <button class="ed-dropdown-item" id="dd-bib-import" data-i18n="ed_importLibrary">⬇ Importar biblioteca</button>
             </div>
           </div>
 
@@ -972,6 +975,8 @@ Router.register('editor', {
     </div>
 
     <input type="file" id="edFileGif" accept=".gif,image/gif" style="display:none">
+    <!-- Input oculto para Importar biblioteca (ver edBibImportFile en editor.js) -->
+    <input type="file" id="edFileBibImport" accept=".cxbib" style="display:none">
     <!-- Overlay cámara in-app -->
     <div id="edCameraOverlay" class="hidden">
       <video id="edCameraVideo" autoplay playsinline muted></video>

@@ -29665,6 +29665,7 @@ async function _edSaveBlob(blob, suggestedName, mimeType) {
       jpeg: [{description:I18n.t('ed_jpegImageDesc'), accept:{'image/jpeg':['.jpg','.jpeg']}}],
       gif:  [{description:I18n.t('ed_animatedGifDesc'), accept:{'image/gif':['.gif']}}],
       mp4:  [{description:I18n.t('ed_mp4VideoDesc'), accept:{'video/mp4':['.mp4']}}],
+      cxbib:[{description:I18n.t('ed_bibFileDesc'), accept:{'application/gzip':['.cxbib']}}],
     };
     try {
       const handle = await window.showSaveFilePicker({
@@ -31816,12 +31817,241 @@ function _bibDragCancel() {
   _bibDrag = null;
 }
 
+// ── EXPORTAR / IMPORTAR BIBLIOTECA (pedido explícito de Alberto) ─────────
+// Permite sacar la biblioteca de la obra actual a un archivo del
+// dispositivo (PC: selector nativo de carpeta/nombre; Android: a
+// Descargas — ver _edSaveBlob, ya usado por "Descargar hoja actual") y
+// volver a importarla en cualquier obra. La importación SIEMPRE fusiona
+// con lo que ya hubiera — nunca borra carpetas ni objetos existentes.
+//
+// Formato del archivo: JSON comprimido con gzip. Se reutiliza la misma
+// API nativa (CompressionStream/DecompressionStream) que ya usa el
+// proyecto para subir la biblioteca a Supabase (ver _czCompress/
+// _czDecompress en supabase-client.js), pero en bytes crudos — sin el
+// envoltorio base64 de ese otro uso — porque aquí el destino es un
+// archivo en disco, no un campo de texto en la base de datos. pako
+// (vendorizado, siempre cargado) actúa de respaldo si el navegador no
+// soporta esa API.
+//
+// Antes de comprimir se resuelve CUALQUIER dato que solo viva en la
+// IndexedDB local del dispositivo (animaciones APNG referenciadas por
+// _apngIdbKey/_pngFramesKey/animKey, y GIFs referenciados por gifKey
+// dentro de un grupo) y se embebe directamente en el JSON — así el
+// archivo es autónomo y se puede importar en cualquier otro dispositivo,
+// sin depender de que este tenga esas claves en su propia IndexedDB.
+const _BIB_EXPORT_EXT  = 'cxbib';
+const _BIB_EXPORT_MIME = 'application/gzip';
+
+// Comprime un string a un Blob gzip. Nativo primero, pako como respaldo.
+async function _bibGzipToBlob(str) {
+  const bytes = new TextEncoder().encode(str);
+  if (typeof CompressionStream === 'function') {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+      return await new Response(stream, { headers: { 'Content-Type': _BIB_EXPORT_MIME } }).blob();
+    } catch(e) { /* caer a pako */ }
+  }
+  if (window.pako && typeof window.pako.gzip === 'function') {
+    return new Blob([window.pako.gzip(bytes)], { type: _BIB_EXPORT_MIME });
+  }
+  return new Blob([bytes], { type: 'application/json' }); // último recurso: sin comprimir
+}
+
+// Descomprime un Blob gzip a string. Detecta la cabecera gzip (1f 8b) para
+// aceptar también, sin fallar, un archivo que se hubiera exportado sin
+// comprimir (último recurso de _bibGzipToBlob en un navegador muy antiguo).
+async function _bibGunzipBlob(blob) {
+  const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+  if (head[0] !== 0x1f || head[1] !== 0x8b) return await blob.text();
+  if (typeof DecompressionStream === 'function') {
+    try {
+      const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+      return await new Response(stream).text();
+    } catch(e) { /* caer a pako */ }
+  }
+  if (window.pako && typeof window.pako.ungzip === 'function') {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    return new TextDecoder().decode(window.pako.ungzip(buf));
+  }
+  throw new Error('sin soporte de descompresión gzip');
+}
+
+// Resuelve, en un entry isGifAnim o en un layer image dentro de un grupo,
+// cualquier referencia a animación que viva solo en la IDB local
+// ('cxAnims'), embebiéndola directamente (apngSrc / pngFrames).
+async function _bibResolveAnimForExport(obj) {
+  if (!obj) return;
+  const _hasEmbedded = obj.apngSrc || (obj.pngFrames && obj.pngFrames.length) || (obj._pngFrames && obj._pngFrames.length);
+  if (_hasEmbedded) return;
+  const key = obj._apngIdbKey || obj._pngFramesKey || obj.animKey;
+  if (!key) return;
+  try {
+    const data = window._sbAnimIdbLoad ? await window._sbAnimIdbLoad(key) : await _edAnimIdbLoad(key);
+    if (!data) return;
+    if (typeof data === 'string') obj.apngSrc = data;
+    else if (Array.isArray(data) && data.length) obj.pngFrames = data;
+  } catch(_) {}
+}
+
+// Resuelve un layer type:'gif' dentro de un grupo: edSerLayer solo guarda
+// su gifKey (referencia a la IDB local 'cxGifs'), nunca el dataUrl — a
+// diferencia de un GIF guardado como entry de primer nivel, que sí lo
+// embebe en gifDataUrl al guardarse (ver edBibGuardar). Se embebe aquí
+// bajo _exportGifDataUrl, un campo temporal solo para el archivo
+// exportado — edBibImportFile lo consume y lo retira al importar.
+async function _bibResolveGifForExport(layer) {
+  if (!layer || layer.type !== 'gif' || !layer.gifKey || layer._exportGifDataUrl) return;
+  try {
+    const dataUrl = await _gifIdbLoad(layer.gifKey);
+    if (dataUrl) layer._exportGifDataUrl = dataUrl;
+  } catch(_) {}
+}
+
+// Recorre toda la biblioteca (clon) resolviendo referencias externas
+async function _bibResolveAllForExport(cloneData) {
+  for (const folder of (cloneData.folders || [])) {
+    for (const entry of (folder.items || [])) {
+      if (entry.isGifAnim) {
+        await _bibResolveAnimForExport(entry);
+      } else if (entry.isGroup && Array.isArray(entry.layers)) {
+        for (const layer of entry.layers) {
+          if (layer && layer.type === 'image') await _bibResolveAnimForExport(layer);
+          if (layer && layer.type === 'gif')   await _bibResolveGifForExport(layer);
+        }
+      }
+    }
+  }
+}
+
+async function edBibExport() {
+  const data = _bibLoad();
+  const _totalItems = (data?.folders || []).reduce((n, f) => n + (f.items?.length || 0), 0);
+  if (!data || !Array.isArray(data.folders) || _totalItems === 0) {
+    edToast(I18n.t('ed_bibExportEmpty'));
+    return;
+  }
+  edToast(I18n.t('ed_bibExporting'), 8000);
+  try {
+    // Clon profundo — no tocar _bibCache mientras se resuelven referencias externas
+    const clone = JSON.parse(JSON.stringify(data));
+    delete clone._localModifiedAt;
+    await _bibResolveAllForExport(clone);
+
+    const payload = {
+      app:          'comxow',
+      kind:         'biblioteca',
+      formatVersion: 1,
+      exportedAt:   new Date().toISOString(),
+      projectTitle: edProjectMeta?.title || '',
+      folders:      clone.folders,
+    };
+
+    const blob = await _bibGzipToBlob(JSON.stringify(payload));
+    const safeTitle = (edProjectMeta?.title || 'Biblioteca')
+      .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9_\- ]/g, '').trim().replace(/\s+/g, '_') || 'Biblioteca';
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `${safeTitle}_biblioteca_${stamp}.${_BIB_EXPORT_EXT}`;
+
+    await _edSaveBlob(blob, filename, _BIB_EXPORT_MIME);
+    edToast(I18n.t('ed_bibExported', { n: _totalItems }));
+  } catch(e) {
+    console.warn('edBibExport:', e);
+    edToast(I18n.t('ed_bibExportError'));
+  }
+}
+
+async function edBibImportFile(file) {
+  if (!file) return;
+  edToast(I18n.t('ed_bibImporting'), 8000);
+  try {
+    const text = await _bibGunzipBlob(file);
+    let payload;
+    try { payload = JSON.parse(text); } catch(e) { throw new Error('json-invalido'); }
+    if (!payload || payload.kind !== 'biblioteca' || !Array.isArray(payload.folders)) {
+      throw new Error('formato-desconocido');
+    }
+
+    // Asegurar que la biblioteca actual existe con sus carpetas base
+    if (!_bibLoad()) {
+      _bibCache = { folders: [
+        { id: '__root__', name: I18n.t('bib_generalFolder'), items: [] },
+        { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
+      ]};
+    }
+    const current = _bibLoad();
+    if (!current.folders.find(f => f.id === '__root__')) {
+      current.folders.unshift({ id: '__root__', name: I18n.t('bib_generalFolder'), items: [] });
+    }
+    if (!current.folders.find(f => f.id === '__anim__')) {
+      current.folders.push({ id: '__anim__', name: I18n.t('bib_animFolder'), items: [] });
+    }
+
+    // Fusión: por cada carpeta importada, encontrar destino existente
+    // (__root__/__anim__ por id fijo; el resto por nombre exacto) o crear
+    // una carpeta nueva — NUNCA se borra ni se sustituye nada existente.
+    let _importedCount = 0;
+    for (const impFolder of payload.folders) {
+      let target = null;
+      if (impFolder.id === '__root__')      target = current.folders.find(f => f.id === '__root__');
+      else if (impFolder.id === '__anim__') target = current.folders.find(f => f.id === '__anim__');
+      if (!target) target = current.folders.find(f => f.id !== '__anim__' && f.name === impFolder.name);
+      if (!target) {
+        // Misma convención que el botón "+ Carpeta" del panel (_bibRenderPanel):
+        // las carpetas nuevas se añaden al final de la lista.
+        target = { id: Date.now() + '_f' + Math.random().toString(36).slice(2, 5), name: impFolder.name || I18n.t('bib_generalFolder'), items: [] };
+        current.folders.push(target);
+      }
+      for (const rawItem of (impFolder.items || [])) {
+        const item = JSON.parse(JSON.stringify(rawItem)); // clon — no compartir referencias con el payload importado
+        item.id = Date.now() + '_' + Math.random().toString(36).slice(2, 7); // id nuevo — evita colisión con la biblioteca actual
+        // Re-materializar GIFs anidados en grupos: escribir su dataUrl en
+        // la IDB local 'cxGifs' bajo una clave NUEVA de este dispositivo
+        // (la clave original solo existía en el dispositivo de origen).
+        if (item.isGroup && Array.isArray(item.layers)) {
+          for (const layer of item.layers) {
+            if (layer && layer.type === 'gif' && layer._exportGifDataUrl) {
+              const _newGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+              try { await _gifIdbSave(_newGifKey, layer._exportGifDataUrl); layer.gifKey = _newGifKey; } catch(_) {}
+              delete layer._exportGifDataUrl;
+            }
+          }
+        }
+        target.items.push(item);
+        _importedCount++;
+      }
+    }
+
+    if (!_importedCount) { edToast(I18n.t('ed_bibImportEmpty')); return; }
+
+    await _bibSave(current);
+    edToast(I18n.t('ed_bibImported', { n: _importedCount }));
+    // Si el panel de biblioteca está abierto, refrescarlo con los nuevos objetos
+    const _panel = $('edOptionsPanel');
+    if (_panel && _panel.dataset.mode === 'biblioteca') _bibRenderPanel(_panel);
+  } catch(e) {
+    console.warn('edBibImportFile:', e);
+    edToast(I18n.t('ed_bibImportError'));
+  }
+}
+
 function edInitBiblioteca() {
   $('dd-bib-save')?.addEventListener('pointerup', e => {
     e.stopPropagation(); edCloseMenus(); edBibGuardar();
   });
   $('dd-bib-open')?.addEventListener('pointerup', e => {
     e.stopPropagation(); edCloseMenus(); edBibAbrir();
+  });
+  $('dd-bib-export')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); edCloseMenus(); edBibExport();
+  });
+  $('dd-bib-import')?.addEventListener('pointerup', e => {
+    e.stopPropagation(); edCloseMenus(); $('edFileBibImport')?.click();
+  });
+  $('edFileBibImport')?.addEventListener('change', e => {
+    const _f = e.target.files[0];
+    e.target.value = '';
+    if (_f) edBibImportFile(_f);
   });
 }
 
