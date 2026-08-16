@@ -46,7 +46,7 @@ function showToast(msg, duration = 2500) {
   requestAnimationFrame(() => {
     t.classList.add('show');
     // duration=null: sin autocierre — permanece visible hasta que se llame
-    // a hideToast() explícitamente (usado por el modo recorrido: petición
+    // a hideToast() explícitamente (usado por el modo trayectoria: petición
     // de Alberto de que el aviso quede fijo hasta el primer tap).
     if (duration !== null) t._tid = setTimeout(() => t.classList.remove('show'), duration);
   });

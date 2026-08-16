@@ -1190,7 +1190,7 @@ body.ed-scale-tablet {
 /* ══════════════════════════════
    MODAL PROYECTO
    ══════════════════════════════ */
-/* ── Acordeón de comportamiento del recorrido ──────────────────────── */
+/* ── Acordeón de comportamiento de la trayectoria ──────────────────────── */
 .mpbeh-section {
   border: 2px solid var(--gray-200);
   border-radius: 10px;
@@ -2018,8 +2018,8 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 #editorShell.draw-active #edMenuBar #edMenuScroll {
   opacity: 0.35;
 }
-/* Excepción: durante la edición de un recorrido (trayectos), el menú Guías
-   permanece accesible y a opacidad completa — los trayectos se ajustan a
+/* Excepción: durante la edición de una trayectoria, el menú Guías
+   permanece accesible y a opacidad completa — las trayectorias se ajustan a
    las guías, así que hace falta poder añadir/gestionar guías mientras se
    edita. El resto del menú sigue bloqueado igual que en cualquier otro modo
    draw-active (dibujo a mano, vectorial, paneles de propiedades). La

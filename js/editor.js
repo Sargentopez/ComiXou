@@ -1361,23 +1361,23 @@ let _edCropHistIdx = -1;        // índice actual en el historial
 // z   = escala (1 = lienzo ocupa el viewport)
 const edCamera = { x: 0, y: 0, z: 1 };
 let _edLastTapTime = 0, _edLastTapIdx = -1; // para detectar doble tap
-// ── Recorrido de animación (motion path) ─────────────────────────────────
+// ── Trayectoria de animación (motion path) ─────────────────────────────────
 let _edViewerMode       = false;  // true solo mientras edUpdateViewer() está dibujando
 let _edViewerMpRaf      = null;   // RAF del ticker de path en el visor
-let _edMpPreviewActive  = false;  // true mientras el preview play del recorrido está activo
-let _edMotionPathPlaying = false; // botón ▶ pulsado en la barra de recorrido
+let _edMpPreviewActive  = false;  // true mientras el preview play de la trayectoria está activo
+let _edMotionPathPlaying = false; // botón ▶ pulsado en la barra de trayectoria
 let _edMpPreviewRaf     = null;   // RAF del ticker de preview
-let _edMotionPathMode    = false; // modo edición de recorrido activo
+let _edMotionPathMode    = false; // modo edición de trayectoria activo
 let _edMotionPathTarget  = -1;    // índice de la capa objetivo
 let _edMotionPathPts     = [];    // puntos simplificados guardados [{x,y}]
 let _edMotionPathRaw     = [];    // puntos brutos del trazo actual
 let _edMotionPathDrawing = false; // usuario arrastrando activamente
-let _edMotionPathClosed  = false; // recorrido cerrado
-let edMpRotating = false; // true mientras se arrastra el handle de rotación durante la edición del recorrido
-let _edMotionPathOrigRotation = 0; // rotación original del objeto al entrar en modo recorrido (para restaurar si se cancela)
-let _edMotionPathOrigX = 0.5, _edMotionPathOrigY = 0.5; // origen FIJO del recorrido (posición del objeto/grupo al abrir la ventana) — no se recalcula al arrastrar el objeto durante la edición
+let _edMotionPathClosed  = false; // trayectoria cerrada
+let edMpRotating = false; // true mientras se arrastra el handle de rotación durante la edición de la trayectoria
+let _edMotionPathOrigRotation = 0; // rotación original del objeto al entrar en modo trayectoria (para restaurar si se cancela)
+let _edMotionPathOrigX = 0.5, _edMotionPathOrigY = 0.5; // origen FIJO de la trayectoria (posición del objeto/grupo al abrir la ventana) — no se recalcula al arrastrar el objeto durante la edición
 let _edMotionPathSpeed   = 100;   // velocidad en píxeles del canvas por segundo (capas no animadas)
-let _edMotionPathCycles  = 1;     // ciclos de animación durante el recorrido (capas animadas)
+let _edMotionPathCycles  = 1;     // ciclos de animación durante la trayectoria (capas animadas)
 let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segmento de línea
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
@@ -2732,7 +2732,7 @@ class DrawLayer extends BaseLayer {
   draw(ctx){
     // Pintar el workspace entero con el mismo transform de cámara ya activo en ctx
     ctx.save();
-    // Motion path: trasladar el canvas workspace por el offset del recorrido
+    // Motion path: trasladar el canvas workspace por el offset de la trayectoria
     if ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) {
       const _mpPw = edPageW(), _mpPh = edPageH();
       ctx.translate((this._pathCurX - (this.x || 0.5)) * _mpPw,
@@ -3823,7 +3823,7 @@ function _edSnapLayerFragment(l){
       if(l._gcpRefW != null) o._gcpRefW = l._gcpRefW;
       if(l._gcpRefH != null) o._gcpRefH = l._gcpRefH;
     }
-    // Recorrido de animación — presente en cualquier tipo de capa
+    // Trayectoria de animación — presente en cualquier tipo de capa
     if(l._motionPath && l._motionPath.length >= 2) o._motionPath = _edCopyMotionPathPts(l._motionPath);
     if(l._motionPathClosed) o._motionPathClosed = true;
     if(l._motionSpeed != null) o._motionSpeed = l._motionSpeed;
@@ -4240,7 +4240,7 @@ function edApplyHistory(snapshot){
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
-      // Restaurar recorrido de animación
+      // Restaurar trayectoria de animación
       if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
@@ -4254,7 +4254,7 @@ function edApplyHistory(snapshot){
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
-      // Restaurar recorrido de animación
+      // Restaurar trayectoria de animación
       if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
@@ -4275,7 +4275,7 @@ function edApplyHistory(snapshot){
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
-      // Restaurar recorrido de animación
+      // Restaurar trayectoria de animación
       if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
       return l;
     }
@@ -5283,7 +5283,7 @@ function _edRenderOverlays() {
   edCtx.restore();
   // Overlay de recorte: contorno del polígono + zona exterior oscurecida
   if (_edCropMode && _edCropLayer) _edCropDrawOverlay();
-  // ── Overlay recorrido de animación ──────────────────────────────────────
+  // ── Overlay trayectoria de animación ──────────────────────────────────────
   if (_edMotionPathMode) {
     _edDrawMotionPath(_edMotionPathPts, _edMotionPathClosed, true, _edMotionPathTarget);
   } else if (edSelectedIdx >= 0) {
@@ -5478,15 +5478,15 @@ function edApplyDeviceClass() {
 }
 
 function edDrawSel(){
-  // Durante edición de recorrido: además del handle de rotación propio (que
+  // Durante edición de trayectoria: además del handle de rotación propio (que
   // funciona con independencia de edSelectedIdx), dejar caer también al
   // dibujo normal del marco + handles de resize — edSelectedIdx ya está
-  // sincronizado con el objeto del recorrido (ver _edStartMotionPath), así
+  // sincronizado con el objeto de la trayectoria (ver _edStartMotionPath), así
   // que es el mismo objeto. Petición de Alberto: poder ver y usar también
-  // los handlers de arrastrar/redimensionar con la ventana de recorrido
+  // los handlers de arrastrar/redimensionar con la ventana de trayectoria
   // abierta, no solo el de rotar. Si el objeto está agrupado, el dibujo
   // normal de más abajo ya se salta los handles individuales (mismo criterio
-  // que fuera de este modo) — el handle de rotación del recorrido se sigue
+  // que fuera de este modo) — el handle de rotación de la trayectoria se sigue
   // mostrando igualmente (no depende de esa comprobación).
   if(_edMotionPathMode){
     const _mpLa = edLayers[_edMotionPathTarget];
@@ -7796,7 +7796,7 @@ function edPinchStart(e) {
   // ni rotar el objeto — debe actuar solo sobre la cámara, solidario con todo
   // el lienzo, igual que en dibujo a mano (draw/eraser).
   const _vecFreehand = _edVectorFreehandGesture();
-  // Durante recorte, edición de recorrido, o edición vectorial: forzar modo cámara
+  // Durante recorte, edición de trayectoria, o edición vectorial: forzar modo cámara
   // (no escalar el objeto seleccionado — el pinch es solo para navegar el canvas)
   const la = (_edCropMode || _edMotionPathMode || _vecFreehand
     || (!isDrawTool && edSelectedIdx >= 0 && edLayers[edSelectedIdx]?.locked)) ? null
@@ -7960,7 +7960,7 @@ function edPinchMove(e) {
     }
   } else {
     // ── Modo cámara: pan + zoom ──
-    // En modo recorte, edición de recorrido, o edición de dibujo vectorial
+    // En modo recorte, edición de trayectoria, o edición de dibujo vectorial
     // (herramienta distinta del selector puro, o nodos V⟺C) el pinch siempre
     // mueve la cámara — el objeto/línea en construcción no debe escalar, y
     // debe verse solidario con el resto del lienzo (igual que en dibujo a mano).
@@ -8386,7 +8386,7 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
   });
 }
 
-// ── Bezier sampling para recorridos cerrados ─────────────────────────────────────
+// ── Bezier sampling para trayectorias cerradas ─────────────────────────────────────
 // Genera numSamples puntos sobre la curva bezier de punto medio (igual que el render)
 // Garantiza que la animación siga la misma curva suave que se dibuja visualmente
 function _edBezierSampleClosed(pts, numSamples) {
@@ -8397,9 +8397,9 @@ function _edBezierSampleClosed(pts, numSamples) {
     // límite ENTRE segmentos, que con la técnica de "punto medio" es el
     // punto medio entre el último punto y pts[0], NUNCA pts[0] exacto (el
     // punto solo se visita tal cual en u=0.5, sea cual sea su segmento).
-    // Como pts[0] es el origen del recorrido (debe coincidir con la.x/la.y
+    // Como pts[0] es el origen de la trayectoria (debe coincidir con la.x/la.y
     // al empezar/terminar cada vuelta), sin este ajuste la reproducción de
-    // un recorrido CERRADO arrancaba y cerraba en ese punto medio en vez
+    // una trayectoria CERRADA arrancaba y cerraba en ese punto medio en vez
     // del origen real — el salto "hacia la izquierda" reportado por
     // Alberto. Con el desplazamiento, s=0 cae en u=0.5 del segmento 0, es
     // decir, en pts[0] exacto.
@@ -8415,8 +8415,8 @@ function _edBezierSampleClosed(pts, numSamples) {
       // suavizado): pasar EXACTAMENTE por este punto — esquina dura, p.ej.
       // un giro de 90° — en vez de la curva bezier suave, con dos tramos
       // rectos (mismo criterio que en el overlay, ver _edDrawMotionPath).
-      // seg===0 SIEMPRE se trata así, tenga o no guía: es el origen del
-      // recorrido (debe coincidir exacto con la.x/la.y al empezar/cerrar
+      // seg===0 SIEMPRE se trata así, tenga o no guía: es el origen de la
+      // trayectoria (debe coincidir exacto con la.x/la.y al empezar/cerrar
       // cada vuelta) — la curva suave solo se APROXIMA al punto en u=0.5,
       // no lo toca exacto, lo que seguía provocando el salto reportado.
       if (u < 0.5) {
@@ -8456,7 +8456,7 @@ function _edPathPositionAt(points, closed, t, pw, ph) {
     total += d;
   }
   if (total === 0) return { x: pts[0].x, y: pts[0].y };
-  // t=1 en un recorrido CERRADO equivale a t=0 (se completó la vuelta) — el
+  // t=1 en una trayectoria CERRADA equivale a t=0 (se completó la vuelta) — el
   // envolvente módulo es correcto ahí. En uno ABIERTO, t=1 es el final real
   // y NO debe envolver a t=0: en JS, 1 % 1 da 0, así que sin esta distinción
   // pedir la posición justo en el final devolvía la del INICIO — de ahí el
@@ -8477,7 +8477,7 @@ function _edPathPositionAt(points, closed, t, pw, ph) {
   return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
 }
 
-// Longitud total del recorrido en píxeles — usa bezier sample para bucles cerrados
+// Longitud total de la trayectoria en píxeles — usa bezier sample para bucles cerrados
 // (misma base que _edPathPositionAt, garantizando velocidad constante)
 function _edPathArcLengthPx(points, closed, pw, ph) {
   if (!points || points.length < 2) return 1;
@@ -8513,21 +8513,21 @@ function _edPathTangentDeg(points, closed, t, pw, ph) {
 // Delta de rotación (grados) para orientar el objeto según la tangente de la
 // trayectoria en el instante t, relativo a la tangente inicial (t=0). Al ser
 // relativo, la orientación propia del objeto se conserva como punto de partida:
-// un recorrido en semicírculo (180° de giro de tangente) gira el objeto 180°
+// una trayectoria en semicírculo (180° de giro de tangente) gira el objeto 180°
 // desde su rotación de partida — su lado superior queda abajo, el derecho a la
 // izquierda — sin importar hacia dónde apuntara originalmente el objeto.
 function _edPathOrientDelta(points, closed, t, pw, ph) {
   return _edPathTangentDeg(points, closed, t, pw, ph) - _edPathTangentDeg(points, closed, 0, pw, ph);
 }
 
-// Grados extra de rotación por recorrido a aplicar AHORA MISMO al dibujar la capa la
-// (0 si no está en reproducción de recorrido o si la capa no tiene orientación activa).
+// Grados extra de rotación por trayectoria a aplicar AHORA MISMO al dibujar la capa la
+// (0 si no está en reproducción de trayectoria o si la capa no tiene orientación activa).
 // Único punto de verdad usado por los draw() de todos los tipos de capa rotables.
 function _edLayerPathRotDeg(la) {
   return ((_edViewerMode || _edMpPreviewActive) && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
 }
 
-// ── Easing para recorridos: reasigna t dentro de [0,1] sin cambiar la duración ─
+// ── Easing para trayectorias: reasigna t dentro de [0,1] sin cambiar la duración ─
 // ── Easing Hermite por tramos: rápido lineal + frenado/arrancada cortos ──
 // kt=0.75, kp=3kt/(1+2kt)=0.9 → derivada fase frenado P'(u)=0.3(u-1)²≥0 (monotona)
 function _edEaseT(t,accel){
@@ -8545,12 +8545,12 @@ function _edEaseT(t,accel){
   return t;
 }
 
-// ── Sincronización recorrido↔animación respetando pausas por frame (T) ──────
+// ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
 // Cuando un frame tiene pausa (window._gcpFrameHolds en el editor GCP, guardada
 // en la capa como la._gcpFrameHolds), tanto el frame mostrado como la posición
-// en el recorrido deben quedarse fijos durante toda la pausa — el ancho fijo
+// en la trayectoria deben quedarse fijos durante toda la pausa — el ancho fijo
 // de la tarjeta en la Matriz no guarda proporción con el tiempo real (ver el
-// mismo razonamiento aplicado a la regla de tiempo), y aquí el recorrido debe
+// mismo razonamiento aplicado a la regla de tiempo), y aquí la trayectoria debe
 // "esperar" exactamente igual que la propia animación.
 
 // Tiempo acumulado (ms) de una capa GCP/APNG/GIF ya insertada (fuera de una
@@ -8589,11 +8589,11 @@ function _edFrameProgressAt(cumTime, totalF, tMs, holds) {
   return totalF;
 }
 
-// Convierte una fracción 0-1 de UN traversal completo del recorrido (que
+// Convierte una fracción 0-1 de UN traversal completo de la trayectoria (que
 // puede abarcar varios ciclos de animación) en la fracción equivalente
 // respetando pausas — se aplica a la fracción "cruda" de cada modo de fin de
-// recorrido (stop/rewind/restart) ANTES de la curva de aceleración, así el
-// recorrido se congela exactamente cuando la animación se detiene, y ambos
+// trayectoria (stop/rewind/restart) ANTES de la curva de aceleración, así la
+// trayectoria se congela exactamente cuando la animación se detiene, y ambos
 // retoman el avance juntos al terminar la pausa.
 function _edApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
   if (!(cycles > 0) || totalF <= 0 || !cumTime) return pathFrac01;
@@ -8652,9 +8652,9 @@ function _edViewerMpTick() {
   if (!$('editorViewer')?.classList.contains('open')) {
     _edViewerMpRaf = null; return; // viewer cerrado — parar
   }
-  // Comprobar si ALGUNA hoja tiene recorridos (no solo la actual).
+  // Comprobar si ALGUNA hoja tiene trayectorias (no solo la actual).
   // Si solo comprobamos la hoja actual, el ticker se para al navegar a hojas sin
-  // recorrido y nunca se reactiva al llegar a hojas que sí los tienen.
+  // trayectoria y nunca se reactiva al llegar a hojas que sí los tienen.
   const _anyPath = edPages.some(pg => (pg.layers||[]).some(l => l._motionPath && l._motionPath.length >= 2));
   if (!_anyPath) { _edViewerMpRaf = null; return; }
 
@@ -8669,13 +8669,13 @@ function _edViewerMpTick() {
   let _mpUpdated = false;
   (page.layers||[]).forEach(l => {
     if (!l._motionPath || l._motionPath.length < 2) return;
-    // No iniciar el recorrido hasta que el temporizador de inicio de la
+    // No iniciar la trayectoria hasta que el temporizador de inicio de la
     // animación haya disparado (sincroniza path y animación).
     if (!l._pathStartTime) {
       if (l._startDelayTimer) { _mpUpdated = true; return; } // aún esperando
       l._pathStartTime = now;
     }
-    // Congelar recorrido durante el periodo de espera del reinicio de animación.
+    // Congelar trayectoria durante el periodo de espera del reinicio de animación.
     // Sin esto, path en modo restart/rewind sigue avanzando aunque la animación
     // esté parada. Al disparar _restartTimer se borra _pathStartTime (v31.50 FIX3)
     // y el path reinicia desde 0 junto a la animación.
@@ -8690,7 +8690,7 @@ function _edViewerMpTick() {
       : (_elapsed * (l._motionSpeed || 100)) / _totalPx;
     // ── Scrubbing: derivar frame de animación del progreso del path ──────────
     // cumTime/holds se calculan aquí (una vez) y se reutilizan más abajo para
-    // que la posición en el recorrido también respete las pausas por frame.
+    // que la posición en la trayectoria también respete las pausas por frame.
     let _mpCumTime = null, _mpTotalF = 0;
     if (_vCycleDurMs > 0 && _vCycles > 0) {
       const _syncFs = (l._animFrames && l._animFrames.length) ? l._animFrames
@@ -8848,7 +8848,7 @@ function _edViewerMpTickStop() {
   if (page) (page.layers||[]).forEach(l => { delete l._pathCurX; delete l._pathCurY; delete l._pathCurRotDeg; delete l._pathStartTime; delete l._pathStopped; });
 }
 
-// ── Ticker de preview play del recorrido (solo en modo edición de recorrido) ─────
+// ── Ticker de preview play de la trayectoria (solo en modo edición de trayectoria) ─────
 function _edMpPreviewTick() {
   if (!_edMotionPathMode || !_edMotionPathPlaying) {
     _edMpPreviewRaf = null; return;
@@ -8869,7 +8869,7 @@ function _edMpPreviewTick() {
     : ((now - la._pathStartTime) / 1000 * _edMotionPathSpeed) / _tot;
   // ── Scrubbing: sincronizar frame de animación al progreso del path ──────────
   // cumTime/holds se calculan aquí (una vez) y se reutilizan más abajo para
-  // que la posición en el recorrido también respete las pausas por frame.
+  // que la posición en la trayectoria también respete las pausas por frame.
   let _pCumTime = null, _pTotalF = 0;
   const _pIsSync = _cycleDurMs > 0 && _edMotionPathCycles > 0;
   if (_pIsSync) {
@@ -9052,14 +9052,14 @@ function _edMpPreviewStop() {
 // el segmento equivocado, y después continúa bien). Mismo criterio que ya
 // usa el ajuste EN VIVO durante el dibujo (_edSnapMotionPathPt) — aquí se
 // aplica el mismo razonamiento al trazo completo, ya cerrado, al soltar.
-// Copia los puntos de un recorrido preservando la marca "sharp" (ajustado a
+// Copia los puntos de una trayectoria preservando la marca "sharp" (ajustado a
 // guía) — sin esto, cualquier copia (guardar, recargar el editor al reabrir
 // la ventana, duplicar el objeto, deshacer/rehacer, agrupar, exportar…)
 // perdía la marca y el trazado volvía a mostrarse suavizado visualmente
 // aunque la reproducción siguiera siendo correcta (los trayectos abiertos no
 // dependen de "sharp" para reproducirse, solo para dibujarse en pantalla —
-// bug reportado por Alberto: "el recorrido que se visualiza debe representar
-// fielmente el recorrido real"). Único punto de verdad para esta copia.
+// bug reportado por Alberto: "la trayectoria que se visualiza debe representar
+// fielmente la trayectoria real"). Único punto de verdad para esta copia.
 function _edCopyMotionPathPts(pts) {
   return pts.map(p => p.sharp ? { x: p.x, y: p.y, sharp: true } : { x: p.x, y: p.y });
 }
@@ -9164,8 +9164,8 @@ function _edRotOpacityRowHtml(la) {
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
       </div>`;
 }
-// ── RECORRIDO DE ANIMACIÓN (motion path) ────────────────────────────────────
-// ── Helpers HTML de recorrido — punto único de verdad ────────────────────────
+// ── TRAYECTORIA DE ANIMACIÓN (motion path) ────────────────────────────────────
+// ── Helpers HTML de trayectoria — punto único de verdad ────────────────────────
 // Cambiar aquí afecta a todos los paneles de propiedades a la vez.
 function _edPathRowHtml(la, withBtnAction) {
   return `
@@ -9203,7 +9203,7 @@ function _edGrpPathRowHtml(la) {
 
 // Parpadeo del punto central (botón de inicio) — rAF de bajo coste, limitado
 // a ~14fps (suficiente para un pulso visible, mucho más barato que 60fps)
-// mientras dure el modo recorrido. edRedraw() ya se llama en cada gesto del
+// mientras dure el modo trayectoria. edRedraw() ya se llama en cada gesto del
 // usuario; esto añade los redibujados adicionales necesarios para animar el
 // marcador incluso con el dedo/ratón quieto.
 let _edMpBlinkRaf = null;
@@ -9246,7 +9246,7 @@ function _edMpBlinkStop() {
 }
 
 // Centro del objeto (o promedio del grupo) — misma lógica usada en varios
-// sitios del recorrido; centralizada aquí para no repetirla.
+// sitios de la trayectoria; centralizada aquí para no repetirla.
 function _edMpLiveCenter(la) {
   if (!la) return { x: 0.5, y: 0.5 };
   if (la.groupId) {
@@ -9260,7 +9260,7 @@ function _edMpLiveCenter(la) {
   return { x: la.x, y: la.y };
 }
 
-// Inicia el modo dibujo de recorrido para la capa idx
+// Inicia el modo dibujo de trayectoria para la capa idx
 function _edStartMotionPath(idx) {
   const la = edLayers[idx]; if (!la) return;
   _edMotionPathMode    = true;
@@ -9275,7 +9275,7 @@ function _edStartMotionPath(idx) {
   // Guardar la rotación de partida para poder restaurarla si se cancela (✕)
   edMpRotating = false;
   _edMotionPathOrigRotation = la.rotation || 0;
-  // Origen FIJO del recorrido: la posición del objeto/grupo AHORA, al abrir
+  // Origen FIJO de la trayectoria: la posición del objeto/grupo AHORA, al abrir
   // la ventana. Petición de Alberto: poder arrastrar el objeto durante la
   // edición sin que el punto de inicio de la trayectoria se desplace con
   // él — solo el objeto se mueve, el origen del trazado queda fijo hasta
@@ -9284,7 +9284,7 @@ function _edStartMotionPath(idx) {
   const _origC = _edMpLiveCenter(la);
   _edMotionPathOrigX = _origC.x; _edMotionPathOrigY = _origC.y;
   _edDrawLockUI();
-  // Marca específica del modo recorrido (además de "draw-active", que
+  // Marca específica del modo trayectoria (además de "draw-active", que
   // comparten dibujo a mano/vectorial/paneles de propiedades): permite
   // excepcionar SOLO aquí el menú Guías, que debe seguir accesible porque
   // los trayectos se ajustan a las guías (ver css/editor.css).
@@ -9310,7 +9310,7 @@ function _edStartMotionPath(idx) {
   if (cdv) cdv.textContent = (_cDurMs > 0) ? '≈' + (_edMotionPathCycles * _cDurMs / 1000).toFixed(1) + 's' : '';
   const pb = $('mpb-play'); if (pb) pb.textContent = '▶'; // asegurar estado inicial
   _edMpShowStartToast();
-  // En táctil, el menú queda bloqueado durante la edición de recorrido
+  // En táctil, el menú queda bloqueado durante la edición de trayectoria
   // salvo el botón Guías (ver css/editor.css) — pero si ese botón está
   // desplazado fuera de la pantalla, no hay forma de arrastrar la barra
   // para alcanzarlo (también está bloqueada). Desplazar automáticamente
@@ -9327,8 +9327,8 @@ function _edStartMotionPath(idx) {
   edRedraw();
 }
 
-// Cierra el modo recorrido; si save=true guarda los puntos en la capa
-// Cerrar modal de comportamiento del recorrido
+// Cierra el modo trayectoria; si save=true guarda los puntos en la capa
+// Cerrar modal de comportamiento de la trayectoria
 function _mpbehClose() {
   const _m = document.getElementById('edMpBehaviourModal');
   if (_m) _m.classList.remove('open');
@@ -9364,7 +9364,7 @@ function _edEndMotionPath(save) {
         delete la._motionPathOrient; delete la._pathCurRotDeg;
       }
       edPushHistory();
-      // Propagar recorrido a todos los miembros del grupo si es un grupo
+      // Propagar trayectoria a todos los miembros del grupo si es un grupo
       if (la.groupId) {
         const _gidProp = la.groupId;
         const _idxsProp = _edGroupMemberIdxs(_gidProp);
@@ -9381,7 +9381,7 @@ function _edEndMotionPath(save) {
             // _motionCycles/_motionCyclesDur: si la (el objeto cuya trayectoria se
             // acaba de editar) es una animación sincronizada por ciclos, el resto
             // del grupo debe usar la MISMA duración de ciclo — si no, cada miembro
-            // calcula su progreso por el recorrido con una fórmula distinta
+            // calcula su progreso por la trayectoria con una fórmula distinta
             // (velocidad en px/s unos, ciclos de animación otro) y acaban en
             // puntos distintos del mismo camino con el tiempo, rompiendo el grupo.
             if (la._motionCycles)    _m._motionCycles    = la._motionCycles;    else delete _m._motionCycles;
@@ -9412,7 +9412,7 @@ function _edEndMotionPath(save) {
   _edMotionPathDrawing = false;
   edMpRotating         = false;
   window._edMpRotateLastAngle = undefined;
-  // Limpiar todos los punteros activos: el dedo que dibujó el recorrido puede
+  // Limpiar todos los punteros activos: el dedo que dibujó la trayectoria puede
   // seguir registrado en _edActivePointers y causar "dedo fantasma" en cámara.
   if (window._edActivePointers) window._edActivePointers.clear();
   if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
@@ -9422,7 +9422,7 @@ function _edEndMotionPath(save) {
   edRedraw();
 }
 
-// ── Handle de rotación del objeto, visible durante la edición del recorrido ──
+// ── Handle de rotación del objeto, visible durante la edición de la trayectoria ──
 // Réplica visual exacta del handle de rotación normal (línea + círculo + flecha),
 // pero autónomo: no depende de edSelectedIdx ni de la selección normal, así que
 // no interfiere con el resto de handles (resize) que siguen ocultos aquí.
@@ -9455,7 +9455,7 @@ function _edDrawMpRotateHandle(la) {
   edCtx.restore();
 }
 
-// ¿El evento cae sobre el handle de rotación del objeto del recorrido?
+// ¿El evento cae sobre el handle de rotación del objeto de la trayectoria?
 function _edMpRotateHitTest(e) {
   const la = edLayers[_edMotionPathTarget];
   if (!la || la.type === 'bubble' || la.locked) return false;
@@ -9502,7 +9502,7 @@ function _edMpRotateUpdate(e) {
   edRedraw();
 }
 
-// Dibuja el overlay del recorrido sobre el canvas (curvas bezier suaves)
+// Dibuja el overlay de la trayectoria sobre el canvas (curvas bezier suaves)
 // pts: coords relativas al centro de la capa; layerIdx: índice en edLayers
 function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   if (!pts && !editing) return;
@@ -9510,11 +9510,11 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const _la = (layerIdx != null && layerIdx >= 0) ? edLayers[layerIdx] : null;
-  // Origen del recorrido: mientras se está EDITANDO, el origen FIJO capturado
+  // Origen de la trayectoria: mientras se está EDITANDO, el origen FIJO capturado
   // al abrir la ventana (_edMotionPathOrigX/Y) — no la posición en vivo del
   // objeto, para poder arrastrarlo sin que el trazado ya dibujado se desplace
-  // con él (petición de Alberto). Fuera de edición (vista previa de un
-  // recorrido ya guardado) se sigue usando la posición real de la capa/grupo.
+  // con él (petición de Alberto). Fuera de edición (vista previa de una
+  // trayectoria ya guardada) se sigue usando la posición real de la capa/grupo.
   let bx, by;
   if (editing) {
     bx = _edMotionPathOrigX; by = _edMotionPathOrigY;
@@ -9536,12 +9536,12 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   edCtx.lineCap     = 'round';
   edCtx.lineJoin    = 'round';
 
-  // ── Marcador de centro de la capa (origen del recorrido) ─────────────────
+  // ── Marcador de centro de la capa (origen de la trayectoria) ─────────────────
   // Es el BOTÓN de inicio de trazado (ver _edMpCenterHitTest en edOnStart):
   // más grande, semitransparente e intermitente para que se note que hay que
   // tocarlo ahí (petición de Alberto). El parpadeo lo produce _edMpBlinkStart/
   // Stop (rAF de bajo coste, ~14fps) llamando a edRedraw() mientras dure el
-  // modo recorrido — aquí solo se calcula la fase a partir de Date.now().
+  // modo trayectoria — aquí solo se calcula la fase a partir de Date.now().
   if (editing && _la) {
     const cx = mx + bx * pw;
     const cy = my + by * ph;
@@ -9893,7 +9893,7 @@ function edOnStart(e){
     _edActiveNonTouchPointerId = e.pointerId;
     _edActiveNonTouchPointerTs = Date.now();
   }
-  // ── MODO RECORRIDO: inicio de trazo a mano alzada ───────────────────────
+  // ── MODO TRAYECTORIA: inicio de trazo a mano alzada ───────────────────────
   if (_edMotionPathMode) {
     // No iniciar trazo si se está tocando la barra de controles o el modal de comportamiento
     if (e.target && e.target.closest('#edMotionBar')) return;
@@ -9937,9 +9937,9 @@ function edOnStart(e){
 
     // ── Handles de redimensionado del objeto ──────────────────────────────
     // Mismo criterio que el bloque general de handles (más abajo en esta
-    // misma función, fuera de modo recorrido): 8 puntos de getControlPoints()
+    // misma función, fuera de modo trayectoria): 8 puntos de getControlPoints()
     // sin contar 'rotate' (ya comprobado arriba). Petición de Alberto: poder
-    // redimensionar el objeto con la ventana de recorrido abierta, igual que
+    // redimensionar el objeto con la ventana de trayectoria abierta, igual que
     // ya se podía rotar.
     {
       const _laRz = edLayers[_edMotionPathTarget];
@@ -10008,7 +10008,7 @@ function edOnStart(e){
 
         if (window._edActivePointers.size >= 2) {
           // Segundo dedo (o más): cancelar el timer de dibujo y activar la cámara.
-          // Esto permite mover/zoom con dos dedos aunque la ventana de recorrido esté abierta.
+          // Esto permite mover/zoom con dos dedos aunque la ventana de trayectoria esté abierta.
           clearTimeout(window._edMpTouchTimer);
           window._edMpTouchTimer = null;
           _edMotionPathDrawing = false;
@@ -10191,10 +10191,10 @@ function edOnStart(e){
     }
   }
 
-  // En modo recorrido, si nada de lo anterior (handles del objeto, guías)
+  // En modo trayectoria, si nada de lo anterior (handles del objeto, guías)
   // consumió el toque de UN solo dedo, se ignora más abajo (después de la
   // detección de pinch de 2 dedos, para que sí pueda hacerse zoom/pan de
-  // cámara con gestos aunque no se haya tocado nada del recorrido — ver el
+  // cámara con gestos aunque no se haya tocado nada de la trayectoria — ver el
   // guard junto a "if(window._edActivePointers.size > 1) return;").
 
   // Ignorar clicks en elementos de UI (botones, menús, overlays, paneles)
@@ -10309,7 +10309,7 @@ function edOnStart(e){
         const cos2=Math.cos(rot2),sin2=Math.sin(rot2);
         const _vcNow=Date.now();
         // Encontrar el nodo MÁS CERCANO dentro del radio (no el primero por índice
-        // recorrido — con nodos próximos entre sí, sus áreas de detección se
+        // trayectoria — con nodos próximos entre sí, sus áreas de detección se
         // solapan y tomar "el primero que coincide" podía seleccionar/borrar
         // un nodo vecino en vez del que realmente se está tocando).
         let _vcBestDist = _vcHitR, _vcBestI = -1;
@@ -10502,7 +10502,7 @@ function edOnStart(e){
     // Cancelar drag de nodo pendiente — era un pinch, no una intención de arrastrar el nodo
     if(window._edNodeDragTouchTimer){ clearTimeout(window._edNodeDragTouchTimer); window._edNodeDragTouchTimer = null; }
     window._edPendingNodeDrag = null;
-    // Cancelar timer de recorrido — el segundo dedo es pinch/cámara, no dibujo
+    // Cancelar timer de trayectoria — el segundo dedo es pinch/cámara, no dibujo
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
     if(edRubberBand){ edRubberBand = null; edRedraw(); }
@@ -10562,8 +10562,8 @@ function edOnStart(e){
     return;
   }
   if(window._edActivePointers.size > 1) return;
-  // Modo recorrido: si llegamos aquí es que el toque de UN solo dedo no
-  // coincidía con nada propio del recorrido (handles, botón central, guía)
+  // Modo trayectoria: si llegamos aquí es que el toque de UN solo dedo no
+  // coincidía con nada propio de la trayectoria (handles, botón central, guía)
   // — ignorarlo, no debe caer en la selección general de objetos (podría
   // reasignar edSelectedIdx y romper la sesión de edición, ver
   // _edStartMotionPath). El pinch de 2 dedos SÍ ha podido procesarse justo
@@ -12097,7 +12097,7 @@ function edOnMove(e){
       return;
     }
     if (_edMotionPathDrawing) {
-      // Dibujo activo: acumular puntos del recorrido, relativos al origen
+      // Dibujo activo: acumular puntos de la trayectoria, relativos al origen
       // FIJO (no a la posición en vivo del objeto — ver _edStartMotionPath).
       const _mm = edCoords(e);
       const _bx = _edMotionPathOrigX, _by = _edMotionPathOrigY;
@@ -13007,7 +13007,7 @@ function edOnEnd(e){
     edRedraw();
   }
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
-  // Todos los modos especiales (recorrido, recorte, zoom-rect, etc.) hacen return
+  // Todos los modos especiales (trayectoria, recorte, zoom-rect, etc.) hacen return
   // sin pasar por el delete normal que está más abajo — origen de todos los "dedos fantasma".
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
@@ -13045,7 +13045,7 @@ function edOnEnd(e){
     // general de más abajo (misma función), que resetea edIsResizing/
     // edIsDragging/_edRuleDrag y guarda en el historial exactamente igual
     // que cualquier otro resize/drag/guía del editor. Solo se retorna ya
-    // (arriba) para rotar/dibujar, que son exclusivos del modo recorrido y
+    // (arriba) para rotar/dibujar, que son exclusivos del modo trayectoria y
     // no tienen equivalente general.
     if (!edIsResizing && !edIsDragging && !_edRuleDrag) return;
   }
@@ -18502,7 +18502,7 @@ function _edUpdateBubble(slider, suffix) {
   const min = parseFloat(slider.min) || 0;
   const max = parseFloat(slider.max) || 100;
   const pct = (parseFloat(slider.value) - min) / (max - min);
-  // El thumb ocupa ~10px en ambos extremos (corrección de recorrido real)
+  // El thumb ocupa ~10px en ambos extremos (corrección de trayectoria real)
   const thumbW = 10;
   const trackW = slider.offsetWidth - thumbW * 2;
   const leftPx = thumbW + pct * trackW;
@@ -19565,7 +19565,7 @@ function edRenderOptionsPanel(mode){
         }
         edToast(newLocked ? I18n.t('ed_groupLocked') : I18n.t('ed_groupUnlocked'));
       });
-      // ── Recorrido del grupo ──
+      // ── Trayectoria del grupo ──
       $('pp-grp-path-btn')?.addEventListener('click', () => {
         const _pidx = edSelectedIdx; if (_pidx < 0) return;
         edCloseOptionsPanel();
@@ -20844,7 +20844,7 @@ function _edIsAnimLayer(la) {
     (la.type === 'image' && !!(la._gcpLayersData || la._isGcpImage || la._pngFrames));
 }
 
-// Snap de un punto de recorrido a las guías activas.
+// Snap de un punto de trayectoria a las guías activas.
 // rx, ry: coords relativas al centro de la capa (espacio de página, fracción).
 // bx, by: centro de la capa en espacio de página (fracción 0-1).
 // Misma lógica que _edSnapToRules pero para un punto individual.
@@ -25942,14 +25942,14 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
-  // Resetear estado de recorridos en TODAS las hojas — posición inicial = base de la capa.
+  // Resetear estado de trayectorias en TODAS las hojas — posición inicial = base de la capa.
   // NO fijar _pathStartTime aquí: el ticker (_edViewerMpTick) lo fija en el primer frame
-  // de la hoja activa. Así el recorrido arranca siempre desde el principio cuando el
+  // de la hoja activa. Así la trayectoria arranca siempre desde el principio cuando el
   // usuario llega a cada hoja, independientemente de cuánto tiempo lleve abierto el visor.
   edPages.forEach(pg => (pg.layers||[]).forEach(l => {
     if (l._motionPath && l._motionPath.length >= 2) {
       delete l._pathStartTime;  // el ticker lo fijará al procesar la hoja activa
-      delete l._pathStopped;    // borrar bandera 'stop' para que el recorrido pueda reiniciarse
+      delete l._pathStopped;    // borrar bandera 'stop' para que la trayectoria pueda reiniciarse
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
       delete l._pathCurRotDeg;
@@ -26457,11 +26457,11 @@ function _edResetPageAnims(pageIdx) {
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
     if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
-    // Resetear recorrido: al salir de una hoja, limpiar tiempos para que al volver
-    // el recorrido empiece desde el principio.
+    // Resetear trayectoria: al salir de una hoja, limpiar tiempos para que al volver
+    // la trayectoria empiece desde el principio.
     if (l._motionPath && l._motionPath.length >= 2) {
       delete l._pathStartTime;
-      delete l._pathStopped; // limpiar bandera 'stop' para que el recorrido reinicie
+      delete l._pathStopped; // limpiar bandera 'stop' para que la trayectoria reinicie
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
       delete l._pathCurRotDeg;
@@ -26471,8 +26471,8 @@ function _edResetPageAnims(pageIdx) {
 
 // Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
 function _edStartPageAnims(pageIdx) {
-  // Garantizar que el ticker de recorridos está corriendo (puede haberse parado si
-  // se abrió el visor en una hoja sin recorridos).
+  // Garantizar que el ticker de trayectorias está corriendo (puede haberse parado si
+  // se abrió el visor en una hoja sin trayectorias).
   _edViewerMpTickStart();
   const page = edPages[pageIdx];
   if (!page) return;
@@ -26501,7 +26501,7 @@ function _edStartPageAnims(pageIdx) {
       const _doStart = () => {
         l._startDelayTimer = null;
         l._playing = true;
-        // Resetear el recorrido para que arranque sincronizado con la animación
+        // Resetear la trayectoria para que arranque sincronizado con la animación
         delete l._pathStartTime;
         delete l._pathStopped;
         // Fade in si gcpInvisBeforeStart (transición rápida pero gradual —
@@ -26673,7 +26673,7 @@ function edInitViewerTap(){
 }
 function edCloseViewer(){
   _edGifSetPlaying(false); // detener animación GIF al salir del visor
-  _edViewerMpTickStop();   // detener ticker de recorrido y limpiar posiciones
+  _edViewerMpTickStop();   // detener ticker de trayectoria y limpiar posiciones
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
   _edViewerFullCtx    = null;
@@ -27648,7 +27648,7 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
     if (!la || !la._buttonAction) continue;
-    // Usar posición actual del recorrido si está en movimiento, si no la original
+    // Usar posición actual de la trayectoria si está en movimiento, si no la original
     const cx = (la._pathCurX != null ? la._pathCurX : (la.x || 0.5)) * pw;
     const cy = (la._pathCurY != null ? la._pathCurY : (la.y || 0.5)) * ph;
     const hw = (la.width  || 1) * pw / 2;
@@ -27875,7 +27875,7 @@ function EditorView_init(){
 
   // ── TOPBAR ──
   $('edBackBtn')?.addEventListener('click', () => {
-    // Terminar modo recorrido activo antes de salir:
+    // Terminar modo trayectoria activo antes de salir:
     // el timer de 120ms podría dispararse después del click y capturar el puntero del canvas.
     if (_edMotionPathMode) _edEndMotionPath(false);
     // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
@@ -28391,17 +28391,17 @@ function EditorView_init(){
     edRedraw();
   });
 
-  // ── Barra de recorrido de animación (edMotionBar) ──
+  // ── Barra de trayectoria de animación (edMotionBar) ──
   $('mpb-play')?.addEventListener('click', () => {
     if (_edMotionPathPlaying) {
       _edMpPreviewStop();
     } else {
-      if (!_edMotionPathPts || _edMotionPathPts.length < 2) return; // no hay recorrido
+      if (!_edMotionPathPts || _edMotionPathPts.length < 2) return; // no hay trayectoria
       _edMotionPathPlaying = true;
       const _pla = edLayers[_edMotionPathTarget];
       if (_pla) {
-        _pla._pathStartTime = Date.now(); // reiniciar recorrido desde el inicio
-        // Arrancar también la animación sincronizada con el recorrido
+        _pla._pathStartTime = Date.now(); // reiniciar trayectoria desde el inicio
+        // Arrancar también la animación sincronizada con la trayectoria
         if (_pla.type === 'gif' && _pla._ready) {
           _pla._fIdx = 0; _pla._playing = true; _pla._applyFrame(0);
         } else if (_pla.type === 'image' && (_pla._animReady || _pla._apngSrc || _pla._pngFrames)) {
@@ -28440,7 +28440,7 @@ function EditorView_init(){
   $('mpb-ok')?.addEventListener('click', () => _edEndMotionPath(true));
   $('mpb-cancel')?.addEventListener('click', () => _edEndMotionPath(false));
 
-  // ── Botón Comportamiento de la barra de recorrido ─────────────────────────
+  // ── Botón Comportamiento de la barra de trayectoria ─────────────────────────
   $('mpb-behaviour')?.addEventListener('click', () => {
     const _modal = $('edMpBehaviourModal');
     if (!_modal) return;
@@ -28462,7 +28462,7 @@ function EditorView_init(){
     _modal.classList.add('open');
   });
 
-  // ── Modal Comportamiento del Recorrido ────────────────────────────────────
+  // ── Modal Comportamiento de la Trayectoria ────────────────────────────────────
   // (el modal vive fuera de editorShell → los eventos no son interceptados por el canvas)
   {
     const _mpbehModal = $('edMpBehaviourModal');
@@ -28504,7 +28504,7 @@ function EditorView_init(){
       if (e.target === _mpbehModal) _mpbehClose();
     });
 
-    // Toggle sección "Al final del recorrido"
+    // Toggle sección "Al final de la trayectoria"
     $('mpbeh-end-toggle')?.addEventListener('click', () => {
       const _sec = $('mpbeh-end-toggle').closest('.mpbeh-section');
       const _isOpen = _sec.classList.contains('open');
@@ -28528,7 +28528,7 @@ function EditorView_init(){
       if (!_isOpen) _sec.classList.add('open');
     });
 
-    // Selección de opción "Al final del recorrido"
+    // Selección de opción "Al final de la trayectoria"
     document.querySelectorAll('[data-mpbeh-end]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('[data-mpbeh-end]').forEach(b => b.classList.remove('active'));
@@ -28553,7 +28553,7 @@ function EditorView_init(){
     });
   }
 
-  // ── Drag de la barra de recorrido ─────────────────────────────────────────
+  // ── Drag de la barra de trayectoria ─────────────────────────────────────────
   {
     const _mpBar = $('edMotionBar');
     const _mpHandle = $('mpb-drag');

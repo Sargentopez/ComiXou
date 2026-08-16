@@ -1293,7 +1293,7 @@ async function preloadImages() {
     }));
     // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
 
-    // Cachear referencia de imagen en capas botón para alpha hit testing en recorridos
+    // Cachear referencia de imagen en capas botón para alpha hit testing en trayectorias
     (panel.layers || []).forEach((layer, j) => {
       if (layer._buttonAction && panel.layerImgs[j]) layer._btnHitImg = panel.layerImgs[j];
     });
@@ -1402,7 +1402,7 @@ async function sbGetAuth(path) {
 }
 
 // ── INICIAR ───────────────────────────────────────────────────
-// ── Bezier sampling para recorridos cerrados (reader) ────────────────────────────
+// ── Bezier sampling para trayectorias cerradas (reader) ────────────────────────────
 function _bezierSampleClosed(pts, numSamples) {
   const n = pts.length;
   const result = [];
@@ -1485,7 +1485,7 @@ function _pathTangentDeg(points, closed, t, pw, ph) {
 function _pathOrientDelta(points, closed, t, pw, ph) {
   return _pathTangentDeg(points, closed, t, pw, ph) - _pathTangentDeg(points, closed, 0, pw, ph);
 }
-// Grados extra de rotación de recorrido a aplicar ahora al dibujar una capa
+// Grados extra de rotación de trayectoria a aplicar ahora al dibujar una capa
 function _layerPathRotDeg(la) {
   return (la && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
 }
@@ -1564,7 +1564,7 @@ function _readerGifTick() {
               layer._animFadeOpacity = null; // restaurar opacidad natural
               layer._animLastTick    = now;
             }
-            // Reiniciar el recorrido sincronizado con la animación
+            // Reiniciar la trayectoria sincronizada con la animación
             if (layer._motionPath && layer._motionPath.length >= 2) {
               const _hasStartDelay = layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0;
               layer._pathStartTime = _hasStartDelay ? null : now;
@@ -1620,7 +1620,7 @@ function _readerGifTick() {
         } // end else (!_animMpSync)
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
-// ── Sincronización recorrido↔animación respetando pausas por frame (T) ──────
+// ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
 // Mismo criterio que en editor.js (_edLayerCumTimeMs/_edFrameProgressAt/
 // _edApplyHoldFreeze) — implementación paralela propia del reader.
 function _rLayerCumTimeMs(layer, totalF) {
@@ -1684,11 +1684,11 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
   return Math.floor(animProgress) % totalF;
 }
 
-// ── Recorrido de animación (motion path) — velocidad por ciclos o px/s ────
+// ── Trayectoria de animación (motion path) — velocidad por ciclos o px/s ────
       if (layer._motionPath && layer._motionPath.length >= 2) {
-        // Solo procesar el recorrido del panel activo. Los paneles no visibles no
+        // Solo procesar la trayectoria del panel activo. Los paneles no visibles no
         // deben acumular tiempo ni llegar a _pathStopped mientras el usuario no los lee.
-        // El recorrido arranca de cero cada vez que _resetPanelAnims es llamado al
+        // La trayectoria arranca de cero cada vez que _resetPanelAnims es llamado al
         // navegar a ese panel.
         if (pi !== RS.idx) return;
         if (!layer._pathStartTime) {
@@ -1696,7 +1696,7 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           if (layer._animStartAt && now < layer._animStartAt) return;
           layer._pathStartTime = now;
         }
-        // Congelar recorrido durante el periodo de espera del reinicio.
+        // Congelar trayectoria durante el periodo de espera del reinicio.
         // _animRestartAt indica que la animación está esperando para reiniciarse;
         // el path también debe esperar para reiniciarse sincrónicamente (FIX6).
         if (layer._animRestartAt) return;
@@ -2919,7 +2919,7 @@ function _resetPanelAnims(idx) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
       }
     }
-    // Recorrido: reiniciar — si hay delay de inicio, el path espera junto a la animación
+    // Trayectoria: reiniciar — si hay delay de inicio, el path espera junto a la animación
     if (layer._motionPath && layer._motionPath.length >= 2) {
       const _hasDelay = (layer._gcpStartDelay || 0) > 0;
       layer._pathStartTime = _hasDelay ? null : Date.now();
@@ -3004,7 +3004,7 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
     if (!la || !la._buttonAction) continue;
-    // Usar posición actual del recorrido si está en movimiento, si no la original
+    // Usar posición actual de la trayectoria si está en movimiento, si no la original
     const cx = (la._pathCurX != null ? la._pathCurX : (la.x || 0.5)) * pw;
     const cy = (la._pathCurY != null ? la._pathCurY : (la.y || 0.5)) * ph;
     const hw = (la.width  || 1) * pw / 2;

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v37.86</footer>
+    <footer class="app-version">v37.89</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -731,7 +731,7 @@ Router.register('editor', {
         </div>
       </div>
 
-      <!-- ── BARRA RECORRIDO DE ANIMACIÓN ── -->
+      <!-- ── BARRA TRAYECTORIA DE ANIMACIÓN ── -->
       <div id="edMotionBar" style="display:none;position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:200;align-items:center;gap:8px;background:rgba(20,20,20,0.92);border:1px solid rgba(255,255,255,0.15);border-radius:14px;padding:8px 14px;box-shadow:0 4px 20px rgba(0,0,0,.55);color:#fff;font-size:.82rem;font-weight:700;white-space:nowrap;-webkit-tap-highlight-color:transparent;flex-wrap:wrap;max-width:calc(100vw - 24px);user-select:none">
         <span id="mpb-drag" data-i18n-title="ed_moveBar" title="Mover barra" style="cursor:grab;opacity:0.55;font-size:.95rem;padding:0 2px;touch-action:none;line-height:1">⠿⠿</span>
         <span style="font-size:1rem">🛤️</span>
@@ -756,9 +756,9 @@ Router.register('editor', {
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-play" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-size:1rem;font-weight:900" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
-        <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" data-i18n-title="ed_eraseTrailRedraw" title="Borrar recorrido y redibujar">🗑</button>
+        <button id="mpb-undo" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 11px;color:#fff;cursor:pointer;font-size:.9rem;font-weight:900" data-i18n-title="ed_eraseTrailRedraw" title="Borrar trayectoria y redibujar">🗑</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
-        <button id="mpb-behaviour" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 8px;color:#fff;cursor:pointer;font-size:1.35rem;line-height:1" data-i18n-title="ed_pathBehaviorTitle" title="Comportamiento del recorrido">⚙️</button>
+        <button id="mpb-behaviour" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:5px 8px;color:#fff;cursor:pointer;font-size:1.35rem;line-height:1" data-i18n-title="ed_pathBehaviorTitle" title="Comportamiento de la trayectoria">⚙️</button>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <button id="mpb-ok" style="background:#16a34a;border:none;border-radius:7px;padding:5px 13px;color:#fff;cursor:pointer;font-weight:900;font-size:.88rem">✓ OK</button>
         <button id="mpb-cancel" style="background:rgba(220,38,38,0.25);border:1px solid rgba(220,38,38,0.4);border-radius:7px;padding:5px 11px;color:#ff9999;cursor:pointer;font-size:.88rem;font-weight:900" data-i18n-title="cancel" title="Cancelar">✕</button>
@@ -782,7 +782,7 @@ Router.register('editor', {
       <button class="viewer-btn viewer-close-touch" id="viewerCloseMobile">✕</button>
     </div>
 
-    <!-- MODAL COMPORTAMIENTO DEL RECORRIDO -->
+    <!-- MODAL COMPORTAMIENTO DE LA TRAYECTORIA -->
     <div id="edMpBehaviourModal" class="ed-fulloverlay" style="z-index:2200">
       <div class="ed-fulloverlay-box" style="max-width:480px">
         <div class="ed-fulloverlay-header">
@@ -791,10 +791,10 @@ Router.register('editor', {
         </div>
         <div style="padding:14px 16px 6px;overflow-y:auto;flex:1">
 
-          <!-- Sección: Al final del recorrido -->
+          <!-- Sección: Al final de la trayectoria -->
           <div class="mpbeh-section">
             <button class="mpbeh-header" id="mpbeh-end-toggle">
-              <span class="mpbeh-header-label" data-i18n="gcp_endOfPath">Al final del recorrido…</span>
+              <span class="mpbeh-header-label" data-i18n="gcp_endOfPath">Al final de la trayectoria…</span>
               <span class="mpbeh-arrow">▾</span>
             </button>
             <div class="mpbeh-options" id="mpbeh-end-options">
