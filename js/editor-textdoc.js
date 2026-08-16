@@ -230,27 +230,44 @@ function edOpenTextDoc(editLayer){
     _tdSyncAlignMenuActive();
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
-    _tdRecomputeViewPagination();
-    // Reeditar: centrar la vista en el texto que había en la hoja concreta
-    // desde la que se abrió el panel (doble tap), no siempre al principio
-    // del documento. _tdEditingSourcePageRelIdx (ver arriba) es exacto: la
-    // vista en vivo pagina con un marco POR HOJA REAL del flujo (mismo
-    // criterio que _tdEditingFlowFrames/_tdRecomputeViewPagination), así que
-    // "página N de la vista" es siempre la hoja _tdFlowIdxs(...)[N] — no
-    // hace falta aproximar por caracteres. Si por lo que sea no se pudo
-    // determinar (capa no encontrada en ninguna hoja), se cae al método
-    // anterior por caracteres como red de seguridad.
-    if(_tdEditingSourcePageRelIdx != null){
-      _tdScrollToViewPage(Math.min(_tdEditingSourcePageRelIdx, _tdViewPageStartChars.length - 1), false);
-    } else if(editLayer && editLayer.richLines && editLayer._tdFlowId){
-      const targetChars = _tdCharsBeforeLayer(editLayer);
-      if(targetChars > 0){
-        let page = 0;
-        for(let i = 0; i < _tdViewPageStartChars.length; i++){ if(targetChars >= _tdViewPageStartChars[i]) page = i; }
-        _tdScrollToViewPage(page, false);
+    _tdCenterOnSourcePage(editLayer);
+    // Repetir una vez cargadas del todo las fuentes (ver _tdCenterOnSourcePage
+    // para el motivo completo) — solo si seguimos en la MISMA sesión de
+    // edición (el usuario podría haber cerrado el editor, o reeditado otro
+    // flujo distinto, antes de que esto se resuelva).
+    const _tdFontsFlowGuard = _tdEditingFlowId;
+    (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+      const shellEl = document.getElementById('tdShell');
+      if(shellEl && shellEl.style.display !== 'none' && _tdEditingFlowId === _tdFontsFlowGuard){
+        _tdCenterOnSourcePage(editLayer);
       }
-    }
+    });
   }));
+}
+// Centra la vista del editor de textos en la hoja desde la que se abrió
+// "Editar texto" (_tdEditingSourcePageRelIdx, ver edOpenTextDoc) — recalcula
+// la paginación en vivo primero (por si el contenido o las métricas de
+// fuente cambiaron desde la última vez) y salta SIN animar (ver
+// _tdScrollToViewPage). Se llama tanto nada más abrir como otra vez cuando
+// las fuentes terminan de cargar de verdad: si la primera paginación se
+// calculó con la fuente de reserva (la personalizada aún no lista), el
+// salto inicial podía no corresponder a la hoja correcta — bug reportado
+// por Alberto tras probar en dispositivo real (números de hoja que no
+// cuadraban entre el editor general y el editor de textos).
+function _tdCenterOnSourcePage(editLayer){
+  _tdRecomputeViewPagination();
+  if(_tdEditingSourcePageRelIdx != null){
+    _tdScrollToViewPage(Math.min(_tdEditingSourcePageRelIdx, _tdViewPageStartChars.length - 1), false, true);
+  } else if(editLayer && editLayer.richLines && editLayer._tdFlowId){
+    // Red de seguridad si por lo que sea no se pudo determinar la hoja de
+    // origen (ver edOpenTextDoc): aproximar por caracteres, como antes.
+    const targetChars = _tdCharsBeforeLayer(editLayer);
+    if(targetChars > 0){
+      let page = 0;
+      for(let i = 0; i < _tdViewPageStartChars.length; i++){ if(targetChars >= _tdViewPageStartChars[i]) page = i; }
+      _tdScrollToViewPage(page, false, true);
+    }
+  }
 }
 // Caracteres de texto plano que hay ANTES de la hoja `la` dentro de su mismo
 // flujo (sumando las hojas anteriores, en el orden en que aparecen en la
@@ -423,6 +440,19 @@ function edCloseTextDoc(fromPopstate){
     // nunca llegó a ponerse) no se toca la cámara — ahí no hubo zoom previo
     // que deshacer, y forzarlo pisaría un zoom manual del usuario sin motivo.
     const _tdWasReediting = !!_tdEditingFlowId;
+    // Volver a la hoja del flujo desde la que se abrió "Editar texto",
+    // también al cerrar SIN guardar (pedido explícito de Alberto) — recién
+    // recalculado (nunca cacheado, ver _tdFlowIdxs), por si algo cambió
+    // mientras el editor de textos estaba abierto. En el camino de
+    // "Guardar" (_tdApplyToCanvas) esto no se repite: ya navegó a la hoja
+    // correcta y puso _tdEditingFlowId a null antes de llamar aquí.
+    if(_tdWasReediting && _tdEditingSourcePageRelIdx != null){
+      const { flowIdxs: _tdCloseFlowIdxs } = _tdFlowIdxs(_tdEditingFlowId);
+      if(_tdCloseFlowIdxs.length){
+        const _tdCloseRelIdx = Math.min(_tdEditingSourcePageRelIdx, _tdCloseFlowIdxs.length - 1);
+        edLoadPage(_tdCloseFlowIdxs[_tdCloseRelIdx]);
+      }
+    }
     if(shell) shell.style.display = 'none';
     document.getElementById('editorShell')?.classList.remove('td-open');
     _tdEditingFlowId = null;
@@ -3484,11 +3514,22 @@ function _tdSyncPageNavFromOffset(offset){
 // con un toast (se usa al seguir el cursor automáticamente mientras se
 // escribe, para que el cambio de hoja sea inequívoco; los botones de flecha
 // no lo necesitan, ya es obvio que el usuario lo pidió él mismo).
-function _tdScrollToViewPage(n, announce){
+function _tdScrollToViewPage(n, announce, instant){
   const total = _tdViewPageStartChars.length;
   const target = Math.max(0, Math.min(total - 1, n));
   const changed = target !== _tdViewCurPage;
-  _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, true);
+  // instant=true (saltos programáticos: centrar al abrir/tras guardar) evita
+  // el scroll suave — BUG CORREGIDO (reportado por Alberto tras probar en
+  // dispositivo real: "doble tap en la hoja 7 centraba en la hoja 4" y
+  // similares, números que no cuadraban): _tdSetScrollOffset(..., true)
+  // anima el scroll, y el recompute que Trix dispara solo (evento
+  // "trix-change", ~220ms después de cargar el HTML — ver _tdLogScroll)
+  // termina reaplicando el scrollTop ACTUAL sin animar; si eso ocurre a
+  // mitad de la animación, congela la vista en un punto intermedio
+  // cualquiera en vez del destino real. Los botones prev/next y las flechas
+  // de teclado (navegación del usuario, no saltos programáticos) siguen
+  // animando siempre — no pasan este tercer argumento.
+  _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, !instant);
   _tdViewCurPage = target; // _tdSetScrollOffset ya lo habría puesto bien, pero por si acaso
   _tdUpdateViewPageNav();
   if(changed && announce) edToast(I18n.t('td_pageToast', { n: _tdViewCurPage + 1 }));
