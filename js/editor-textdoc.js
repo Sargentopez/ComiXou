@@ -440,16 +440,21 @@ function edCloseTextDoc(fromPopstate){
     // nunca llegó a ponerse) no se toca la cámara — ahí no hubo zoom previo
     // que deshacer, y forzarlo pisaría un zoom manual del usuario sin motivo.
     const _tdWasReediting = !!_tdEditingFlowId;
-    // Volver a la hoja del flujo desde la que se abrió "Editar texto",
-    // también al cerrar SIN guardar (pedido explícito de Alberto) — recién
-    // recalculado (nunca cacheado, ver _tdFlowIdxs), por si algo cambió
-    // mientras el editor de textos estaba abierto. En el camino de
-    // "Guardar" (_tdApplyToCanvas) esto no se repite: ya navegó a la hoja
-    // correcta y puso _tdEditingFlowId a null antes de llamar aquí.
-    if(_tdWasReediting && _tdEditingSourcePageRelIdx != null){
+    // Volver a la hoja EQUIVALENTE A LA QUE SE VE AHORA MISMO en la cabecera
+    // del editor de textos (_tdViewCurPage, "N / total" — no la hoja desde la
+    // que se abrió): si dentro del editor de textos te desplazas a otra
+    // página del flujo y cierras sin guardar, debes volver a ESA, no a la de
+    // entrada — bug reportado por Alberto (entró por la hoja 2, se desplazó
+    // a la 3 dentro del editor de textos, cerró sin guardar, y el editor
+    // general se había quedado en la 2). Recalculado siempre en caliente
+    // (nunca cacheado, ver _tdFlowIdxs), por si algo cambió mientras el
+    // editor de textos estaba abierto. En el camino de "Guardar"
+    // (_tdApplyToCanvas) esto no se repite: ya navegó a la hoja correcta y
+    // puso _tdEditingFlowId a null antes de llamar aquí.
+    if(_tdWasReediting){
       const { flowIdxs: _tdCloseFlowIdxs } = _tdFlowIdxs(_tdEditingFlowId);
       if(_tdCloseFlowIdxs.length){
-        const _tdCloseRelIdx = Math.min(_tdEditingSourcePageRelIdx, _tdCloseFlowIdxs.length - 1);
+        const _tdCloseRelIdx = Math.max(0, Math.min(_tdViewCurPage, _tdCloseFlowIdxs.length - 1));
         edLoadPage(_tdCloseFlowIdxs[_tdCloseRelIdx]);
       }
     }
@@ -853,7 +858,18 @@ function _tdInitOnce(){
   let _tdScrollSyncRaf = null;
   _tdArea?.addEventListener('scroll', () => {
     cancelAnimationFrame(_tdScrollSyncRaf);
-    _tdScrollSyncRaf = requestAnimationFrame(() => _tdSyncPageNavFromOffset(_tdArea.scrollTop));
+    _tdScrollSyncRaf = requestAnimationFrame(() => {
+      // Mientras dura una navegación animada a una página concreta (◀▶,
+      // flechas — ver _tdPendingNavUntil en _tdScrollToViewPage), este mismo
+      // scroll suave dispara eventos 'scroll' nativos en cada fotograma de
+      // la animación — sincronizar con la posición a medias de cada uno
+      // desincroniza _tdViewCurPage del destino real hasta que la animación
+      // termina de asentarse (mismo bug, otro disparador — ver el comentario
+      // en _tdRecomputeViewPagination). Mientras dure, se ignora: el destino
+      // ya está fijado explícitamente en _tdScrollToViewPage.
+      if(Date.now() < _tdPendingNavUntil) return;
+      _tdSyncPageNavFromOffset(_tdArea.scrollTop);
+    });
   }, {passive:true});
 
   // Botones de página: navegación explícita a una página concreta — igual
@@ -3439,7 +3455,24 @@ function _tdRecomputeViewPagination(){
   // reaplicar el MISMO scrollTop invoca scrollTo() sobre el contenedor del
   // <trix-editor>, y eso ya es suficiente en Android para cancelar la
   // composición en curso.
-  if(!_tdComposing) _tdSetScrollOffset(areaEl.scrollTop, false);
+  //
+  // EXCEPCIÓN — navegación animada en curso (◀▶, flechas — ver
+  // _tdPendingNavUntil en _tdScrollToViewPage): si este recompute dispara a
+  // mitad de esa animación (p.ej. el "trix-change" que se dispara solo al
+  // cargar contenido), reaplicar "el scrollTop que haya AHORA MISMO" congela
+  // la vista en un punto intermedio cualquiera — ni la página de origen ni
+  // la de destino — y además desincroniza _tdViewCurPage (usado para saber a
+  // qué hoja volver al guardar/cerrar — bug reportado por Alberto: se
+  // desplazó a otra hoja dentro del editor de textos y, al salir, el editor
+  // general se había quedado en la de origen). Mientras dure, reaplicar el
+  // DESTINO ya decidido (_tdViewCurPage), no el scrollTop a medias.
+  if(!_tdComposing){
+    if(Date.now() < _tdPendingNavUntil){
+      _tdSetScrollOffset(_tdViewPageOffsets[_tdViewCurPage] || 0, true);
+    } else {
+      _tdSetScrollOffset(areaEl.scrollTop, false);
+    }
+  }
 }
 let _tdLineOffsetsCache = [];
 
@@ -3529,11 +3562,23 @@ function _tdScrollToViewPage(n, announce, instant){
   // cualquiera en vez del destino real. Los botones prev/next y las flechas
   // de teclado (navegación del usuario, no saltos programáticos) siguen
   // animando siempre — no pasan este tercer argumento.
+  //
+  // _tdPendingNavUntil: para ESOS casos animados, marca durante cuánto
+  // tiempo se considera "todavía en camino" — ver el mismo recompute de
+  // arriba, en _tdRecomputeViewPagination, que si dispara DURANTE esta
+  // animación debe reaplicar el DESTINO (_tdViewCurPage), no el scrollTop a
+  // medias que haya en ese instante — mismo bug, otro disparador: al pulsar
+  // ◀▶ o las flechas justo después de abrir/escribir, la página de destino
+  // podía quedar mal sincronizada (reportado por Alberto: se desplazó
+  // dentro del editor de textos a otra hoja y, al salir, el editor general
+  // no reflejaba esa hoja).
+  if(!instant) _tdPendingNavUntil = Date.now() + 400;
   _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, !instant);
   _tdViewCurPage = target; // _tdSetScrollOffset ya lo habría puesto bien, pero por si acaso
   _tdUpdateViewPageNav();
   if(changed && announce) edToast(I18n.t('td_pageToast', { n: _tdViewCurPage + 1 }));
 }
+let _tdPendingNavUntil = 0;
 
 // Mientras se escribe (o se mueve el cursor): la línea activa se mantiene
 // SIEMPRE en el mismo punto de la pantalla — la mitad del hueco visible de
@@ -4728,16 +4773,19 @@ function _tdApplyToCanvas(){
       // reflejarlo. Puede abarcar varias páginas tras el reflujo, así que no
       // basta con existingLayer.
       edPages.forEach(pg => (pg.layers || []).forEach(l => { if (l && l._tdFlowId === _tdEditingFlowId) l.name = flowName; }));
-      // Volver a la MISMA hoja del flujo desde la que se abrió "Editar
-      // texto" (pedido explícito de Alberto), no siempre a la primera del
-      // tramo. Se recalculan los índices AHORA — tras el reflujo, que puede
-      // haber añadido/quitado hojas — y se usa la misma posición DENTRO del
-      // flujo (_tdEditingSourcePageRelIdx, ver edOpenTextDoc), recortada si
-      // el flujo se ha quedado más corto que esa posición (p.ej. se borró
-      // texto suficiente como para que esa hoja ya no exista).
+      // Volver a la hoja EQUIVALENTE A LA QUE SE VE AHORA MISMO en la
+      // cabecera del editor de textos (_tdViewCurPage, "N / total"), no a la
+      // hoja desde la que se abrió "Editar texto" — si dentro del editor de
+      // textos te desplazas a otra página del flujo antes de guardar, debe
+      // volver a ESA (pedido explícito de Alberto, con ejemplo real: entró
+      // por la hoja 2, se desplazó a la 3, y esperaba volver a la 3). Se
+      // recalculan los índices AHORA — tras el reflujo, que puede haber
+      // añadido/quitado hojas — y se recorta si el flujo se ha quedado más
+      // corto que esa posición (p.ej. se borró texto suficiente como para
+      // que esa hoja ya no exista).
       const { flowIdxs: _tdPostFlowIdxs } = _tdFlowIdxs(_tdEditingFlowId);
-      const _tdTargetRelIdx = _tdEditingSourcePageRelIdx != null
-        ? Math.min(_tdEditingSourcePageRelIdx, _tdPostFlowIdxs.length - 1)
+      const _tdTargetRelIdx = _tdPostFlowIdxs.length
+        ? Math.max(0, Math.min(_tdViewCurPage, _tdPostFlowIdxs.length - 1))
         : 0;
       edLoadPage(_tdPostFlowIdxs.length ? _tdPostFlowIdxs[_tdTargetRelIdx] : r.firstIdx);
       if(typeof edCloseOptionsPanel === 'function') edCloseOptionsPanel();
