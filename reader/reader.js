@@ -3171,23 +3171,23 @@ function _renderCredits() {
 
     let socialLines = [];
     if (socialText) {
-      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
+      ctx.font = '400 ' + socialFS + 'px Arial, Helvetica, sans-serif';
       socialLines = wrapText(socialText, socialMaxW);
     }
     const socialLineH = socialFS * 1.5;
     const blockH = socialLines.length * socialLineH + (socialText ? socialFS * 1.2 : 0) + authorFS * 1.5;
     let y = (ph - blockH) / 2 + socialLineH * 0.5;
     if (socialText) {
-      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
-      ctx.fillStyle = '#444'; ctx.textAlign = 'left';
-      socialLines.forEach(line => { ctx.fillText(line, leftX, y); y += socialLineH; });
+      ctx.font = '400 ' + socialFS + 'px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = '#444'; ctx.textAlign = 'center';
+      socialLines.forEach(line => { ctx.fillText(line, leftX + leftW / 2, y); y += socialLineH; });
       y += socialFS * 0.8;
     }
-    ctx.font = '600 ' + authorFS + 'px Patrick Hand, sans-serif';
+    ctx.font = '600 ' + authorFS + 'px Arial, Helvetica, sans-serif';
     ctx.fillStyle = '#222'; ctx.textAlign = 'center';
     ctx.fillText(authorText, leftX + leftW / 2, y);
 
-    const logoFS = Math.round(fRef * 0.11), sloganFS = Math.round(fRef * 0.042), linkFS = Math.round(fRef * 0.038);
+    const logoFS = Math.round(fRef * 0.11), sloganFS = Math.round(fRef * 0.042), linkFS = socialFS;
     const lineH = ph * 0.09;
     const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
@@ -3204,34 +3204,34 @@ function _renderCredits() {
       ctx.drawImage(_logoImg, rightCX - lw2/2, rightStartY - lh * 0.8, lw2, lh);
     }
     const sloganY = rightStartY + sloganFS * 2;
-    ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
+    ctx.font = '400 ' + sloganFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#555';
     ctx.fillText('IDEA Y COMPARTE', rightCX, sloganY);
     const linkY = sloganY + sloganFS * 3;
-    ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
+    ctx.font = '400 ' + linkFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#1a73e8';
     ctx.fillText('Visita más obras del autor', rightCX, linkY);
     const lw = ctx.measureText('Visita más obras del autor').width;
     ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
     ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6); ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6); ctx.stroke();
-    const restartFS = Math.round(fRef * 0.038), restartY = linkY + linkFS * 2.2;
-    ctx.font = '600 ' + restartFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#888';
+    const restartFS = socialFS, restartY = linkY + linkFS * 2.2;
+    ctx.font = '600 ' + restartFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#888';
     ctx.fillText('↩ Volver a leer', rightCX, restartY);
     // Guardar coordenadas canvas para los botones HTML
     RS._creditsLink    = { cx: rightCX, cy: linkY,    fs: linkFS,    pw, ph };
     RS._creditsRestart = { cx: rightCX, cy: restartY, fs: restartFS, pw, ph };
 
   } else {
-    const fRef = pw, cx = pw / 2, marginX = pw * 0.09, maxW = pw * 0.82;
+    const fRef = pw, cx = pw / 2, maxW = pw * 0.82;
     let authorY = ph * 0.11;
+    const socialFS = Math.round(fRef * 0.038);
     if (socialText) {
-      const socialFS = Math.round(fRef * 0.038);
-      ctx.font = '400 ' + socialFS + 'px Patrick Hand, sans-serif';
-      ctx.fillStyle = '#444'; ctx.textAlign = 'left';
+      ctx.font = '400 ' + socialFS + 'px Arial, Helvetica, sans-serif';
+      ctx.fillStyle = '#444'; ctx.textAlign = 'center';
       const socialLines = wrapText(socialText, maxW);
       const socialLineH = socialFS * 1.4, socialStartY = ph * 0.26;
-      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      socialLines.forEach((line, i) => ctx.fillText(line, cx, socialStartY + i * socialLineH));
       authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
     }
-    ctx.font = '600 ' + Math.round(fRef * 0.055) + 'px Patrick Hand, sans-serif';
+    ctx.font = '600 ' + Math.round(fRef * 0.055) + 'px Arial, Helvetica, sans-serif';
     ctx.fillStyle = '#222'; ctx.textAlign = 'center';
     ctx.fillText(authorText, cx, authorY);
     const lineH = ph * 0.09, logoFS = Math.round(fRef * 0.11), logoY = authorY + lineH * 1.3;
@@ -3248,16 +3248,16 @@ function _renderCredits() {
       ctx.drawImage(_logoImg, cx - lw2/2, logoY - lh2 * 0.8, lw2, lh2);
     }
     const sloganFS = Math.round(fRef * 0.042), sloganY = logoY + sloganFS * 2;
-    ctx.font = '400 ' + sloganFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#555';
+    ctx.font = '400 ' + sloganFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#555';
     ctx.fillText('IDEA Y COMPARTE', cx, sloganY);
-    const linkFS = Math.round(fRef * 0.038), linkY = sloganY + sloganFS * 3;
-    ctx.font = '400 ' + linkFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#1a73e8';
+    const linkFS = socialFS, linkY = sloganY + sloganFS * 3;
+    ctx.font = '400 ' + linkFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#1a73e8';
     ctx.fillText('Visita más obras del autor', cx, linkY);
     const lw = ctx.measureText('Visita más obras del autor').width;
     ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
     ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6); ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6); ctx.stroke();
-    const restartFS = Math.round(fRef * 0.038), restartY = linkY + linkFS * 2.2;
-    ctx.font = '600 ' + restartFS + 'px Patrick Hand, sans-serif'; ctx.fillStyle = '#888';
+    const restartFS = socialFS, restartY = linkY + linkFS * 2.2;
+    ctx.font = '600 ' + restartFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#888';
     ctx.fillText('↩ Volver a leer', cx, restartY);
     RS._creditsLink    = { cx, cy: linkY,    fs: linkFS,    pw, ph };
     RS._creditsRestart = { cx, cy: restartY, fs: restartFS, pw, ph };

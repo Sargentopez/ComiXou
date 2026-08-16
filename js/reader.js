@@ -611,7 +611,7 @@ function _renderCreditsCanvas() {
     const authorFS = Math.round(fRef * 0.072);
     let socialLines = [];
     if (socialText) {
-      ctx.font = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.font = `400 ${socialFS}px Arial, Helvetica, sans-serif`;
       socialLines = wrapText(socialText, leftW - leftX - pw * 0.02);
     }
     const socialLineH  = socialFS * 1.5;
@@ -620,13 +620,13 @@ function _renderCreditsCanvas() {
     let y = (ph - blockH) / 2 + socialLineH * 0.5;
 
     if (socialText) {
-      ctx.font      = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.font      = `400 ${socialFS}px Arial, Helvetica, sans-serif`;
       ctx.fillStyle = '#444444';
-      ctx.textAlign = 'left';
-      socialLines.forEach(line => { ctx.fillText(line, leftX, y); y += socialLineH; });
+      ctx.textAlign = 'center';
+      socialLines.forEach(line => { ctx.fillText(line, leftX + leftW / 2, y); y += socialLineH; });
       y += socialFS * 0.8;
     }
-    ctx.font      = `600 ${authorFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `600 ${authorFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#222222';
     ctx.textAlign = 'center';
     ctx.fillText(authorText, leftX + leftW / 2, y);
@@ -634,7 +634,7 @@ function _renderCreditsCanvas() {
     ctx.globalAlpha = alpha;
     const logoFS   = Math.round(fRef * 0.11);
     const sloganFS = Math.round(fRef * 0.042);
-    const linkFS   = Math.round(fRef * 0.038);
+    const linkFS   = socialFS;
     const lineH    = ph * 0.09;
     const rightBlockH = lineH * 1.3 + logoFS + sloganFS * 2 + sloganFS * 3 + linkFS;
     const rightStartY = (ph - rightBlockH) / 2 + logoFS * 0.5;
@@ -661,13 +661,13 @@ function _renderCreditsCanvas() {
     }
 
     const sloganY = rightStartY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `400 ${sloganFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#555555';
     ctx.fillText('IDEA Y COMPARTE', rightCX, sloganY);
 
     const linkY    = sloganY + sloganFS * 3;
     const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `400 ${linkFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#1a73e8';
     ctx.fillText(linkText, rightCX, linkY);
     const lw = ctx.measureText(linkText).width;
@@ -679,10 +679,10 @@ function _renderCreditsCanvas() {
     ctx.stroke();
 
     // Botón "Volver a leer"
-    const restartFS = Math.round(fRef * 0.038);
+    const restartFS = socialFS;
     const restartY  = linkY + linkFS * 2.2;
     const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `600 ${restartFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#888888';
     ctx.textAlign = 'center';
     ctx.fillText(restartText, rightCX, restartY);
@@ -694,23 +694,22 @@ function _renderCreditsCanvas() {
     // Layout vertical columna única
     const fRef    = pw;
     const cx      = pw / 2;
-    const marginX = pw * 0.09;
     const maxW    = pw * 0.82;
 
     let authorY = ph * 0.11;
+    const socialFS = Math.round(fRef * 0.038);
     if (socialText) {
-      const socialFS    = Math.round(fRef * 0.038);
-      ctx.font          = `400 ${socialFS}px Patrick Hand, sans-serif`;
+      ctx.font          = `400 ${socialFS}px Arial, Helvetica, sans-serif`;
       ctx.fillStyle     = '#444444';
-      ctx.textAlign     = 'left';
+      ctx.textAlign     = 'center';
       const socialLines = wrapText(socialText, maxW);
       const socialLineH = socialFS * 1.4;
       const socialStartY = ph * 0.26;
-      socialLines.forEach((line, i) => ctx.fillText(line, marginX, socialStartY + i * socialLineH));
+      socialLines.forEach((line, i) => ctx.fillText(line, cx, socialStartY + i * socialLineH));
       authorY = socialStartY + socialLines.length * socialLineH + socialFS * 0.9;
     }
 
-    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Patrick Hand, sans-serif`;
+    ctx.font      = `600 ${Math.round(fRef * 0.055)}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#222222';
     ctx.textAlign = 'center';
     ctx.fillText(authorText, cx, authorY);
@@ -741,14 +740,14 @@ function _renderCreditsCanvas() {
 
     const sloganFS = Math.round(fRef * 0.042);
     const sloganY  = logoY + sloganFS * 2;
-    ctx.font      = `400 ${sloganFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `400 ${sloganFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#555555';
     ctx.fillText('IDEA Y COMPARTE', cx, sloganY);
 
-    const linkFS   = Math.round(fRef * 0.038);
+    const linkFS   = socialFS;
     const linkY    = sloganY + sloganFS * 3;
     const linkText = 'Visita más obras del autor';
-    ctx.font      = `400 ${linkFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `400 ${linkFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#1a73e8';
     ctx.fillText(linkText, cx, linkY);
     const lw = ctx.measureText(linkText).width;
@@ -760,10 +759,10 @@ function _renderCreditsCanvas() {
     ctx.stroke();
 
     // Botón "Volver a leer"
-    const restartFS = Math.round(fRef * 0.038);
+    const restartFS = socialFS;
     const restartY  = linkY + linkFS * 2.2;
     const restartText = '↩ Volver a leer';
-    ctx.font      = `600 ${restartFS}px Patrick Hand, sans-serif`;
+    ctx.font      = `600 ${restartFS}px Arial, Helvetica, sans-serif`;
     ctx.fillStyle = '#888888';
     ctx.textAlign = 'center';
     ctx.fillText(restartText, cx, restartY);
