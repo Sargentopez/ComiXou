@@ -619,6 +619,9 @@ const TRANSLATIONS = {
     ed_comingSoon:          "Próximamente...",
     ed_helpTitle:           "Ayuda",
     ed_dontShowHelpAgain:   "No volver a mostrar esta ayuda",
+    ed_helpEditorTitle:     "Editor",
+    ed_helpEditorP1:        "Si estás utilizando un dispositivo móvil, arrastra la barra de herramientas para visualizar todas las opciones",
+    ed_helpEditorP2:        "Haz doble tap sobre cualquiera de los objetos creados en el canvas para acceder a su panel de propiedades o reeditarlo",
     ed_cameraCaptureTitle:  "Capturar",
     ed_cameraFlipTitle:     "Cambiar cámara",
 
@@ -1559,6 +1562,9 @@ const TRANSLATIONS = {
     ed_comingSoon:          "Coming soon...",
     ed_helpTitle:           "Help",
     ed_dontShowHelpAgain:   "Don't show this help again",
+    ed_helpEditorTitle:     "Editor",
+    ed_helpEditorP1:        "If you're using a mobile device, drag the toolbar to see all the options",
+    ed_helpEditorP2:        "Double-tap any object you've created on the canvas to open its properties panel or edit it again",
     ed_cameraCaptureTitle:  "Capture",
     ed_cameraFlipTitle:     "Switch camera",
 

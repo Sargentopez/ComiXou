@@ -23082,6 +23082,17 @@ function _edSaveOverlayError(msg) {
 //    Los <svg> inline no la sufren (la regla es solo para "img"), pero por
 //    seguridad se añade también ahí.
 const _edHelpContent = {
+  'editor': {
+    title: I18n.t('ed_helpEditorTitle'),
+    body: `
+      <div style="margin-bottom:14px">
+        <b>1.</b> ${I18n.t('ed_helpEditorP1')}
+      </div>
+      <div>
+        <b>2.</b> ${I18n.t('ed_helpEditorP2')}
+      </div>
+    `
+  },
   'draw-tools': {
     title: I18n.t('ed_drawTools'),
     body: (() => {
@@ -27807,6 +27818,11 @@ function EditorView_init(){
   (window._edFullyLoadedPromise || Promise.resolve()).then(() => {
     window._edLoadingSuppressDirty = false;
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+    // Ayuda general del editor (id 'editor' en _edHelpContent): igual que
+    // 'draw-tools', se abre sola tras acceder (aquí, al terminar de cargar
+    // la obra) y respeta "no volver a mostrar" — solo aparece una vez por
+    // usuario hasta que la descarte.
+    setTimeout(() => edHelpShow('editor'), 500);
   }).catch(() => {
     window._edLoadingSuppressDirty = false;
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
@@ -28160,6 +28176,10 @@ function EditorView_init(){
   $('dd-help-draw-tools')?.addEventListener('click', () => {
     edCloseMenus();
     _edHelpShowRef('draw-tools');
+  });
+  $('dd-help-editor')?.addEventListener('click', () => {
+    edCloseMenus();
+    _edHelpShowRef('editor');
   });
   $('edHelpRefClose')?.addEventListener('click', () => {
     document.getElementById('edHelpRefModal')?.classList.remove('open');
