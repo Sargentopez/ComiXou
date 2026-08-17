@@ -94,6 +94,8 @@ html, body {
   display: block;
   clip-path: inset(0 round 10px);
   box-shadow: 0 8px 32px rgba(0,0,0,.35);
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 /* ── Botones sobre la hoja: posicionados por JS pegados al canvas ── */
@@ -210,6 +212,10 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   background: #111;
   min-width: 0;
   min-height: 0;
+  /* Recorta el contenido ampliado (ver zoom del contenido) para que nunca
+     "sangre" visualmente sobre las hojas vecinas del carrusel — cada hoja
+     solo puede mostrar zoom dentro de su propio recuadro. */
+  overflow: hidden;
 }
 
 /* Canvas dentro del slide */
@@ -220,4 +226,6 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   clip-path: inset(0 round 10px);
   box-shadow: 0 8px 32px rgba(0,0,0,.45);
   pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
 }

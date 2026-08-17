@@ -849,6 +849,132 @@ const RS = {
   navMode:      'fixed', // 'fixed' | 'horizontal' | 'vertical'
 };
 
+// ── ZOOM DEL CONTENIDO (pedido explícito de Alberto) ───────────────────────
+// Amplía visualmente la hoja actual sin volver a renderizarla a mayor
+// resolución — igual que el pinch-zoom nativo del navegador haría con una
+// imagen: se aplica un transform CSS (translate + scale) sobre el <canvas>
+// activo. Android: pellizco con dos dedos + arrastre de un dedo cuando ya
+// hay zoom. PC: Ctrl+rueda hacia el cursor, igual que edZoomAt() en el
+// editor — misma fórmula, adaptada de "cámara de todo el lienzo" a
+// "transform de un elemento".
+//
+// Nunca debe impedir pasar de hoja: los taps en los bordes/botones siguen
+// resolviéndose exactamente igual que siempre (ver _rGoToPanel/advance/
+// goBack, sin tocar), y un arrastre de un dedo solo se interpreta como
+// paneo cuando YA hay zoom aplicado — si no, sigue siendo un swipe de
+// navegación como hasta ahora. El retardo de 120ms antes de "armar" el
+// paneo en vivo es el mismo criterio que usa el editor (ver edPinchStart/
+// _edMpTouchTimer) para no reaccionar al primer dedo hasta estar razonablemente
+// seguros de que no va a llegar un segundo (pellizco).
+//
+// Nunca persiste entre hojas: RZ se resetea siempre que cambia la hoja
+// visible (modo fixed: dentro de _resizeCanvas, que TODA navegación llama
+// antes de redibujar; modo scroll: en el detector de scroll, al abandonar
+// el canvas anterior) — así la hoja siguiente nunca aparece ya ampliada, y
+// si se vuelve a visitar una hoja ya vista aparece de nuevo a tamaño normal.
+const RZ = { scale: 1, tx: 0, ty: 0, MIN: 1, MAX: 4 };
+const RZ_TOUCH_DELAY_MS = 120; // mismo retardo que usa el editor para pinch vs dibujo
+
+function _rzApply(canvas) {
+  if (!canvas) return;
+  canvas.style.transform = (RZ.scale === 1 && RZ.tx === 0 && RZ.ty === 0)
+    ? ''
+    : `translate(${RZ.tx}px, ${RZ.ty}px) scale(${RZ.scale})`;
+}
+
+function _rzReset(canvas) {
+  RZ.scale = 1; RZ.tx = 0; RZ.ty = 0;
+  if (canvas) canvas.style.transform = '';
+}
+
+// Recuadro ORIGINAL (sin el transform actual) del canvas, en coordenadas de
+// pantalla — se obtiene invirtiendo el transform que nosotros mismos hemos
+// aplicado. Válido sea cual sea la estructura del DOM (fixed o scroll),
+// porque no depende de offsetParent ni de ningún otro supuesto de layout.
+function _rzOrigRect(canvas) {
+  if (!canvas) return { left: 0, top: 0, width: 0, height: 0 };
+  const r = canvas.getBoundingClientRect();
+  return {
+    left:   r.left - RZ.tx,
+    top:    r.top  - RZ.ty,
+    width:  r.width  / RZ.scale,
+    height: r.height / RZ.scale,
+  };
+}
+
+// Limita tx/ty para que el canvas ampliado siga cubriendo por completo su
+// propio recuadro original — igual que cualquier visor de imágenes: nunca
+// se puede arrastrar tan lejos que aparezca hueco vacío donde debería
+// seguir habiendo contenido.
+function _rzClamp(orig) {
+  const minTx = orig.width  * (1 - RZ.scale);
+  const minTy = orig.height * (1 - RZ.scale);
+  RZ.tx = Math.min(0, Math.max(minTx, RZ.tx));
+  RZ.ty = Math.min(0, Math.max(minTy, RZ.ty));
+}
+
+// Zoom manteniendo fijo el punto de pantalla (clientX,clientY) — misma
+// fórmula que edZoomAt() en el editor, adaptada al recuadro ORIGINAL del
+// canvas (que puede no empezar en 0,0 de la ventana, a diferencia del
+// lienzo del editor).
+function _rzZoomAt(canvas, clientX, clientY, factor) {
+  const orig = _rzOrigRect(canvas);
+  const sx = clientX - orig.left, sy = clientY - orig.top;
+  const newScale = Math.min(RZ.MAX, Math.max(RZ.MIN, RZ.scale * factor));
+  const fReal = newScale / RZ.scale;
+  RZ.tx = sx - (sx - RZ.tx) * fReal;
+  RZ.ty = sy - (sy - RZ.ty) * fReal;
+  RZ.scale = newScale;
+  if (RZ.scale === RZ.MIN) { RZ.tx = 0; RZ.ty = 0; } // exactamente en 1x: nunca queda deriva residual
+  _rzClamp(orig);
+  _rzApply(canvas);
+}
+
+// ── Pellizco de 2 dedos — estado compartido por los dos modos (fixed/scroll) ──
+let _rzPinch = null; // { canvas, dist0, ctr0:{x,y}, scale0, tx0, ty0, orig }
+function _rzPinchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+function _rzPinchCenter(touches) {
+  return { x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2 };
+}
+function _rzPinchStart(canvas, touches) {
+  if (!canvas) { _rzPinch = null; return; }
+  _rzPinch = {
+    canvas,
+    dist0:  Math.max(1, _rzPinchDist(touches)),
+    ctr0:   _rzPinchCenter(touches),
+    scale0: RZ.scale, tx0: RZ.tx, ty0: RZ.ty,
+    orig:   _rzOrigRect(canvas),
+  };
+}
+function _rzPinchMove(touches) {
+  if (!_rzPinch) return;
+  const p = _rzPinch;
+  const ratio = _rzPinchDist(touches) / p.dist0;
+  const ctr   = _rzPinchCenter(touches);
+  const newScale = Math.min(RZ.MAX, Math.max(RZ.MIN, p.scale0 * ratio));
+  const sx0 = p.ctr0.x - p.orig.left, sy0 = p.ctr0.y - p.orig.top;
+  RZ.tx = (ctr.x - p.orig.left) - newScale * (sx0 - p.tx0) / p.scale0;
+  RZ.ty = (ctr.y - p.orig.top)  - newScale * (sy0 - p.ty0) / p.scale0;
+  RZ.scale = newScale;
+  _rzClamp(p.orig);
+  _rzApply(p.canvas);
+}
+function _rzPinchEnd() { _rzPinch = null; }
+
+// ── Ctrl+rueda (PC) — estándar del resto de la web, hacia el cursor ──────
+function _rzWheelZoom(e, canvas) {
+  if (!canvas) return false;
+  if (!(e.ctrlKey || e.metaKey)) return false;
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+  _rzZoomAt(canvas, e.clientX, e.clientY, factor);
+  return true;
+}
+
 // ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -2008,13 +2134,47 @@ function _startScrollReader() {
 
   // ── Swipe en el overlay ──
   let _osx = null, _osy = null;
+  // Zoom táctil (pellizco/paneo) — mismo criterio que en modo fixed (ver RZ).
+  let _oArmTimer = null, _oPanning = false, _oPanned = false;
+  let _oPanTx0 = 0, _oPanTy0 = 0, _oPanOrig = null;
+
   overlay.addEventListener('touchstart', e => {
+    if (_oArmTimer) { clearTimeout(_oArmTimer); _oArmTimer = null; }
+    if (e.touches.length >= 2) {
+      _osx = null; _osy = null; _oPanning = false;
+      _rzPinchStart(RS.canvas, e.touches);
+      return;
+    }
     if (e.touches.length !== 1) { _osx = null; return; }
     _osx = e.touches[0].clientX;
     _osy = e.touches[0].clientY;
+    _oPanning = false; _oPanned = false;
+    // Retardo habitual en táctil: si en 120ms no llega un segundo dedo, se
+    // arma el paneo en vivo (solo actúa de verdad si ya hay zoom > 1).
+    _oArmTimer = setTimeout(() => {
+      _oArmTimer = null;
+      if (RZ.scale > 1) {
+        _oPanning = true;
+        _oPanOrig = _rzOrigRect(RS.canvas);
+        _oPanTx0 = RZ.tx; _oPanTy0 = RZ.ty;
+      }
+    }, RZ_TOUCH_DELAY_MS);
+  }, { passive: true });
+
+  overlay.addEventListener('touchmove', e => {
+    if (e.touches.length >= 2) { _rzPinchMove(e.touches); return; }
+    if (_osx === null || !_oPanning) return;
+    RZ.tx = _oPanTx0 + (e.touches[0].clientX - _osx);
+    RZ.ty = _oPanTy0 + (e.touches[0].clientY - _osy);
+    _rzClamp(_oPanOrig);
+    _rzApply(RS.canvas);
+    _oPanned = true;
   }, { passive: true });
 
   overlay.addEventListener('touchend', e => {
+    if (_oArmTimer) { clearTimeout(_oArmTimer); _oArmTimer = null; }
+    if (_rzPinch) { _rzPinchEnd(); _osx = null; return; }
+    if (_oPanning) { _oPanning = false; _osx = null; if (_oPanned) return; }
     if (_osx === null) return;
     const ex = e.changedTouches[0].clientX;
     const ey = e.changedTouches[0].clientY;
@@ -2055,6 +2215,11 @@ function _startScrollReader() {
     }
   }, { passive: true });
 
+  // PC: Ctrl+rueda para zoom hacia el cursor (llega aquí cuando el overlay
+  // está activo — con textos pendientes; ver también el listener gemelo en
+  // container, para cuando el overlay tiene pointer-events:none)
+  overlay.addEventListener('wheel', e => { _rzWheelZoom(e, RS.canvas); }, { passive: false });
+
   // ── Retroceder ──
   function _vsBack() {
     if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
@@ -2082,6 +2247,10 @@ function _startScrollReader() {
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
+      // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja — se
+      // resetea la hoja que se abandona, así que si se vuelve a visitar más
+      // tarde aparece de nuevo a tamaño normal (pedido explícito de Alberto).
+      _rzReset(_canvases[_prevSI]);
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
@@ -2108,14 +2277,53 @@ function _startScrollReader() {
 
   // ── Botones de capa — container táctil (cuando overlay está inactivo) ──
   // El overlay tiene pointer-events:none cuando no hay textos pendientes;
-  // en ese caso los toques llegan al container de scroll.
+  // en ese caso los toques llegan al container de scroll. Es también la vía
+  // principal por la que llega el pellizco de zoom, ya que la mayor parte
+  // de la lectura transcurre con el overlay inactivo.
   let _csx = null, _csy = null;
+  let _cArmTimer = null, _cPanning = false, _cPanned = false;
+  let _cPanTx0 = 0, _cPanTy0 = 0, _cPanOrig = null;
+
   container.addEventListener('touchstart', e => {
+    if (_cArmTimer) { clearTimeout(_cArmTimer); _cArmTimer = null; }
+    if (e.touches.length >= 2) {
+      _csx = null; _cPanning = false;
+      _rzPinchStart(RS.canvas, e.touches);
+      return;
+    }
     if (e.touches.length !== 1) { _csx = null; return; }
     _csx = e.touches[0].clientX;
     _csy = e.touches[0].clientY;
+    _cPanning = false; _cPanned = false;
+    // Retardo habitual en táctil: si en 120ms no llega un segundo dedo, se
+    // arma el paneo en vivo (solo actúa de verdad si ya hay zoom > 1) — con
+    // zoom en 1x el arrastre sigue siendo el scroll nativo de siempre.
+    _cArmTimer = setTimeout(() => {
+      _cArmTimer = null;
+      if (RZ.scale > 1) {
+        _cPanning = true;
+        _cPanOrig = _rzOrigRect(RS.canvas);
+        _cPanTx0 = RZ.tx; _cPanTy0 = RZ.ty;
+      }
+    }, RZ_TOUCH_DELAY_MS);
   }, { passive: true });
+
+  container.addEventListener('touchmove', e => {
+    if (e.touches.length >= 2) { _rzPinchMove(e.touches); e.preventDefault(); return; }
+    if (_csx === null || !_cPanning) return;
+    // Tomar el control sobre el scroll nativo mientras se panea con zoom activo
+    RZ.tx = _cPanTx0 + (e.touches[0].clientX - _csx);
+    RZ.ty = _cPanTy0 + (e.touches[0].clientY - _csy);
+    _rzClamp(_cPanOrig);
+    _rzApply(RS.canvas);
+    _cPanned = true;
+    e.preventDefault();
+  }, { passive: false });
+
   container.addEventListener('touchend', e => {
+    if (_cArmTimer) { clearTimeout(_cArmTimer); _cArmTimer = null; }
+    if (_rzPinch) { _rzPinchEnd(); _csx = null; return; }
+    if (_cPanning) { _cPanning = false; _csx = null; if (_cPanned) return; }
     if (_csx === null) return;
     const _cex = e.changedTouches[0].clientX;
     const _cey = e.changedTouches[0].clientY;
@@ -2130,16 +2338,35 @@ function _startScrollReader() {
     else if (_cba.type === 'url') window.open(_cba.url, '_blank', 'noopener');
   }, { passive: true });
 
-  // ── Botones de capa — ratón / PC (container) ──
-  let _smpdX = null, _smpdY = null;
+  // PC: Ctrl+rueda para zoom hacia el cursor (llega aquí cuando el overlay
+  // está inactivo — sin textos pendientes; ver también el listener gemelo
+  // en overlay, para cuando sí hay textos pendientes)
+  container.addEventListener('wheel', e => { _rzWheelZoom(e, RS.canvas); }, { passive: false });
+
+  // ── Botones de capa — ratón / PC (container) + arrastre para panear con zoom ──
+  let _smpdX = null, _smpdY = null, _smpPanning = false, _smpPanTx0 = 0, _smpPanTy0 = 0, _smpPanOrig = null;
   container.addEventListener('pointerdown', e => {
     if (e.pointerType !== 'mouse') return;
     _smpdX = e.clientX; _smpdY = e.clientY;
+    _smpPanning = RZ.scale > 1;
+    if (_smpPanning) {
+      _smpPanOrig = _rzOrigRect(RS.canvas);
+      _smpPanTx0 = RZ.tx; _smpPanTy0 = RZ.ty;
+    }
+  }, { passive: true });
+  container.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'mouse' || _smpdX === null || !_smpPanning) return;
+    RZ.tx = _smpPanTx0 + (e.clientX - _smpdX);
+    RZ.ty = _smpPanTy0 + (e.clientY - _smpdY);
+    _rzClamp(_smpPanOrig);
+    _rzApply(RS.canvas);
   }, { passive: true });
   container.addEventListener('pointerup', e => {
     if (e.pointerType !== 'mouse' || _smpdX === null) return;
     const _sdx = Math.abs(e.clientX - _smpdX), _sdy = Math.abs(e.clientY - _smpdY);
-    _smpdX = null; _smpdY = null;
+    const _wasPanning = _smpPanning;
+    _smpdX = null; _smpdY = null; _smpPanning = false;
+    if (_wasPanning) return; // fue paneo, no un clic
     if (_sdx > 15 || _sdy > 15) return; // fue arrastre, no clic
     const _sbhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
     if (!_sbhit) return;
@@ -2181,6 +2408,10 @@ function _startScrollReader() {
       if (cv) {
         cv.style.width  = Math.round(pw * scale) + 'px';
         cv.style.height = Math.round(ph * scale) + 'px';
+        // Zoom del contenido: las dimensiones base cambian con el resize —
+        // resetear también aquí para no arrastrar un transform calculado
+        // sobre medidas que ya no son válidas.
+        _rzReset(cv);
       }
     });
     // Reposicionar al panel activo
@@ -2325,6 +2556,10 @@ function _resizeCanvas() {
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
   RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
   RS.canvas.style.touchAction = 'manipulation';
+  // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja (ni a un
+  // redimensionado de ventana, que recalcula las dimensiones base sobre las
+  // que se apoya el transform) — pedido explícito de Alberto.
+  _rzReset(RS.canvas);
   _positionBtns();
 
 }
@@ -3357,20 +3592,56 @@ function _setupControls() {
   RS.ac = new AbortController();
   const sig = { signal: RS.ac.signal };
   let sx = null, sy = null, cancelled = false;
+  // Zoom táctil (pellizco/paneo) — ver módulo RZ más arriba.
+  let _rzArmTimer = null, _rzArmed = false, _rzPanning = false, _rzPanned = false;
+  let _rzPanTx0 = 0, _rzPanTy0 = 0, _rzPanOrig = null;
 
   RS.canvas.addEventListener('touchstart', e => {
-    sx = null; sy = null; cancelled = false;
-    if (e.touches.length !== 1) return;
+    if (_rzArmTimer) { clearTimeout(_rzArmTimer); _rzArmTimer = null; }
+    if (e.touches.length >= 2) {
+      // Segundo dedo: es un pellizco — cancelar cualquier candidatura a swipe/paneo.
+      sx = null; sy = null; cancelled = false; _rzArmed = false; _rzPanning = false;
+      _rzPinchStart(RS.canvas, e.touches);
+      return;
+    }
+    // Un solo dedo: capturar posición YA (para que un tap rápido siga
+    // funcionando exactamente igual que siempre), pero esperar
+    // RZ_TOUCH_DELAY_MS antes de "armar" el paneo en vivo — así, si llega
+    // un segundo dedo durante ese margen, se cede el control al pellizco
+    // de arriba sin que este dedo haya llegado a mover nada todavía.
     sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    cancelled = false; _rzArmed = false; _rzPanning = false; _rzPanned = false;
+    _rzArmTimer = setTimeout(() => {
+      _rzArmTimer = null;
+      _rzArmed = true;
+      if (RZ.scale > 1) {
+        _rzPanning = true;
+        _rzPanOrig = _rzOrigRect(RS.canvas);
+        _rzPanTx0 = RZ.tx; _rzPanTy0 = RZ.ty;
+      }
+    }, RZ_TOUCH_DELAY_MS);
   }, { passive: true, ...sig });
 
   RS.canvas.addEventListener('touchmove', e => {
+    if (e.touches.length >= 2) { _rzPinchMove(e.touches); e.preventDefault(); return; }
     if (sx === null) return;
+    if (_rzPanning) {
+      RZ.tx = _rzPanTx0 + (e.touches[0].clientX - sx);
+      RZ.ty = _rzPanTy0 + (e.touches[0].clientY - sy);
+      _rzClamp(_rzPanOrig);
+      _rzApply(RS.canvas);
+      _rzPanned = true;
+      e.preventDefault();
+      return;
+    }
     const dy = e.touches[0].clientY - sy;
     if (Math.abs(dy) > 30) cancelled = true;
-  }, { passive: true, ...sig });
+  }, { passive: false, ...sig });
 
   RS.canvas.addEventListener('touchend', e => {
+    if (_rzArmTimer) { clearTimeout(_rzArmTimer); _rzArmTimer = null; }
+    if (_rzPinch) { _rzPinchEnd(); sx = null; return; } // venía de un pellizco — no navegar
+    if (_rzPanning) { _rzPanning = false; sx = null; if (_rzPanned) return; } // paneo real — no navegar
     if (sx === null) return;
     const endX = e.changedTouches[0].clientX;
     const endY = e.changedTouches[0].clientY;
@@ -3400,16 +3671,35 @@ function _setupControls() {
     if (_isBackSide(endX, endY)) goBack(); else advance();
   }, { passive: true, ...sig });
 
-  // RATÓN / PC: detección de botones de capa
-  let _mpX = null, _mpY = null;
+  // PC: Ctrl+rueda para zoom hacia el cursor (estándar del resto de la web)
+  RS.canvas.addEventListener('wheel', e => {
+    _rzWheelZoom(e, RS.canvas);
+  }, { passive: false, ...sig });
+
+  // RATÓN / PC: detección de botones de capa + arrastre para panear cuando ya hay zoom
+  let _mpX = null, _mpY = null, _mpPanning = false, _mpPanTx0 = 0, _mpPanTy0 = 0, _mpPanOrig = null;
   RS.canvas.addEventListener('pointerdown', e => {
     if (e.pointerType !== 'mouse') return;
     _mpX = e.clientX; _mpY = e.clientY;
+    _mpPanning = RZ.scale > 1;
+    if (_mpPanning) {
+      _mpPanOrig = _rzOrigRect(RS.canvas);
+      _mpPanTx0 = RZ.tx; _mpPanTy0 = RZ.ty;
+    }
+  }, { passive: true, ...sig });
+  RS.canvas.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'mouse' || _mpX === null || !_mpPanning) return;
+    RZ.tx = _mpPanTx0 + (e.clientX - _mpX);
+    RZ.ty = _mpPanTy0 + (e.clientY - _mpY);
+    _rzClamp(_mpPanOrig);
+    _rzApply(RS.canvas);
   }, { passive: true, ...sig });
   RS.canvas.addEventListener('pointerup', e => {
     if (e.pointerType !== 'mouse' || _mpX === null) return;
     const _mdx = Math.abs(e.clientX - _mpX), _mdy = Math.abs(e.clientY - _mpY);
-    _mpX = null; _mpY = null;
+    const _wasPanning = _mpPanning;
+    _mpX = null; _mpY = null; _mpPanning = false;
+    if (_wasPanning) return; // fue paneo, no un clic de botón
     if (_mdx > 15 || _mdy > 15) return; // fue un arrastre, no un clic
     const _bhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
     if (!_bhit) return;
