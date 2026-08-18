@@ -37475,6 +37475,20 @@ function gcpOpen(edLayerIdx) {
 
     // Campos editables del resumen — establecer parámetros con teclado PC/Android
     // (además de seguir actualizándose en vivo al arrastrar el slider)
+    // BUG CORREGIDO (reportado por Alberto: "la barra deslizante permite
+    // hasta 10 [repeticiones], eso es correcto, pero al escribir un número
+    // mayor en el cuadro de texto, debe respetarse"). El slider es un atajo
+    // cómodo para el rango más habitual (por eso conserva su propio tope,
+    // fijado en HTML/en _gcpSyncComportamiento — su value se recorta ahí
+    // mismo si el valor real lo supera, sin tocar la variable global): no
+    // hay ningún límite técnico real en number-de-repeticiones/fps/segundos
+    // de esperas que justifique impedir un valor mayor tecleado a propósito.
+    // `max` se sigue recibiendo (documenta el rango habitual del slider,
+    // útil de un vistazo) pero ya NO se usa para recortar lo que el propio
+    // Alberto ha escrito explícitamente — mismo criterio que ya usaba
+    // edb-size-num/edb-size-slider (grosor de pincel/goma): el número de
+    // texto manda, el slider solo se satura visualmente si el valor real lo
+    // supera (ver _gcpSyncComportamiento, ya lo hacía bien en los 4 modos).
     const _gcpCommitSumInput = (id, mode, parse, min, max, step) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -37483,7 +37497,7 @@ function gcpOpen(edLayerIdx) {
       const commit = () => {
         const n = parse(el.value);
         if (n == null || isNaN(n)) { _gcpSyncComportamiento(); return; } // entrada inválida: revertir
-        let v = Math.min(max, Math.max(min, n));
+        let v = Math.max(min, n);
         if (step) v = Math.round(v / step) * step;
         v = Math.round(v * 100) / 100; // corrige errores de coma flotante (ej. 2.5000000000000004)
         _gcpApplyBehaviorVal(mode, v);
