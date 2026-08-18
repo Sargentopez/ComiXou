@@ -7338,6 +7338,11 @@ function _edDuplicateGroup(gid) {
       if (copy) {
         copy.groupId = newGid; copy.x += 0.03; copy.y += 0.03;
         delete copy._fusionId;
+        // Independizar datos de animación GCP del original — ver comentario
+        // extenso junto a _edCloneLayerAnimStorage/_edCloneLayerAnimData
+        // (edDeserLayer).
+        _edCloneLayerAnimData(copy);
+        _edCloneLayerAnimStorage(copy);
       }
       copies.push(copy);
     }
@@ -7425,6 +7430,10 @@ function edDuplicateSelected(){
   if(!serialized) return;
   const copy = edDeserLayer(serialized, edOrientation);
   if(!copy) return;
+  // Independizar datos de animación GCP del original — ver comentario extenso
+  // junto a _edCloneLayerAnimStorage/_edCloneLayerAnimData (edDeserLayer).
+  _edCloneLayerAnimData(copy);
+  _edCloneLayerAnimStorage(copy);
   // Desplazar ligeramente para distinguirlo visualmente del original
   copy.x = la.x + 0.02;
   copy.y = la.y + 0.02;
@@ -25512,6 +25521,76 @@ function edDeserLayer(d, pageOrientation){
   }
   return null;
 }
+
+// ── Independencia de animaciones al duplicar ────────────────────────────
+// BUG CORREGIDO (reportado por Alberto: "cambios en los comportamientos en
+// el editor de animaciones y en las trayectorias, en duplicados de
+// animaciones, están afectando a sus originales"). Dos causas distintas,
+// las dos por el mismo motivo de fondo — edSerLayer copia estos campos TAL
+// CUAL, por referencia, nunca clonados:
+//
+// 1) animKey/_pngFramesKey/_apngIdbKey (la CLAVE de IndexedDB donde viven
+//    los fotogramas reales de la animación): un duplicado se queda
+//    apuntando a la MISMA clave que el original. Al reeditar la animación
+//    del duplicado en el editor de animaciones y guardar, ese guardado
+//    REESCRIBE esa misma clave con los fotogramas nuevos (rama "reedición"
+//    del guardado GCP — "animKey se preserva si ya existía") — así que
+//    corrompe también el original, aunque en memoria, hasta la siguiente
+//    recarga, cada uno pareciera tener sus propios datos.
+// 2) _gcpFrameHolds/_gcpLayersData/_gcpFramesData/_gcpLayerNames (pausas
+//    por fotograma y datos de composición): arrays/objetos compartidos en
+//    memoria entre original y duplicado — mutar uno en cualquier punto que
+//    no pase por la protección de gcpOpen (que sí clona con .slice() al
+//    abrir para editar) afectaría también al otro.
+//
+// _edCopyMotionPathPts ya resolvía el mismo problema para _motionPath desde
+// hace tiempo — esto extiende el mismo criterio a las animaciones.
+
+// Da a `layer` una copia INDEPENDIENTE de sus datos de animación en
+// IndexedDB (clave nueva, mismo contenido) — asíncrona: reasigna la clave
+// del layer en cuanto la copia esté lista en la base de datos. Mientras
+// tanto sigue apuntando a la clave compartida — ventana breve y sin riesgo
+// real, ya que hace falta abrir a propósito el editor de animaciones sobre
+// el duplicado para que algo llegue a escribir en esa clave.
+function _edCloneLayerAnimStorage(layer) {
+  if (!layer || layer.type !== 'image') return;
+  const _oldKey = layer.animKey || layer._pngFramesKey || layer._apngIdbKey;
+  if (!_oldKey || !window._sbAnimIdbSave) return;
+  const _newKey = _edAnimKey('dup_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8));
+  const _assignNewKey = () => {
+    if (layer.animKey)       layer.animKey       = _newKey;
+    if (layer._pngFramesKey) layer._pngFramesKey = _newKey;
+    if (layer._apngIdbKey)   layer._apngIdbKey   = _newKey;
+  };
+  // Si los fotogramas ya están en memoria (caso habitual: capa visible, ya
+  // cargada), reescribirlos directamente en la clave nueva — no hace falta
+  // leer de IndexedDB primero.
+  const _inMemory = (layer._pngFrames && layer._pngFrames.length) ? layer._pngFrames : (layer._apngSrc || null);
+  if (_inMemory) {
+    window._sbAnimIdbSave(_newKey, _inMemory).then(_assignNewKey).catch(() => {});
+    return;
+  }
+  // Sin datos en memoria todavía (p.ej. hoja diferida, aún sin decodificar):
+  // leer de la clave vieja y volcarlo en la nueva.
+  if (window._sbAnimIdbLoad) {
+    window._sbAnimIdbLoad(_oldKey).then(data => {
+      if (!data) return;
+      return window._sbAnimIdbSave(_newKey, data).then(_assignNewKey);
+    }).catch(() => {});
+  }
+}
+
+// Clona en profundidad los datos de composición/comportamiento de una
+// animación GCP que edSerLayer copia por referencia — ver el bloque de
+// comentario de más arriba.
+function _edCloneLayerAnimData(layer) {
+  if (!layer) return;
+  if (layer._gcpFramesData) layer._gcpFramesData = JSON.parse(JSON.stringify(layer._gcpFramesData));
+  if (layer._gcpLayersData) layer._gcpLayersData = JSON.parse(JSON.stringify(layer._gcpLayersData));
+  if (layer._gcpLayerNames) layer._gcpLayerNames = JSON.parse(JSON.stringify(layer._gcpLayerNames));
+  if (layer._gcpFrameHolds) layer._gcpFrameHolds = layer._gcpFrameHolds.slice();
+}
+
 // ══════════════════════════════════════════════════════════════════
 // AUTOSAVE TEMPORAL — IndexedDB 'cxAutosave' / objectStore 'saves'
 // ══════════════════════════════════════════════════════════════════
@@ -31518,6 +31597,12 @@ function _bibRenderPanel(panel) {
                 if(entry.gcpLayerNames) la2._gcpLayerNames=entry.gcpLayerNames;
                 if(entry.gcpFrameDelay!=null)  la2._gcpFrameDelay=entry.gcpFrameDelay;
                 if(Array.isArray(entry.gcpFrameHolds)) la2._gcpFrameHolds=entry.gcpFrameHolds;
+                // Independizar del ítem de biblioteca (entry vive en _bibCache y
+                // puede volver a insertarse más veces) — ver comentario extenso
+                // junto a _edCloneLayerAnimData (edDeserLayer). La clave de
+                // IndexedDB (animKey, unas líneas más abajo) ya se generaba
+                // nueva aquí; a estos otros campos les faltaba el mismo cuidado.
+                _edCloneLayerAnimData(la2);
                 if(entry.gcpRepeatCount!=null) la2._gcpRepeatCount=entry.gcpRepeatCount;
                 if(entry.gcpStopAtEnd)         la2._gcpStopAtEnd=true;
                 if(entry.gcpRestartDelay)      la2._gcpRestartDelay=entry.gcpRestartDelay;

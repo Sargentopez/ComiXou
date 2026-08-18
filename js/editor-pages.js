@@ -441,13 +441,17 @@ function _pgDuplicate(idx) {
     if (ser.groupId) copy.groupId = ser.groupId;
     if (ser.locked)  copy.locked  = true;
 
-    // _gcpFramesData/_gcpLayersData/_gcpLayerNames (animación GCP embebida en capas image):
-    // edSerLayer los copia por REFERENCIA (a diferencia de _motionPath, que sí clona), así que
-    // sin este clonado explícito el duplicado compartiría el mismo array en memoria y editar
-    // frames de la animación en una hoja corrompería la otra.
-    if (copy._gcpFramesData) copy._gcpFramesData = JSON.parse(JSON.stringify(copy._gcpFramesData));
-    if (copy._gcpLayersData) copy._gcpLayersData = JSON.parse(JSON.stringify(copy._gcpLayersData));
-    if (copy._gcpLayerNames) copy._gcpLayerNames = JSON.parse(JSON.stringify(copy._gcpLayerNames));
+    // _gcpFramesData/_gcpLayersData/_gcpLayerNames/_gcpFrameHolds (composición y
+    // comportamiento de animación GCP) Y animKey/_pngFramesKey/_apngIdbKey (la
+    // clave de IndexedDB donde viven los fotogramas reales): edSerLayer copia
+    // TODO esto por REFERENCIA/tal cual — ver el comentario extenso junto a
+    // _edCloneLayerAnimStorage/_edCloneLayerAnimData (edDeserLayer, editor.js).
+    // Sin este clonado, duplicar una hoja con una animación dejaba la copia
+    // apuntando a la MISMA entrada de IndexedDB que el original — reeditar esa
+    // animación en cualquiera de las dos hojas corrompía la otra al guardar
+    // (bug reportado por Alberto).
+    _edCloneLayerAnimData(copy);
+    _edCloneLayerAnimStorage(copy);
 
     // Remapear IDs de vinculación a valores nuevos e independientes del original.
     if (copy._uid)               copy._uid               = _pgRemapId(copy._uid);
