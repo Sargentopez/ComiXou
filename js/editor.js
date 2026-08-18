@@ -37313,6 +37313,8 @@ function gcpOpen(edLayerIdx) {
       const elTmr    = document.getElementById('gcpSumTimer');
       const wrapRei  = document.getElementById('gcpSumReiWrap');
       const wrapTmr  = document.getElementById('gcpSumTimerWrap');
+      const wrapTotal = document.getElementById('gcpSumTotalWrap');
+      const elTotal   = document.getElementById('gcpSumTotal');
       if (!elVel || !elRep) return;
       const mode = window._gcpBehavMode || 'vel';
       const fps  = Math.round(1000 / Math.max(window._gcpFrameDelay || 100, 1));
@@ -37327,6 +37329,26 @@ function gcpOpen(edLayerIdx) {
       if (wrapTmr) wrapTmr.style.display = (mode === 'timer' || sd > 0) ? 'inline' : 'none';
       if (elRei && document.activeElement !== elRei) elRei.value = rd;
       if (elTmr && document.activeElement !== elTmr) elTmr.value = (sd % 1 === 0) ? sd : sd.toFixed(1);
+      // Duración total de la animación — petición explícita de Alberto: con
+      // repeticiones NO infinitas, mostrar el tiempo total (fotogramas por
+      // segundo × repeticiones), teniendo en cuenta también las pausas por
+      // fotograma fijadas con el botón T (window._gcpFrameHolds) — mismas
+      // funciones que ya usa la regla de tiempo de la matriz
+      // (_gcpGetTotalFrames/_gcpBuildCumTimeMs, ver _gcpDrawRulerMarks) para
+      // que este número sea exacto y consistente con lo que allí se ve, no
+      // una aproximación aparte. Con repeticiones infinitas no hay un total
+      // que mostrar — se oculta, igual que Reinicio/Timer cuando no aplican.
+      if (wrapTotal && elTotal) {
+        if (rc > 0) {
+          const totalFrames = _gcpGetTotalFrames();
+          const cumTime     = _gcpBuildCumTimeMs(totalFrames, window._gcpFrameDelay || 100);
+          const cycleMs     = cumTime[totalFrames] || 0;
+          elTotal.textContent = ((cycleMs * rc) / 1000).toFixed(1) + 's';
+          wrapTotal.style.display = 'inline';
+        } else {
+          wrapTotal.style.display = 'none';
+        }
+      }
     };
 
     // Texto de burbuja según modo activo

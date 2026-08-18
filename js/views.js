@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v37.96</footer>
+    <footer class="app-version">v37.97</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1065,6 +1065,7 @@ Router.register('editor', {
                 <span><input id="gcpSumVel" type="text" inputmode="numeric" maxlength="2" value="10" autocomplete="off" data-i18n-title="gcp_speedFpsTitle" title="Velocidad (fps)" style="width:20px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"> fps</span>
                 <span>·</span>
                 <span><input id="gcpSumRep" type="text" inputmode="numeric" maxlength="3" value="∞" autocomplete="off" data-i18n-title="gcp_repetitionsTitle" title="Repeticiones (0 = ∞)" style="width:24px;text-align:center;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"></span>
+                <span id="gcpSumTotalWrap" style="display:none">= <span id="gcpSumTotal" data-i18n-title="gcp_totalDurationTitle" title="Duración total de la animación"></span></span>
                 <span id="gcpSumReiWrap" style="display:none">· R:<input id="gcpSumRei" type="text" inputmode="numeric" maxlength="2" value="0" autocomplete="off" data-i18n-title="gcp_restartSecondsTitle" title="Reinicio (segundos)" style="width:18px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
                 <span id="gcpSumTimerWrap" style="display:none">· T:<input id="gcpSumTimer" type="text" inputmode="decimal" maxlength="4" value="0" autocomplete="off" data-i18n-title="gcp_waitStartSecondsTitle" title="Tiempo espera inicio (segundos)" style="width:24px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
               </div>
