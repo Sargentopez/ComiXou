@@ -3719,7 +3719,9 @@ function _edSnapLayerFragment(l){
         _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
         _motionPathEnd: l._motionPathEnd||undefined,
         _motionPathAccel: l._motionPathAccel||undefined,
-        _motionPathOrient: l._motionPathOrient||false };
+        _motionPathOrient: l._motionPathOrient||false,
+        _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
+        _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
@@ -3733,7 +3735,9 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
-      _motionPathOrient: l._motionPathOrient||false };
+      _motionPathOrient: l._motionPathOrient||false,
+      _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
+      _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
       color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -3746,7 +3750,9 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
-      _motionPathOrient: l._motionPathOrient||false };
+      _motionPathOrient: l._motionPathOrient||false,
+      _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
+      _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
@@ -3761,7 +3767,9 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
-      _motionPathOrient: l._motionPathOrient||false };
+      _motionPathOrient: l._motionPathOrient||false,
+      _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
+      _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     const o = {};
     for(const k of ['type','x','y','width','height','rotation',
                     'text','fontSize','fontFamily','fontBold','fontItalic','color','backgroundColor','bgOpacity',
@@ -3830,6 +3838,25 @@ function _edSnapLayerFragment(l){
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
     if(l._motionPathOrient) o._motionPathOrient = true;
+    // BUG CORREGIDO (reportado por Alberto: "el número de ciclos en las
+    // trayectorias se sigue perdiendo"). _motionCycles/_motionCyclesDur eran
+    // los DOS ÚNICOS campos de trayectoria que faltaban aquí — todos los
+    // demás (_motionPath, _motionPathClosed, _motionSpeed, _motionPathEnd,
+    // _motionPathAccel, _motionPathOrient) ya estaban, en las 5 ramas de
+    // esta función. Consecuencia: si una edición solo tocaba el número de
+    // ciclos (sin mover ningún punto del propio recorrido), el JSON
+    // resultante de este snapshot salía IDÉNTICO al anterior — y
+    // edPushHistory, al comparar "layersJSON === último guardado" para
+    // evitar entradas de historial redundantes, lo interpretaba como "nada
+    // cambió" y se saltaba por completo la llamada a _edMarkPageDirty() que
+    // viene justo después — así que la hoja NUNCA quedaba marcada como sucia
+    // para ese cambio, y el guardado (que reutiliza la serialización en
+    // caché de las hojas no marcadas como sucias, por rendimiento) seguía
+    // persistiendo el número de ciclos ANTIGUO indefinidamente, tanto local
+    // como en la nube — el valor nuevo solo "parecía" correcto mientras
+    // durase la sesión en memoria.
+    if(l._motionCycles != null) o._motionCycles = l._motionCycles;
+    if(l._motionCyclesDur != null) o._motionCyclesDur = l._motionCyclesDur;
     return o;
 }
 
