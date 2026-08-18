@@ -8795,9 +8795,33 @@ function _edViewerMpTick() {
     }
     const _mpEnd     = l._motionPathEnd   || 'restart';
     const _mpAccel   = l._motionPathAccel || 'none';
-    // En sync mode con repeticiones finitas, el path se recorre una vez por repetición
     const _isSyncPth = _vCycleDurMs > 0 && _vCycles > 0;
-    const _mpStopAt  = _isSyncPth && l._gcpRepeatCount > 0 ? l._gcpRepeatCount : 1;
+    // BUG CORREGIDO (reportado por Alberto: animación con 20 ciclos por
+    // recorrido y 40 repeticiones totales — esperaba que el recorrido se
+    // hiciera UNA vez, ocupando las primeras 20 repeticiones, y que las
+    // otras 20 se reprodujeran ya con el recorrido detenido; en su lugar el
+    // objeto recorría el trayecto una y otra vez — reapareciendo cada vez —
+    // antes de desaparecer del todo). Causa: _mpStopAt (en unidades de
+    // "vueltas completas al recorrido") se igualaba a l._gcpRepeatCount
+    // siempre que hubiera repeticiones finitas — correcto SOLO en el caso
+    // particular de la entrega anterior, donde repeticiones y ciclos por
+    // recorrido coincidían (1 vuelta = 1 repetición); con más ciclos por
+    // recorrido que "vueltas" necesarias (aquí, 20 ciclos × 2 vueltas
+    // costearía 40 repeticiones, muchas más de las 2 vueltas reales que
+    // corresponden), el recorrido no se consideraba "terminado" hasta
+    // completar tantas vueltas como repeticiones totales — de ahí que
+    // reapareciera y volviera a recorrer el trayecto repetidamente. El
+    // propio editor de trayectorias, en su vista previa en vivo
+    // (_edMpPreviewTick, más abajo en este archivo), siempre lo hizo bien:
+    // SIEMPRE una sola vuelta completa (_rawT >= 1.0) antes de detenerse, sin
+    // depender de las repeticiones — el número de repeticiones de la
+    // animación (l._gcpRepeatCount) es un contador aparte, ya desacoplado
+    // del recorrido en las dos entregas anteriores (ver _edMpSyncFrame y la
+    // desaparición al final): sigue avanzando fotogramas y, si corresponde,
+    // desvaneciéndose, aunque el recorrido ya lleve rato detenido. Mismo
+    // criterio aquí — el visor debe comportarse igual que la vista previa
+    // del propio editor.
+    const _mpStopAt  = 1;
     // Congela la fracción cruda (antes de easing) durante las pausas por frame —
     // ver _edApplyHoldFreeze. Sin cumTime (capa sin datos de frames) no hace nada.
     const _freeze = f => _mpCumTime ? _edApplyHoldFreeze(_mpCumTime, _mpTotalF, l._gcpFrameHolds, _vCycles, f) : f;

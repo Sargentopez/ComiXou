@@ -1905,7 +1905,12 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         const _mpEndB    = layer._motionPathEnd   || 'restart';
         const _mpAcl     = layer._motionPathAccel || 'none';
         const _isSyncMR  = _mpCycleDurMs > 0 && layer._motionCycles != null;
-        const _mpStopAtR = _isSyncMR && layer._gcpRepeatCount > 0 ? layer._gcpRepeatCount : 1;
+        // BUG CORREGIDO (ver el comentario extenso en _edViewerMpTick,
+        // editor.js — misma función, implementación paralela para el lector
+        // externo): el recorrido se detiene SIEMPRE tras una sola vuelta
+        // completa, sea cual sea el número de repeticiones de la animación
+        // — son dos contadores independientes.
+        const _mpStopAtR = 1;
         // Congela la fracción cruda (antes de easing) durante las pausas por frame.
         const _rFreeze = f => _mpCumTime ? _rApplyHoldFreeze(_mpCumTime, _mpTF, layer._gcpFrameHolds, layer._motionCycles, f) : f;
         let _mpPos = null, _mpRelT = 0;
