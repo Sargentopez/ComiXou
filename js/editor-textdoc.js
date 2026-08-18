@@ -3536,6 +3536,29 @@ function _tdSyncPageNavFromOffset(offset){
   _tdCurrentOffset = offset;
   let page = 0;
   for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(offset + 2 >= _tdViewPageOffsets[i]) page = i; }
+  // BUG CORREGIDO (reportado por Alberto: al escribir texto nuevo al final
+  // de un flujo, creando hojas que antes no existían, la correspondencia
+  // entre la hoja mostrada aquí y la hoja real del editor general dejaba de
+  // funcionar). Causa raíz: la ÚLTIMA hoja de un flujo (o, mientras se
+  // escribe, la hoja que se está rellenando en ese momento, que por
+  // definición casi nunca está llena) rara vez tiene contenido suficiente
+  // DEBAJO de su propio inicio como para llenar una pantalla entera — así
+  // que el scroll nativo nunca puede desplazarse hasta su offset exacto
+  // (scrollTo se clampa siempre a scrollHeight-clientHeight). El bucle de
+  // arriba, comparando contra ese offset clampado (más corto de lo que
+  // debería), resolvía sistemáticamente una hoja ANTERIOR a la real —
+  // reproducido con Playwright: reabrir "Editar texto" en la última hoja de
+  // un flujo de 5 centraba en la 4ª, y seguía desincronizándose con cada
+  // recálculo posterior mientras se escribía. Estar al fondo del área
+  // desplazable (o a los mismos 2px de margen que ya usa el bucle) se
+  // considera siempre la ÚLTIMA hoja — mismo criterio que cualquier lector
+  // paginado (PDF, ebook): "al fondo" es "última página", nunca una
+  // intermedia, sea cual sea el offset teórico que le tocaría por contenido.
+  const _tdAreaForBottom = document.getElementById('tdPageArea');
+  if(_tdAreaForBottom){
+    const _tdMaxScroll = Math.max(0, _tdAreaForBottom.scrollHeight - _tdAreaForBottom.clientHeight);
+    if(offset + 2 >= _tdMaxScroll) page = _tdViewPageStartChars.length - 1;
+  }
   if(page !== _tdViewCurPage){ _tdViewCurPage = page; }
   _tdUpdateViewPageNav();
 }
@@ -3563,16 +3586,37 @@ function _tdScrollToViewPage(n, announce, instant){
   // de teclado (navegación del usuario, no saltos programáticos) siguen
   // animando siempre — no pasan este tercer argumento.
   //
-  // _tdPendingNavUntil: para ESOS casos animados, marca durante cuánto
-  // tiempo se considera "todavía en camino" — ver el mismo recompute de
-  // arriba, en _tdRecomputeViewPagination, que si dispara DURANTE esta
-  // animación debe reaplicar el DESTINO (_tdViewCurPage), no el scrollTop a
-  // medias que haya en ese instante — mismo bug, otro disparador: al pulsar
-  // ◀▶ o las flechas justo después de abrir/escribir, la página de destino
-  // podía quedar mal sincronizada (reportado por Alberto: se desplazó
-  // dentro del editor de textos a otra hoja y, al salir, el editor general
-  // no reflejaba esa hoja).
-  if(!instant) _tdPendingNavUntil = Date.now() + 400;
+  // _tdPendingNavUntil: marca durante cuánto tiempo se considera "todavía en
+  // camino" el destino de ESTE salto — ver el mismo recompute de arriba, en
+  // _tdRecomputeViewPagination, que si dispara DURANTE esta ventana debe
+  // reaplicar el DESTINO (_tdViewCurPage), no el scrollTop a medias que haya
+  // en ese instante — mismo bug, otro disparador: al pulsar ◀▶ o las flechas
+  // justo después de abrir/escribir, la página de destino podía quedar mal
+  // sincronizada (reportado por Alberto: se desplazó dentro del editor de
+  // textos a otra hoja y, al salir, el editor general no reflejaba esa hoja).
+  //
+  // TERCER DISPARADOR ENCONTRADO (bug reportado por Alberto: al escribir
+  // texto nuevo al final de un flujo, en una reedición, la correspondencia
+  // de hojas dejaba de funcionar): antes SOLO se armaba para saltos
+  // ANIMADOS (!instant) — el razonamiento original era "un salto instantáneo
+  // termina en el mismo tick, no hay animación que proteger". Cierto para la
+  // animación en sí, pero incompleto: _tdCenterActiveLine (el seguimiento
+  // automático del cursor) es un TERCER sitio que también llama a
+  // _tdSetScrollOffset, y no pasa por ningún temporizador de animación — se
+  // dispara solo, disparado por los eventos "trix-selection-change"
+  // (~100ms) y "trix-change" (~220ms) que Trix emite tras cargar el HTML al
+  // reeditar. En ese momento el cursor real de Trix sigue en el sitio donde
+  // loadHTML() lo dejó (el principio del documento), no en la hoja de
+  // origen a la que _tdCenterOnSourcePage acaba de saltar — así que
+  // _tdCenterActiveLine, sin ninguna protección, centraba sobre ESA posición
+  // y deshacía el salto correcto, arrastrando la vista de vuelta hacia el
+  // principio. Reproducido y confirmado con trazas reales de Playwright.
+  // Armar la ventana también para saltos instantáneos (no solo animados)
+  // cierra el hueco: cualquier salto programático, sea cual sea su motivo,
+  // queda protegido 400ms frente a los TRES sitios que podrían reescribir
+  // _tdViewCurPage a partir de una lectura cruda de scrollTop/cursor (ver
+  // también el guard añadido en _tdCenterActiveLine).
+  _tdPendingNavUntil = Date.now() + 400;
   _tdSetScrollOffset(_tdViewPageOffsets[target] || 0, !instant);
   _tdViewCurPage = target; // _tdSetScrollOffset ya lo habría puesto bien, pero por si acaso
   _tdUpdateViewPageNav();
@@ -3618,6 +3662,15 @@ function _tdCenterActiveLine(reason){
   // ese instante es lo que hace que Android cancele la composición y se
   // pierda el carácter que se estaba formando (p.ej. el acento de "más").
   if(_tdComposing){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — _tdComposing activo'); return; }
+  // BUG CORREGIDO (ver el comentario extenso en _tdScrollToViewPage, sección
+  // "TERCER DISPARADOR ENCONTRADO"): mientras un salto programático sigue
+  // "en camino" (_tdPendingNavUntil), no centrar sobre la posición del
+  // cursor real de Trix — justo tras reeditar un flujo, esa posición sigue
+  // siendo donde loadHTML() dejó el cursor (el principio del documento), no
+  // la hoja de origen a la que se acaba de saltar, y centrar sobre ella
+  // deshacía el salto correcto. _tdRecomputeViewPagination y el listener de
+  // scroll nativo ya respetaban este guard — a este tercer sitio le faltaba.
+  if(Date.now() < _tdPendingNavUntil){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — salto programático en curso (_tdPendingNavUntil)'); return; }
   if(!_tdAutoFollow){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — _tdAutoFollow=false'); return; } // el usuario se ha desplazado a mano para leer — no forzar hasta que vuelva a escribir
   const editorEl = document.getElementById('tdEditor');
   const areaEl = document.getElementById('tdPageArea');
@@ -3660,6 +3713,39 @@ function _tdCenterActiveLine(reason){
   }
   if(!rect || (rect.top === 0 && rect.bottom === 0)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin rect utilizable (viaFallback=' + viaFallback + ')'); return; }
   const cursorY = rect.top + rect.height / 2;
+
+  // BUG CORREGIDO (reportado por Alberto: al escribir texto nuevo al final
+  // de un flujo, creando hojas que antes no existían, la cabecera del
+  // editor de textos se quedaba "una hoja por detrás" de donde realmente se
+  // estaba escribiendo). Causa: la hoja mostrada se deducía del scrollTop
+  // del contenedor (_tdSyncPageNavFromOffset, disparada más abajo vía
+  // _tdSetScrollOffset) — pero esta misma función mantiene el cursor a
+  // media pantalla, no al principio del hueco visible (pedido explícito:
+  // "la línea activa siempre en el mismo sitio"). Mientras se escribe cerca
+  // de un salto de hoja, el cursor puede haber cruzado ya al principio de
+  // la hoja siguiente mientras el BORDE SUPERIOR del área visible sigue
+  // mostrando el final de la anterior — el scrollTop, por diseño, nunca
+  // llega a reflejar ese cruce hasta que el cursor avanza mucho más.
+  // Arreglo: derivar la hoja directamente de la posición Y REAL del cursor
+  // en el documento (independiente del scroll — misma resta contra el
+  // borde superior de #tdPage que ya usa _tdRecomputeViewPagination/charToY,
+  // válida precisamente porque ambos puntos se desplazan juntos al
+  // hacer scroll y su diferencia se mantiene constante) en vez de esperar a
+  // que el scrollTop la revele indirectamente. Se actualiza aquí SIEMPRE
+  // que hay un rect utilizable, incluso si luego no hace falta mover el
+  // scroll (el cruce de hoja puede no requerir ningún ajuste visible).
+  const _tdInnerForPage = document.getElementById('tdPage');
+  if(_tdInnerForPage && typeof _tdViewPageOffsets !== 'undefined' && _tdViewPageOffsets && _tdViewPageOffsets.length){
+    const _tdInnerRectForPage = _tdInnerForPage.getBoundingClientRect();
+    const _tdCursorDocY = rect.top - _tdInnerRectForPage.top;
+    let _tdCursorPage = 0;
+    for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(_tdCursorDocY + 2 >= _tdViewPageOffsets[i]) _tdCursorPage = i; }
+    if(_tdCursorPage !== _tdViewCurPage){
+      _tdLogScroll('_tdCenterActiveLine corrige hoja por posicion del cursor', _r + ' — de ' + _tdViewCurPage + ' a ' + _tdCursorPage + ' (cursorDocY=' + _tdCursorDocY.toFixed(1) + ')');
+      _tdViewCurPage = _tdCursorPage;
+      _tdUpdateViewPageNav();
+    }
+  }
 
   const areaRect = areaEl.getBoundingClientRect();
   const safeTop = areaRect.top;
