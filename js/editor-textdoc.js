@@ -3534,6 +3534,22 @@ function _tdSetScrollOffset(px, animate){
 // arrastre directo del usuario, que ya no pasan por _tdSetScrollOffset).
 function _tdSyncPageNavFromOffset(offset){
   _tdCurrentOffset = offset;
+  // BUG CORREGIDO (caso de imágenes señalado por Alberto, siguiendo el
+  // mismo patrón ya documentado en _tdScrollToViewPage/_tdCenterActiveLine):
+  // mientras _tdPendingNavUntil sigue "en camino", no volver a derivar la
+  // hoja mostrada a partir de este scrollTop — un origen más preciso
+  // (offset de carácter, en _tdCenterActiveLine; o el destino explícito de
+  // _tdScrollToViewPage) ya la decidió, y esta misma función se llama
+  // TAMBIÉN como efecto secundario indirecto del propio scrollTo() que ese
+  // salto acaba de pedir (tanto desde _tdSetScrollOffset directamente como,
+  // un frame después, desde el listener nativo de 'scroll') — sin este
+  // guard, ese eco tardío pisaba el valor recién decidido con una lectura
+  // de scrollTop menos fiable (el cursor junto a una imagen recién
+  // insertada, sobre su marcador \uFEFF invisible, no tiene un rectángulo
+  // de línea propio del que fiarse del todo — confirmado con trazas reales
+  // de Playwright: la hoja correcta se fijaba por offset de carácter y
+  // volvía a cambiar dos líneas después, dentro de la misma ejecución).
+  if(Date.now() < _tdPendingNavUntil){ _tdUpdateViewPageNav(); return; }
   let page = 0;
   for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(offset + 2 >= _tdViewPageOffsets[i]) page = i; }
   // BUG CORREGIDO (reportado por Alberto: al escribir texto nuevo al final
@@ -3655,6 +3671,84 @@ function _tdLogScroll(kind, detail){
   window._tdScrollLog.push(`${hh}:${mm}:${ss}.${ms}  ${kind}  ${detail || ''}`);
   if(window._tdScrollLog.length > 150) window._tdScrollLog.shift();
 }
+// Offset de carácter (esquema "plano" de _tdParseBlocks/_tdLayoutPages: sin
+// separador entre párrafos, las imágenes y los <br> cuentan 0 caracteres —
+// ver el comentario "La imagen no consume caracteres" en _tdLayoutPages)
+// correspondiente a una posición real del DOM VIVO del editor (nodo+offset,
+// tal como los da window.getSelection()). Es el equivalente "de ida" de
+// _tdCharOffsetToRange/_tdCharOffsetToPoint (que hacen el camino inverso,
+// offset→posición) — hacía falta para poder comparar la posición REAL del
+// cursor contra _tdViewPageStartChars con la misma precisión con la que se
+// construyó ese array, en vez de aproximar por píxeles (ver
+// _tdCenterActiveLine, bug reportado por Alberto: al escribir en mitad de
+// un flujo, cerca de un salto de página ya existente, la comparación por
+// posición Y en pantalla podía fallar por unos pocos píxeles — Trix
+// renderiza el texto de forma continua, sin ningún hueco visual en los
+// saltos de hoja, así que el último carácter de una hoja y el primero de la
+// siguiente pueden caer a un pixel de distancia o incluso en la misma
+// línea). Recorre el DOM en el MISMO orden y con las MISMAS reglas que
+// runsFromInline (ver _tdParseBlocks): ignora los nodos
+// [data-trix-serialize=false] (marcadores \uFEFF que Trix coloca junto a
+// cada adjunto no editable, invisibles para el HTML "limpio" que de verdad
+// se guarda/pagina), no desciende dentro de un <figure
+// class="attachment--preview"> (una imagen insertada — cuenta 0, igual que
+// en el layout), y no cuenta nada por un <br>.
+function _tdCountCharsInNode(node){
+  if(node.nodeType === Node.TEXT_NODE) return node.textContent.length;
+  if(node.nodeType !== Node.ELEMENT_NODE) return 0;
+  if(node.getAttribute && node.getAttribute('data-trix-serialize') === 'false') return 0;
+  const tag = node.tagName.toLowerCase();
+  if(tag === 'br') return 0;
+  if(tag === 'figure' && node.classList && node.classList.contains('attachment--preview')) return 0;
+  let sum = 0;
+  node.childNodes.forEach(child => { sum += _tdCountCharsInNode(child); });
+  return sum;
+}
+function _tdDomPosToCharOffset(root, targetNode, targetOffset){
+  let count = 0, found = false, result = 0;
+  function walk(node){
+    if(found) return;
+    if(node === targetNode){
+      if(node.nodeType === Node.TEXT_NODE){
+        result = count + Math.max(0, Math.min(targetOffset, node.textContent.length));
+      } else {
+        let subCount = 0;
+        const kids = node.childNodes;
+        const upTo = Math.max(0, Math.min(targetOffset, kids.length));
+        for(let i = 0; i < upTo; i++) subCount += _tdCountCharsInNode(kids[i]);
+        result = count + subCount;
+      }
+      found = true;
+      return;
+    }
+    if(node.nodeType === Node.TEXT_NODE){ count += node.textContent.length; return; }
+    if(node.nodeType === Node.ELEMENT_NODE){
+      const _tdIsZeroCharWrapper = (node.getAttribute && node.getAttribute('data-trix-serialize') === 'false')
+        || node.tagName.toLowerCase() === 'br'
+        || (node.tagName.toLowerCase() === 'figure' && node.classList && node.classList.contains('attachment--preview'));
+      if(_tdIsZeroCharWrapper){
+        // BUG CORREGIDO (caso señalado por Alberto: tener siempre en cuenta
+        // que puede haber imágenes insertadas): si el cursor real cae
+        // DENTRO de uno de estos envoltorios de coste cero — el caso
+        // habitual es el marcador \uFEFF que Trix coloca junto a CUALQUIER
+        // imagen para darle al cursor un sitio donde colocarse (p.ej.
+        // justo tras pulsar Ctrl+Fin con una imagen al final del
+        // documento) — antes el recorrido lo saltaba entero SIN
+        // descender (correcto para el conteo, cuenta 0 caracteres) pero
+        // por eso mismo nunca "encontraba" el objetivo ahí dentro, y la
+        // búsqueda se quedaba sin resultado. Reconocerlo aquí mismo — la
+        // posición correcta es la misma tanto si el cursor está justo
+        // antes de la imagen como uno de estos marcadores invisibles a su
+        // lado, ambos ocupan la misma posición de 0 caracteres.
+        if(node === targetNode || node.contains(targetNode)){ result = count; found = true; }
+        return;
+      }
+      node.childNodes.forEach(child => { if(!found) walk(child); });
+    }
+  }
+  walk(root);
+  return found ? result : count;
+}
 function _tdCenterActiveLine(reason){
   const _r = reason || '(sin origen indicado)';
   // No mover el scroll mientras hay una composición IME activa — ver
@@ -3679,6 +3773,78 @@ function _tdCenterActiveLine(reason){
   if(!sel || sel.rangeCount === 0 || !sel.isCollapsed){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin selección colapsada'); return; } // con texto seleccionado, no forzar
   const anchorNode = sel.focusNode;
   if(!anchorNode || !editorEl.contains(anchorNode)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — focusNode fuera del editor'); return; }
+
+  // BUG CORREGIDO (reportado por Alberto: al escribir texto nuevo al final
+  // de un flujo, creando hojas que antes no existían, la cabecera del
+  // editor de textos se quedaba "una hoja por detrás" de donde realmente se
+  // estaba escribiendo — y, revisado a petición suya, también al escribir
+  // en MITAD de un flujo ya existente, y con imágenes insertadas de por
+  // medio). Causa de fondo: la hoja mostrada se deducía del scrollTop del
+  // contenedor — pero esta misma función mantiene el cursor a media
+  // pantalla, no al principio del hueco visible (pedido explícito: "la
+  // línea activa siempre en el mismo sitio"), así que el cursor puede haber
+  // cruzado ya a la hoja siguiente mientras el scroll aún no lo refleja.
+  //
+  // Dos revisiones sucesivas hasta llegar a esta versión:
+  // 1) Comparar por posición Y en pantalla (rect.top) contra
+  //    _tdViewPageOffsets — funcionaba al final del flujo (distancia de
+  //    cientos de píxeles, sin ambigüedad) pero fallaba cerca de un salto
+  //    de página YA EXISTENTE en mitad del documento: Trix renderiza el
+  //    texto de forma continua, sin ningún hueco visual en los saltos de
+  //    hoja, así que el último carácter de una hoja y el primero de la
+  //    siguiente pueden caer a un píxel de distancia — ninguna tolerancia
+  //    en píxeles es fiable ahí.
+  // 2) Comparar por OFFSET DE CARÁCTER (_tdDomPosToCharOffset, mismo
+  //    esquema exacto que construye _tdViewPageStartChars — sin separador
+  //    entre párrafos, imagen y <br> cuentan 0 caracteres) en vez de por
+  //    píxeles — sin ambigüedad posible, es un conteo entero. Pero
+  //    colocado DESPUÉS del cálculo de "rect" de más abajo (con su propio
+  //    return temprano si no hay un rectángulo válido) se saltaba entero
+  //    justo en el caso que más importaba comprobar: el cursor recién
+  //    llegado (p.ej. con Ctrl+Fin) al marcador \uFEFF invisible que Trix
+  //    coloca junto a CUALQUIER imagen — ese nodo no tiene un rectángulo
+  //    de línea útil, así que la función abortaba antes de corregir nada.
+  // Arreglo definitivo: la detección de página no necesita ninguna
+  // geometría de pantalla, solo la posición DOM (nodo+offset) que ya
+  // tenemos aquí — se hace ANTES del cálculo de "rect" y de su posible
+  // aborto, para que corrija la página incluso cuando no haga falta (o no
+  // se pueda) mover el scroll.
+  if(typeof _tdViewPageStartChars !== 'undefined' && _tdViewPageStartChars && _tdViewPageStartChars.length){
+    const _tdCursorCharOffset = _tdDomPosToCharOffset(editorEl, anchorNode, sel.focusOffset);
+    let _tdCursorPage = 0;
+    for(let i = 0; i < _tdViewPageStartChars.length; i++){ if(_tdCursorCharOffset >= _tdViewPageStartChars[i]) _tdCursorPage = i; }
+    if(_tdCursorPage !== _tdViewCurPage){
+      _tdLogScroll('_tdCenterActiveLine corrige hoja por offset de caracter', _r + ' — de ' + _tdViewCurPage + ' a ' + _tdCursorPage + ' (charOffset=' + _tdCursorCharOffset + ')');
+      _tdViewCurPage = _tdCursorPage;
+      _tdUpdateViewPageNav();
+    }
+    // Proteger este valor recién decidido (exacto, por offset de carácter)
+    // frente a los ecos menos precisos de scrollTop que puede disparar el
+    // resto de ESTA MISMA llamada (el propio _tdSetScrollOffset de más
+    // abajo, y el listener nativo de 'scroll' un frame después, como efecto
+    // secundario del scrollTo() que ese ajuste visual pide) — ver el guard
+    // correspondiente añadido en _tdSyncPageNavFromOffset.
+    //
+    // DURACIÓN CORTA A PROPÓSITO (bug real, encontrado al verificar el caso
+    // de escribir justo después de una imagen): reutilizar aquí los mismos
+    // 400ms que usa _tdScrollToViewPage para sus saltos animados producía un
+    // efecto perverso — _tdCenterActiveLine se dispara DOS VECES por cada
+    // ráfaga de tecleo (a 100ms, "trix-selection-change", SIN recalcular
+    // límites de página antes; y a 220ms, "trix-change", que SÍ recalcula
+    // antes de centrar). Con un guard de 400ms, la primera llamada (con
+    // límites de página aún desactualizados, de ANTES de esta ráfaga) fijaba
+    // una hoja incorrecta y bloqueaba con su propio guard a la SEGUNDA
+    // llamada — la única con datos frescos — que llegaba solo ~120ms
+    // después, todavía dentro de esa ventana: el aborto temprano de más
+    // arriba ("salto programático en curso") le impedía volver a corregirla.
+    // Confirmado con Playwright: escribir justo tras el marcador de una
+    // imagen se quedaba fijado varios segundos en una hoja anterior a la
+    // real. Una ventana corta (basta con sobrevivir al eco inmediato: la
+    // propia llamada de más abajo, síncrona, y el eco del listener nativo de
+    // scroll, un frame después vía requestAnimationFrame) protege igual
+    // frente a esos dos ecos sin bloquear la siguiente pasada real.
+    _tdPendingNavUntil = Date.now() + 50;
+  }
 
   const range = sel.getRangeAt(0).cloneRange();
   range.collapse(true);
@@ -3713,39 +3879,6 @@ function _tdCenterActiveLine(reason){
   }
   if(!rect || (rect.top === 0 && rect.bottom === 0)){ _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — sin rect utilizable (viaFallback=' + viaFallback + ')'); return; }
   const cursorY = rect.top + rect.height / 2;
-
-  // BUG CORREGIDO (reportado por Alberto: al escribir texto nuevo al final
-  // de un flujo, creando hojas que antes no existían, la cabecera del
-  // editor de textos se quedaba "una hoja por detrás" de donde realmente se
-  // estaba escribiendo). Causa: la hoja mostrada se deducía del scrollTop
-  // del contenedor (_tdSyncPageNavFromOffset, disparada más abajo vía
-  // _tdSetScrollOffset) — pero esta misma función mantiene el cursor a
-  // media pantalla, no al principio del hueco visible (pedido explícito:
-  // "la línea activa siempre en el mismo sitio"). Mientras se escribe cerca
-  // de un salto de hoja, el cursor puede haber cruzado ya al principio de
-  // la hoja siguiente mientras el BORDE SUPERIOR del área visible sigue
-  // mostrando el final de la anterior — el scrollTop, por diseño, nunca
-  // llega a reflejar ese cruce hasta que el cursor avanza mucho más.
-  // Arreglo: derivar la hoja directamente de la posición Y REAL del cursor
-  // en el documento (independiente del scroll — misma resta contra el
-  // borde superior de #tdPage que ya usa _tdRecomputeViewPagination/charToY,
-  // válida precisamente porque ambos puntos se desplazan juntos al
-  // hacer scroll y su diferencia se mantiene constante) en vez de esperar a
-  // que el scrollTop la revele indirectamente. Se actualiza aquí SIEMPRE
-  // que hay un rect utilizable, incluso si luego no hace falta mover el
-  // scroll (el cruce de hoja puede no requerir ningún ajuste visible).
-  const _tdInnerForPage = document.getElementById('tdPage');
-  if(_tdInnerForPage && typeof _tdViewPageOffsets !== 'undefined' && _tdViewPageOffsets && _tdViewPageOffsets.length){
-    const _tdInnerRectForPage = _tdInnerForPage.getBoundingClientRect();
-    const _tdCursorDocY = rect.top - _tdInnerRectForPage.top;
-    let _tdCursorPage = 0;
-    for(let i = 0; i < _tdViewPageOffsets.length; i++){ if(_tdCursorDocY + 2 >= _tdViewPageOffsets[i]) _tdCursorPage = i; }
-    if(_tdCursorPage !== _tdViewCurPage){
-      _tdLogScroll('_tdCenterActiveLine corrige hoja por posicion del cursor', _r + ' — de ' + _tdViewCurPage + ' a ' + _tdCursorPage + ' (cursorDocY=' + _tdCursorDocY.toFixed(1) + ')');
-      _tdViewCurPage = _tdCursorPage;
-      _tdUpdateViewPageNav();
-    }
-  }
 
   const areaRect = areaEl.getBoundingClientRect();
   const safeTop = areaRect.top;
