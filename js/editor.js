@@ -33607,7 +33607,7 @@ window._gcpRepeatCount  = 0;    // 0 = infinito
 window._gcpStopAtEnd    = false; // true = detener en el último frame
 window._gcpRestartDelay = 0;    // 0 = desactivado, 1-60 = segundos antes de reiniciar
 window._gcpBehavMode   = 'vel'; // modo activo del dropdown Comportamiento: 'vel'|'rep'|'rei'|'timer'
-window._gcpStartDelay  = 0;    // segundos (paso 0.5) antes de comenzar la reproducción
+window._gcpStartDelay  = 0;    // segundos antes de comenzar la reproducción (slider: paso 0.5; tecleado: paso 0.1)
 window._gcpInvisBeforeStart = false; // true = capa invisible durante el startDelay (fade-in al iniciar)
 window._gcpInvisAtEnd       = false; // true = capa se desvanece al terminar todas las reproducciones
 window._gcpInvisGradual     = true;  // false = aparición/desaparición inmediata, sin fade (por defecto true = gradual, como ya era el comportamiento antes de esta opción)
@@ -37758,7 +37758,13 @@ function gcpOpen(edLayerIdx) {
       return digits === '' ? 0 : parseInt(digits, 10);
     }, 0, 10, 1);
     _gcpCommitSumInput('gcpSumRei',   'rei',   v => parseInt(v, 10), 0, 60, 1);
-    _gcpCommitSumInput('gcpSumTimer', 'timer', v => parseFloat(String(v).replace(',', '.')), 0, 60, 0.5);
+    // Precisión de teclado = décimas (0.1), no el 0.5 del slider — pedido explícito
+    // de Alberto: "puedo escribir 32,5 o 33,00 pero no 32,8" (se redondeaba al medio
+    // segundo más próximo). El slider (ver _gcpSyncComportamiento) conserva su propio
+    // step=0.5 porque arrastrar con precisión de décimas es poco práctico al tacto;
+    // mismo criterio que el max del slider vs. el texto tecleado (v37.98): el número
+    // de texto manda con su propia granularidad, más fina que la del control visual.
+    _gcpCommitSumInput('gcpSumTimer', 'timer', v => parseFloat(String(v).replace(',', '.')), 0, 60, 0.1);
 
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
