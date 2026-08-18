@@ -1879,6 +1879,28 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
             layer._animOc.getContext('2d').putImageData(layer._animFrames[_mpSyncF].imageData, 0, 0);
             panelChanged = true;
           }
+          // BUG CORREGIDO (ver el comentario extenso en _edViewerMpTick,
+          // editor.js — misma función, implementación paralela para el
+          // lector externo, mismo hueco): "Invisibilidad → Al final"
+          // (layer._gcpInvisAtEnd) solo estaba conectada en la rama NO
+          // sincronizada (más abajo, "else" de _animMpSync) — para una capa
+          // con trayectoria sincronizada esa rama nunca se alcanza, así que
+          // nunca llegaba a desvanecerse al agotar las repeticiones. Mismo
+          // criterio de "terminado" que usa _rMpSyncFrame internamente
+          // (ciclos de ANIMACIÓN completos, deliberadamente independiente de
+          // si el recorrido en sí ya se ha detenido).
+          const _mpRepeatCntR = layer._gcpRepeatCount || 0;
+          if (_mpRepeatCntR > 0 && (_mpRawT * layer._motionCycles) >= _mpRepeatCntR && layer._gcpInvisAtEnd && !layer._mpInvisTriggered) {
+            layer._mpInvisTriggered = true;
+            if (layer._gcpInvisGradual === false) {
+              layer._animFadeOpacity = 0;
+            } else {
+              layer._animFadeStart = now;
+              layer._animFadeDur   = 150;
+              layer._animFadeDir   = 'out';
+            }
+            panelChanged = true;
+          }
         }
         const _mpEndB    = layer._motionPathEnd   || 'restart';
         const _mpAcl     = layer._motionPathAccel || 'none';
@@ -3166,6 +3188,7 @@ function _resetPanelAnims(idx) {
       const _hasDelay = (layer._gcpStartDelay || 0) > 0;
       layer._pathStartTime = _hasDelay ? null : Date.now();
       delete layer._pathStopped;
+      delete layer._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
       layer._pathCurX = layer.x || 0.5;
       layer._pathCurY = layer.y || 0.5;
       delete layer._pathCurRotDeg;

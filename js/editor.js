@@ -8729,11 +8729,66 @@ function _edViewerMpTick() {
           l._gcpCircularEnd || false,
           _mpCumTime, l._gcpFrameHolds
         );
+        // BUG CORREGIDO (reportado por Alberto: animación con repeticiones
+        // finitas + "desaparecer al final" + trayectoria en modo "Detener" —
+        // se reproducía como se esperaba, desaparecía, pero LUEGO la
+        // trayectoria volvía a reiniciarse sola, sin tener Reinicio
+        // configurado). Causa raíz real: el temporizador PROPIO de la
+        // animación (_applyFrame/this._timer, con su propio conteo de
+        // repeticiones y su propia lógica de "Al final") solo se cancelaba
+        // aquí CUANDO el fotograma calculado por el recorrido cambiaba — una
+        // ventana de carrera real, no una exclusión mutua de verdad: según
+        // el instante exacto en que arranca cada uno (_edStartPageAnims
+        // arranca los dos, el propio temporizador Y este motor de
+        // trayectoria, sin saber el uno del otro), el temporizador propio
+        // podía sobrevivir el tiempo suficiente para avanzar y completar SUS
+        // propias repeticiones de forma independiente — confirmado con
+        // Playwright real (tiempo real, no simulado): en unas ejecuciones el
+        // temporizador propio ganaba la carrera y llegaba a completar sus
+        // repeticiones; en otras, este motor lo suprimía casi de inmediato y
+        // nunca llegaba a completarlas. Cancelar AQUÍ SIEMPRE (no solo
+        // cuando el fotograma cambia) cierra esa ventana: mientras haya
+        // trayectoria sincronizada, este motor es la ÚNICA fuente de verdad
+        // para el fotograma — nunca compite con el temporizador propio.
+        if (l._timer) { clearTimeout(l._timer); l._timer = null; }
+        l._playing = false;
         if (_mpSyncF !== l._fIdx) {
-          if (l._timer) { clearTimeout(l._timer); l._timer = null; }
-          l._playing = false;
           l._fIdx = _mpSyncF;
           l._oc.getContext('2d').putImageData(_syncFs[_mpSyncF].imageData, 0, 0);
+          _mpUpdated = true;
+        }
+        // "Invisibilidad → Al final" (l._gcpInvisAtEnd): esa lógica solo
+        // existía dentro de _applyFrame, en la rama que se alcanza al
+        // agotar las repeticiones POR SU CUENTA — con el temporizador propio
+        // ahora suprimido de forma fiable (arriba), nunca llegaba a
+        // ejecutarse para una capa con trayectoria sincronizada, así que hay
+        // que reproducirla aquí, el único sitio que de verdad controla el
+        // fotograma en este caso. Mismo criterio de "terminado" que usa
+        // _edMpSyncFrame internamente (ciclos de ANIMACIÓN completos:
+        // repeticiones del recorrido × ciclos por recorrido), deliberadamente
+        // independiente de si el recorrido en sí ya se ha detenido o no —
+        // pedido explícito de Alberto: son dos contadores independientes que
+        // solo coinciden si se hacen coincidir a propósito (mismo criterio
+        // ya aplicado en _edMpSyncFrame, v37.96). _mpInvisTriggered evita
+        // relanzar el desvanecimiento en cada tick posterior.
+        const _mpRepeatCnt = l._gcpRepeatCount || 0;
+        if (_mpRepeatCnt > 0 && (_rawT * _vCycles) >= _mpRepeatCnt && l._gcpInvisAtEnd && !l._mpInvisTriggered) {
+          l._mpInvisTriggered = true;
+          if (l._gcpInvisGradual === false) {
+            l._animFadeOpacity = 0;
+          } else {
+            const _natMpFO = l.opacity ?? 1;
+            const _t0MpFO  = performance.now();
+            const _durMpFO = 150;
+            const _doMpFO = () => {
+              const p = Math.min((performance.now() - _t0MpFO) / _durMpFO, 1);
+              l._animFadeOpacity = (1 - p) * _natMpFO;
+              if (typeof edRedraw === 'function') edRedraw();
+              if (typeof edUpdateViewer === 'function') edUpdateViewer();
+              if (p < 1) requestAnimationFrame(_doMpFO);
+            };
+            requestAnimationFrame(_doMpFO);
+          }
           _mpUpdated = true;
         }
       }
@@ -8760,6 +8815,8 @@ function _edViewerMpTick() {
           l._restartTimer = setTimeout(() => {
             _sr._restartTimer = null;
             delete _sr._pathStartTime; delete _sr._pathStopped;
+            delete _sr._mpInvisTriggered; // permitir que "Invisibilidad → Al final" dispare de nuevo en el ciclo nuevo
+            _sr._animFadeOpacity = null;
             _sr._fIdx = 0; _sr._gcpPlayCount = 0;
             requestAnimationFrame(() => { if (typeof edUpdateViewer === 'function') edUpdateViewer(); });
           }, l._gcpRestartDelay * 1000);
@@ -8908,11 +8965,35 @@ function _edMpPreviewTick() {
         la._gcpCircularEnd || false,
         _pCumTime, la._gcpFrameHolds
       );
+      // Mismo arreglo que _edViewerMpTick (ver comentario extenso ahí,
+      // sección "BUG CORREGIDO"): cancelar SIEMPRE el temporizador propio de
+      // la animación aquí, no solo cuando el fotograma cambia, para cerrar
+      // la misma ventana de carrera durante la vista previa de trayectoria
+      // en el propio editor.
+      if (la._timer) { clearTimeout(la._timer); la._timer = null; }
+      la._playing = false;
       if (_pSyncF !== la._fIdx) {
-        if (la._timer) { clearTimeout(la._timer); la._timer = null; }
-        la._playing = false;
         la._fIdx = _pSyncF;
         la._oc.getContext('2d').putImageData(_pSyncFs[_pSyncF].imageData, 0, 0);
+      }
+      // "Invisibilidad → Al final" — mismo criterio que _edViewerMpTick.
+      const _pRepeatCnt = la._gcpRepeatCount || 0;
+      if (_pRepeatCnt > 0 && (_rawT * _edMotionPathCycles) >= _pRepeatCnt && la._gcpInvisAtEnd && !la._mpInvisTriggered) {
+        la._mpInvisTriggered = true;
+        if (la._gcpInvisGradual === false) {
+          la._animFadeOpacity = 0;
+        } else {
+          const _natPFO = la.opacity ?? 1;
+          const _t0PFO  = performance.now();
+          const _durPFO = 150;
+          const _doPFO = () => {
+            const p = Math.min((performance.now() - _t0PFO) / _durPFO, 1);
+            la._animFadeOpacity = (1 - p) * _natPFO;
+            if (typeof edRedraw === 'function') edRedraw();
+            if (p < 1) requestAnimationFrame(_doPFO);
+          };
+          requestAnimationFrame(_doPFO);
+        }
       }
     }
   }
@@ -25983,6 +26064,8 @@ function edOpenViewer(){
     if (l._motionPath && l._motionPath.length >= 2) {
       delete l._pathStartTime;  // el ticker lo fijará al procesar la hoja activa
       delete l._pathStopped;    // borrar bandera 'stop' para que la trayectoria pueda reiniciarse
+      delete l._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
+      l._animFadeOpacity = null;
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
       delete l._pathCurRotDeg;
@@ -26495,6 +26578,7 @@ function _edResetPageAnims(pageIdx) {
     if (l._motionPath && l._motionPath.length >= 2) {
       delete l._pathStartTime;
       delete l._pathStopped; // limpiar bandera 'stop' para que la trayectoria reinicie
+      delete l._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
       l._pathCurX = l.x || 0.5;
       l._pathCurY = l.y || 0.5;
       delete l._pathCurRotDeg;
@@ -26537,6 +26621,7 @@ function _edStartPageAnims(pageIdx) {
         // Resetear la trayectoria para que arranque sincronizado con la animación
         delete l._pathStartTime;
         delete l._pathStopped;
+        delete l._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
         // Fade in si gcpInvisBeforeStart (transición rápida pero gradual —
         // inmediato en su lugar si Gradual está desmarcado)
         if (l._gcpInvisBeforeStart && _startMs > 0) {
@@ -28443,6 +28528,9 @@ function EditorView_init(){
       const _pla = edLayers[_edMotionPathTarget];
       if (_pla) {
         _pla._pathStartTime = Date.now(); // reiniciar trayectoria desde el inicio
+        delete _pla._pathStopped;
+        delete _pla._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
+        _pla._animFadeOpacity = null;
         // Arrancar también la animación sincronizada con la trayectoria
         if (_pla.type === 'gif' && _pla._ready) {
           _pla._fIdx = 0; _pla._playing = true; _pla._applyFrame(0);
