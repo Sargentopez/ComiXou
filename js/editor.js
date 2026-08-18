@@ -8624,7 +8624,27 @@ function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, cir
   const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
   // Caso especial: stop + circularEnd + fin alcanzado → frame 0 (estado inicial)
   if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
+  // BUG CORREGIDO (reportado por Alberto: trayectoria con "detener al final
+  // del recorrido" + animación con reproducciones INFINITAS — al llegar al
+  // final del recorrido, el objeto deja de moverse (correcto, lo gestiona
+  // el llamante) pero la animación TAMBIÉN dejaba de reproducirse, pese a
+  // estar configurada como infinita). Causa: en modo 'stop', iterT se
+  // recortaba SIEMPRE a _stopLimit (aquí, 1, cuando repeatCnt es 0/infinito
+  // — _stopLimit solo crece con repeticiones FINITAS mayores que 1, ver
+  // arriba) — así que, pasado ese punto, cycleUnits/animProgress dejaban de
+  // crecer para SIEMPRE, y el frame devuelto quedaba fijo aunque el propio
+  // repeatCnt=0 más abajo diga expresamente "sigue en bucle sin límite".
+  // Pedido explícito de Alberto: el recorrido y la reproducción de la
+  // animación son dos contadores independientes — el recorrido se detiene
+  // según SU propio fin configurado, la animación sigue reproduciéndose
+  // hasta agotar SUS propias repeticiones (o para siempre, si son
+  // infinitas), y solo coinciden si Alberto hace coincidir a propósito el
+  // número de repeticiones con el número de ciclos del recorrido. Con
+  // repeticiones infinitas no hay ningún límite que aplicar aquí: iterT
+  // sigue creciendo sin recorte, igual que en modo 'restart', para que la
+  // animación seguida siga completando ciclos indefinidamente aunque el
+  // recorrido ya esté congelado en su posición final.
+  const iterT = (pathEnd === 'stop') ? (repeatCnt > 0 ? Math.min(rawT, _stopLimit - 1e-9) : rawT)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);  // restart: fracción dentro del traversal actual
   // Posición dentro del ciclo actual — respeta pausas por frame si se dispone

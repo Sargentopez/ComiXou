@@ -1790,7 +1790,14 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
   if (totalF < 1 || cycles <= 0) return 0;
   const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
   if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  const iterT = (pathEnd === 'stop') ? Math.min(rawT, _stopLimit - 1e-9)
+  // BUG CORREGIDO (ver el comentario extenso en _edMpSyncFrame, editor.js —
+  // misma función, implementación paralela para el lector externo, mismo
+  // arreglo): con repeticiones INFINITAS (repeatCnt=0), iterT no debe
+  // recortarse a _stopLimit — el recorrido se detiene según SU propio fin
+  // configurado (lo gestiona el llamante), pero la reproducción de la
+  // animación es un contador independiente que debe seguir avanzando sin
+  // límite, no congelarse en el momento en que el recorrido se detiene.
+  const iterT = (pathEnd === 'stop') ? (repeatCnt > 0 ? Math.min(rawT, _stopLimit - 1e-9) : rawT)
               : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
               : (rawT % 1);
   const cycleUnits  = iterT * cycles;
