@@ -36976,10 +36976,27 @@ function gcpInsertFromBib(entry) {
     const _cx = (_mxOGcp + (la.x||0.5) * _pwOGcp - _mxDGcp) / _pwDGcp;
     const _cy = (_myOGcp + (la.y||0.5) * _phOGcp - _myDGcp) / _phDGcp;
     la.x = _cx; la.y = _cy;
-    if (la.type !== 'stroke') {
-      la.x = Math.max(0, Math.min(1, la.x));
-      la.y = Math.max(0, Math.min(1, la.y));
-    }
+    // BUG CORREGIDO (reportado por Alberto: animación compuesta con varios
+    // objetos de biblioteca, originados en una página horizontal, insertados
+    // en una sesión del editor de animaciones sobre página vertical —
+    // "objetos centrados" pero el conjunto salía desproporcionado). Antes,
+    // aquí se recortaba x/y a [0,1] para todo tipo salvo 'stroke' — pero la
+    // posición de un objeto NUNCA debe recortarse a [0,1]: puede quedar
+    // legítima e intencionadamente parcial o totalmente fuera de la página
+    // (decisión ya tomada y documentada por Alberto en
+    // _edRelayoutLayersForOrientation, editor-pages.js — "todos los tipos
+    // pueden quedar parcialmente fuera de la página... antes solo 'stroke' e
+    // 'image' lo permitían y el resto se forzaba dentro, lo que podía
+    // separar visualmente a miembros de un mismo grupo"). _adaptGcp
+    // reimplementaba esta misma conversión de forma independiente, sin
+    // seguir ese mismo criterio ya establecido, y volvía a introducir
+    // exactamente el mismo recorte que ya se había identificado y quitado
+    // en el otro sitio: con varios objetos en la misma animación, si la
+    // conversión de orientación empuja a alguno fuera de [0,1] pero no a
+    // otros (o los empuja en distinta medida), el recorte separaba sus
+    // posiciones relativas, deformando la composición conjunta — de ahí la
+    // desproporción, aunque cada objeto por separado tuviera el tamaño
+    // correcto ("los objetos caben perfectamente en el lienzo").
     if (la.type === 'line' && Array.isArray(la.points)) {
       const _cvP = p => {
         if (!p) return p;
