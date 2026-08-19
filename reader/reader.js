@@ -1529,87 +1529,35 @@ async function sbGetAuth(path) {
 
 // ── INICIAR ───────────────────────────────────────────────────
 // ── Bezier sampling para trayectorias cerradas (reader) ────────────────────────────
+// v38.06: toda la matemática de trayectoria/tiempo de esta sección ahora vive en
+// js/anim-clock.js (AnimClock), cargado antes que este archivo — fuente ÚNICA
+// compartida con el editor (visor interno + editor de trayectorias). Las
+// funciones de aquí abajo se conservan con su nombre histórico como envoltorios
+// finos porque tienen varios puntos de llamada en este mismo archivo. Antes de
+// v38.06 esta sección era una copia independiente que había divergido del
+// editor en dos puntos (_bezierSampleClosed sin el ajuste de esquina dura/
+// alineación de origen, _pathPositionAt sin distinguir trayecto abierto de
+// cerrado al llegar a t=1) — unificarla corrige ambos de raíz.
 function _bezierSampleClosed(pts, numSamples) {
-  const n = pts.length;
-  const result = [];
-  for (let s = 0; s < numSamples; s++) {
-    const tFull = (s / numSamples) * n;
-    const seg  = Math.floor(tFull) % n;
-    const u    = tFull - Math.floor(tFull);
-    const prev = (seg - 1 + n) % n, next = (seg + 1) % n;
-    const mp0x = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
-    const mp1x = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
-    result.push({
-      x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
-      y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
-    });
-  }
-  result.push({ x: result[0].x, y: result[0].y });
-  return result;
+  return AnimClock.bezierSampleClosed(pts, numSamples);
 }
 
 // ── Helper: posición a lo largo de un trayecto (t = fracción de longitud de arco) ─
 // pw/ph: dimensiones reales del lienzo en px para arc-length en espacio píxel real
 function _easeT(t,accel){
-  if(!accel||accel==='none')return t;
-  const c=t<0?0:t>1?1:t;
-  const _eo=(x)=>{
-    const kt=0.75,kp=0.9,sl=kp/kt;
-    if(x<kt)return sl*x;
-    const u=(x-kt)/(1-kt),m=sl*(1-kt);
-    return(2*u*u*u-3*u*u+1)*kp+(u*u*u-2*u*u+u)*m+(-2*u*u*u+3*u*u);
-  };
-  if(accel==='start') return _eo(c);
-  if(accel==='end')   return 1-_eo(1-c);
-  if(accel==='middle')return c<0.5?(1-_eo(1-2*c))/2:(1+_eo(2*c-1))/2;
-  return t;
+  return AnimClock.easeT(t, accel);
 }
 function _pathPositionAt(points, closed, t, pw, ph) {
-  if (!points || points.length === 0) return null;
-  if (points.length === 1) return { x: points[0].x, y: points[0].y };
-  const _pw = pw || 360, _ph = ph || 780;
-  // Para bucles cerrados: bezier sample → misma curva que el render, sin costura brusca
-  const pts = (closed && points.length >= 3)
-    ? _bezierSampleClosed(points, 200)
-    : (closed ? [...points, points[0]] : points);
-  const dists = [];
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
-    dists.push(d);
-    total += d;
-  }
-  if (total === 0) return { x: pts[0].x, y: pts[0].y };
-  const _t = ((t % 1) + 1) % 1;
-  const target = _t * total;
-  let cum = 0;
-  for (let i = 0; i < dists.length; i++) {
-    if (cum + dists[i] >= target) {
-      const f = dists[i] > 0 ? (target - cum) / dists[i] : 0;
-      return { x: pts[i].x + (pts[i+1].x - pts[i].x) * f,
-               y: pts[i].y + (pts[i+1].y - pts[i].y) * f };
-    }
-    cum += dists[i];
-  }
-  return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
+  return AnimClock.pathPositionAt(points, closed, t, pw, ph);
 }
 
 // ── Motion path: ángulo de la tangente (grados) en el punto t ── (idem editor.js)
 function _pathTangentDeg(points, closed, t, pw, ph) {
-  if (!points || points.length < 2) return 0;
-  const dt = 0.0015;
-  const t0 = closed ? t - dt : Math.max(0, t - dt);
-  const t1 = closed ? t + dt : Math.min(1, t + dt);
-  const pA = _pathPositionAt(points, closed, t0, pw, ph);
-  const pB = _pathPositionAt(points, closed, t1, pw, ph);
-  if (!pA || !pB) return 0;
-  const dx = (pB.x - pA.x) * pw, dy = (pB.y - pA.y) * ph;
-  if (!dx && !dy) return 0;
-  return Math.atan2(dy, dx) * 180 / Math.PI;
+  return AnimClock.pathTangentDeg(points, closed, t, pw, ph);
 }
 // Delta de rotación (grados), relativo a la tangente inicial (t=0) — idem editor.js
 function _pathOrientDelta(points, closed, t, pw, ph) {
-  return _pathTangentDeg(points, closed, t, pw, ph) - _pathTangentDeg(points, closed, 0, pw, ph);
+  return AnimClock.pathOrientDelta(points, closed, t, pw, ph);
 }
 // Grados extra de rotación de trayectoria a aplicar ahora al dibujar una capa
 function _layerPathRotDeg(la) {
@@ -1747,74 +1695,20 @@ function _readerGifTick() {
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
 // ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
-// Mismo criterio que en editor.js (_edLayerCumTimeMs/_edFrameProgressAt/
-// _edApplyHoldFreeze) — implementación paralela propia del reader.
+// v38.06: delegan en AnimClock (js/anim-clock.js) — misma fuente que
+// _edLayerCumTimeMs/_edFrameProgressAt/_edApplyHoldFreeze/_edMpSyncFrame en
+// editor.js. Antes de v38.06 esta era una copia independiente del reader.
 function _rLayerCumTimeMs(layer, totalF) {
-  const cum = [0];
-  if (layer._gifFrames && layer._gifFrames.length) {
-    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((layer._gifFrames[fi] && layer._gifFrames[fi].delay) || 100));
-  } else {
-    const delayMs = layer._gcpFrameDelay || 100;
-    const holds = layer._gcpFrameHolds;
-    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((holds && holds[fi]) || delayMs));
-  }
-  return cum;
+  return AnimClock.layerCumTimeMs(layer, totalF);
 }
 function _rFrameProgressAt(cumTime, totalF, tMs, holds) {
-  if (totalF <= 0) return 0;
-  const totalMs = cumTime[totalF];
-  if (tMs <= 0 || totalMs <= 0) return 0;
-  if (tMs >= totalMs) return totalF;
-  for (let fi = 0; fi < totalF; fi++) {
-    if (tMs >= cumTime[fi] && tMs < cumTime[fi + 1]) {
-      const holdMs = (holds && holds[fi]) || 0;
-      if (holdMs > 0) return fi;
-      const dur = cumTime[fi + 1] - cumTime[fi];
-      return fi + (dur > 0 ? (tMs - cumTime[fi]) / dur : 0);
-    }
-  }
-  return totalF;
+  return AnimClock.frameProgressAt(cumTime, totalF, tMs, holds);
 }
 function _rApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
-  if (!(cycles > 0) || totalF <= 0 || !cumTime) return pathFrac01;
-  const totalMs = cumTime[totalF];
-  if (!(totalMs > 0)) return pathFrac01;
-  const cycleUnits  = pathFrac01 * cycles;
-  const cycleIdx    = Math.floor(cycleUnits);
-  const fracInCycle = cycleUnits - cycleIdx;
-  const warped      = _rFrameProgressAt(cumTime, totalF, fracInCycle * totalMs, holds) / totalF;
-  return (cycleIdx + warped) / cycles;
+  return AnimClock.applyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01);
 }
-
 function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
-  if (totalF < 1 || cycles <= 0) return 0;
-  const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
-  if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  // BUG CORREGIDO (ver el comentario extenso en _edMpSyncFrame, editor.js —
-  // misma función, implementación paralela para el lector externo, mismo
-  // arreglo): con repeticiones INFINITAS (repeatCnt=0), iterT no debe
-  // recortarse a _stopLimit — el recorrido se detiene según SU propio fin
-  // configurado (lo gestiona el llamante), pero la reproducción de la
-  // animación es un contador independiente que debe seguir avanzando sin
-  // límite, no congelarse en el momento en que el recorrido se detiene.
-  const iterT = (pathEnd === 'stop') ? (repeatCnt > 0 ? Math.min(rawT, _stopLimit - 1e-9) : rawT)
-              : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
-              : (rawT % 1);
-  const cycleUnits  = iterT * cycles;
-  const cycleIdx    = Math.floor(cycleUnits);
-  const fracInCycle = cycleUnits - cycleIdx;
-  const _totalMsMp  = cumTime ? cumTime[totalF] : 0;
-  const fiInCycle   = (cumTime && _totalMsMp > 0)
-    ? _rFrameProgressAt(cumTime, totalF, fracInCycle * _totalMsMp, holds)
-    : fracInCycle * totalF;
-  const animProgress = cycleIdx * totalF + fiInCycle;
-  if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
-  if (repeatCnt > 0) {
-    const _done = (pathEnd === 'stop' && rawT >= _stopLimit)
-               || animProgress >= repeatCnt * totalF;
-    return _done ? (circularEnd ? 0 : totalF - 1) : Math.floor(animProgress) % totalF;
-  }
-  return Math.floor(animProgress) % totalF;
+  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds);
 }
 
 // ── Trayectoria de animación (motion path) — velocidad por ciclos o px/s ────
@@ -1848,10 +1742,7 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         // real (_rLayerCumTimeMs), que respeta las pausas por frame (T); antes
         // multiplicaba frames × delay uniforme, ignorándolas.
         // _gcpLayersData.length = nº de capas GCP (NO de frames) → no usar para duración
-        let _mpTF = layer._gifFrames ? layer._gifFrames.length
-          : (layer._gcpFramesData && layer._gcpFramesData[0]) ? layer._gcpFramesData[0].length
-          : (layer._pngFrames ? layer._pngFrames.length
-          : (layer._animFrames ? layer._animFrames.length : 0));
+        let _mpTF = AnimClock.layerTotalFrames(layer);
         const _mpCumTime = _mpTF > 0 ? _rLayerCumTimeMs(layer, _mpTF) : null;
         const _mpCycleDurMs = _mpCumTime ? _mpCumTime[_mpTF] : 0;
         // Si es animada y tiene ciclos definidos → duración = ciclos × duración_ciclo
@@ -1905,108 +1796,43 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         const _mpEndB    = layer._motionPathEnd   || 'restart';
         const _mpAcl     = layer._motionPathAccel || 'none';
         const _isSyncMR  = _mpCycleDurMs > 0 && layer._motionCycles != null;
-        // BUG CORREGIDO (ver el comentario extenso en _edViewerMpTick,
-        // editor.js — misma función, implementación paralela para el lector
-        // externo): el recorrido se detiene SIEMPRE tras una sola vuelta
-        // completa, sea cual sea el número de repeticiones de la animación
-        // — son dos contadores independientes.
-        const _mpStopAtR = 1;
         // Congela la fracción cruda (antes de easing) durante las pausas por frame.
         const _rFreeze = f => _mpCumTime ? _rApplyHoldFreeze(_mpCumTime, _mpTF, layer._gcpFrameHolds, layer._motionCycles, f) : f;
-        let _mpPos = null, _mpRelT = 0;
-        if (_mpEndB === 'stop') {
-          if (layer._pathStopped) {
-            panelChanged = true;
-          } else if (_mpRawT >= _mpStopAtR) {
-            _mpRelT = 0.9999;
-            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+        if (_mpEndB === 'stop' && layer._pathStopped) {
+          panelChanged = true;
+        } else {
+          // v38.06: fase de la trayectoria (stop/rewind/restart → relT con
+          // easing) — ver AnimClock.pathPhaseAt (js/anim-clock.js), misma
+          // fuente que el visor interno y el editor de trayectorias. El
+          // recorrido SIEMPRE se detiene tras una sola vuelta completa
+          // (rawT>=1) en modo 'stop', sea cual sea el nº de repeticiones de
+          // la animación (dos contadores independientes).
+          const _mpPhase = AnimClock.pathPhaseAt(_mpRawT, _mpEndB, _mpAcl, _isSyncMR, _rFreeze);
+          const _mpRelT = _mpPhase.relT;
+          const _mpPos  = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
+          if (_mpPhase.justStopped) {
             layer._pathStopped = true;
             // En sync mode: programar reinicio (el mecanismo _animRestartAt de FIX6 lo gestiona)
             if (_isSyncMR && layer._gcpRestartDelay > 0 && !layer._animRestartAt) {
               layer._animStopped   = true;
               layer._animRestartAt = now + layer._gcpRestartDelay * 1000;
             }
-          } else {
-            const _pFracR = _isSyncMR ? _rFreeze(_mpRawT % 1) : _mpRawT;
-            _mpRelT = _easeT(_pFracR,_mpAcl);
-            _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
           }
-        } else if (_mpEndB === 'rewind') {
-          const _mpCycle = _mpRawT % 2;
-          const _mpPosT0  = _mpCycle <= 1 ? _mpCycle : (2 - _mpCycle);
-          const _mpPosT   = _isSyncMR ? _rFreeze(_mpPosT0) : _mpPosT0;
-          const _mpIsRwd  = _mpCycle > 1;
-          const _mpRwdAcl = (_mpIsRwd && _mpAcl === 'start') ? 'end'
-                          : (_mpIsRwd && _mpAcl === 'end')   ? 'start'
-                          : _mpAcl;
-          _mpRelT = _easeT(_mpPosT,_mpRwdAcl);
-          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
-        } else {
-          // restart: fracción (congelada durante pausas) + easing
-          _mpRelT = _easeT(_isSyncMR ? _rFreeze(_mpRawT % 1) : (_mpRawT % 1), _mpAcl);
-          _mpPos = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
-        }
-        if (_mpPos) {
-          const _mpAngleDegR = layer._motionPathOrient
-            ? _pathOrientDelta(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh)
-            : null;
-          const _mpGidxsR = layer.groupId
-            ? (panel.layers||[]).reduce((acc,l2,i2)=>{ if (l2 && l2.groupId===layer.groupId) acc.push(i2); return acc; }, [])
-            : null;
-          const _mpPropagateR = (m) => {
-            const _mUid = m._uid || m._fillLayerId;
-            if (!_mUid) return;
-            (panel.layers||[]).forEach(_lk => {
-              if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
-                _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
-                if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
-              }
-            });
-          };
-          if (_mpAngleDegR != null && _mpGidxsR && _mpGidxsR.length > 1) {
-            // Grupo con orientación automática activa: el grupo entero rota
-            // como un solo objeto rígido — cada miembro ORBITA alrededor del
-            // centro común del grupo, no gira cada uno sobre su propio
-            // centro (mismo criterio y mismo motivo que _edViewerMpTick en
-            // editor.js — ver ese comentario para el porqué completo).
-            let _pivXR = 0, _pivYR = 0, _pivNR = 0;
-            _mpGidxsR.forEach(gi => {
-              const m = panel.layers[gi];
-              if (!m || m.type === 'draw') return;
-              _pivXR += m.x; _pivYR += m.y; _pivNR++;
-            });
-            if (_pivNR) {
-              _pivXR /= _pivNR; _pivYR /= _pivNR;
-              const _rotRadR = _mpAngleDegR * Math.PI / 180;
-              const _cosR = Math.cos(_rotRadR), _sinR = Math.sin(_rotRadR);
-              const _pivCurXR = _pivXR + _mpPos.x, _pivCurYR = _pivYR + _mpPos.y;
-              _mpGidxsR.forEach(gi => {
-                const m = panel.layers[gi];
-                if (!m) return;
-                if (m.type === 'draw') {
-                  // No soporta rotación propia — se traslada con el grupo, sin orbitar.
-                  m._pathCurX = (m.x || 0.5) + _mpPos.x;
-                  m._pathCurY = (m.y || 0.5) + _mpPos.y;
-                  _mpPropagateR(m);
-                  return;
-                }
-                const _offXR = (m.x - _pivXR) * _mpPw, _offYR = (m.y - _pivYR) * _mpPh;
-                m._pathCurX = _pivCurXR + (_offXR * _cosR - _offYR * _sinR) / _mpPw;
-                m._pathCurY = _pivCurYR + (_offXR * _sinR + _offYR * _cosR) / _mpPh;
-                m._pathCurRotDeg = _mpAngleDegR;
-                _mpPropagateR(m);
-              });
-            }
-          } else {
-            // Objeto suelto, o grupo sin orientación automática activa: mismo
-            // cálculo de siempre, sin cambios.
-            layer._pathCurX = (layer.x || 0.5) + _mpPos.x;
-            layer._pathCurY = (layer.y || 0.5) + _mpPos.y;
-            if (_mpAngleDegR != null) layer._pathCurRotDeg = _mpAngleDegR; else delete layer._pathCurRotDeg;
-            _mpPropagateR(layer);
+          if (_mpPos) {
+            const _mpAngleDegR = layer._motionPathOrient
+              ? _pathOrientDelta(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh)
+              : null;
+            const _mpGidxsR = layer.groupId
+              ? (panel.layers||[]).reduce((acc,l2,i2)=>{ if (l2 && l2.groupId===layer.groupId) acc.push(i2); return acc; }, [])
+              : null;
+            // AnimClock.applyPathOffset: misma función que usa el visor interno
+            // y el editor de trayectorias — mueve el objeto suelto o, si forma
+            // parte de un grupo, a TODOS sus compañeros (con o sin orientación
+            // automática).
+            AnimClock.applyPathOffset(panel.layers, layer, _mpGidxsR, _mpPos, _mpAngleDegR, _mpPw, _mpPh);
           }
+          panelChanged = true;
         }
-        panelChanged = true;
       }
     });
     if (panelChanged) {

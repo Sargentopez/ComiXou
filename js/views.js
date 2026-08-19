@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.08</footer>
+    <footer class="app-version">v38.06</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -403,10 +403,11 @@ Router.register('editor', {
              página del editor de textos no coincide con el editor
              general" (resuelto en v37.30-v37.32 — ver
              CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo).
-             Reactivado (ago-2026) a petición de Alberto para investigar
-             animaciones GCP que desaparecen de las capas — volver a ocultar
-             cuando ya no haga falta, comentando la línea de abajo de nuevo. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+             Para volver a mostrarlo, descomentar la línea siguiente; toda
+             la instrumentación (_edRepairDuplicateIds, _edFCL/
+             window._edFCLog) sigue activa en editor.js aunque el botón
+             esté oculto. -->
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -1346,13 +1347,10 @@ Router.register('admin', {
         <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicadas</button>
         <div class="admin-tab-sep"></div>
         <button class="admin-tab" data-tab="users" data-i18n="usersTab">Autores</button>
-        <div class="admin-tab-sep"></div>
-        <button class="admin-tab" data-tab="repair" data-i18n="repairTab">Reparar</button>
       </div>
       <div class="admin-panel" id="tabPending"></div>
       <div class="admin-panel hidden" id="tabPublished"></div>
       <div class="admin-panel hidden" id="tabUsers"></div>
-      <div class="admin-panel hidden" id="tabRepair"></div>
     </main>
   `,
   init: () => AdminView_init(),

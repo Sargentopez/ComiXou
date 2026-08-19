@@ -8423,137 +8423,37 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
 }
 
 // ── Bezier sampling para trayectorias cerradas ─────────────────────────────────────
-// Genera numSamples puntos sobre la curva bezier de punto medio (igual que el render)
-// Garantiza que la animación siga la misma curva suave que se dibuja visualmente
+// v38.06: delega en AnimClock (js/anim-clock.js) — fuente única compartida con el
+// visor interno, el editor de trayectorias y el lector externo. Ver ese archivo
+// para la implementación real y su documentación; esta función se conserva con
+// su nombre histórico porque tiene ~10 puntos de llamada en este archivo.
 function _edBezierSampleClosed(pts, numSamples) {
-  const n = pts.length;
-  const result = [];
-  for (let s = 0; s < numSamples; s++) {
-    // +0.5: sin este desplazamiento, s=0 caería en u=0 del segmento 0 — el
-    // límite ENTRE segmentos, que con la técnica de "punto medio" es el
-    // punto medio entre el último punto y pts[0], NUNCA pts[0] exacto (el
-    // punto solo se visita tal cual en u=0.5, sea cual sea su segmento).
-    // Como pts[0] es el origen de la trayectoria (debe coincidir con la.x/la.y
-    // al empezar/terminar cada vuelta), sin este ajuste la reproducción de
-    // una trayectoria CERRADA arrancaba y cerraba en ese punto medio en vez
-    // del origen real — el salto "hacia la izquierda" reportado por
-    // Alberto. Con el desplazamiento, s=0 cae en u=0.5 del segmento 0, es
-    // decir, en pts[0] exacto.
-    const tFull = (s / numSamples) * n + 0.5;
-    const seg   = Math.floor(tFull) % n;
-    const u     = tFull - Math.floor(tFull);
-    const prev  = (seg - 1 + n) % n;
-    const next  = (seg + 1) % n;
-    const mp0x  = (pts[prev].x + pts[seg].x) / 2, mp0y = (pts[prev].y + pts[seg].y) / 2;
-    const mp1x  = (pts[seg].x + pts[next].x)  / 2, mp1y = (pts[seg].y + pts[next].y)  / 2;
-    if (pts[seg].sharp || seg === 0) {
-      // Ajuste a guía (petición de Alberto: debe prevalecer sobre el
-      // suavizado): pasar EXACTAMENTE por este punto — esquina dura, p.ej.
-      // un giro de 90° — en vez de la curva bezier suave, con dos tramos
-      // rectos (mismo criterio que en el overlay, ver _edDrawMotionPath).
-      // seg===0 SIEMPRE se trata así, tenga o no guía: es el origen de la
-      // trayectoria (debe coincidir exacto con la.x/la.y al empezar/cerrar
-      // cada vuelta) — la curva suave solo se APROXIMA al punto en u=0.5,
-      // no lo toca exacto, lo que seguía provocando el salto reportado.
-      if (u < 0.5) {
-        const uu = u / 0.5;
-        result.push({ x: mp0x + (pts[seg].x - mp0x) * uu, y: mp0y + (pts[seg].y - mp0y) * uu });
-      } else {
-        const uu = (u - 0.5) / 0.5;
-        result.push({ x: pts[seg].x + (mp1x - pts[seg].x) * uu, y: pts[seg].y + (mp1y - pts[seg].y) * uu });
-      }
-    } else {
-      result.push({
-        x: (1-u)*(1-u)*mp0x + 2*(1-u)*u*pts[seg].x + u*u*mp1x,
-        y: (1-u)*(1-u)*mp0y + 2*(1-u)*u*pts[seg].y + u*u*mp1y
-      });
-    }
-  }
-  result.push({ x: result[0].x, y: result[0].y }); // cerrar el bucle
-  return result;
+  return AnimClock.bezierSampleClosed(pts, numSamples);
 }
 
 // ── Motion path: interpolación por longitud de arco en espacio píxel ───────────
-// pw/ph: dimensiones reales del lienzo en px (corrige anisotropía horizontal/vertical)
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edPathPositionAt(points, closed, t, pw, ph) {
-  if (!points || points.length === 0) return null;
-  if (points.length === 1) return { x: points[0].x, y: points[0].y };
-  const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
-  // Para bucles cerrados: pre-muestrear la curva bezier (misma curva que el render)
-  // Elimina la discontinuidad de velocidad en la costura del bucle
-  const pts = (closed && points.length >= 3)
-    ? _edBezierSampleClosed(points, 200)
-    : (closed ? [...points, points[0]] : points);
-  const dists = [];
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
-    dists.push(d);
-    total += d;
-  }
-  if (total === 0) return { x: pts[0].x, y: pts[0].y };
-  // t=1 en una trayectoria CERRADA equivale a t=0 (se completó la vuelta) — el
-  // envolvente módulo es correcto ahí. En uno ABIERTO, t=1 es el final real
-  // y NO debe envolver a t=0: en JS, 1 % 1 da 0, así que sin esta distinción
-  // pedir la posición justo en el final devolvía la del INICIO — de ahí el
-  // giro/salto extraño al llegar al final de trayectorias abiertas, más
-  // notorio aún al rebobinar (que sí llega a t=1 exacto en el pico del
-  // rebote, no solo de forma transitoria como el muestreo de la tangente).
-  const _t = closed ? (((t % 1) + 1) % 1) : Math.max(0, Math.min(1, t));
-  const target = _t * total;
-  let cum = 0;
-  for (let i = 0; i < dists.length; i++) {
-    if (cum + dists[i] >= target) {
-      const f = dists[i] > 0 ? (target - cum) / dists[i] : 0;
-      return { x: pts[i].x + (pts[i+1].x - pts[i].x) * f,
-               y: pts[i].y + (pts[i+1].y - pts[i].y) * f };
-    }
-    cum += dists[i];
-  }
-  return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
+  return AnimClock.pathPositionAt(points, closed, t, pw || ED_PAGE_W, ph || ED_PAGE_H);
 }
 
-// Longitud total de la trayectoria en píxeles — usa bezier sample para bucles cerrados
-// (misma base que _edPathPositionAt, garantizando velocidad constante)
+// Longitud total de la trayectoria en píxeles.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edPathArcLengthPx(points, closed, pw, ph) {
-  if (!points || points.length < 2) return 1;
-  const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
-  const pts = (closed && points.length >= 3)
-    ? _edBezierSampleClosed(points, 200)
-    : (closed ? [...points, points[0]] : points);
-  let total = 0;
-  for (let i = 1; i < pts.length; i++)
-    total += Math.hypot((pts[i].x - pts[i-1].x) * _pw, (pts[i].y - pts[i-1].y) * _ph);
-  return total || 1;
+  return AnimClock.pathArcLengthPx(points, closed, pw || ED_PAGE_W, ph || ED_PAGE_H);
 }
 
 // ── Motion path: ángulo de la tangente (grados) en el punto t de la trayectoria ──
-// Deriva la dirección local de la curva mediante diferencia finita sobre la misma
-// función de posición que usa el render (_edPathPositionAt), garantizando que la
-// orientación siga exactamente la curva visible (incluido el suavizado bezier de
-// los bucles cerrados). En los bordes de un trayecto abierto usa diferencia
-// hacia delante/atrás (sin envolver) para no mezclar con el extremo opuesto.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edPathTangentDeg(points, closed, t, pw, ph) {
-  if (!points || points.length < 2) return 0;
-  const dt = 0.0015;
-  const t0 = closed ? t - dt : Math.max(0, t - dt);
-  const t1 = closed ? t + dt : Math.min(1, t + dt);
-  const pA = _edPathPositionAt(points, closed, t0, pw, ph);
-  const pB = _edPathPositionAt(points, closed, t1, pw, ph);
-  if (!pA || !pB) return 0;
-  const dx = (pB.x - pA.x) * pw, dy = (pB.y - pA.y) * ph;
-  if (!dx && !dy) return 0;
-  return Math.atan2(dy, dx) * 180 / Math.PI;
+  return AnimClock.pathTangentDeg(points, closed, t, pw, ph);
 }
 
 // Delta de rotación (grados) para orientar el objeto según la tangente de la
-// trayectoria en el instante t, relativo a la tangente inicial (t=0). Al ser
-// relativo, la orientación propia del objeto se conserva como punto de partida:
-// una trayectoria en semicírculo (180° de giro de tangente) gira el objeto 180°
-// desde su rotación de partida — su lado superior queda abajo, el derecho a la
-// izquierda — sin importar hacia dónde apuntara originalmente el objeto.
+// trayectoria en el instante t, relativo a la tangente inicial (t=0).
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edPathOrientDelta(points, closed, t, pw, ph) {
-  return _edPathTangentDeg(points, closed, t, pw, ph) - _edPathTangentDeg(points, closed, 0, pw, ph);
+  return AnimClock.pathOrientDelta(points, closed, t, pw, ph);
 }
 
 // Grados extra de rotación por trayectoria a aplicar AHORA MISMO al dibujar la capa la
@@ -8564,21 +8464,9 @@ function _edLayerPathRotDeg(la) {
 }
 
 // ── Easing para trayectorias: reasigna t dentro de [0,1] sin cambiar la duración ─
-// ── Easing Hermite por tramos: rápido lineal + frenado/arrancada cortos ──
-// kt=0.75, kp=3kt/(1+2kt)=0.9 → derivada fase frenado P'(u)=0.3(u-1)²≥0 (monotona)
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edEaseT(t,accel){
-  if(!accel||accel==='none')return t;
-  const c=t<0?0:t>1?1:t;
-  const _eo=(x)=>{
-    const kt=0.75,kp=0.9,sl=kp/kt; // sl=1.2
-    if(x<kt)return sl*x;
-    const u=(x-kt)/(1-kt),m=sl*(1-kt); // m=0.3=3*(1-kp): garantía monotonía
-    return(2*u*u*u-3*u*u+1)*kp+(u*u*u-2*u*u+u)*m+(-2*u*u*u+3*u*u);
-  };
-  if(accel==='start') return _eo(c);
-  if(accel==='end')   return 1-_eo(1-c);
-  if(accel==='middle')return c<0.5?(1-_eo(1-2*c))/2:(1+_eo(2*c-1))/2;
-  return t;
+  return AnimClock.easeT(t, accel);
 }
 
 // ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
@@ -8589,118 +8477,33 @@ function _edEaseT(t,accel){
 // mismo razonamiento aplicado a la regla de tiempo), y aquí la trayectoria debe
 // "esperar" exactamente igual que la propia animación.
 
-// Tiempo acumulado (ms) de una capa GCP/APNG/GIF ya insertada (fuera de una
-// sesión activa del editor de animación) — mismo criterio que
-// _gcpBuildCumTimeMs, pero leyendo los datos ya guardados en la propia capa.
-// GIF: cada frame ya trae su propio delay real (formato GIF), se usa tal cual.
+// Tiempo acumulado (ms) de una capa GCP/APNG/GIF ya insertada.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edLayerCumTimeMs(la, totalF) {
-  const cum = [0];
-  if (la._gifFrames && la._gifFrames.length) {
-    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((la._gifFrames[fi] && la._gifFrames[fi].delay) || 100));
-  } else {
-    const delayMs = la._gcpFrameDelay || 100;
-    const holds = la._gcpFrameHolds;
-    for (let fi = 0; fi < totalF; fi++) cum.push(cum[fi] + ((holds && holds[fi]) || delayMs));
-  }
-  return cum;
+  return AnimClock.layerCumTimeMs(la, totalF);
 }
 
 // Posición fraccional dentro de la secuencia de frames en el instante tMs,
-// respetando pausas: dentro de un frame con pausa, se queda fija en su índice
-// entero (sin parte fraccional) durante toda la duración de la pausa — no
-// avanza hacia el siguiente frame hasta que esta termine.
+// respetando pausas por frame.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edFrameProgressAt(cumTime, totalF, tMs, holds) {
-  if (totalF <= 0) return 0;
-  const totalMs = cumTime[totalF];
-  if (tMs <= 0 || totalMs <= 0) return 0;
-  if (tMs >= totalMs) return totalF;
-  for (let fi = 0; fi < totalF; fi++) {
-    if (tMs >= cumTime[fi] && tMs < cumTime[fi + 1]) {
-      const holdMs = (holds && holds[fi]) || 0;
-      if (holdMs > 0) return fi; // congelado — sin parte fraccional durante la pausa
-      const dur = cumTime[fi + 1] - cumTime[fi];
-      return fi + (dur > 0 ? (tMs - cumTime[fi]) / dur : 0);
-    }
-  }
-  return totalF;
+  return AnimClock.frameProgressAt(cumTime, totalF, tMs, holds);
 }
 
-// Convierte una fracción 0-1 de UN traversal completo de la trayectoria (que
-// puede abarcar varios ciclos de animación) en la fracción equivalente
-// respetando pausas — se aplica a la fracción "cruda" de cada modo de fin de
-// trayectoria (stop/rewind/restart) ANTES de la curva de aceleración, así la
-// trayectoria se congela exactamente cuando la animación se detiene, y ambos
-// retoman el avance juntos al terminar la pausa.
+// Convierte una fracción 0-1 de UN traversal completo de la trayectoria en la
+// fracción equivalente respetando pausas por frame.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
-  if (!(cycles > 0) || totalF <= 0 || !cumTime) return pathFrac01;
-  const totalMs = cumTime[totalF];
-  if (!(totalMs > 0)) return pathFrac01;
-  const cycleUnits  = pathFrac01 * cycles;
-  const cycleIdx    = Math.floor(cycleUnits);
-  const fracInCycle = cycleUnits - cycleIdx;
-  const warped      = _edFrameProgressAt(cumTime, totalF, fracInCycle * totalMs, holds) / totalF;
-  return (cycleIdx + warped) / cycles;
+  return AnimClock.applyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01);
 }
 
 // Calcula el frame sincronizado al progreso del path, respetando el comportamiento
-// de la animación (stopAtEnd, repeatCount) — igual a lo que haría la animación
-// si empezara exactamente cuando empieza el path.
-//   rawT      : progreso del path 0→1 (crece más allá de 1 en restart/rewind)
-//   cycles    : ciclos de animación por traversal completo
-//   totalF    : total de frames de la animación
-//   stopAtEnd : detener en último frame tras 1 ciclo
-//   repeatCnt : detener en último frame tras N ciclos (0 = infinito)
-//   pathEnd   : comportamiento del path ('stop'|'restart'|'rewind')
-//   cumTime, holds: tiempo acumulado y pausas por frame — si se omiten, se
-//   asume velocidad uniforme (comportamiento idéntico al de antes).
+// de la animación (stopAtEnd, repeatCount).
+// v38.06: delega en AnimClock — ver js/anim-clock.js (misma función usada por el
+// visor interno, el editor de trayectorias y el lector externo — ver el comentario
+// extenso en el propio AnimClock.mpSyncFrame para el porqué de cada rama).
 function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
-  if (totalF < 1 || cycles <= 0) return 0;
-  // En stop mode con repeticiones finitas, el path recorre repeatCnt veces (una por repetición).
-  // _stopLimit indica hasta dónde puede llegar rawT antes de que todo se detenga.
-  const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
-  // Caso especial: stop + circularEnd + fin alcanzado → frame 0 (estado inicial)
-  if (pathEnd === 'stop' && rawT >= _stopLimit && circularEnd && repeatCnt > 0 && !stopAtEnd) return 0;
-  // BUG CORREGIDO (reportado por Alberto: trayectoria con "detener al final
-  // del recorrido" + animación con reproducciones INFINITAS — al llegar al
-  // final del recorrido, el objeto deja de moverse (correcto, lo gestiona
-  // el llamante) pero la animación TAMBIÉN dejaba de reproducirse, pese a
-  // estar configurada como infinita). Causa: en modo 'stop', iterT se
-  // recortaba SIEMPRE a _stopLimit (aquí, 1, cuando repeatCnt es 0/infinito
-  // — _stopLimit solo crece con repeticiones FINITAS mayores que 1, ver
-  // arriba) — así que, pasado ese punto, cycleUnits/animProgress dejaban de
-  // crecer para SIEMPRE, y el frame devuelto quedaba fijo aunque el propio
-  // repeatCnt=0 más abajo diga expresamente "sigue en bucle sin límite".
-  // Pedido explícito de Alberto: el recorrido y la reproducción de la
-  // animación son dos contadores independientes — el recorrido se detiene
-  // según SU propio fin configurado, la animación sigue reproduciéndose
-  // hasta agotar SUS propias repeticiones (o para siempre, si son
-  // infinitas), y solo coinciden si Alberto hace coincidir a propósito el
-  // número de repeticiones con el número de ciclos del recorrido. Con
-  // repeticiones infinitas no hay ningún límite que aplicar aquí: iterT
-  // sigue creciendo sin recorte, igual que en modo 'restart', para que la
-  // animación seguida siga completando ciclos indefinidamente aunque el
-  // recorrido ya esté congelado en su posición final.
-  const iterT = (pathEnd === 'stop') ? (repeatCnt > 0 ? Math.min(rawT, _stopLimit - 1e-9) : rawT)
-              : (pathEnd === 'rewind') ? (rawT % 2 < 1 ? rawT % 2 : 2 - rawT % 2)
-              : (rawT % 1);  // restart: fracción dentro del traversal actual
-  // Posición dentro del ciclo actual — respeta pausas por frame si se dispone
-  // de cumTime (ver _edFrameProgressAt); si no, reparto uniforme (como antes).
-  const cycleUnits  = iterT * cycles;
-  const cycleIdx    = Math.floor(cycleUnits);
-  const fracInCycle = cycleUnits - cycleIdx;
-  const _totalMsMp  = cumTime ? cumTime[totalF] : 0;
-  const fiInCycle   = (cumTime && _totalMsMp > 0)
-    ? _edFrameProgressAt(cumTime, totalF, fracInCycle * _totalMsMp, holds)
-    : fracInCycle * totalF;
-  const animProgress = cycleIdx * totalF + fiInCycle;
-  if (stopAtEnd) return Math.min(Math.floor(animProgress), totalF - 1);
-  if (repeatCnt > 0) {
-    // Terminal: rawT llegó al límite (stop mode) o animProgress al total
-    const _done = (pathEnd === 'stop' && rawT >= _stopLimit)
-               || animProgress >= repeatCnt * totalF;
-    return _done ? (circularEnd ? 0 : totalF - 1) : Math.floor(animProgress) % totalF;
-  }
-  return Math.floor(animProgress) % totalF;
+  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds);
 }
 
 // ── Ticker RAF del motion path — solo activo durante la previsualización ────────
@@ -8832,141 +8635,55 @@ function _edViewerMpTick() {
     const _mpEnd     = l._motionPathEnd   || 'restart';
     const _mpAccel   = l._motionPathAccel || 'none';
     const _isSyncPth = _vCycleDurMs > 0 && _vCycles > 0;
-    // BUG CORREGIDO (reportado por Alberto: animación con 20 ciclos por
-    // recorrido y 40 repeticiones totales — esperaba que el recorrido se
-    // hiciera UNA vez, ocupando las primeras 20 repeticiones, y que las
-    // otras 20 se reprodujeran ya con el recorrido detenido; en su lugar el
-    // objeto recorría el trayecto una y otra vez — reapareciendo cada vez —
-    // antes de desaparecer del todo). Causa: _mpStopAt (en unidades de
-    // "vueltas completas al recorrido") se igualaba a l._gcpRepeatCount
-    // siempre que hubiera repeticiones finitas — correcto SOLO en el caso
-    // particular de la entrega anterior, donde repeticiones y ciclos por
-    // recorrido coincidían (1 vuelta = 1 repetición); con más ciclos por
-    // recorrido que "vueltas" necesarias (aquí, 20 ciclos × 2 vueltas
-    // costearía 40 repeticiones, muchas más de las 2 vueltas reales que
-    // corresponden), el recorrido no se consideraba "terminado" hasta
-    // completar tantas vueltas como repeticiones totales — de ahí que
-    // reapareciera y volviera a recorrer el trayecto repetidamente. El
-    // propio editor de trayectorias, en su vista previa en vivo
-    // (_edMpPreviewTick, más abajo en este archivo), siempre lo hizo bien:
-    // SIEMPRE una sola vuelta completa (_rawT >= 1.0) antes de detenerse, sin
-    // depender de las repeticiones — el número de repeticiones de la
-    // animación (l._gcpRepeatCount) es un contador aparte, ya desacoplado
-    // del recorrido en las dos entregas anteriores (ver _edMpSyncFrame y la
-    // desaparición al final): sigue avanzando fotogramas y, si corresponde,
-    // desvaneciéndose, aunque el recorrido ya lleve rato detenido. Mismo
-    // criterio aquí — el visor debe comportarse igual que la vista previa
-    // del propio editor.
-    const _mpStopAt  = 1;
     // Congela la fracción cruda (antes de easing) durante las pausas por frame —
-    // ver _edApplyHoldFreeze. Sin cumTime (capa sin datos de frames) no hace nada.
+    // ver AnimClock.applyHoldFreeze. Sin cumTime (capa sin datos de frames) no hace nada.
     const _freeze = f => _mpCumTime ? _edApplyHoldFreeze(_mpCumTime, _mpTotalF, l._gcpFrameHolds, _vCycles, f) : f;
-    let rel = null, relT = 0;
-    if (_mpEnd === 'stop') {
-      if (l._pathStopped) { _mpUpdated = true; return; }
-      if (_rawT >= _mpStopAt) {
-        relT = 0.9999;
-        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
-        l._pathStopped = true;
-        // En sync mode: disparar el restart timer si _gcpRestartDelay está configurado.
-        // (En modo no-sync lo gestiona _applyFrame; aquí el path es quien dirige los frames.)
-        if (_isSyncPth && l._gcpRestartDelay > 0 && !l._restartTimer) {
-          const _sr = l;
-          l._restartTimer = setTimeout(() => {
-            _sr._restartTimer = null;
-            delete _sr._pathStartTime; delete _sr._pathStopped;
-            delete _sr._mpInvisTriggered; // permitir que "Invisibilidad → Al final" dispare de nuevo en el ciclo nuevo
-            _sr._animFadeOpacity = null;
-            _sr._fIdx = 0; _sr._gcpPlayCount = 0;
-            requestAnimationFrame(() => { if (typeof edUpdateViewer === 'function') edUpdateViewer(); });
-          }, l._gcpRestartDelay * 1000);
-        }
-      } else {
-        // En sync: fracción dentro del ciclo actual (el path reinicia cada repetición)
-        const _pFrac = _isSyncPth ? _freeze(_rawT % 1) : _rawT;
-        relT = _edEaseT(_pFrac,_mpAccel);
-        rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
+    if (_mpEnd === 'stop' && l._pathStopped) { _mpUpdated = true; return; }
+    // v38.06: fase de la trayectoria (stop/rewind/restart → relT con easing) — ver
+    // AnimClock.pathPhaseAt (js/anim-clock.js), fuente única compartida con el
+    // editor de trayectorias y el lector externo. El recorrido SIEMPRE se detiene
+    // tras una sola vuelta completa (rawT>=1) en modo 'stop', sea cual sea el nº
+    // de repeticiones de la animación (bug corregido en v37.100 — no volver a
+    // atarlo a l._gcpRepeatCount, ver el comentario en AnimClock.pathPhaseAt).
+    const _phase = AnimClock.pathPhaseAt(_rawT, _mpEnd, _mpAccel, _isSyncPth, _freeze);
+    const relT = _phase.relT;
+    const rel  = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
+    if (_phase.justStopped) {
+      l._pathStopped = true;
+      // En sync mode: disparar el restart timer si _gcpRestartDelay está configurado.
+      // (En modo no-sync lo gestiona _applyFrame; aquí el path es quien dirige los frames.)
+      if (_isSyncPth && l._gcpRestartDelay > 0 && !l._restartTimer) {
+        const _sr = l;
+        l._restartTimer = setTimeout(() => {
+          _sr._restartTimer = null;
+          delete _sr._pathStartTime; delete _sr._pathStopped;
+          delete _sr._mpInvisTriggered; // permitir que "Invisibilidad → Al final" dispare de nuevo en el ciclo nuevo
+          _sr._animFadeOpacity = null;
+          _sr._fIdx = 0; _sr._gcpPlayCount = 0;
+          requestAnimationFrame(() => { if (typeof edUpdateViewer === 'function') edUpdateViewer(); });
+        }, l._gcpRestartDelay * 1000);
       }
-    } else if (_mpEnd === 'rewind') {
-      const _cycle = _rawT % 2;
-      const _posT0 = _cycle <= 1 ? _cycle : (2 - _cycle);
-      const _posT  = _isSyncPth ? _freeze(_posT0) : _posT0;
-      // En fase backward (cycle>1) inicio y final se invierten → intercambiar start/end
-      const _isRwd  = _cycle > 1;
-      const _rwdAcc = (_isRwd && _mpAccel === 'start') ? 'end'
-                    : (_isRwd && _mpAccel === 'end')   ? 'start'
-                    : _mpAccel;
-      relT = _edEaseT(_posT,_rwdAcc);
-      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
-    } else {
-      // restart: fracción del ciclo (congelada durante pausas) + easing
-      relT = _edEaseT(_isSyncPth ? _freeze(_rawT % 1) : (_rawT % 1), _mpAccel);
-      rel = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     }
     if (rel) {
       const _mpAngleDeg = l._motionPathOrient
         ? _edPathOrientDelta(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph)
         : null;
-      const _mpGidxs = l.groupId ? _edGroupMemberIdxs(l.groupId) : null;
-      const _mpPropagate = (m) => {
-        const _mUid = m._uid || m._fillLayerId;
-        if (!_mUid) return;
-        (page.layers||[]).forEach(_lk => {
-          if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
-            _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
-            if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
-          }
-        });
-      };
-      if (_mpAngleDeg != null && _mpGidxs && _mpGidxs.length > 1) {
-        // Grupo con orientación automática activa: el grupo entero rota como
-        // un solo objeto rígido — cada miembro ORBITA alrededor del centro
-        // común del grupo, en vez de girar cada uno sobre su propio centro
-        // (bug reportado: "se aplica a cada elemento por separado"). Mismo
-        // criterio de pivote (centroide de los miembros, sin DrawLayer) que
-        // _msRecalcBbox usa para la rotación manual del grupo (pinch de
-        // multiselección) — incluye objetos animados (gif/imagen) igual que
-        // cualquier otro miembro; su reproducción de fotogramas es un
-        // sistema aparte (_applyFrame) que esto no toca.
-        let _pivX = 0, _pivY = 0, _pivN = 0;
-        _mpGidxs.forEach(gi => {
-          const m = edLayers[gi];
-          if (!m || m.type === 'draw') return;
-          _pivX += m.x; _pivY += m.y; _pivN++;
-        });
-        if (_pivN) {
-          _pivX /= _pivN; _pivY /= _pivN;
-          const _rotRad = _mpAngleDeg * Math.PI / 180;
-          const _cosA = Math.cos(_rotRad), _sinA = Math.sin(_rotRad);
-          const _pivCurX = _pivX + rel.x, _pivCurY = _pivY + rel.y;
-          _mpGidxs.forEach(gi => {
-            const m = edLayers[gi];
-            if (!m) return;
-            if (m.type === 'draw') {
-              // No soporta rotación propia (ver su propio draw()) — se
-              // traslada con el grupo, sin orbitar el pivote.
-              m._pathCurX = (m.x || 0.5) + rel.x;
-              m._pathCurY = (m.y || 0.5) + rel.y;
-              _mpPropagate(m);
-              return;
-            }
-            const _offX = (m.x - _pivX) * _vpw, _offY = (m.y - _pivY) * _vph;
-            m._pathCurX = _pivCurX + (_offX * _cosA - _offY * _sinA) / _vpw;
-            m._pathCurY = _pivCurY + (_offX * _sinA + _offY * _cosA) / _vph;
-            m._pathCurRotDeg = _mpAngleDeg;
-            _mpPropagate(m);
-          });
-          _mpUpdated = true;
-        }
-      } else {
-        // Objeto suelto, o grupo sin orientación automática activa (la
-        // traslación relativa ya mantiene las posiciones del grupo
-        // correctamente sin necesitar rotación rígida): mismo cálculo de
-        // siempre, sin cambios.
-        l._pathCurX = (l.x || 0.5) + rel.x;
-        l._pathCurY = (l.y || 0.5) + rel.y;
-        if (_mpAngleDeg != null) l._pathCurRotDeg = _mpAngleDeg; else delete l._pathCurRotDeg;
-        _mpPropagate(l);
+      // v38.06 — BUG CORREGIDO: los índices de grupo se calculaban antes con
+      // _edGroupMemberIdxs(), que busca en `edLayers` (la página abierta para
+      // EDICIÓN, edCurrentPage) en vez de en la página que se está VIENDO en
+      // el visor (page = edPages[edViewerIdx]) — si no coinciden (p.ej. el
+      // visor se abre en la hoja 0 mientras se estaba editando otra), el
+      // grupo con orientación automática rotaba usando capas de una página
+      // distinta. Se calcula aquí directamente sobre `page.layers`, la única
+      // fuente correcta para lo que se está reproduciendo ahora mismo.
+      const _mpGidxs = l.groupId
+        ? (page.layers||[]).reduce((acc,l2,i2) => { if (l2 && l2.groupId===l.groupId) acc.push(i2); return acc; }, [])
+        : null;
+      // AnimClock.applyPathOffset mueve tanto el objeto suelto como, si forma
+      // parte de un grupo, a TODOS sus compañeros — con o sin orientación
+      // automática (bug corregido en v38.06: sin orientación automática,
+      // antes solo se movía `l`, dejando quieto al resto del grupo).
+      if (AnimClock.applyPathOffset(page.layers, l, _mpGidxs, rel, _mpAngleDeg, _vpw, _vph)) {
         _mpUpdated = true;
       }
     }
@@ -9059,106 +8776,30 @@ function _edMpPreviewTick() {
   }
   const _end  = la._motionPathEnd   || 'restart';
   const _acc  = la._motionPathAccel || 'none';
-  let rel = null, relT = 0, _done = false;
   // Congela la fracción cruda (antes de easing) durante las pausas por frame.
   const _pFreeze = f => _pCumTime ? _edApplyHoldFreeze(_pCumTime, _pTotalF, la._gcpFrameHolds, _edMotionPathCycles, f) : f;
 
-  if (_end === 'stop') {
-    if (_rawT >= 1.0) {
-      relT = 0.9999;
-      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
-      _done = true; // llegó al final: detener tras este frame
-    } else {
-      relT = _edEaseT(_pIsSync ? _pFreeze(_rawT) : _rawT, _acc);
-      rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
-    }
-  } else if (_end === 'rewind') {
-    const _cycle  = _rawT % 2;
-    const _posT0  = _cycle <= 1 ? _cycle : (2 - _cycle);
-    const _posT   = _pIsSync ? _pFreeze(_posT0) : _posT0;
-    const _isRwd  = _cycle > 1;
-    const _rwdAcc = (_isRwd && _acc === 'start') ? 'end'
-                  : (_isRwd && _acc === 'end')   ? 'start'
-                  : _acc;
-    relT = _edEaseT(_posT, _rwdAcc);
-    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
-  } else {
-    // restart (default): loop, congelado durante pausas
-    relT = _edEaseT(_pIsSync ? _pFreeze(_rawT % 1) : (_rawT % 1), _acc);
-    rel = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
-  }
+  // v38.06: fase de la trayectoria — ver AnimClock.pathPhaseAt (js/anim-clock.js),
+  // misma fuente que _edViewerMpTick (visor) y el lector externo. La única
+  // diferencia real de este contexto (previsualización de UN objeto mientras se
+  // edita su trayectoria) es que aquí "justStopped" para directamente el RAF —
+  // no hace falta programar un temporizador de reinicio, el botón ▶ ya lo hace.
+  const _phase = AnimClock.pathPhaseAt(_rawT, _end, _acc, _pIsSync, _pFreeze);
+  const relT = _phase.relT;
+  const rel  = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
+  const _done = _phase.justStopped;
 
   if (rel) {
     const _mpvAngleDeg = la._motionPathOrient
       ? _edPathOrientDelta(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph)
       : null;
-    const _mpvGidxs = la.groupId ? _edGroupMemberIdxs(la.groupId) : null;
-    const _mpvPropagate = (m) => {
-      const _mUid = m._uid || m._fillLayerId;
-      if (!_mUid) return;
-      const _pvPg2 = edPages[edCurrentPage];
-      if (!_pvPg2) return;
-      (_pvPg2.layers||[]).forEach(_lk => {
-        if ((_lk.type==='fill'||_lk.type==='pencil'||_lk.type==='watercolor') && _lk._drawLayerId===_mUid) {
-          _lk._pathCurX = m._pathCurX; _lk._pathCurY = m._pathCurY;
-          if (m._pathCurRotDeg != null) _lk._pathCurRotDeg = m._pathCurRotDeg; else delete _lk._pathCurRotDeg;
-        }
-      });
-    };
-    if (_mpvAngleDeg != null && _mpvGidxs && _mpvGidxs.length > 1) {
-      // Mismo criterio que _edViewerMpTick: el grupo entero rota como un
-      // solo objeto rígido — cada miembro orbita alrededor del centro común,
-      // no solo el objeto que se está editando (bug reportado: "solo uno de
-      // los objetos se reproduce, el otro no se desplaza").
-      let _pivX2 = 0, _pivY2 = 0, _pivN2 = 0;
-      _mpvGidxs.forEach(gi => {
-        const m = edLayers[gi];
-        if (!m || m.type === 'draw') return;
-        _pivX2 += m.x; _pivY2 += m.y; _pivN2++;
-      });
-      if (_pivN2) {
-        _pivX2 /= _pivN2; _pivY2 /= _pivN2;
-        const _rotRad2 = _mpvAngleDeg * Math.PI / 180;
-        const _cosA2 = Math.cos(_rotRad2), _sinA2 = Math.sin(_rotRad2);
-        const _pivCurX2 = _pivX2 + rel.x, _pivCurY2 = _pivY2 + rel.y;
-        _mpvGidxs.forEach(gi => {
-          const m = edLayers[gi];
-          if (!m) return;
-          if (m.type === 'draw') {
-            m._pathCurX = (m.x || 0.5) + rel.x;
-            m._pathCurY = (m.y || 0.5) + rel.y;
-            _mpvPropagate(m);
-            return;
-          }
-          const _offX2 = (m.x - _pivX2) * _pw, _offY2 = (m.y - _pivY2) * _ph;
-          m._pathCurX = _pivCurX2 + (_offX2 * _cosA2 - _offY2 * _sinA2) / _pw;
-          m._pathCurY = _pivCurY2 + (_offX2 * _sinA2 + _offY2 * _cosA2) / _ph;
-          m._pathCurRotDeg = _mpvAngleDeg;
-          _mpvPropagate(m);
-        });
-      }
-    } else if (_mpvGidxs && _mpvGidxs.length > 1) {
-      // Grupo SIN orientación automática activa: aun así hay que mover a
-      // TODOS los miembros — a diferencia de _edViewerMpTick (que recorre
-      // todas las capas de la página), esta función solo procesa "la", el
-      // objeto sobre el que se entró a editar. Sin este bloque, el resto del
-      // grupo se quedaba quieto salvo que "girar según trayectoria" estuviera
-      // activo (ese caso sí entraba en la rama de arriba). Traslación simple,
-      // sin rotación/órbita — no hace falta, no hay ángulo que aplicar.
-      _mpvGidxs.forEach(gi => {
-        const m = edLayers[gi];
-        if (!m) return;
-        m._pathCurX = (m.x || 0.5) + rel.x;
-        m._pathCurY = (m.y || 0.5) + rel.y;
-        delete m._pathCurRotDeg;
-        _mpvPropagate(m);
-      });
-    } else {
-      la._pathCurX = (la.x || 0.5) + rel.x;
-      la._pathCurY = (la.y || 0.5) + rel.y;
-      if (_mpvAngleDeg != null) la._pathCurRotDeg = _mpvAngleDeg; else delete la._pathCurRotDeg;
-      _mpvPropagate(la);
-    }
+    const _mpvGidxs = la.groupId
+      ? edLayers.reduce((acc,l2,i2) => { if (l2 && l2.groupId===la.groupId) acc.push(i2); return acc; }, [])
+      : null;
+    // AnimClock.applyPathOffset: misma función que usa el visor y el lector —
+    // mueve el objeto suelto o, si forma parte de un grupo, a TODOS sus
+    // compañeros (con o sin orientación automática).
+    AnimClock.applyPathOffset(edLayers, la, _mpvGidxs, rel, _mpvAngleDeg, _pw, _ph);
   }
   _edMpPreviewActive = true;
   edRedraw();
@@ -20980,25 +20621,9 @@ const _ED_SNAP_THRESHOLD_PX = 8; // px de pantalla — umbral estándar de la in
 
 // Duración en ms de un ciclo completo de animación.
 // Devuelve 0 si la capa no es animada o los datos no están cargados.
+// v38.06: delega en AnimClock — ver js/anim-clock.js.
 function _edGetCycleDurationMs(la) {
-  if (!la) return 0;
-  // GIF importado: suma de delays reales por frame
-  if (la._gifFrames && la._gifFrames.length)
-    return la._gifFrames.reduce((s, f) => s + (f.delay || 100), 0);
-  // GCP/APNG: _gcpFramesData[0].length = frames totales incluyendo interpolados.
-  // Usa el tiempo acumulado real (_edLayerCumTimeMs), que respeta las pausas
-  // por frame (T) — antes multiplicaba frames × delay uniforme, ignorándolas.
-  if (la._gcpFramesData && la._gcpFramesData[0] && la._gcpFramesData[0].length) {
-    const totalF = la._gcpFramesData[0].length;
-    return _edLayerCumTimeMs(la, totalF)[totalF];
-  }
-  // Fallback: _pngFrames = frames renderizados (incluye interpolados)
-  if (la._pngFrames && la._pngFrames.length) {
-    const totalF = la._pngFrames.length;
-    return _edLayerCumTimeMs(la, totalF)[totalF];
-  }
-  // NOTA: _gcpLayersData.length = nº de capas de composición GCP, NO de frames → no usar
-  return 0;
+  return AnimClock.getCycleDurationMs(la);
 }
 // Comprueba si una capa es una animación (GIF o APNG/GCP).
 function _edIsAnimLayer(la) {
@@ -39618,51 +39243,6 @@ async function _edRunDiag() {
   } else {
     L('  Sin datos (no se pulsó "Editar" desde my-works en esta sesión, o la app se recargó después)');
   }
-  // ── CAPAS DE ANIMACIÓN DESAPARECIDAS (investigación ago-2026) ──
-  // Dos fuentes complementarias: (1) el registro de fallos ocurridos durante
-  // la ÚLTIMA descarga desde la nube (downloadDraftAsEditorData, ver
-  // window._sbLoadDiagLog en supabase-client.js) — vacío si esta apertura no
-  // llegó a descargar de la nube (ver needsDownload arriba: si es false, lo
-  // que se ve viene de la copia local, no de este registro); y (2) un
-  // volcado en vivo de TODAS las capas type=image de TODAS las páginas
-  // actualmente en memoria (edPages), con sus campos de animación — esto
-  // funciona siempre, venga el dato de la nube o de local, y permite ver si
-  // una capa "desaparecida" en realidad SÍ está en el array pero sin
-  // _apngSrc/_pngFramesKey (se renderiza en blanco, no que falte el objeto).
-  L('');
-  L('── REGISTRO DE FALLOS AL CARGAR DESDE LA NUBE (window._sbLoadDiagLog) ──');
-  if (window._sbLoadDiagLog && window._sbLoadDiagLog.length) {
-    window._sbLoadDiagLog.forEach(e => {
-      L(`  [${e.ts}] obra=${e.supabaseId} página=${e.panel} capa#=${e.layerOrder} tipo=${e.layerType}`);
-      L(`      motivo: ${e.reason}`);
-      if (e.dataLen != null) L(`      longitud layer_data: ${e.dataLen}`);
-      if (e.animUrl) L(`      anim_url: ${e.animUrl}`);
-      if (e.error) L(`      error: ${e.error}`);
-    });
-  } else {
-    L('  (vacío — o no se ha descargado de la nube en esta sesión [ver needsDownload arriba], o no hubo ningún fallo en la última descarga)');
-  }
-  L('');
-  L('── CAPAS type=image EN MEMORIA AHORA MISMO, TODAS LAS PÁGINAS (edPages) ──');
-  try {
-    let _anyImageLayer = false;
-    edPages.forEach((p, pi) => {
-      (p.layers || []).forEach((l, li) => {
-        if (!l || l.type !== 'image') return;
-        _anyImageLayer = true;
-        const _hasGcp = !!(l._gcpLayersData || l._gcpFramesData);
-        const _hasApngSrc = !!l._apngSrc;
-        const _hasPngKey  = !!l._pngFramesKey;
-        const _frameCount = l._gcpFramesData ? (Array.isArray(l._gcpFramesData) ? l._gcpFramesData.length : '?') : null;
-        L(`  P${pi}L${li}: _uid=${l._uid || '(sin uid)'} | gcpAnim=${_hasGcp} (frames=${_frameCount}) | _apngSrc=${_hasApngSrc} | _pngFramesKey=${_hasPngKey}${_hasPngKey ? ' ('+l._pngFramesKey+')' : ''}`);
-        if (_hasGcp && !_hasApngSrc && !_hasPngKey) {
-          L(`      ⚠️ Tiene configuración de animación GCP pero NINGUNA fuente de fotogramas cargada — se renderizará en blanco/estático, aunque la capa SÍ existe en el array`);
-        }
-      });
-    });
-    if (!_anyImageLayer) L('  (ninguna capa type=image en ninguna página cargada actualmente)');
-  } catch(e) { L('  Error al recorrer edPages: ' + e.message); }
-
   // Estado actual de _bibCache
   L('\n── bibCache actual ──');
   try {

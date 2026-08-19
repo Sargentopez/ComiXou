@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v38-08';
+const CACHE = 'comxow-v38-06';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -81,15 +81,6 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // Ignorar peticiones que no son http(s) — extensiones del navegador
-  // (chrome-extension://, moz-extension://...) a veces hacen fetch() desde
-  // el contexto de la página, y esas peticiones también pasan por este
-  // listener aunque no tengan nada que ver con la app. La API de Cache no
-  // admite esos esquemas: intentar cachearlas lanzaba "Request scheme
-  // 'chrome-extension' is unsupported" como promesa sin capturar. No son
-  // peticiones nuestras — ni intentar responderlas ni cachearlas.
-  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
-
   // No interceptar el reproductor externo — tiene su propia lógica
   if (url.includes('/reader/')) return;
 
@@ -108,11 +99,7 @@ self.addEventListener('fetch', e => {
         .then(r => {
           if (r.ok) {
             const clone = r.clone();
-            // catch silencioso: si el guardado en caché falla por cualquier
-            // motivo (esquema no soportado, cuota llena...), la respuesta
-            // ya se ha devuelto igualmente — no debe quedar como promesa
-            // rechazada sin capturar en la consola.
-            caches.open(CACHE).then(c => c.put(e.request, clone)).catch(() => {});
+            caches.open(CACHE).then(c => c.put(e.request, clone));
           }
           return r;
         })
