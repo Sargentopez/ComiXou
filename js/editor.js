@@ -39618,6 +39618,51 @@ async function _edRunDiag() {
   } else {
     L('  Sin datos (no se pulsó "Editar" desde my-works en esta sesión, o la app se recargó después)');
   }
+  // ── CAPAS DE ANIMACIÓN DESAPARECIDAS (investigación ago-2026) ──
+  // Dos fuentes complementarias: (1) el registro de fallos ocurridos durante
+  // la ÚLTIMA descarga desde la nube (downloadDraftAsEditorData, ver
+  // window._sbLoadDiagLog en supabase-client.js) — vacío si esta apertura no
+  // llegó a descargar de la nube (ver needsDownload arriba: si es false, lo
+  // que se ve viene de la copia local, no de este registro); y (2) un
+  // volcado en vivo de TODAS las capas type=image de TODAS las páginas
+  // actualmente en memoria (edPages), con sus campos de animación — esto
+  // funciona siempre, venga el dato de la nube o de local, y permite ver si
+  // una capa "desaparecida" en realidad SÍ está en el array pero sin
+  // _apngSrc/_pngFramesKey (se renderiza en blanco, no que falte el objeto).
+  L('');
+  L('── REGISTRO DE FALLOS AL CARGAR DESDE LA NUBE (window._sbLoadDiagLog) ──');
+  if (window._sbLoadDiagLog && window._sbLoadDiagLog.length) {
+    window._sbLoadDiagLog.forEach(e => {
+      L(`  [${e.ts}] obra=${e.supabaseId} página=${e.panel} capa#=${e.layerOrder} tipo=${e.layerType}`);
+      L(`      motivo: ${e.reason}`);
+      if (e.dataLen != null) L(`      longitud layer_data: ${e.dataLen}`);
+      if (e.animUrl) L(`      anim_url: ${e.animUrl}`);
+      if (e.error) L(`      error: ${e.error}`);
+    });
+  } else {
+    L('  (vacío — o no se ha descargado de la nube en esta sesión [ver needsDownload arriba], o no hubo ningún fallo en la última descarga)');
+  }
+  L('');
+  L('── CAPAS type=image EN MEMORIA AHORA MISMO, TODAS LAS PÁGINAS (edPages) ──');
+  try {
+    let _anyImageLayer = false;
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach((l, li) => {
+        if (!l || l.type !== 'image') return;
+        _anyImageLayer = true;
+        const _hasGcp = !!(l._gcpLayersData || l._gcpFramesData);
+        const _hasApngSrc = !!l._apngSrc;
+        const _hasPngKey  = !!l._pngFramesKey;
+        const _frameCount = l._gcpFramesData ? (Array.isArray(l._gcpFramesData) ? l._gcpFramesData.length : '?') : null;
+        L(`  P${pi}L${li}: _uid=${l._uid || '(sin uid)'} | gcpAnim=${_hasGcp} (frames=${_frameCount}) | _apngSrc=${_hasApngSrc} | _pngFramesKey=${_hasPngKey}${_hasPngKey ? ' ('+l._pngFramesKey+')' : ''}`);
+        if (_hasGcp && !_hasApngSrc && !_hasPngKey) {
+          L(`      ⚠️ Tiene configuración de animación GCP pero NINGUNA fuente de fotogramas cargada — se renderizará en blanco/estático, aunque la capa SÍ existe en el array`);
+        }
+      });
+    });
+    if (!_anyImageLayer) L('  (ninguna capa type=image en ninguna página cargada actualmente)');
+  } catch(e) { L('  Error al recorrer edPages: ' + e.message); }
+
   // Estado actual de _bibCache
   L('\n── bibCache actual ──');
   try {

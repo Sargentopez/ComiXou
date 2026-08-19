@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.04</footer>
+    <footer class="app-version">v38.07</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -403,11 +403,10 @@ Router.register('editor', {
              página del editor de textos no coincide con el editor
              general" (resuelto en v37.30-v37.32 — ver
              CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo).
-             Para volver a mostrarlo, descomentar la línea siguiente; toda
-             la instrumentación (_edRepairDuplicateIds, _edFCL/
-             window._edFCLog) sigue activa en editor.js aunque el botón
-             esté oculto. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+             Reactivado (ago-2026) a petición de Alberto para investigar
+             animaciones GCP que desaparecen de las capas — volver a ocultar
+             cuando ya no haga falta, comentando la línea de abajo de nuevo. -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -1067,7 +1066,7 @@ Router.register('editor', {
                 <span><input id="gcpSumRep" type="text" inputmode="numeric" maxlength="3" value="∞" autocomplete="off" data-i18n-title="gcp_repetitionsTitle" title="Repeticiones (0 = ∞)" style="width:24px;text-align:center;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px"></span>
                 <span id="gcpSumTotalWrap" style="display:none">= <span id="gcpSumTotal" data-i18n-title="gcp_totalDurationTitle" title="Duración total de la animación"></span></span>
                 <span id="gcpSumReiWrap" style="display:none">· R:<input id="gcpSumRei" type="text" inputmode="numeric" maxlength="2" value="0" autocomplete="off" data-i18n-title="gcp_restartSecondsTitle" title="Reinicio (segundos)" style="width:18px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
-                <span id="gcpSumTimerWrap" style="display:none">· T:<input id="gcpSumTimer" type="text" inputmode="decimal" maxlength="4" value="0" autocomplete="off" data-i18n-title="gcp_waitStartSecondsTitle" title="Tiempo espera inicio (segundos)" style="width:24px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
+                <span id="gcpSumTimerWrap" style="display:none">· T:<input id="gcpSumTimer" type="text" inputmode="decimal" maxlength="4" value="0" autocomplete="off" data-i18n-title="gcp_waitStartSecondsTitle" title="Tiempo espera inicio (segundos)" style="width:30px;text-align:right;border:none;border-bottom:1px dashed var(--gray-300);background:transparent;color:inherit;font:inherit;font-weight:inherit;padding:0 1px">s</span>
               </div>
             </div>
             <!-- Burbuja flotante de valor para sliders de comportamiento -->
@@ -1347,10 +1346,13 @@ Router.register('admin', {
         <button class="admin-tab" data-tab="published" data-i18n="publishedTab">Publicadas</button>
         <div class="admin-tab-sep"></div>
         <button class="admin-tab" data-tab="users" data-i18n="usersTab">Autores</button>
+        <div class="admin-tab-sep"></div>
+        <button class="admin-tab" data-tab="repair" data-i18n="repairTab">Reparar</button>
       </div>
       <div class="admin-panel" id="tabPending"></div>
       <div class="admin-panel hidden" id="tabPublished"></div>
       <div class="admin-panel hidden" id="tabUsers"></div>
+      <div class="admin-panel hidden" id="tabRepair"></div>
     </main>
   `,
   init: () => AdminView_init(),

@@ -57,16 +57,39 @@ async function _czCompress(jsonStr) {
     let off = 0;
     for (const c of chunks) { merged.set(c, off); off += c.length; }
     // btoa sin spread operator — evita stack overflow en Android
-    // String.fromCharCode con bucle explícito, chunks de 1024 bytes
+    // String.fromCharCode con bucle explícito, chunks de 1023 bytes.
+    // BUG CORREGIDO (detectado ago-2026 tras pérdida de datos reportada por
+    // Alberto — capas de animación GCP que desaparecían en silencio del
+    // editor y del visor externo aunque la fila seguía en Supabase): el
+    // CHUNK anterior era 1024, que NO es múltiplo de 3. btoa() rellena con
+    // '=' cualquier trozo cuya longitud no sea múltiplo de 3 — con CHUNK=1024
+    // eso metía relleno '=' A MITAD de la cadena final (en cada límite de
+    // trozo), no solo al final. Ese Base64 con relleno intercalado es
+    // inválido: _czDecompress no podía revertirlo, JSON.parse lanzaba, y la
+    // capa se descartaba silenciosamente al cargar. 1023 SÍ es múltiplo de
+    // 3: cada trozo completo codifica sin relleno intermedio, y solo el
+    // último trozo (el final real de toda la cadena) puede llevarlo, que es
+    // justo donde corresponde en Base64 válido.
     let b64 = '';
-    const CHUNK = 1024;
+    const CHUNK = 1023; // múltiplo de 3 — ver comentario arriba
     for (let i = 0; i < merged.length; i += CHUNK) {
       const end = Math.min(i + CHUNK, merged.length);
       let bin = '';
       for (let j = i; j < end; j++) bin += String.fromCharCode(merged[j]);
       b64 += btoa(bin);
     }
-    return _CZ_PFX + b64;
+    const result = _CZ_PFX + b64;
+    // Autoverificación de round-trip: red de seguridad contra cualquier otro
+    // bug de codificación (presente o futuro), no solo el de arriba. Antes
+    // de aceptar el resultado comprimido, confirmar que _czDecompress lo
+    // revierte EXACTAMENTE al JSON original. Si algo falla, nunca se guarda
+    // un dato potencialmente irrecuperable: se cae a JSON plano sin
+    // comprimir, que por definición no puede sufrir este tipo de corrupción.
+    try {
+      const roundTrip = await _czDecompress(result);
+      if (roundTrip !== jsonStr) return jsonStr; // verificación falló: sin comprimir
+    } catch(e) { return jsonStr; }
+    return result;
   } catch(e) { return jsonStr; } // fallback: sin comprimir
 }
 
@@ -127,6 +150,67 @@ async function _czDecompress(str) {
     let off=0; for(const c of chunks){merged.set(c,off);off+=c.length;}
     return new TextDecoder().decode(merged);
   } catch(e) { return str; }
+}
+
+// Repara layer_data comprimido con el bug de _czCompress anterior a v38.06
+// (CHUNK=1024 bytes, no múltiplo de 3 → relleno '=' incrustado a mitad de la
+// cadena Base64, que _czDecompress no puede revertir — ver comentario en
+// _czCompress arriba). Cada trozo de 1024 bytes originales se codificó de
+// forma independiente y VÁLIDA en Base64; solo la concatenación es inválida.
+// Troceando la cadena de vuelta en segmentos de 1368 caracteres (longitud
+// fija de un trozo completo de 1024 bytes en Base64) se decodifica cada
+// segmento por separado y se reconstruyen los bytes gzip originales sin
+// pérdida. Lanza si no consigue recuperar un JSON válido — quien llama debe
+// capturarlo y tratar esa fila como no reparable automáticamente.
+async function _czRepairChunked(str) {
+  if (!str || !str.startsWith(_CZ_PFX)) throw new Error('No tiene prefijo ' + _CZ_PFX);
+  const b64 = str.slice(_CZ_PFX.length);
+  const OLD_CHUNK_B64_LEN = 1368; // btoa(1024 bytes) siempre da 1368 caracteres
+  const parts = [];
+  for (let i = 0; i < b64.length; i += OLD_CHUNK_B64_LEN) {
+    const piece = b64.slice(i, i + OLD_CHUNK_B64_LEN);
+    const bin = atob(piece);
+    const bytes = new Uint8Array(bin.length);
+    for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+    parts.push(bytes);
+  }
+  const total = parts.reduce((a, p) => a + p.length, 0);
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { merged.set(p, off); off += p.length; }
+
+  // Cada rama va en su propio try/catch, capturado en el punto exacto donde
+  // puede fallar — datos genuinamente truncados/irreparables (no solo con
+  // el relleno mal puesto) pueden hacer que pako o DecompressionStream
+  // fallen de formas que no siempre se propagan limpias como rechazo de
+  // promesa normal. Da igual el motivo: cualquier fallo aquí se convierte
+  // en un Error normal y catcheable para quien llama.
+  if (typeof pako !== 'undefined') {
+    try {
+      const result = new TextDecoder().decode(pako.inflate(merged));
+      if (result && result.length > 0) return result;
+    } catch(e) { /* datos realmente corruptos — probar el siguiente método */ }
+  }
+  if (typeof DecompressionStream === 'undefined') throw new Error('No se pudo descomprimir (DecompressionStream no disponible)');
+  try {
+    const ds = new DecompressionStream('gzip');
+    const writer = ds.writable.getWriter();
+    writer.write(merged);
+    writer.close();
+    const chunks = [];
+    const reader = ds.readable.getReader();
+    let done, value;
+    while (!({ done, value } = await reader.read(), done)) chunks.push(value);
+    const totalLen = chunks.reduce((a, c) => a + c.length, 0);
+    const outBytes = new Uint8Array(totalLen);
+    let off2 = 0;
+    for (const c of chunks) { outBytes.set(c, off2); off2 += c.length; }
+    const decoded = new TextDecoder().decode(outBytes);
+    if (!decoded) throw new Error('descompresión vacía');
+    return decoded;
+  } catch(e) {
+    throw new Error('No se pudo descomprimir: ' + e.message);
+  }
 }
 
 // ── Pool de concurrencia limitada ("promise pool") ─────────────────────────
@@ -948,6 +1032,16 @@ const SupabaseClient = (() => {
         layerObj = JSON.parse(_raw);
       } catch(e) {
         console.warn('downloadDraftAsEditorData: capa descartada (no se pudo decodificar)', 'panel', pi, 'layer_order', li, e);
+        // Registro para el botón 🩺 del editor (window._sbLoadDiagLog) —
+        // investigación ago-2026: capas de animación que desaparecían en
+        // silencio. Sin esto, Alberto no tenía forma de saber CUÁL página/
+        // capa se estaba descartando ni por qué, solo que faltaba en pantalla.
+        if (!window._sbLoadDiagLog) window._sbLoadDiagLog = [];
+        window._sbLoadDiagLog.push({
+          ts: new Date().toISOString(), supabaseId, panel: pi, layerOrder: li,
+          layerType: row.layer_type, dataLen: (row.layer_data || '').length,
+          reason: 'decompress/parse falló', error: e.message,
+        });
       }
       if (!layerObj) return null;
       // APNG animado — patrón idéntico al GIF:
@@ -972,8 +1066,28 @@ const SupabaseClient = (() => {
               // El visor usará _apngSrc directamente si _pngFramesKey no existe
               window._edIdbUnavailable = true;
             }
+          } else {
+            // _animDownload no lanza en fetch con status no-OK (404/403/etc.)
+            // — devuelve null en silencio. Sin este registro, este caso
+            // pasaba totalmente inadvertido: la capa SIGUE existiendo (se
+            // crea igual, sin _apngSrc) pero se renderiza en blanco/sin
+            // animación, indistinguible a simple vista de "la capa no está".
+            if (!window._sbLoadDiagLog) window._sbLoadDiagLog = [];
+            window._sbLoadDiagLog.push({
+              ts: new Date().toISOString(), supabaseId, panel: pi, layerOrder: li,
+              layerType: layerObj.type, animUrl: row.anim_url,
+              reason: 'descarga de APNG devolvió vacío (fetch no-OK, p.ej. 404) — la capa se mantiene pero sin animación', error: null,
+            });
           }
-        } catch(e) { console.warn('APNG cloud download:', e); }
+        } catch(e) {
+          console.warn('APNG cloud download:', e);
+          if (!window._sbLoadDiagLog) window._sbLoadDiagLog = [];
+          window._sbLoadDiagLog.push({
+            ts: new Date().toISOString(), supabaseId, panel: pi, layerOrder: li,
+            layerType: layerObj.type, animUrl: row.anim_url,
+            reason: 'descarga de APNG (anim_url) lanzó excepción — la capa SÍ se mantiene, pero sin animación', error: e.message,
+          });
+        }
       }
       // GIF: descargar de Storage y meter en IndexedDB local
       if (layerObj.type === 'gif' && row.gif_url) {
@@ -1420,5 +1534,97 @@ continue;
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole };
+  // ── REPARACIÓN de layer_data corrupto (bug de _czCompress anterior a
+  // v38.06, ver comentarios en _czCompress/_czRepairChunked) ────────────────
+  // Escanea panel_layers y biblioteca en busca de filas cuyo layer_data
+  // comprimido NO se puede descomprimir con el _czDecompress actual (la
+  // prueba definitiva: si falla, está corrupta — no se confía solo en
+  // heurísticas de longitud). Para cada una intenta la reparación; el
+  // resultado (JSON ya recuperado) se guarda en el propio item para que
+  // repairCorruptedLayerData() no tenga que repetir el trabajo.
+  async function _scanTable(table, selectCols, extraRowFields) {
+    const rows = await _get(`${table}?layer_data=like.gz:*&select=${selectCols}`).catch(() => []);
+    const tested = await _sbPoolMap(rows, 5, async (r) => {
+      try {
+        const raw = await _czDecompress(r.layer_data);
+        JSON.parse(raw);
+        return null; // se descomprime bien — no es candidato
+      } catch(e) { /* corrupta, seguir */ }
+      let recoverable = false, repairedJson = null;
+      try {
+        repairedJson = await _czRepairChunked(r.layer_data);
+        JSON.parse(repairedJson); // validar que el resultado es JSON válido
+        recoverable = true;
+      } catch(e) { recoverable = false; }
+      const item = { id: r.id, table, layer_type: r.layer_type, len: r.layer_data.length, recoverable, repairedJson };
+      extraRowFields(item, r);
+      return item;
+    });
+    return tested.filter(Boolean);
+  }
+
+  // Consulta un select=...&id=in.(...) en lotes de 40 IDs — evita URLs
+  // excesivamente largas si hay muchas páginas/obras afectadas a la vez.
+  async function _getInBatches(table, ids, selectCols) {
+    const BATCH = 40;
+    const out = [];
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = ids.slice(i, i + BATCH);
+      const rows = await _get(`${table}?id=in.(${batch.join(',')})&select=${selectCols}`).catch(() => []);
+      out.push(...(rows || []));
+    }
+    return out;
+  }
+
+  async function scanCorruptedLayerData() {
+    const panelLayerItems = await _scanTable(
+      'panel_layers', 'id,panel_id,layer_order,layer_type,layer_data',
+      (item, r) => { item.panel_id = r.panel_id; item.layer_order = r.layer_order; }
+    );
+    // Contexto (título de obra + nº de página) para las filas de panel_layers
+    if (panelLayerItems.length) {
+      const panelIds = [...new Set(panelLayerItems.map(it => it.panel_id))];
+      const panelsInfo = await _getInBatches('panels', panelIds, 'id,work_id,panel_order');
+      const panelMap = {}; panelsInfo.forEach(p => panelMap[p.id] = p);
+      const workIds = [...new Set(panelsInfo.map(p => p.work_id))];
+      const worksInfo = workIds.length ? await _getInBatches('works', workIds, 'id,title') : [];
+      const workMap = {}; worksInfo.forEach(w => workMap[w.id] = w);
+      panelLayerItems.forEach(it => {
+        const p = panelMap[it.panel_id];
+        it.panel_order = p ? p.panel_order : null;
+        it.work_title  = (p && workMap[p.work_id]) ? workMap[p.work_id].title : '(?)';
+      });
+    }
+
+    const bibliotecaItems = await _scanTable(
+      'biblioteca', 'id,folder_name,layer_type,layer_data',
+      (item, r) => { item.folder_name = r.folder_name; }
+    );
+
+    return { panel_layers: panelLayerItems, biblioteca: bibliotecaItems };
+  }
+
+  // items: subconjunto de los devueltos por scanCorruptedLayerData() con
+  // recoverable=true (ya traen repairedJson calculado). Recomprime cada uno
+  // con el _czCompress corregido (que además se autoverifica) y escribe el
+  // resultado en Supabase. onProgress(hechos, total) opcional para UI.
+  async function repairCorruptedLayerData(items, onProgress) {
+    let done = 0;
+    const results = await _sbPoolMap(items, 3, async (item) => {
+      try {
+        const newLayerData = item.repairedJson.length >= _CZ_MIN
+          ? await _czCompress(item.repairedJson)
+          : item.repairedJson;
+        await _patch(item.table, `id=eq.${item.id}`, { layer_data: newLayerData });
+        return { id: item.id, table: item.table, ok: true };
+      } catch(e) {
+        return { id: item.id, table: item.table, ok: false, error: e.message };
+      } finally {
+        done++; if (onProgress) onProgress(done, items.length);
+      }
+    });
+    return results;
+  }
+
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole, scanCorruptedLayerData, repairCorruptedLayerData };
 })();

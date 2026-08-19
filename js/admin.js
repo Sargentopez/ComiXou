@@ -80,6 +80,7 @@ function renderTab(tab) {
   if (tab === 'published') renderPublished(panel);
   if (tab === 'all')       renderAll(panel);
   if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
+  if (tab === 'repair')    renderRepair(panel);
 }
 
 // ── PENDIENTES ──
@@ -377,6 +378,118 @@ function buildAdminRow(comic, mode) {
   });
 
   return row;
+}
+
+// ── REPARAR — herramienta de recuperación de layer_data corrupto ──────────
+// Bug corregido en v38.06 (ver _czCompress/_czRepairChunked en
+// supabase-client.js): versiones anteriores podían guardar capas grandes
+// con Base64 mal formado, que _czDecompress no siempre conseguía revertir —
+// la capa desaparecía en silencio del editor y del visor externo aunque la
+// fila seguía existiendo en Supabase. El fix evita que vuelva a pasar en
+// guardados nuevos; esta pestaña repara lo que ya se guardó mal antes.
+async function renderRepair(panel) {
+  panel.innerHTML = `
+    <div style="padding:16px 16px 24px">
+      <p style="font-family:var(--font-body);font-size:.85rem;color:var(--gray-600);line-height:1.55;margin-bottom:16px">
+        ${I18n.t('admin_repairIntro')}
+      </p>
+      <button id="repairScanBtn" class="admin-btn admin-btn-ok" style="padding:9px 18px;font-size:.85rem">
+        ${I18n.t('admin_repairScanBtn')}
+      </button>
+      <div id="repairResults" style="margin-top:18px"></div>
+    </div>`;
+
+  document.getElementById('repairScanBtn').addEventListener('click', async function() {
+    const btn = this;
+    btn.disabled = true;
+    const before = btn.textContent;
+    btn.textContent = I18n.t('admin_repairScanning');
+    const resultsEl = document.getElementById('repairResults');
+    resultsEl.innerHTML = '';
+    let scan;
+    try {
+      scan = await SupabaseClient.scanCorruptedLayerData();
+    } catch(e) {
+      console.warn('scanCorruptedLayerData error:', e);
+      resultsEl.innerHTML = `<p class="admin-empty">${I18n.t('admin_repairScanErr')}${e.message}</p>`;
+      btn.disabled = false; btn.textContent = before;
+      return;
+    }
+    btn.disabled = false; btn.textContent = before;
+    renderRepairResults(resultsEl, scan);
+  });
+}
+
+function renderRepairResults(resultsEl, scan) {
+  const all = [...scan.panel_layers, ...scan.biblioteca];
+  if (!all.length) {
+    resultsEl.innerHTML = `<p class="admin-empty">${I18n.t('admin_repairNoneFound')}</p>`;
+    return;
+  }
+  const fixable    = all.filter(r => r.recoverable);
+  const notFixable = all.filter(r => !r.recoverable);
+
+  let html = `
+    <p style="font-family:var(--font-body);font-weight:900;font-size:.9rem;margin-bottom:4px">
+      ${I18n.t('admin_repairFoundSummary', { n: all.length })}
+    </p>
+    <p style="font-family:var(--font-body);font-size:.8rem;color:var(--gray-600);margin-bottom:14px">
+      ${I18n.t('admin_repairFixableCount', { ok: fixable.length, fail: notFixable.length })}
+    </p>`;
+
+  all.forEach(r => {
+    const label = r.table === 'panel_layers'
+      ? `${escHtml(r.work_title || '(?)')} · ${I18n.t('admin_repairPageLabel', { n: (r.panel_order ?? 0) + 1 })} · ${escHtml(r.layer_type)}`
+      : `${escHtml(r.folder_name || '—')} · ${escHtml(r.layer_type)}`;
+    const kb = (r.len / 1024).toFixed(0);
+    html += `<div class="admin-row">
+      <div class="admin-row-info">
+        <span class="admin-row-title">${label}</span>
+        <span class="admin-row-meta">${kb} KB</span>
+      </div>
+      <div class="admin-row-actions">
+        <span class="admin-badge" style="${r.recoverable ? 'color:#1a7a3a;border-color:#1a7a3a' : 'color:var(--red);border-color:var(--red)'}">
+          ${r.recoverable ? I18n.t('admin_repairRecoverable') : I18n.t('admin_repairNotFixable')}
+        </span>
+      </div>
+    </div>`;
+  });
+
+  if (fixable.length) {
+    html += `
+      <div style="margin-top:18px;text-align:center">
+        <button id="repairFixBtn" class="admin-btn admin-btn-ok" style="padding:10px 22px;font-size:.88rem">
+          ${I18n.t('admin_repairBtn', { n: fixable.length })}
+        </button>
+        <div id="repairProgress" style="margin-top:10px;font-family:var(--font-body);font-size:.8rem;color:var(--gray-500)"></div>
+      </div>`;
+  }
+
+  resultsEl.innerHTML = html;
+
+  document.getElementById('repairFixBtn')?.addEventListener('click', function() {
+    const btn = this;
+    appConfirm(I18n.t('admin_repairConfirm', { n: fixable.length }), async () => {
+      btn.disabled = true;
+      const progressEl = document.getElementById('repairProgress');
+      progressEl.textContent = I18n.t('admin_repairing', { done: 0, total: fixable.length });
+      let results;
+      try {
+        results = await SupabaseClient.repairCorruptedLayerData(fixable, (done, total) => {
+          progressEl.textContent = I18n.t('admin_repairing', { done, total });
+        });
+      } catch(e) {
+        console.warn('repairCorruptedLayerData error:', e);
+        showToast(I18n.t('admin_repairScanErr') + e.message);
+        btn.disabled = false;
+        return;
+      }
+      const ok   = results.filter(r => r.ok).length;
+      const fail = results.filter(r => !r.ok).length;
+      showToast(I18n.t('admin_repairDone', { ok, fail }));
+      renderTab('repair'); // recargar desde cero — vuelve a escanear en el siguiente click
+    });
+  });
 }
 
 // ── MODAL READER EMBED ─────────────────────────────────────
