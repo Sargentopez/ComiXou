@@ -2998,17 +2998,36 @@ function _resetPanelAnims(idx) {
       layer._animPlayCount = 0;
       layer._animStopped   = false;
       layer._animRestartAt = null;
+      // v38.07 — BUG CORREGIDO (reportado por Alberto: animación programada
+      // para "desaparecer al final" + temporizador de inicio — si se dejaba
+      // reproducir hasta desaparecer, cambiar de hoja y volver YA NO la
+      // reproducía; si se cambiaba de hoja ANTES de desaparecer, sí volvía a
+      // reproducirse bien). Causa raíz: layer._animFadeOpacity (y su fundido
+      // en curso, _animFadeStart/_animFadeDir) solo se limpiaban en la rama
+      // "sin retardo de inicio" (el else de abajo) — con retardo configurado
+      // Y sin "invisible antes de empezar" marcado (el caso de Alberto: la
+      // invisibilidad es AL FINAL, no al principio), ninguna rama tocaba
+      // estos campos. El fundido a opacidad 0 disparado por "Invisibilidad →
+      // Al final" en el ciclo anterior (ver _readerGifTick, sección
+      // _gcpInvisAtEnd) se quedaba fijo para siempre: el frame y el
+      // temporizador SÍ se reiniciaban correctamente, pero el objeto seguía
+      // invisible sin que nada llegara a restaurar su opacidad. Arreglo:
+      // limpiar SIEMPRE aquí, antes de la rama de retardo — que, si aplica,
+      // vuelve a poner opacidad 0 explícitamente para el caso "invisible
+      // antes de empezar", igual que antes.
+      layer._animFadeOpacity = null;
+      layer._animFadeStart   = null;
+      layer._animFadeDir     = null;
       // Temporizador de inicio: si _gcpStartDelay > 0, no arrancar hasta que pase el tiempo
       const _initDelay = (layer._gcpStartDelay || 0) * 1000;
       if (_initDelay > 0) {
         layer._animLastTick = null;           // no empezar aún
         layer._animStartAt  = Date.now() + _initDelay;
         // Invisibilidad antes del inicio
-        if (layer._gcpInvisBeforeStart) { layer._animFadeOpacity = 0; layer._animFadeStart = null; }
+        if (layer._gcpInvisBeforeStart) { layer._animFadeOpacity = 0; }
       } else {
         layer._animLastTick = Date.now();     // iniciar tick desde ahora
         layer._animStartAt  = null;
-        layer._animFadeOpacity = null;
       }
       if (layer._animOc && layer._animFrames.length) {
         layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
