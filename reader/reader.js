@@ -1598,8 +1598,28 @@ function _readerGifTick() {
           }
           panelChanged = true;
         }
-        if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
-        else if (!layer._animLastTick) {
+        // BUG CORREGIDO (v38.12 — Alberto: animación con trayectoria sincronizada
+        // por ciclos que nunca llega a verse en el lector externo, aunque se
+        // guarda y se ve bien en el visor interno): este bloque resuelve el
+        // temporizador "_gcpStartDelay + _gcpInvisBeforeStart" (retardo de
+        // inicio con la capa invisible mientras tanto, _animFadeOpacity=0
+        // puesto por _resetPanelAnims). Antes, ese bloque vivía SOLO dentro de
+        // la rama "else if (!layer._animLastTick)", que el `if (_animMpSync)`
+        // de arriba saltaba por completo para cualquier capa en modo
+        // sincronizado (trayectoria + _motionCycles) — así que una capa con
+        // retardo+invisible-antes-de-empezar Y trayectoria sincronizada nunca
+        // llegaba a restaurar su opacidad: se quedaba en _animFadeOpacity=0
+        // para siempre, con independencia de la forma/posición de la
+        // trayectoria (de ahí que cambiarla no cambiara nada). El visor interno
+        // (editor.js) no tiene este fallo porque resuelve el retardo con un
+        // setTimeout real (_startDelayTimer), independiente de si hay
+        // trayectoria sincronizada o no. Arreglo: comprobar primero si la capa
+        // sigue esperando su temporizador de inicio (!layer._animLastTick),
+        // ANTES de mirar si está en modo sincronizado — así el temporizador se
+        // resuelve siempre, y el modo sincronizado solo decide, después, si
+        // hace falta avanzar fotogramas por su cuenta (no le corresponde,
+        // los controla el motor de trayectoria más abajo).
+        if (!layer._animLastTick) {
           // Esperar hasta que expire el temporizador de inicio
           if (layer._animStartAt && now >= layer._animStartAt) {
             layer._animLastTick = now;
@@ -1617,6 +1637,7 @@ function _readerGifTick() {
             panelChanged = true;
           }
         }
+        else if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
         else {
         // Reinicio automático: si la animación está detenida y el plazo ha pasado, reiniciar
         if (layer._animStopped) {
