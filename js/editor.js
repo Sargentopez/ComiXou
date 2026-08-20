@@ -12714,6 +12714,25 @@ function edOnMove(e){
     }
   }
   if(!edIsDragging||edSelectedIdx<0)return;
+  // Bloqueo de arrastre mientras el panel de propiedades del objeto esté abierto
+  // (petición de Alberto): el guard _edDblTapGuard de abajo solo absorbe el
+  // pequeño temblor del PROPIO gesto de doble tap (ventana de 400ms / 10px) —
+  // no protege de un TERCER toque genuino (sobre todo en PC, con ratón) que
+  // llegue después de esa ventana o con más recorrido, el cual sí se
+  // interpretaba como "tocar y arrastrar" y desplazaba el objeto justo al
+  // abrir sus propiedades. Aquí no hace falta arrastrar mientras el panel esté
+  // abierto, así que se bloquea sin límite de tiempo ni distancia. Comprobación
+  // en vivo del DOM (no un flag a mantener aparte): en cuanto el panel deje de
+  // tener la clase 'open' en modo props/text-props — se cierre como se cierre,
+  // hay muchos puntos de cierre distintos en el código — este bloqueo deja de
+  // aplicarse solo, sin necesidad de rescindirlo a mano en cada uno.
+  {
+    const _ppPanel = $('edOptionsPanel');
+    if(_ppPanel && _ppPanel.classList.contains('open') &&
+       (_ppPanel.dataset.mode === 'props' || _ppPanel.dataset.mode === 'text-props')){
+      return;
+    }
+  }
   // Guard anti-arrastre tras doble tap (ver _edHandleDoubleTap): si el objeto es
   // el mismo cuyo panel se acaba de abrir y seguimos dentro de la ventana/umbral,
   // el "drag" es temblor del propio gesto — ignorarlo sin mover el objeto.
