@@ -37762,6 +37762,24 @@ function _gcpSaveToLib(onDone) {
     existingLayer._isGcpImage=true;
     existingLayer._pngFrames=pngFrames;
     existingLayer._animReady=false; existingLayer._animFrames=null;
+    // BUG (reportado por Alberto): al reeditar una animación que sale y vuelve al
+    // lienzo, el primer fotograma se veía deformado en el editor general hasta
+    // previsualizarla — invalidar _animReady/_animFrames NO bastaba porque draw()
+    // usa el patrón "this._oc || this.img" SIN comprobar _animReady, así que seguía
+    // pintando el canvas offscreen (_oc) de la sesión ANTERIOR (con las dimensiones
+    // del recorte VIEJO) mientras width/height ya se actualizan más abajo al recorte
+    // NUEVO — el desajuste de proporciones entre ambos es lo que se veía como
+    // deformación. Solo se "arreglaba" cuando algo externo (p.ej. abrir el visor
+    // interno, _edStartPageAnims) volvía a llamar loadAnim() y reconstruía _oc.
+    // Invalidar _oc aquí (además de _animReady/_animFrames) hace que, mientras tanto,
+    // draw() caiga al fallback this.img (ya actualizado al recorte nuevo, ver
+    // img.onload más abajo) en vez de a un _oc con proporciones ajenas.
+    // Guarda con typeof: si existingLayer es una GifLayer reeditada vía GCP
+    // (existingLayer.type==='gif', también entra en esta rama), esa clase no tiene
+    // loadAnim ni el fallback this.img en su draw() — poner _oc a null la dejaría sin
+    // pintar nada hasta que algo (no implementado) volviera a llamar a su propio
+    // .load(). No toco ese caso: está fuera del alcance de este bug.
+    if (typeof existingLayer.loadAnim === 'function') existingLayer._oc = null;
     // BUG (reportado por Alberto): _apngSrc es el APNG ya "horneado" (con fcTL
     // propio) que se descarga de la nube al abrir la obra — pero NUNCA se
     // invalidaba al reeditar la animación en el GCP. Como en todo el código
@@ -37808,6 +37826,18 @@ function _gcpSaveToLib(onDone) {
       existingLayer._gcpRefX = _gcpCenterX; existingLayer._gcpRefY = _gcpCenterY;
       existingLayer._gcpRefW = _gcpNormW;   existingLayer._gcpRefH = _gcpNormH;
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
+      // Reconstruir _oc YA (mismo patrón que la rama "Animación nueva" más abajo en
+      // esta función) — así el primer fotograma se pinta con el canvas offscreen
+      // correcto desde ya, sin depender de reproducir/previsualizar la animación
+      // para que loadAnim() lo regenere (ver comentario junto a "_oc = null" más
+      // arriba, donde se invalida).
+      if (typeof existingLayer.loadAnim === 'function') {
+        existingLayer.loadAnim(pngFrames, () => {
+          existingLayer._playing = false;
+          existingLayer._applyFrame(0);
+          edRedraw();
+        });
+      }
     };
     img.src=pngFrames[0];
     edToast(I18n.t('gcp_animationUpdated'));
