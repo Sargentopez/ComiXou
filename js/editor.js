@@ -12814,6 +12814,32 @@ function edOnEnd(e){
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
   }
+  // v38.08 — BUG CORREGIDO (reportado por Alberto: el extremo de una guía se
+  // quedaba "pegado" al cursor sin soltarse nunca, sin más solución que
+  // cerrar la app). Causa: al tocar/pulsar el tirador de una guía o un nodo
+  // compartido (ver el bloque de guías en edOnStart, más arriba), el inicio
+  // del arrastre se retrasa 300ms a propósito (_edRuleTapTimer/
+  // _edNodeTapTimer) para distinguir un tap simple de un doble-tap (que abre
+  // el panel en vez de arrastrar). Si el dedo/botón se soltaba ANTES de esos
+  // 300ms — un toque rápido sin querer arrastrar — nada cancelaba el
+  // temporizador: seguía disparando igual, e iniciaba el arrastre
+  // (_edRuleDrag) sin ningún dedo/botón ya presente. A partir de ahí, cada
+  // pointermove posterior (el ratón genera estos eventos en simple "hover",
+  // sin botón pulsado) recolocaba el extremo de la guía seguiéndolo — y como
+  // el arrastre nunca llegó a empezar "de verdad" con su propio pointerdown,
+  // tampoco había ningún pointerup legítimo pendiente que lo soltase. Debe
+  // cancelarse aquí, ANTES de cualquier otro return temprano de esta función
+  // (incluido el de _edMotionPathMode, un poco más abajo, donde las guías
+  // también son arrastrables). Solo se CANCELA el arranque del arrastre, sin
+  // completarlo — a diferencia de los temporizadores de pellizco/pinch más
+  // abajo (que sí resuelven ya mismo al soltar, porque soltar antes SÍ
+  // demuestra que no llega un segundo dedo): aquí soltar antes de los 300ms
+  // NO demuestra que no vaya a llegar un segundo tap — es justo lo que hace
+  // un doble-tap. Por eso tampoco se tocan _edRuleLastTap/_edRuleLastTapId/
+  // _edNodeLastTap/_edNodeLastTapId: deben sobrevivir para que un segundo tap
+  // rápido en el mismo tirador/nodo se siga detectando como doble-tap.
+  if (window._edRuleTapTimer) { clearTimeout(window._edRuleTapTimer); window._edRuleTapTimer = null; }
+  if (window._edNodeTapTimer) { clearTimeout(window._edNodeTapTimer); window._edNodeTapTimer = null; }
   if (_edMotionPathMode) {
     // Cancelar timer táctil si el dedo se levantó antes de que disparara
     if (window._edMpTouchTimer) { clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
@@ -29362,6 +29388,25 @@ function EditorView_init(){
         _gcpToggleFramesBar(); // cierra
       }
       if (_bib && _bib.classList.contains('open') && !_insideBib) {
+        // v38.09 — BUG CORREGIDO (reportado por Alberto: al insertar un objeto
+        // desde la biblioteca en el canvas GCP, la biblioteca no se cierra
+        // sola — al tocar fuera para cerrarla, si un arrastre de miniatura
+        // estaba en curso, p.ej. un toque con algo de desplazamiento
+        // interpretado como inicio de "mover a otra carpeta" — quedaba
+        // "colgado": el elemento arrastrado (y sus listeners de arrastre) se
+        // destruían aquí mismo al vaciar innerHTML, sin que _bibOnUp/
+        // _bibDragCancel llegaran nunca a ejecutarse (solo se disparan por un
+        // pointerup/pointercancel sobre ESE elemento en concreto, que ya no
+        // existe). _bibDrag se quedaba fijado y el "ghost" (miniatura
+        // fantasma flotante) fuera del panel, en document.body, visible para
+        // siempre. Existía ya una función para esto (_bibClose, más abajo en
+        // este archivo — ver su comentario) pero solo se usaba en el botón ✕
+        // de la propia biblioteca, no en este cierre automático al tocar
+        // fuera — que es como se cierra en la práctica al insertar un objeto
+        // en el editor de animaciones. Mismo criterio que _bibClose: cancelar
+        // explícitamente cualquier arrastre pendiente ANTES de vaciar el
+        // panel.
+        if (typeof _bibDragCancel === 'function') _bibDragCancel();
         _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
         window._gcpUiClosedAt = Date.now();
         if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
@@ -29406,6 +29451,11 @@ function EditorView_init(){
       if (_bibGen && _bibGen.classList.contains('open') && _bibGen.dataset.mode === 'biblioteca') {
         const _insideBibGen = e.target?.closest?.('#edOptionsPanel, #dd-bib-open');
         if (!_insideBibGen) {
+          // v38.09 — mismo arreglo que el cierre en contexto GCP (ver el
+          // comentario extenso más arriba, junto a _bibDragCancel): cancelar
+          // explícitamente cualquier arrastre de miniatura pendiente antes de
+          // vaciar el panel, para no dejarlo "colgado".
+          if (typeof _bibDragCancel === 'function') _bibDragCancel();
           _bibGen.classList.remove('open'); _bibGen.innerHTML = ''; delete _bibGen.dataset.mode;
           if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
         }
@@ -31634,12 +31684,22 @@ function _bibDragStart(e, el, panel) {
   }
   document.body.appendChild(ghost);
 
-  _bibDrag = { fi, ii, ghost, panel, lastZone: null };
+  _bibDrag = { fi, ii, ghost, panel, el, lastZone: null };
   _bibMoveGhost(e.clientX, e.clientY);
 
   // Listeners globales en el elemento capturado
   el.addEventListener('pointermove', _bibOnMove);
   el.addEventListener('pointerup',   _bibOnUp);
+  // v38.09 — red de seguridad adicional (ver el comentario extenso junto a
+  // _bibDragCancel, más abajo): si el propio elemento capturado desaparece
+  // del DOM mientras el arrastre sigue en curso (p.ej. la biblioteca se
+  // cierra desde OTRO sitio que aún no cancele el arrastre explícitamente,
+  // como ya se hace en los puntos de cierre conocidos), el navegador libera
+  // la captura del puntero automáticamente pero SOLO dispara
+  // "lostpointercapture" — nunca "pointerup" ni "pointercancel" — así que sin
+  // este listener _bibOnUp/_bibDragCancel no llegarían a ejecutarse nunca por
+  // esta vía.
+  el.addEventListener('lostpointercapture', _bibDragCancel);
 }
 
 function _bibMoveGhost(cx, cy) {
@@ -31677,7 +31737,7 @@ function _bibOnMove(e) {
 
 function _bibOnUp(e) {
   if (!_bibDrag) return;
-  const { fi, ii, ghost, panel, lastZone } = _bibDrag;
+  const { fi, ii, ghost, panel, lastZone, el } = _bibDrag;
 
   ghost.remove();
   if (lastZone) lastZone.style.background = '';
@@ -31685,8 +31745,9 @@ function _bibOnUp(e) {
   const destFi = lastZone ? parseInt(lastZone.dataset.dropFi) : -1;
 
   // Limpiar listeners
-  e.target.removeEventListener('pointermove', _bibOnMove);
-  e.target.removeEventListener('pointerup',   _bibOnUp);
+  el.removeEventListener('pointermove', _bibOnMove);
+  el.removeEventListener('pointerup',   _bibOnUp);
+  el.removeEventListener('lostpointercapture', _bibDragCancel);
   _bibDrag = null;
 
   if (destFi < 0 || destFi === fi) return; // sin destino válido o misma carpeta
@@ -31701,10 +31762,29 @@ function _bibOnUp(e) {
   _bibRenderPanel(panel);
 }
 
+// v38.09 — BUG CORREGIDO (reportado por Alberto: al insertar un objeto desde
+// la biblioteca en el canvas GCP y tocar fuera para cerrarla —que es como se
+// cierra en la práctica, la biblioteca no se cierra sola al insertar—, si
+// justo entonces había un arrastre de miniatura en curso (p.ej. un toque con
+// algo de desplazamiento sobre otra miniatura, interpretado como inicio de
+// "mover a otra carpeta"), el elemento arrastrado se destruía al vaciar el
+// panel SIN que _bibOnUp llegara nunca a ejecutarse — solo se dispara por un
+// pointerup/pointercancel sobre ESE elemento en concreto, que para entonces
+// ya no existe. _bibDrag se quedaba fijado para siempre y el "ghost"
+// (miniatura fantasma flotante, en document.body, fuera del panel) visible
+// sin más. Ahora se cancela explícitamente en todos los puntos de cierre
+// conocidos del panel (ver _edDocDownFn y _gcpDoClose) — y, como red de
+// seguridad adicional para cualquier otro punto de cierre no contemplado, el
+// propio elemento capturado dispara esta función al perder la captura del
+// puntero (ver el listener "lostpointercapture" en _bibDragStart).
 function _bibDragCancel() {
   if (!_bibDrag) return;
-  _bibDrag.ghost.remove();
-  if (_bibDrag.lastZone) _bibDrag.lastZone.style.background = '';
+  const { ghost, lastZone, el } = _bibDrag;
+  ghost.remove();
+  if (lastZone) lastZone.style.background = '';
+  el.removeEventListener('pointermove', _bibOnMove);
+  el.removeEventListener('pointerup',   _bibOnUp);
+  el.removeEventListener('lostpointercapture', _bibDragCancel);
   _bibDrag = null;
 }
 
@@ -37441,6 +37521,11 @@ function _gcpDoClose() {
   if (preBtn) preBtn.textContent = '▶';
   const panel = $('edOptionsPanel');
   if (panel && panel.classList.contains('open')) {
+    // v38.09 — mismo arreglo que en _edDocDownFn (ver el comentario extenso
+    // junto a _bibDragCancel, más abajo): al salir del editor de animaciones
+    // con la biblioteca todavía abierta, cancelar cualquier arrastre de
+    // miniatura pendiente antes de vaciar el panel.
+    if (typeof _bibDragCancel === 'function') _bibDragCancel();
     panel.classList.remove('open');
     panel.innerHTML = '';
     delete panel.dataset.mode;
