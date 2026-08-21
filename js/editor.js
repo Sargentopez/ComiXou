@@ -3670,6 +3670,54 @@ function _edLayersSnapshot(movedLayer){
     return _fragment;
   }));
 }
+// DIAGNÓSTICO TEMPORAL v38.19 — Alberto: prueba controlada confirmó que el
+// problema solo ocurre si el visor llega a MOSTRAR la hoja con la
+// trayectoria (previsualizar sin pasar de la hoja 1: posición correcta al
+// volver; previsualizar hasta la hoja 13: posición revertida al volver).
+// Descartado ya: applyPathOffset/AnimClock (solo toca _pathCurX/_pathCurY,
+// nunca x/y — leído función completa), _edStartPageAnims, edUpdateViewer
+// (sin asignaciones a x/y de capa en ninguna). El log de posición de v38.17
+// SÍ detectó que x cambiaba de verdad entre apertura y cierre del visor para
+// la capa con trayectoria — pero solo captura ANTES/DESPUÉS, no el momento
+// exacto. Esta versión instrumenta x/y de las capas con trayectoria como
+// propiedades con getter/setter: cualquier escritura queda registrada con
+// pila de llamadas, así se ve la función exacta responsable en vez de seguir
+// buscando a ciegas entre candidatos. Quitar entera (esta función + su
+// llamada en edOpenViewer + la sección del informe en _edRunDiag + volver a
+// comentar el botón 🩺) en cuanto se identifique la causa.
+function _mpInstrumentXY(l) {
+  if (!l || l.__xyWatched) return;
+  try {
+    l.__xyWatched = true;
+    let _vx = l.x, _vy = l.y;
+    Object.defineProperty(l, 'x', {
+      get() { return _vx; },
+      set(v) {
+        if (v !== _vx) {
+          window._mpXYWatch = window._mpXYWatch || [];
+          window._mpXYWatch.push({ t: Date.now(), field: 'x', old: _vx, new: v,
+            stack: (new Error().stack || '').split('\n').slice(1, 6).join('  ⤷  ') });
+          if (window._mpXYWatch.length > 40) window._mpXYWatch = window._mpXYWatch.slice(-40);
+        }
+        _vx = v;
+      },
+      configurable: true, enumerable: true,
+    });
+    Object.defineProperty(l, 'y', {
+      get() { return _vy; },
+      set(v) {
+        if (v !== _vy) {
+          window._mpXYWatch = window._mpXYWatch || [];
+          window._mpXYWatch.push({ t: Date.now(), field: 'y', old: _vy, new: v,
+            stack: (new Error().stack || '').split('\n').slice(1, 6).join('  ⤷  ') });
+          if (window._mpXYWatch.length > 40) window._mpXYWatch = window._mpXYWatch.slice(-40);
+        }
+        _vy = v;
+      },
+      configurable: true, enumerable: true,
+    });
+  } catch(e) {}
+}
 // Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
 // .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
 function _edSnapLayerFragment(l){
@@ -25864,6 +25912,7 @@ function edOpenViewer(){
   // usuario llega a cada hoja, independientemente de cuánto tiempo lleve abierto el visor.
   edPages.forEach(pg => (pg.layers||[]).forEach(l => {
     if (l._motionPath && l._motionPath.length >= 2) {
+      _mpInstrumentXY(l); // DIAGNÓSTICO TEMPORAL v38.19 — ver comentario junto a _mpInstrumentXY
       delete l._pathStartTime;  // el ticker lo fijará al procesar la hoja activa
       delete l._pathStopped;    // borrar bandera 'stop' para que la trayectoria pueda reiniciarse
       delete l._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
@@ -38902,6 +38951,25 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── DIAGNÓSTICO TEMPORAL v38.19 — pila de llamadas de escrituras a x/y ───
+  // Ver comentario junto a _mpInstrumentXY (arriba en el archivo). Reproduce
+  // el problema exacto que ya confirmaste (arrastra un poco la animación con
+  // trayectoria de la hoja 13, previsualiza LLEGANDO hasta esa hoja, vuelve
+  // al editor) y ENTONCES pulsa 🩺 — cada entrada de aquí es una escritura
+  // real a x o y de una capa con trayectoria, con la función/línea exacta
+  // que la hizo. La que aparezca justo antes de que 'new' deje de coincidir
+  // con el valor que arrastraste es la causa.
+  L('');
+  L('── ESCRITURAS A x/y — capas con trayectoria (con pila de llamadas) ──');
+  if (window._mpXYWatch && window._mpXYWatch.length) {
+    window._mpXYWatch.forEach(e => {
+      L(`  [${new Date(e.t).toLocaleTimeString()}] ${e.field}: ${e.old} → ${e.new}`);
+      L(`      ${e.stack}`);
+    });
+  } else {
+    L('  (vacío — todavía no se ha escrito x/y de ninguna capa con trayectoria instrumentada en esta sesión)');
+  }
 
   // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
   // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al

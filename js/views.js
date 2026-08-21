@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.18</footer>
+    <footer class="app-version">v38.19</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -407,7 +407,10 @@ Router.register('editor', {
              la instrumentación (_edRepairDuplicateIds, _edFCL/
              window._edFCLog) sigue activa en editor.js aunque el botón
              esté oculto. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- DIAGNÓSTICO TEMPORAL v38.19 — reactivado para capturar la pila de
+             llamadas de escrituras a x/y (ver _mpInstrumentXY en editor.js).
+             Volver a comentar esta línea en cuanto se identifique la causa. -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
