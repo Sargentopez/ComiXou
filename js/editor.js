@@ -23109,14 +23109,18 @@ async function _edCloudSaveInner() {
     return;
   }
   if (!Auth?.currentUser?.()) {
-    // Sin sesión: ofrecer login en lugar de rechazar
+    // Sin sesión: ofrecer login en lugar de rechazar.
+    // v38.27 — unificado con edConfirm() (modal propio, usado en el resto
+    // del proyecto) en vez del confirm() nativo, que rompe la pantalla
+    // completa en Android (mismo motivo por el que existe edConfirm en
+    // primer lugar — ver su comentario de cabecera).
     edToast(I18n.t('ed_loginToSaveCloud'));
     setTimeout(() => {
-      if (confirm(I18n.t('ed_confirmLoginCloud'))) {
+      edConfirm(I18n.t('ed_confirmLoginCloud'), () => {
         // Guardar localmente antes de salir al login
         edSaveProject();
         Router.go('login');
-      }
+      }, I18n.t('loginBtn'));
     }, 400);
     return;
   }
@@ -23483,6 +23487,17 @@ async function _edSaveProjectInner(_keepOverlay){
   if(!_keepOverlay) { _edSaveOverlayShow(I18n.t('ed_savingToDevice')); _edSaveOverlayForceOpen = true; }
   // Asegurar que las reglas de la hoja actual están guardadas en edPages antes de serializar
   const existing=WorkStore.getById(edProjectId)||{};
+  // v38.25 — Alberto: al renombrar una obra desde "Editar datos de obra" (ver
+  // edSaveProjectModal), esta obra bifurcada puede no tener AÚN ninguna
+  // entrada previa en WorkStore (ver ahí el porqué: ya no se precrea una
+  // entrada "cascarón" solo para fijar userId/username). Sin userId, la
+  // obra no se reconocería como propia en "Mis obras". Recurrir a
+  // Auth.currentUser() solo en ese caso — para una obra que YA existía,
+  // existing.userId ya viene bien puesto y esto no cambia nada.
+  if (!existing.userId && typeof Auth !== 'undefined') {
+    const _u = Auth.currentUser?.();
+    if (_u) { existing.userId = _u.id; existing.username = _u.username; }
+  }
   // Guardar estado de cámara para restaurarlo al volver a editar
   const _camState = { x: edCamera.x, y: edCamera.y, z: edCamera.z, page: edCurrentPage };
   const _savedOrient2=edOrientation, _savedPage2=edCurrentPage;
@@ -27400,23 +27415,49 @@ async function edSaveProjectModal(){
       (c.userId === _edUser?.id || c.username === _edUser?.username)
     );
     if (_edDup) {
-      // Mostrar confirmación: sobrescribir (abrir la existente) o volver al modal
+      // BUG CORREGIDO (v38.28 — Alberto). Dos problemas en esta llamada:
+      // (1) edConfirm(msg, onOk, okLabel) espera okLabel como STRING (se usa
+      // literalmente como okBtn.textContent) y llama a onOk() SIN
+      // argumentos solo cuando se confirma — aquí se le pasaba un objeto
+      // {confirmText,cancelText} como tercer argumento (el botón OK
+      // mostraba "[object Object]") y el callback esperaba un parámetro
+      // 'confirmed' que edConfirm nunca pasa, así que pulsar OK no hacía
+      // nada. (2) Alberto pidió además cambiar el comportamiento en sí:
+      // ya no "abrir la obra existente" (lo que abandonaba en silencio los
+      // cambios que se estaban editando) sino sobrescribirla de verdad con
+      // el contenido actual — mismo id, mismo supabaseId si ya lo tenía
+      // (ver _edForkToId(targetId) más abajo). Pregunta exacta pedida por
+      // Alberto: "Ya existe una obra con el mismo nombre, ¿sobrescribir?"
+      // con botones Cancelar/Sobrescribir — Cancelar dejará el modal de
+      // datos de obra abierto para elegir otro nombre (comportamiento por
+      // defecto de edConfirm si no se confirma).
       edConfirm(
-        I18n.t('ed_dupWorkTitleMsg', { title: _newTitle.replace(/"/g,'\\"') }),
-        function(confirmed) {
-          if (confirmed) {
-            edCloseProjectModal();
-            sessionStorage.setItem('cx_edit_id', _edDup.id);
-            if (typeof Router !== 'undefined') Router.go('editor');
-          }
-          // Si cancela: el modal queda abierto para que edite el título
+        I18n.t('ed_dupWorkTitleMsg'),
+        () => {
+          _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
+          _edForkToId(_edDup.id);
         },
-        { confirmText: I18n.t('ed_openExistingWork'), cancelText: I18n.t('ed_changeNameBtn') }
+        I18n.t('ed_overwriteWorkBtn')
       );
       return;
     }
   }
 
+  _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
+
+  if (_titleChanged) {
+    // Crear obra nueva independiente con el nuevo nombre (sin duplicado de título)
+    await _edForkToId(null);
+  } else {
+    edCloseProjectModal();
+    await edSaveProject();
+  }
+}
+
+// Aplica los campos del modal de datos de obra a edProjectMeta y refresca la
+// UI del título — compartido por los tres desenlaces de edSaveProjectModal
+// (sin cambio de título, bifurcar con id nuevo, sobrescribir un id existente).
+function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial) {
   edProjectMeta.title   = _newTitle;
   edProjectMeta.author  = _newAuthor;
   edProjectMeta.genre   = _newGenre;
@@ -27427,76 +27468,71 @@ async function edSaveProjectModal(){
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
   setTimeout(_edUpdateTitlePill, 200);
   setTimeout(_edUpdateTitlePill, 600);
+}
 
-  if (_titleChanged) {
-    // Crear obra nueva independiente con el nuevo nombre
-    const _newId = 'comic_' + Date.now();
+// Bifurca la obra actual (edProjectId) hacia _targetId y la guarda. Si
+// _targetId es null, se genera un id nuevo (obra independiente de verdad,
+// "guardar como..."). Si _targetId es el id de OTRA obra ya existente (ver
+// llamada de "sobrescribir" en edSaveProjectModal), esa obra queda
+// sobrescrita con el contenido actual — mismo id, y _edSaveProjectInner
+// reutilizará su supabaseId si ya tenía uno (vía "...existing" al guardar),
+// así que la nube también se actualiza en el siguiente guardado en nube, no
+// se crea un registro aparte.
+async function _edForkToId(_targetId) {
+  const _newId = _targetId || ('comic_' + Date.now());
 
-    // Restaurar _pngFrames/_apngSrc en los layers vivos desde IDB
-    // para que edSaveProject los re-externalice con las nuevas claves
-    for (const p of edPages) {
-      for (const l of (p.layers || [])) {
-        if (l.type === 'image' && l._pngFramesKey && !l._pngFrames && !l._apngSrc) {
-          if (window._sbAnimIdbLoad) {
-            try {
-              const _data = await window._sbAnimIdbLoad(l._pngFramesKey);
-              if (_data) {
-                if (typeof _data === 'string') l._apngSrc = _data;
-                else if (Array.isArray(_data) && _data.length) l._pngFrames = _data;
-              }
-            } catch(e) {}
-          }
-          // Borrar _pngFramesKey para que edSaveProject cree nueva clave con el nuevo id
-          delete l._pngFramesKey;
+  // Restaurar _pngFrames/_apngSrc en los layers vivos desde IDB
+  // para que edSaveProject los re-externalice con las nuevas claves
+  for (const p of edPages) {
+    for (const l of (p.layers || [])) {
+      if (l.type === 'image' && l._pngFramesKey && !l._pngFrames && !l._apngSrc) {
+        if (window._sbAnimIdbLoad) {
+          try {
+            const _data = await window._sbAnimIdbLoad(l._pngFramesKey);
+            if (_data) {
+              if (typeof _data === 'string') l._apngSrc = _data;
+              else if (Array.isArray(_data) && _data.length) l._pngFrames = _data;
+            }
+          } catch(e) {}
         }
+        // Borrar _pngFramesKey para que edSaveProject cree nueva clave con el nuevo id
+        delete l._pngFramesKey;
       }
     }
-
-    // Migrar biblioteca al nuevo ID — la biblioteca real está en IDB, no localStorage
-    const _oldBibId = edProjectId;
-    const _newBibId = _newId;
-    // Migrar en IDB (ruta principal)
-    _bibOpenIdb().then(db => {
-      const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
-      const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
-      const tx = db.transaction('bib', 'readwrite');
-      const store = tx.objectStore('bib');
-      const req = store.get(_oldKey);
-      req.onsuccess = () => {
-        if (req.result) {
-          store.put(req.result, _newKey); // copiar al nuevo ID
-          // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
-        }
-      };
-    }).catch(() => {});
-    // También migrar _bibCache en memoria
-    // (_bibCache ya tiene los datos correctos, edSaveProject los guardará con el nuevo key
-    // porque edProjectId ya será _newId cuando se llame _bibSave)
-
-    // Cambiar al nuevo id
-    edProjectId = _newId;
-
-    // Pre-crear la entrada con userId correcto para que aparezca en la lista
-    const _forkUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-    if (_forkUser) {
-      WorkStore.save({
-        id: _newId,
-        userId:   _forkUser.id,
-        username: _forkUser.username,
-        title:    _newTitle,
-        cloudOnly: false,
-        published: false,
-      });
-    }
-
-    // Guardar como obra nueva — supabaseId y cloudOnly reseteados
-    edProjectMeta.title = _newTitle;
-    edCloseProjectModal();
-    await edSaveProject();
-  } else {
-    edCloseProjectModal();
-    await edSaveProject();
   }
+
+  // Migrar biblioteca al nuevo ID — la biblioteca real está en IDB, no localStorage.
+  // Si _targetId ya tenía su propia biblioteca (obra sobrescrita), queda
+  // reemplazada por la de la obra actual — mismo criterio que el resto del
+  // contenido al sobrescribir.
+  const _oldBibId = edProjectId;
+  const _newBibId = _newId;
+  _bibOpenIdb().then(db => {
+    const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
+    const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
+    const tx = db.transaction('bib', 'readwrite');
+    const store = tx.objectStore('bib');
+    const req = store.get(_oldKey);
+    req.onsuccess = () => {
+      if (req.result) {
+        store.put(req.result, _newKey); // copiar al nuevo ID
+        // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
+      }
+    };
+  }).catch(() => {});
+
+  // Cambiar al nuevo id
+  edProjectId = _newId;
+
+  // La entrada en WorkStore solo se crea/actualiza cuando _edSaveProjectInner()
+  // (dentro de edSaveProject(), justo debajo) guarda contenido real con
+  // éxito — ver v38.25 para el porqué de no pre-crear nada aquí. Para el
+  // caso "sobrescribir" (_targetId ya existente), existing.userId/username
+  // ya estarán puestos (son los de la obra que se sobrescribe), así que el
+  // respaldo con Auth.currentUser() de _edSaveProjectInner ni siquiera hace
+  // falta ahí — solo se usa cuando _targetId es un id nuevo de verdad.
+  edCloseProjectModal();
+  await edSaveProject();
 }
 
 /* ══════════════════════════════════════════
@@ -28703,14 +28739,18 @@ function EditorView_init(){
     if(!edProjectId) return;
     const comic = WorkStore.getById(edProjectId);
     if(!comic?.localEditorData?.pages?.length) { edToast(I18n.t('ed_noLocalVersion')); return; }
-    if(!confirm(I18n.t('ed_confirmRestoreLocal'))) return;
-    comic.editorData      = comic.localEditorData;
-    comic.localEditorData = null;
-    comic.cloudNewer      = false;
-    comic.cloudOnly       = false;
-    WorkStore.save(comic);
-    edLoadProject(edProjectId);
-    edToast(I18n.t('ed_deviceVersionRestored'));
+    // v38.27 — unificado con edConfirm() (ver el otro caso, edCloudSave, más
+    // arriba, para el motivo completo: el confirm() nativo rompe la
+    // pantalla completa en Android).
+    edConfirm(I18n.t('ed_confirmRestoreLocal'), () => {
+      comic.editorData      = comic.localEditorData;
+      comic.localEditorData = null;
+      comic.cloudNewer      = false;
+      comic.cloudOnly       = false;
+      WorkStore.save(comic);
+      edLoadProject(edProjectId);
+      edToast(I18n.t('ed_deviceVersionRestored'));
+    }, I18n.t('accept'));
   });
 
   $('dd-deleteproject')?.addEventListener('click',()=>{

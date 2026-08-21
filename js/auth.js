@@ -175,6 +175,8 @@ const Auth = (() => {
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
         // Migrar obras locales del ID antiguo al nuevo UUID de Supabase
         _migrateLocalWorks(data.user.id);
+        // Reclamar obras creadas en modo invitado para esta cuenta (ver _claimGuestWorks)
+        _claimGuestWorks(data.user.id, username);
         return { ok: true, user: session };
       }
       const errMsg = (data.error_description || data.msg || '').toLowerCase();
@@ -317,6 +319,38 @@ const Auth = (() => {
                          (comic.userId && comic.userId.startsWith('u_') && comic.userId !== newId);
         if (isLegacy) {
           comic.userId = newId;
+          changed = true;
+        }
+      });
+      if (changed) localStorage.setItem('cs_comics', JSON.stringify(store));
+    } catch(_) {}
+  }
+
+  // Reclamar obras creadas en modo invitado al iniciar sesión (Alberto: "si
+  // el usuario está como invitado... la obra no debe perderse, una vez
+  // iniciada sesión la obra iniciada como invitado debe aparecer entre las
+  // obras del autor en my-works, guardada localmente"). Las obras creadas
+  // sin sesión llevan userId:'_anon_' y anonymous:true (ver _mcCreateProject
+  // en my-works.js) — "Mis obras" filtra estrictamente por
+  // userId===user.id (ver my-works.js, varios sitios), así que sin esto se
+  // quedaban huérfanas e invisibles tras iniciar sesión, aunque sus datos
+  // siguieran intactos en local (WorkStore/OPFS) — parecían perdidas.
+  // Reasociarlas a la cuenta recién autenticada, en local únicamente — no
+  // se suben solas a la nube, el usuario decide cuándo, igual que con
+  // cualquier otra obra local.
+  function _claimGuestWorks(newId, username) {
+    try {
+      const store = JSON.parse(localStorage.getItem('cs_comics') || '{}');
+      const _anonLabel = (typeof I18n !== 'undefined') ? I18n.t('mc_anonymous') : null;
+      let changed = false;
+      Object.values(store).forEach(comic => {
+        if (comic.userId === '_anon_' || comic.anonymous === true) {
+          // Solo pisar 'author' si seguía en su valor por defecto de invitado —
+          // si el usuario ya lo personalizó a mano, respetar lo que puso.
+          if (!comic.author || comic.author === _anonLabel) comic.author = username;
+          comic.userId    = newId;
+          comic.username  = username;
+          comic.anonymous = false;
           changed = true;
         }
       });

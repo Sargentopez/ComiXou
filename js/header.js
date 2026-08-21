@@ -185,14 +185,20 @@ const Header = (() => {
     /* ── Eliminar cuenta ── */
     var delBtn = document.getElementById('dotsDeleteAccount');
     if (delBtn) {
-      delBtn.addEventListener('click', async function(e) {
+      delBtn.addEventListener('click', function(e) {
         e.preventDefault();
-        if (!confirm(T('confirmDeleteAccount'))) return;
-        var u = Auth.currentUser();
-        if (u) WorkStore.getByUser(u.id).forEach(c => WorkStore.remove(c.id));
-        await Auth.deleteAccount();
-        Header.refresh();
-        Router.go('home');
+        // v38.27 — unificado con edConfirm() (editor.js): evita el confirm()
+        // nativo, que rompe la pantalla completa en Android. edConfirm cae
+        // sola al confirm() nativo si su modal no está en el DOM de esta
+        // página (ver su propio código), así que esto no puede ir peor que
+        // antes en ningún caso, solo mejor donde el modal sí esté disponible.
+        edConfirm(T('confirmDeleteAccount'), async () => {
+          var u = Auth.currentUser();
+          if (u) WorkStore.getByUser(u.id).forEach(c => WorkStore.remove(c.id));
+          await Auth.deleteAccount();
+          Header.refresh();
+          Router.go('home');
+        }, T('accept'));
       });
     }
 
