@@ -841,13 +841,28 @@ function _mcRenderList() {
     return;
   }
   wrap.innerHTML = _loginBanner + comics.map(comic => {
+    // BUG CORREGIDO (v38.29 — Alberto: "la miniatura de my-works solo
+    // aparece cuando la obra está en la nube... debe comprobarse cuál es la
+    // versión más reciente"). Antes, en cuanto una obra tenía supabaseId
+    // (se había subido alguna vez), la miniatura SIEMPRE se tomaba de la
+    // nube — aunque hubiera una edición local posterior con una miniatura
+    // distinta (p.ej. la primera página cambió), la caché de nube tenía
+    // prioridad absoluta sobre la local en la cadena de "||" de más abajo.
+    // Esto se recalcula aquí, dentro de _mcRenderList(), así que se
+    // actualiza solo cada vez que se entra en Mis Obras — no hace falta
+    // ningún paso adicional para cumplir "debe actualizarse cada vez que
+    // se acceda a my-works".
+    const _localIsNewer = !!comic.localSavedAt &&
+      (!comic.cloudSavedAt || new Date(comic.localSavedAt) > new Date(comic.cloudSavedAt));
+    const _useLocalThumb = _localIsNewer || !comic.supabaseId;
+
     // Para obras cloudOnly: usar cache en memoria (no se persiste en localStorage).
     // Para obras locales: el dataUrl está en OPFS (_hasDataUrl flag), cargarlo lazy.
-    const thumb = (comic.supabaseId && _mcThumbCache.get(comic.supabaseId))
+    const thumb = (!_useLocalThumb && comic.supabaseId && _mcThumbCache.get(comic.supabaseId))
       || _mcThumbCache.get(comic.id)
       || (!comic.cloudOnly && comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '');
-    const needsCloudThumb = !thumb && !!comic.supabaseId;
-    const needsLocalThumb = !thumb && !comic.supabaseId
+    const needsCloudThumb = !thumb && !_useLocalThumb && !!comic.supabaseId;
+    const needsLocalThumb = !thumb && _useLocalThumb
       && comic.panels && comic.panels[0] && comic.panels[0]._hasDataUrl;
     const needsThumb = needsCloudThumb || needsLocalThumb;
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
