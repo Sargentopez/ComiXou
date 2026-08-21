@@ -4268,7 +4268,7 @@ function edApplyHistory(snapshot){
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'shape') {
@@ -4282,7 +4282,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'line') {
@@ -4303,7 +4303,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'fill') {
@@ -9164,6 +9164,7 @@ function _edEndMotionPath(save) {
         delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
         delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel;
         delete la._motionPathOrient; delete la._pathCurRotDeg;
+        delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime; delete la._pathStopped;
       }
       edPushHistory();
       // Propagar trayectoria a todos los miembros del grupo si es un grupo
@@ -9192,6 +9193,7 @@ function _edEndMotionPath(save) {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
             delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel;
             delete _m._motionPathOrient; delete _m._pathCurRotDeg;
+            delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
           }
         });
       }
@@ -19119,7 +19121,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click',()=>{
       const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
-      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edRenderOptionsPanel('text-props');
     });
     $('pp-path-speed')?.addEventListener('input',(ev)=>{
@@ -19424,7 +19426,7 @@ function edRenderOptionsPanel(mode){
         edPushHistory();
         _idxsGrp.forEach(i => {
           const _m = edLayers[i]; if (!_m) return;
-          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathOrient; delete _m._pathCurRotDeg;
+          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathOrient; delete _m._pathCurRotDeg; delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
         });
         edRenderOptionsPanel('props');
       });
@@ -19752,7 +19754,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click', () => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
-      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg;
+      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edPushHistory();
       edRenderOptionsPanel('props');
     });
