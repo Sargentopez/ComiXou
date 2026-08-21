@@ -971,13 +971,11 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 // la plataforma principal de la app.
 const _edDoubleTapMs = 300;
 const _edPenDragThreshold = 6;
-// Guard anti-arrastre tras doble tap: ventana de tiempo y umbral de movimiento
-// (mismo criterio de umbral que el resto de la app, p.ej. _edPenDragThreshold /
-// el anti-jitter de 8px del recorte) por debajo del cual un "drag" justo después
-// de abrir el panel de propiedades se considera temblor del propio gesto y se ignora.
-const _edDblTapGuardMs = 400;
-const _EdDblTapGuardPx = 10;
-window._edDblTapGuard = null;
+// v38.18 — Guard anti-arrastre tras doble tap ELIMINADO (Alberto: redundante,
+// el bloqueo de arrastre mientras el panel de propiedades está abierto —ver
+// edOnMove— ya cubre el temblor sin los falsos positivos de una ventana fija
+// de tiempo/distancia que seguía activa tras cerrar el panel). Constantes
+// _edDblTapGuardMs/_EdDblTapGuardPx y window._edDblTapGuard retiradas.
 window._edPenDragPending = null;
 window._edPenGroupDragPending = null;
 window._edPenNodeDragPending = null;
@@ -3674,43 +3672,6 @@ function _edLayersSnapshot(movedLayer){
 }
 // Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
 // .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
-// ══════════════════════════════════════════════════════════════════════
-// DIAGNÓSTICO TEMPORAL v38.17 — Alberto: capa CON trayectoria activa, la
-// desplaza unos pocos píxeles, previsualiza, al volver al editor aparece en
-// su sitio previo al desplazamiento. Descartado ya (con pruebas reales):
-// guías/reglas de alineación (probó ocultándolas), temporización (probó
-// esperando 20s antes de previsualizar), la propia función de historial
-// (edPushHistory/_edLayersSnapshot no distingue desplazamientos pequeños de
-// grandes en pruebas dirigidas), y el motor de trayectoria en sí
-// (AnimClock.applyPathOffset, sin redondeos ni umbrales).
-// Este log captura x/y/_pathCurX/_pathCurY y los campos de referencia GCP en
-// tres momentos reales de la sesión de Alberto — fin de arrastre, apertura y
-// cierre del visor — para ver con datos suyos en vez de seguir reproduciendo
-// a ciegas. Se muestra en el informe del botón 🩺 (ver _edRunDiag). Quitar
-// esta sección entera (helper + las 3 llamadas a _mpPosDiagLog) y volver a
-// comentar el botón 🩺 en views.js en cuanto se identifique la causa.
-window._mpPosDiag = window._mpPosDiag || [];
-function _mpPosDiagLog(tag, layers, pageIdx) {
-  try {
-    (layers||[]).forEach((l, li) => {
-      if (!l || !l._motionPath || l._motionPath.length < 2) return;
-      window._mpPosDiag.push({
-        tag, t: Date.now(), pageIdx, li,
-        x: l.x, y: l.y,
-        _pathCurX: l._pathCurX, _pathCurY: l._pathCurY,
-        _pathStartTime: l._pathStartTime||null, _pathStopped: !!l._pathStopped,
-        _gcpRefX: l._gcpRefX??null, _gcpRefY: l._gcpRefY??null,
-        _gcpRefW: l._gcpRefW??null, _gcpRefH: l._gcpRefH??null,
-        _isGcpImage: !!l._isGcpImage,
-        animKey: l.animKey||l._pngFramesKey||l._apngIdbKey||null,
-        groupId: l.groupId||null, _uid: l._uid||null,
-        _edViewerMode: (typeof _edViewerMode!=='undefined') ? _edViewerMode : null,
-      });
-    });
-    if (window._mpPosDiag.length > 60) window._mpPosDiag = window._mpPosDiag.slice(-60);
-  } catch(e) {}
-}
-
 function _edSnapLayerFragment(l){
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
@@ -8385,12 +8346,6 @@ function _edRoundRect(ctx, x, y, w, h, r){
 }
 
 function _edHandleDoubleTap(idx, e){
-  // Guard anti-arrastre: recordar dónde y cuándo se abrió el panel por doble tap.
-  // Un doble tap real casi siempre deja al dedo con un pequeño temblor residual
-  // (o el siguiente toque cae ligerísimamente desplazado) — sin este guard, ese
-  // temblor se interpretaba como "tocar y arrastrar" y desplazaba el objeto justo
-  // al abrir sus propiedades. Se consume/expira solo en edOnMove (ver _EdDblTapGuardPx).
-  window._edDblTapGuard = e ? { idx, x0: e.clientX, y0: e.clientY, until: Date.now() + _edDblTapGuardMs } : null;
   const la = edLayers[idx];
   if(la && la.type === 'draw'){
     // DrawLayer: doble tap → abrir panel de propiedades (editar desde el botón del panel)
@@ -12754,38 +12709,33 @@ function edOnMove(e){
   }
   if(!edIsDragging||edSelectedIdx<0)return;
   // Bloqueo de arrastre mientras el panel de propiedades del objeto esté abierto
-  // (petición de Alberto): el guard _edDblTapGuard de abajo solo absorbe el
-  // pequeño temblor del PROPIO gesto de doble tap (ventana de 400ms / 10px) —
-  // no protege de un TERCER toque genuino (sobre todo en PC, con ratón) que
-  // llegue después de esa ventana o con más recorrido, el cual sí se
-  // interpretaba como "tocar y arrastrar" y desplazaba el objeto justo al
-  // abrir sus propiedades. Aquí no hace falta arrastrar mientras el panel esté
-  // abierto, así que se bloquea sin límite de tiempo ni distancia. Comprobación
-  // en vivo del DOM (no un flag a mantener aparte): en cuanto el panel deje de
-  // tener la clase 'open' en modo props/text-props — se cierre como se cierre,
-  // hay muchos puntos de cierre distintos en el código — este bloqueo deja de
-  // aplicarse solo, sin necesidad de rescindirlo a mano en cada uno.
+  // (petición de Alberto): comprobación en vivo del DOM (no un flag a mantener
+  // aparte) — en cuanto el panel deje de tener la clase 'open' en modo
+  // props/text-props, se cierre como se cierre (hay muchos puntos de cierre
+  // distintos en el código), este bloqueo deja de aplicarse solo, sin
+  // necesidad de rescindirlo a mano en cada uno.
+  //
+  // BUG CORREGIDO (v38.18 — Alberto: capa con trayectoria, arrastre de unos
+  // pocos píxeles, al volver de la previsualización aparece sin mover. Log de
+  // diagnóstico confirmó "DRAG_END_NO_MOVE": el arrastre nunca llegaba a
+  // actualizar x/y en absoluto). Causa: existía además un segundo guard,
+  // _edDblTapGuard (ventana fija de 400ms / 10px tras CUALQUIER doble tap,
+  // pensado para el mismo problema que este bloqueo por panel-abierto ya
+  // resuelve de forma más completa), que confirmó Alberto que ya no hace
+  // falta — el bloqueo por panel abierto cubre el temblor mientras el panel
+  // sigue abierto; ese guard aparte, al no comprobar si el panel seguía
+  // abierto ni de qué dedo/puntero venía el movimiento, seguía activo hasta
+  // 400ms DESPUÉS de cerrar el panel y absorbía como si fuera temblor
+  // cualquier toque nuevo y deliberado que empezara a menos de 10px del punto
+  // del doble tap — p.ej. un nudge rápido justo después de cerrar el panel,
+  // gesto habitual. Eliminado entero (constantes, asignación en
+  // _edHandleDoubleTap, y esta comprobación) en vez de parchearlo.
   {
     const _ppPanel = $('edOptionsPanel');
     if(_ppPanel && _ppPanel.classList.contains('open') &&
        (_ppPanel.dataset.mode === 'props' || _ppPanel.dataset.mode === 'text-props')){
       return;
     }
-  }
-  // Guard anti-arrastre tras doble tap (ver _edHandleDoubleTap): si el objeto es
-  // el mismo cuyo panel se acaba de abrir y seguimos dentro de la ventana/umbral,
-  // el "drag" es temblor del propio gesto — ignorarlo sin mover el objeto.
-  if(window._edDblTapGuard && window._edDblTapGuard.idx === edSelectedIdx){
-    const _g = window._edDblTapGuard;
-    const _gDist = Math.hypot(e.clientX - _g.x0, e.clientY - _g.y0);
-    if(Date.now() <= _g.until && _gDist < _EdDblTapGuardPx){
-      return; // pequeño temblor tras el doble tap — no arrastrar
-    }
-    // Umbral superado o guard caducado: es un arrastre real — dejar de proteger
-    // y recalcular el offset desde AQUÍ para que continúe sin salto.
-    const _laGuard = edLayers[edSelectedIdx];
-    if(_laGuard){ edDragOffX = c.nx - _laGuard.x; edDragOffY = c.ny - _laGuard.y; }
-    window._edDblTapGuard = null;
   }
   const la=edLayers[edSelectedIdx];
   const _prevX = la.x, _prevY = la.y;
@@ -13377,10 +13327,6 @@ function edOnEnd(e){
     // Ver _edLayersSnapshot(movedLayer) más abajo.
     const _plainDragLayer = (edIsDragging && !edIsResizing && !edIsRotating && !edIsTailDragging && edSelectedIdx>=0)
       ? edLayers[edSelectedIdx] : null;
-    // DIAGNÓSTICO TEMPORAL v38.17 (Alberto: capa con trayectoria, arrastre
-    // leve de unos pocos píxeles, se desubica al volver de la previsualización
-    // — descartados guías/reglas y temporización, ver informe del 🩺).
-    if (_plainDragLayer) _mpPosDiagLog('drag_end', [_plainDragLayer], edCurrentPage);
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -25927,7 +25873,6 @@ function edOpenViewer(){
       delete l._pathCurRotDeg;
     }
   }));
-  edPages.forEach((pg, pi) => _mpPosDiagLog('viewer_open_after_reset', pg.layers, pi)); // DIAGNÓSTICO TEMPORAL v38.17 — ver comentario junto a _mpPosDiagLog
   try { _edStartPageAnims(0); } catch(e) { console.warn('[edOpenViewer] fallo al montar animaciones de la hoja 0:', e); } // arrancar animaciones solo de la hoja 0
   _edViewerMpTickStart();
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -26688,7 +26633,6 @@ function edCloseViewer(){
   // llegaba a ejecutarse. Ahora la limpieza va primero, y lo demás queda
   // protegido para que un fallo aislado no bloquee el resto del cierre.
   _edViewerMpTickStop();   // detener ticker de trayectoria y limpiar posiciones
-  _mpPosDiagLog('viewer_close_after_cleanup', edPages[edCurrentPage]?.layers, edCurrentPage); // DIAGNÓSTICO TEMPORAL v38.17 — ver comentario junto a _mpPosDiagLog
   try { _edGifSetPlaying(false); } catch(e) { console.warn('[edCloseViewer] fallo al detener GIF:', e); } // detener animación GIF al salir del visor
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
@@ -38958,32 +38902,6 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
-
-  // ── DIAGNÓSTICO TEMPORAL v38.17 — posición de capas con trayectoria ──────
-  // Ver comentario junto a _mpPosDiagLog (arriba en el archivo) para el
-  // contexto completo. Reproduce el problema (arrastra un poco la animación
-  // con trayectoria, previsualiza, vuelve al editor) y ENTONCES pulsa 🩺 —
-  // este bloque muestra los últimos eventos capturados, más recientes al
-  // final. Compara 'x'/'y' entre 'drag_end' y el siguiente 'viewer_open...'
-  // de la MISMA capa (mismo pageIdx+li): si 'x'/'y' YA salen distintos ahí,
-  // el problema es anterior a abrir el visor (el arrastre no llegó a
-  // cuajar). Si 'x'/'y' coinciden en 'drag_end' y 'viewer_open...' pero
-  // 'viewer_close...' vuelve a los valores antiguos, el problema está en el
-  // cierre. _pathCurX/_pathCurY deberían seguir siempre a x/y (mismo valor
-  // salvo un instante de la propia trayectoria animándose).
-  L('');
-  L('── LOG DE POSICIÓN — capas con trayectoria (arrastre / apertura / cierre del visor) ──');
-  if (window._mpPosDiag && window._mpPosDiag.length) {
-    window._mpPosDiag.forEach(e => {
-      L(`  [${new Date(e.t).toLocaleTimeString()}] ${e.tag}  P${e.pageIdx}L${e.li} uid=${e.uid||e._uid||'-'}`);
-      L(`      x=${e.x} y=${e.y}  _pathCurX=${e._pathCurX} _pathCurY=${e._pathCurY}`);
-      L(`      _pathStartTime=${e._pathStartTime} _pathStopped=${e._pathStopped}  _edViewerMode=${e._edViewerMode}`);
-      L(`      _gcpRefX=${e._gcpRefX} _gcpRefY=${e._gcpRefY} _gcpRefW=${e._gcpRefW} _gcpRefH=${e._gcpRefH} _isGcpImage=${e._isGcpImage}`);
-      L(`      animKey=${e.animKey} groupId=${e.groupId}`);
-    });
-  } else {
-    L('  (vacío — todavía no se ha arrastrado ninguna capa con trayectoria en esta sesión)');
-  }
 
   // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
   // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al
