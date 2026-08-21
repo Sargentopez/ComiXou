@@ -25857,7 +25857,20 @@ function _edGifSetPlaying(playing) {
 function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
-  _edStartPageAnims(0); // arrancar animaciones solo de la hoja 0
+  // BUG CORREGIDO (v38.16 — Alberto: capa CON trayectoria activa, la arrastra,
+  // previsualiza sin guardar, al volver al editor aparece en su sitio previo
+  // al arrastre). Causa: este reseteo de _pathCurX/_pathCurY (que SÍ recoge
+  // la posición fresca de l.x/l.y tras el arrastre) se ejecutaba DESPUÉS de
+  // _edStartPageAnims(0) — si CUALQUIER capa (no necesariamente la
+  // arrastrada, ni siquiera de la misma hoja: basta una hoja 0 con un fallo)
+  // lanzaba una excepción al montar su animación (fotograma corrupto, dato a
+  // medias, etc.), el resto de edOpenViewer() —incluido este reseteo— nunca
+  // llegaba a ejecutarse, sin ningún try/catch que lo evitara. Si esa capa (o
+  // cualquier otra) tenía ya un _pathCurX de una reproducción anterior, se
+  // quedaba fijo ahí para siempre en vez de actualizarse a la posición recién
+  // arrastrada. Arreglo: el reseteo (esencial, no depende de nada que pueda
+  // fallar) va SIEMPRE primero, y _edStartPageAnims() queda protegido para
+  // que un fallo en una capa no impida que el visor termine de abrirse.
   // Resetear estado de trayectorias en TODAS las hojas — posición inicial = base de la capa.
   // NO fijar _pathStartTime aquí: el ticker (_edViewerMpTick) lo fija en el primer frame
   // de la hoja activa. Así la trayectoria arranca siempre desde el principio cuando el
@@ -25873,6 +25886,7 @@ function edOpenViewer(){
       delete l._pathCurRotDeg;
     }
   }));
+  try { _edStartPageAnims(0); } catch(e) { console.warn('[edOpenViewer] fallo al montar animaciones de la hoja 0:', e); } // arrancar animaciones solo de la hoja 0
   _edViewerMpTickStart();
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
     edViewerTextStep=(_fp?.textMode==='sequential'&&_ftl.length>0)?1:0; }
@@ -26432,6 +26446,7 @@ function _edStartPageAnims(pageIdx) {
     return;
   }
   page.layers.forEach(function(l) {
+    try {
     if (l.type === 'gif' && l._ready) {
       l._fIdx = 0;
       l._playing = true;
@@ -26447,6 +26462,7 @@ function _edStartPageAnims(pageIdx) {
       // Invisibilidad antes del inicio: opacity 0 durante el delay
       if (_startMs > 0 && l._gcpInvisBeforeStart) l._animFadeOpacity = 0;
       const _doStart = () => {
+        try {
         l._startDelayTimer = null;
         l._playing = true;
         // Resetear la trayectoria para que arranque sincronizado con la animación
@@ -26481,6 +26497,7 @@ function _edStartPageAnims(pageIdx) {
             if (l._playing) l._applyFrame(0);
           });
         }
+        } catch(e) { console.warn('[_edStartPageAnims] fallo en _doStart de una capa:', e); }
       };
       if (_startMs > 0) {
         l._playing = false; // esperar al temporizador
@@ -26489,6 +26506,7 @@ function _edStartPageAnims(pageIdx) {
         _doStart();
       }
     }
+    } catch(e) { console.warn('[_edStartPageAnims] fallo al montar una capa, se continúa con el resto:', e); }
   });
 }
 
@@ -26621,8 +26639,14 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
-  _edGifSetPlaying(false); // detener animación GIF al salir del visor
+  // BUG CORREGIDO (v38.16 — mismo hilo que edOpenViewer, ver comentario allí):
+  // _edViewerMpTickStop() es quien limpia _pathCurX/_pathCurY al cerrar el
+  // visor — antes corría DESPUÉS de _edGifSetPlaying(false), así que si esta
+  // lanzaba (p.ej. un GIF con datos a medias) la limpieza de posición nunca
+  // llegaba a ejecutarse. Ahora la limpieza va primero, y lo demás queda
+  // protegido para que un fallo aislado no bloquee el resto del cierre.
   _edViewerMpTickStop();   // detener ticker de trayectoria y limpiar posiciones
+  try { _edGifSetPlaying(false); } catch(e) { console.warn('[edCloseViewer] fallo al detener GIF:', e); } // detener animación GIF al salir del visor
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
   _edViewerFullCtx    = null;
