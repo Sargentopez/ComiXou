@@ -3674,6 +3674,43 @@ function _edLayersSnapshot(movedLayer){
 }
 // Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
 // .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
+// ══════════════════════════════════════════════════════════════════════
+// DIAGNÓSTICO TEMPORAL v38.17 — Alberto: capa CON trayectoria activa, la
+// desplaza unos pocos píxeles, previsualiza, al volver al editor aparece en
+// su sitio previo al desplazamiento. Descartado ya (con pruebas reales):
+// guías/reglas de alineación (probó ocultándolas), temporización (probó
+// esperando 20s antes de previsualizar), la propia función de historial
+// (edPushHistory/_edLayersSnapshot no distingue desplazamientos pequeños de
+// grandes en pruebas dirigidas), y el motor de trayectoria en sí
+// (AnimClock.applyPathOffset, sin redondeos ni umbrales).
+// Este log captura x/y/_pathCurX/_pathCurY y los campos de referencia GCP en
+// tres momentos reales de la sesión de Alberto — fin de arrastre, apertura y
+// cierre del visor — para ver con datos suyos en vez de seguir reproduciendo
+// a ciegas. Se muestra en el informe del botón 🩺 (ver _edRunDiag). Quitar
+// esta sección entera (helper + las 3 llamadas a _mpPosDiagLog) y volver a
+// comentar el botón 🩺 en views.js en cuanto se identifique la causa.
+window._mpPosDiag = window._mpPosDiag || [];
+function _mpPosDiagLog(tag, layers, pageIdx) {
+  try {
+    (layers||[]).forEach((l, li) => {
+      if (!l || !l._motionPath || l._motionPath.length < 2) return;
+      window._mpPosDiag.push({
+        tag, t: Date.now(), pageIdx, li,
+        x: l.x, y: l.y,
+        _pathCurX: l._pathCurX, _pathCurY: l._pathCurY,
+        _pathStartTime: l._pathStartTime||null, _pathStopped: !!l._pathStopped,
+        _gcpRefX: l._gcpRefX??null, _gcpRefY: l._gcpRefY??null,
+        _gcpRefW: l._gcpRefW??null, _gcpRefH: l._gcpRefH??null,
+        _isGcpImage: !!l._isGcpImage,
+        animKey: l.animKey||l._pngFramesKey||l._apngIdbKey||null,
+        groupId: l.groupId||null, _uid: l._uid||null,
+        _edViewerMode: (typeof _edViewerMode!=='undefined') ? _edViewerMode : null,
+      });
+    });
+    if (window._mpPosDiag.length > 60) window._mpPosDiag = window._mpPosDiag.slice(-60);
+  } catch(e) {}
+}
+
 function _edSnapLayerFragment(l){
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
@@ -13340,6 +13377,10 @@ function edOnEnd(e){
     // Ver _edLayersSnapshot(movedLayer) más abajo.
     const _plainDragLayer = (edIsDragging && !edIsResizing && !edIsRotating && !edIsTailDragging && edSelectedIdx>=0)
       ? edLayers[edSelectedIdx] : null;
+    // DIAGNÓSTICO TEMPORAL v38.17 (Alberto: capa con trayectoria, arrastre
+    // leve de unos pocos píxeles, se desubica al volver de la previsualización
+    // — descartados guías/reglas y temporización, ver informe del 🩺).
+    if (_plainDragLayer) _mpPosDiagLog('drag_end', [_plainDragLayer], edCurrentPage);
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
@@ -25886,6 +25927,7 @@ function edOpenViewer(){
       delete l._pathCurRotDeg;
     }
   }));
+  edPages.forEach((pg, pi) => _mpPosDiagLog('viewer_open_after_reset', pg.layers, pi)); // DIAGNÓSTICO TEMPORAL v38.17 — ver comentario junto a _mpPosDiagLog
   try { _edStartPageAnims(0); } catch(e) { console.warn('[edOpenViewer] fallo al montar animaciones de la hoja 0:', e); } // arrancar animaciones solo de la hoja 0
   _edViewerMpTickStart();
   { const _fp=edPages[0]; const _ftl=_fp?.layers.filter(l=>l.type==='text'||l.type==='bubble')||[];
@@ -26646,6 +26688,7 @@ function edCloseViewer(){
   // llegaba a ejecutarse. Ahora la limpieza va primero, y lo demás queda
   // protegido para que un fallo aislado no bloquee el resto del cierre.
   _edViewerMpTickStop();   // detener ticker de trayectoria y limpiar posiciones
+  _mpPosDiagLog('viewer_close_after_cleanup', edPages[edCurrentPage]?.layers, edCurrentPage); // DIAGNÓSTICO TEMPORAL v38.17 — ver comentario junto a _mpPosDiagLog
   try { _edGifSetPlaying(false); } catch(e) { console.warn('[edCloseViewer] fallo al detener GIF:', e); } // detener animación GIF al salir del visor
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
@@ -38915,6 +38958,32 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── DIAGNÓSTICO TEMPORAL v38.17 — posición de capas con trayectoria ──────
+  // Ver comentario junto a _mpPosDiagLog (arriba en el archivo) para el
+  // contexto completo. Reproduce el problema (arrastra un poco la animación
+  // con trayectoria, previsualiza, vuelve al editor) y ENTONCES pulsa 🩺 —
+  // este bloque muestra los últimos eventos capturados, más recientes al
+  // final. Compara 'x'/'y' entre 'drag_end' y el siguiente 'viewer_open...'
+  // de la MISMA capa (mismo pageIdx+li): si 'x'/'y' YA salen distintos ahí,
+  // el problema es anterior a abrir el visor (el arrastre no llegó a
+  // cuajar). Si 'x'/'y' coinciden en 'drag_end' y 'viewer_open...' pero
+  // 'viewer_close...' vuelve a los valores antiguos, el problema está en el
+  // cierre. _pathCurX/_pathCurY deberían seguir siempre a x/y (mismo valor
+  // salvo un instante de la propia trayectoria animándose).
+  L('');
+  L('── LOG DE POSICIÓN — capas con trayectoria (arrastre / apertura / cierre del visor) ──');
+  if (window._mpPosDiag && window._mpPosDiag.length) {
+    window._mpPosDiag.forEach(e => {
+      L(`  [${new Date(e.t).toLocaleTimeString()}] ${e.tag}  P${e.pageIdx}L${e.li} uid=${e.uid||e._uid||'-'}`);
+      L(`      x=${e.x} y=${e.y}  _pathCurX=${e._pathCurX} _pathCurY=${e._pathCurY}`);
+      L(`      _pathStartTime=${e._pathStartTime} _pathStopped=${e._pathStopped}  _edViewerMode=${e._edViewerMode}`);
+      L(`      _gcpRefX=${e._gcpRefX} _gcpRefY=${e._gcpRefY} _gcpRefW=${e._gcpRefW} _gcpRefH=${e._gcpRefH} _isGcpImage=${e._isGcpImage}`);
+      L(`      animKey=${e.animKey} groupId=${e.groupId}`);
+    });
+  } else {
+    L('  (vacío — todavía no se ha arrastrado ninguna capa con trayectoria en esta sesión)');
+  }
 
   // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
   // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al
