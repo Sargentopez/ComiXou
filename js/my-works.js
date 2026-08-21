@@ -1184,18 +1184,40 @@ function _mcRenderList() {
         appAlert(I18n.t('mc_needCloudFirst'));
         return;
       }
-      // 2. Comparar fechas: localSavedAt vs cloudSavedAt
-      //    - localSavedAt: se actualiza cada vez que se guarda en local (editor)
-      //    - cloudSavedAt: se actualiza SOLO cuando se sube a la nube con éxito
-      //    Si localSavedAt > cloudSavedAt (o cloudSavedAt no existe) → hay cambios sin subir
+      // 2. Comparar fechas: localSavedAt vs la fecha REAL en la nube AHORA MISMO.
+      //    BUG CORREGIDO (v38.23 — Alberto: en un dispositivo que no había
+      //    editado la obra recientemente, "Enviar a revisión" avisó de que
+      //    lo local era más nuevo que la nube, siendo falso — la obra se
+      //    había guardado DESPUÉS desde otro dispositivo). Causa: a
+      //    diferencia del flujo "Editar" (línea ~982 más arriba, que sí
+      //    consulta Supabase en vivo con SupabaseClient.fetchWorksByIds
+      //    antes de comparar), este comparaba localSavedAt contra
+      //    cloudSavedAt — las dos LOCALES, leídas de WorkStore/IndexedDB de
+      //    ESTE dispositivo. cloudSavedAt solo se actualiza cuando ESTE
+      //    dispositivo sube con éxito — si otro dispositivo subió una
+      //    versión más reciente después, este seguía con su propio
+      //    cloudSavedAt desfasado, así que la comparación (local vs. una
+      //    caché local desactualizada, no vs. la nube real) podía salir
+      //    "local más nuevo" sin serlo. Arreglo: consultar la nube en vivo
+      //    aquí también, mismo patrón que "Editar"; si la consulta falla
+      //    (sin red, etc.) cae al criterio anterior en vez de bloquear el
+      //    envío.
       const _comicFull = WorkStore.getByIdFull
         ? (await WorkStore.getByIdFull(comic.id)) || comic
         : comic;
-      const _localAt  = _comicFull.localSavedAt || '';
-      const _cloudAt  = _comicFull.cloudSavedAt || '';
+      const _localAtRaw = _comicFull.localSavedAt || '';
+      let _cloudAtRaw = _comicFull.cloudSavedAt || '';
+      if (typeof SupabaseClient !== 'undefined') {
+        try {
+          const _cloudMetaP = await SupabaseClient.fetchWorksByIds([comic.supabaseId]);
+          if (_cloudMetaP && _cloudMetaP[0] && _cloudMetaP[0].updated_at) {
+            _cloudAtRaw = _cloudMetaP[0].updated_at; // fecha real de la nube ahora mismo, no la cacheada localmente
+          }
+        } catch(e) { console.warn('fecha nube (publish):', e); }
+      }
       const _hasLocalData = !!(_comicFull.editorData?.pages?.length);
       // Local más nueva: tiene datos locales Y (nunca subida a la nube O guardado local posterior a la subida)
-      const _localNewer = _hasLocalData && (_localAt > _cloudAt || !_cloudAt);
+      const _localNewer = _hasLocalData && (!_cloudAtRaw || new Date(_localAtRaw || 0) > new Date(_cloudAtRaw));
       // ── Función de envío real ──────────────────────────────────────────────
       const _doSubmit = async () => {
         if (typeof SupabaseClient !== 'undefined') {
@@ -1284,14 +1306,27 @@ function _mcRenderList() {
         appAlert(I18n.t('mc_notInCloudShare'));
         return;
       }
-      // 2. Comparar localSavedAt vs cloudSavedAt para detectar cambios sin subir.
+      // 2. Comparar localSavedAt vs la fecha REAL en la nube AHORA MISMO.
       //    NOTA: updatedAt no es fiable aquí — WorkStore.save() lo sobreescribe siempre
       //    con new Date(), por lo que no refleja la fecha real de la última subida a la nube.
-      //    cloudSavedAt solo se actualiza en editor.js al guardar en nube con éxito.
+      //    v38.23 — mismo arreglo que "Enviar a revisión" (ver ahí el porqué
+      //    completo): cloudSavedAt cacheado localmente solo se actualiza
+      //    cuando ESTE dispositivo sube con éxito, así que si otro
+      //    dispositivo subió una versión más reciente, este avisaba de
+      //    "local más nuevo" sin serlo de verdad. Consultar la nube en vivo
+      //    aquí también; si falla (sin red, etc.), cae al criterio anterior.
       const _localAt = comic.localSavedAt || '';
-      const _cloudAt = comic.cloudSavedAt || '';
+      let _cloudAt = comic.cloudSavedAt || '';
+      if (typeof SupabaseClient !== 'undefined') {
+        try {
+          const _cloudMetaS = await SupabaseClient.fetchWorksByIds([comic.supabaseId]);
+          if (_cloudMetaS && _cloudMetaS[0] && _cloudMetaS[0].updated_at) {
+            _cloudAt = _cloudMetaS[0].updated_at;
+          }
+        } catch(e) { console.warn('fecha nube (share):', e); }
+      }
       // 2. Versión local más nueva que la nube → advertir pero dar opción de continuar
-      if (_localAt && _cloudAt && _localAt > _cloudAt) {
+      if (_localAt && _cloudAt && new Date(_localAt) > new Date(_cloudAt)) {
         appConfirm(
           I18n.t('mc_localNewerShare'),
           () => { if (typeof openShareModal !== 'undefined') openShareModal(comic); },

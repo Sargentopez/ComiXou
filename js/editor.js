@@ -30905,6 +30905,20 @@ function edBibGuardar() {
         const gifEntry = {
           id: Date.now() + '_gif', timestamp: Date.now(),
           isGroup: false, isGifAnim: true,
+          // BUG CORREGIDO (v38.24 — Alberto: "las bibliotecas exportadas no
+          // están guardando correctamente la info de orientación", objetos
+          // deformados al insertar en una hoja de orientación distinta a la
+          // de origen). Causa: de las tres formas de guardar en biblioteca
+          // (grupo, objeto individual, GIF), solo esta —GIF— NO incluía
+          // 'orientation'. Tanto la inserción de GIF (_convAnimSize, más
+          // abajo en esta misma función) como la general (_adaptLayerOrientation)
+          // SÍ convierten correctamente si conocen la orientación de origen —
+          // pero con el campo ausente, "entry.orientation || edOrientation"
+          // caía siempre en la orientación ACTUAL (la de destino), así que la
+          // condición "¿hace falta convertir?" salía falsa por definición,
+          // nunca por evaluación real. La lógica de conversión nunca estuvo
+          // rota — el dato que necesitaba nunca se guardó para los GIF.
+          orientation: edOrientation,
           gifDataUrl, layerData: null, thumb: gifThumb
         };
         const d2 = _bibLoad();

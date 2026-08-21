@@ -5313,6 +5313,15 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     layer.marginXFrac = la.marginXFrac;
     layer.manualBreakChars = effectiveManualBreaks;
     layer.text = _tdPlainSummary(pages[i]);
+    // BUG CORREGIDO (v38.22 — auditoría del guardado en nube pedida por
+    // Alberto: guardados muy largos con muy pocos cambios en una sola hoja).
+    // El contenido de ESTA página cambió de verdad (richLines/text/etc.
+    // reescritos arriba) — marcarla sucia individualmente. Antes no se
+    // marcaba nada aquí: solo se salvaba porque el paso 3 (más abajo) casi
+    // siempre terminaba llamando a _edMarkPagesStructureDirty(), que fuerza
+    // el reproceso de TODA la obra igualmente — pero eso era la propia causa
+    // del guardado lento, no una red de seguridad deseable.
+    if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(edPages[flowIdxs[i]]);
   }
 
   // 2) Slots sobrantes (cupo en menos hojas): la capa de texto del flujo ya
@@ -5327,6 +5336,11 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
     const extras = (pg.layers || []).filter(l => !(l && l._tdFlowId === flowId));
     if(extras.length){
       pg.layers = extras;
+      // v38.22 — esta página sigue existiendo, en el mismo sitio: perder su
+      // capa de texto del flujo cambia SU contenido, no la estructura de la
+      // obra. Marcarla sucia individualmente en vez de forzar el reproceso
+      // de todas las páginas.
+      if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(pg);
     } else {
       edPages.splice(idx, 1);
       if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
@@ -5369,6 +5383,20 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       pg.layers.push(tl);
       pg._dirtyCountLocal = (pg._dirtyCountLocal || 0) + 1;
       pg._dirtyCountCloud = (pg._dirtyCountCloud || 0) + 1;
+      // BUG CORREGIDO (v38.22 — auditoría del guardado en nube pedida por
+      // Alberto: guardados muy largos con muy pocos cambios en una sola
+      // hoja). Reutilizar una hoja YA EXISTENTE para el desbordamiento no
+      // cambia el número ni el orden de páginas de la obra — no es un
+      // cambio ESTRUCTURAL, aunque antes esta fase terminaba llamando de
+      // todos modos a _edMarkPagesStructureDirty() (más abajo, fuera de este
+      // bucle) simplemente por caer dentro del "if(pages.length > reused)".
+      // Esa marca global fuerza reserializar TODAS las páginas de la obra en
+      // el siguiente guardado (ver _canReuse en _edSaveProjectInner/el
+      // cálculo de tamaño) — con un flujo de texto de varias hojas, cualquier
+      // edición que necesitara una hoja más de desbordamiento (algo muy
+      // habitual, no un caso raro) volvía lento el guardado entero. Arreglo:
+      // marcar sucia solo ESTA página, la única que de verdad cambió.
+      if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(pg);
       cursor++; oi++;
     }
     // Fase B: si aún sobra texto tras agotar las hojas existentes de la
@@ -5399,8 +5427,12 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
         };
       });
       edPages.splice(cursor, 0, ...extraPages);
+      // v38.22 — esto SÍ es un cambio estructural real (el número de páginas
+      // de la obra cambia) — movido aquí dentro, desde fuera del if(pages.length
+      // > reused) de más abajo, donde disparaba también para la Fase A (que no
+      // crea ni quita ninguna página, ver arriba).
+      if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
     }
-    if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
   }
 
   if(wasCurrentInFlow){
