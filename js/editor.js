@@ -1807,6 +1807,7 @@ class ImageLayer extends BaseLayer {
                   };
                   requestAnimationFrame(_doFIR);
                 }
+                _self._animNextT = null; // reanclar el temporizador autocorrectivo para el nuevo ciclo
                 _self._applyFrame(0);
               }, _sdMsR);
             } else {
@@ -1814,6 +1815,7 @@ class ImageLayer extends BaseLayer {
               _self._playing = true;
               delete _self._pathStartTime;
               delete _self._pathStopped;
+              _self._animNextT = null; // reanclar el temporizador autocorrectivo para el nuevo ciclo
               _self._applyFrame(0);
               requestAnimationFrame(() => {
                 if (typeof edRedraw === 'function') edRedraw();
@@ -1836,6 +1838,27 @@ class ImageLayer extends BaseLayer {
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
     const delay = frame.delay || this._gcpFrameDelay || window._gcpFrameDelay || 100;
+    // TEMPORIZADOR AUTOCORRECTIVO (v38.21 — auditoría de tiempos pedida por
+    // Alberto: "el más mínimo fallo en los tiempos puede hacer que ambas
+    // animaciones se superpongan"). Antes se agendaba siempre setTimeout(fn,
+    // delay) desde el instante en que ESTE fotograma se pintó — si ese
+    // callback disparaba unos ms tarde (normal bajo carga: muchas capas,
+    // dispositivo lento), el retraso se sumaba al de todos los fotogramas
+    // siguientes sin corregirse nunca, así que una animación de muchos
+    // fotogramas/ciclos (p.ej. 20 ciclos) podía terminar notablemente más
+    // tarde de lo previsto — justo la ventana en la que otra capa pensada
+    // para aparecer en el mismo instante en que esta desaparece puede acabar
+    // superponiéndose o dejando un hueco. Arreglo: agendar contra el
+    // instante IDEAL del siguiente fotograma (acumulado desde el inicio de
+    // la reproducción), no desde "ahora" — un fotograma que llega tarde
+    // acorta el siguiente para compensar, en vez de arrastrar el retraso.
+    // Si el retraso acumulado supera 2 fotogramas (pestaña en segundo plano,
+    // GC largo...) se resincroniza a "ahora" en vez de intentar recuperar de
+    // golpe muchos fotogramas seguidos.
+    const _nowAF = performance.now();
+    if (this._animNextT == null || (_nowAF - this._animNextT) > delay * 2) this._animNextT = _nowAF;
+    this._animNextT += delay;
+    const _waitAF = Math.max(0, this._animNextT - _nowAF);
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
       requestAnimationFrame(() => {
@@ -1845,7 +1868,7 @@ class ImageLayer extends BaseLayer {
           edRedraw();
         }
       });
-    }, delay);
+    }, _waitAF);
   }
 
   // Stubs de compatibilidad (código externo que aún usa los nombres antiguos)
@@ -1860,6 +1883,7 @@ class ImageLayer extends BaseLayer {
     this._fIdx = 0;
     this._gcpPlayCount = 0;
     this._animFadeOpacity = null; // Cancelar cualquier fade activo
+    this._animNextT = null; // reanclar el temporizador autocorrectivo para el próximo play
     if (this._animReady && this._animFrames && this._animFrames.length) {
       this._oc.getContext('2d').putImageData(this._animFrames[0].imageData, 0, 0);
     }
@@ -1939,6 +1963,11 @@ class GifLayer extends BaseLayer {
     // La animación se activará en los reproductores (Fase 2)
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
+    // Temporizador autocorrectivo — ver comentario en ImageLayer._applyFrame (v38.21)
+    const _nowGF = performance.now();
+    if (this._animNextT == null || (_nowGF - this._animNextT) > frame.delay * 2) this._animNextT = _nowGF;
+    this._animNextT += frame.delay;
+    const _waitGF = Math.max(0, this._animNextT - _nowGF);
     this._timer = setTimeout(() => {
       this._applyFrame(this._fIdx + 1);
       requestAnimationFrame(() => {
@@ -1950,12 +1979,13 @@ class GifLayer extends BaseLayer {
           edRedraw();
         }
       });
-    }, frame.delay);
+    }, _waitGF);
   }
   stopAnim() {
     if (this._timer) { clearTimeout(this._timer); this._timer = null; }
     this._playing = false;
     this._fIdx = 0;
+    this._animNextT = null; // reanclar el temporizador autocorrectivo para el próximo play
     if (this._ready && this._frames && this._frames.length && this._oc) {
       this._oc.getContext('2d').putImageData(this._frames[0].imageData, 0, 0);
     }
@@ -3669,54 +3699,6 @@ function _edLayersSnapshot(movedLayer){
     if (_cacheableType && _fragment) l._cachedSnapFragment = _fragment; // refrescar caché
     return _fragment;
   }));
-}
-// DIAGNÓSTICO TEMPORAL v38.19 — Alberto: prueba controlada confirmó que el
-// problema solo ocurre si el visor llega a MOSTRAR la hoja con la
-// trayectoria (previsualizar sin pasar de la hoja 1: posición correcta al
-// volver; previsualizar hasta la hoja 13: posición revertida al volver).
-// Descartado ya: applyPathOffset/AnimClock (solo toca _pathCurX/_pathCurY,
-// nunca x/y — leído función completa), _edStartPageAnims, edUpdateViewer
-// (sin asignaciones a x/y de capa en ninguna). El log de posición de v38.17
-// SÍ detectó que x cambiaba de verdad entre apertura y cierre del visor para
-// la capa con trayectoria — pero solo captura ANTES/DESPUÉS, no el momento
-// exacto. Esta versión instrumenta x/y de las capas con trayectoria como
-// propiedades con getter/setter: cualquier escritura queda registrada con
-// pila de llamadas, así se ve la función exacta responsable en vez de seguir
-// buscando a ciegas entre candidatos. Quitar entera (esta función + su
-// llamada en edOpenViewer + la sección del informe en _edRunDiag + volver a
-// comentar el botón 🩺) en cuanto se identifique la causa.
-function _mpInstrumentXY(l) {
-  if (!l || l.__xyWatched) return;
-  try {
-    l.__xyWatched = true;
-    let _vx = l.x, _vy = l.y;
-    Object.defineProperty(l, 'x', {
-      get() { return _vx; },
-      set(v) {
-        if (v !== _vx) {
-          window._mpXYWatch = window._mpXYWatch || [];
-          window._mpXYWatch.push({ t: Date.now(), field: 'x', old: _vx, new: v,
-            stack: (new Error().stack || '').split('\n').slice(1, 6).join('  ⤷  ') });
-          if (window._mpXYWatch.length > 40) window._mpXYWatch = window._mpXYWatch.slice(-40);
-        }
-        _vx = v;
-      },
-      configurable: true, enumerable: true,
-    });
-    Object.defineProperty(l, 'y', {
-      get() { return _vy; },
-      set(v) {
-        if (v !== _vy) {
-          window._mpXYWatch = window._mpXYWatch || [];
-          window._mpXYWatch.push({ t: Date.now(), field: 'y', old: _vy, new: v,
-            stack: (new Error().stack || '').split('\n').slice(1, 6).join('  ⤷  ') });
-          if (window._mpXYWatch.length > 40) window._mpXYWatch = window._mpXYWatch.slice(-40);
-        }
-        _vy = v;
-      },
-      configurable: true, enumerable: true,
-    });
-  } catch(e) {}
 }
 // Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
 // .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
@@ -25912,7 +25894,6 @@ function edOpenViewer(){
   // usuario llega a cada hoja, independientemente de cuánto tiempo lleve abierto el visor.
   edPages.forEach(pg => (pg.layers||[]).forEach(l => {
     if (l._motionPath && l._motionPath.length >= 2) {
-      _mpInstrumentXY(l); // DIAGNÓSTICO TEMPORAL v38.19 — ver comentario junto a _mpInstrumentXY
       delete l._pathStartTime;  // el ticker lo fijará al procesar la hoja activa
       delete l._pathStopped;    // borrar bandera 'stop' para que la trayectoria pueda reiniciarse
       delete l._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
@@ -28857,6 +28838,24 @@ function EditorView_init(){
   // ── Teclado: Ctrl+Z / Ctrl+Y / Delete ──
   window._edKeyFn = function(e){
     if(!document.getElementById('editorShell')) return;
+    // BUG CORREGIDO (v38.20 — Alberto: "el editor está moviendo el objeto sin
+    // que yo lo vea mientras avanzo en las hojas [del visor]. Si el objeto no
+    // está seleccionado no se mueve, si avanzo con las flechas [botones en
+    // pantalla] en vez de con el teclado tampoco. Debes hacer que mientras se
+    // esté realizando una previsualización nada en el canvas del editor
+    // pueda modificarse"). Causa: _edViewerKey (más arriba en este archivo)
+    // ya gestiona el teclado del visor —flechas para avanzar/retroceder de
+    // hoja, Escape para cerrar— comprobando primero si 'editorViewer' tiene
+    // la clase 'open'. Pero es un listener SEPARADO de este (_edKeyFn), que
+    // seguía activo en paralelo sin comprobar en absoluto si el visor estaba
+    // abierto: cada flecha de navegación, además de avanzar la hoja del
+    // visor, TAMBIÉN desplazaba unos píxeles la capa que hubiera quedado
+    // seleccionada en el editor desde antes de abrirlo — según el atajo que
+    // tocara (Supr/Retroceso y Ctrl+D pasan por aquí igual), podría haber
+    // borrado o duplicado. Arreglo: mientras el visor esté abierto, ningún
+    // atajo de este archivo debe alcanzar el lienzo del editor — la
+    // navegación/cierre del visor ya está cubierta por _edViewerKey.
+    if(document.getElementById('editorViewer')?.classList.contains('open')) return;
     // Editor de textos (tdShell) abierto: si el foco no está en el propio
     // Trix (#tdEditor), ningún atajo del editor general debe alcanzar el
     // lienzo que queda bloqueado detrás del overlay — mismo criterio que ya
@@ -38951,25 +38950,6 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
-
-  // ── DIAGNÓSTICO TEMPORAL v38.19 — pila de llamadas de escrituras a x/y ───
-  // Ver comentario junto a _mpInstrumentXY (arriba en el archivo). Reproduce
-  // el problema exacto que ya confirmaste (arrastra un poco la animación con
-  // trayectoria de la hoja 13, previsualiza LLEGANDO hasta esa hoja, vuelve
-  // al editor) y ENTONCES pulsa 🩺 — cada entrada de aquí es una escritura
-  // real a x o y de una capa con trayectoria, con la función/línea exacta
-  // que la hizo. La que aparezca justo antes de que 'new' deje de coincidir
-  // con el valor que arrastraste es la causa.
-  L('');
-  L('── ESCRITURAS A x/y — capas con trayectoria (con pila de llamadas) ──');
-  if (window._mpXYWatch && window._mpXYWatch.length) {
-    window._mpXYWatch.forEach(e => {
-      L(`  [${new Date(e.t).toLocaleTimeString()}] ${e.field}: ${e.old} → ${e.new}`);
-      L(`      ${e.stack}`);
-    });
-  } else {
-    L('  (vacío — todavía no se ha escrito x/y de ninguna capa con trayectoria instrumentada en esta sesión)');
-  }
 
   // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
   // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al

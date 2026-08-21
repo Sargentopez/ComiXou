@@ -1576,10 +1576,18 @@ function _readerGifTick() {
         if (!_gifMpSync) {
           if (!layer._gifLastTick) return;
           const frame = layer._gifFrames[layer._gifIdx];
-          if (now - layer._gifLastTick >= (frame.delay || 100)) {
+          const _gd = frame.delay || 100;
+          if (now - layer._gifLastTick >= _gd) {
             layer._gifIdx = (layer._gifIdx + 1) % layer._gifFrames.length;
             layer._gifOc.getContext('2d').putImageData(layer._gifFrames[layer._gifIdx].imageData, 0, 0);
-            layer._gifLastTick = now;
+            // AUTOCORRECCIÓN (v38.21 — auditoría de tiempos pedida por Alberto):
+            // sumar el delay IDEAL al último tick en vez de resetear a 'now' —
+            // así un tick que llega unos ms tarde (normal, la comprobación solo
+            // corre una vez por frame de pantalla) no desplaza el origen de
+            // todos los fotogramas siguientes con él. Si el retraso ya es
+            // grande (pestaña en segundo plano, etc.) se resincroniza a 'now'
+            // en vez de intentar recuperar de golpe varios fotogramas seguidos.
+            layer._gifLastTick = (now - layer._gifLastTick > _gd * 2) ? now : layer._gifLastTick + _gd;
             panelChanged = true;
           }
         }
@@ -1708,7 +1716,12 @@ function _readerGifTick() {
           }
           layer._animIdx = _nextIdx;
           layer._animOc.getContext('2d').putImageData(layer._animFrames[_nextIdx].imageData, 0, 0);
-          layer._animLastTick = now;
+          // AUTOCORRECCIÓN (v38.21) — mismo criterio que el bloque GIF de
+          // arriba: sumar el delay ideal en vez de resetear a 'now', salvo
+          // que el retraso ya sea grande. No aplica al reinicio tras parada
+          // (líneas ~1652-1669 más arriba), que ancla a 'now' correctamente
+          // porque ahí sí empieza una secuencia nueva tras un hueco real.
+          layer._animLastTick = (now - layer._animLastTick > _ad * 2) ? now : layer._animLastTick + _ad;
           panelChanged = true;
         }
         } // end else (!_animStopped)
