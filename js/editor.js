@@ -26386,6 +26386,11 @@ function _edResetPageAnims(pageIdx) {
   });
 }
 
+// pageIdx en curso de carga diferida -> promesa compartida (evita que una
+// re-entrada rápida se salte el montaje mientras la carga anterior sigue en
+// vuelo). Ver _edStartPageAnims, arreglo v38.14.
+const _edDeferredLoadPromises = {};
+
 // Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
 function _edStartPageAnims(pageIdx) {
   // Garantizar que el ticker de trayectorias está corriendo (puede haberse parado si
@@ -26393,11 +26398,35 @@ function _edStartPageAnims(pageIdx) {
   _edViewerMpTickStart();
   const page = edPages[pageIdx];
   if (!page) return;
+
+  // BUG CORREGIDO (v38.14 — Alberto: el temporizador de inicio no se respeta
+  // si se navega muy rápido entre hojas, "no da tiempo a montarse
+  // correctamente"). Causa: _edLoadPageAnims marca _animDeferred=false en
+  // cuanto EMPIEZA a cargar (antes de que la lectura real de IndexedDB
+  // termine). Si el usuario salía y volvía a entrar en la misma hoja
+  // mientras esa carga seguía en vuelo, la re-entrada veía _animDeferred ya
+  // en false, se saltaba por completo el "if (_hasDeferredAnims)" de abajo,
+  // y pasaba directo al montaje real de la capa — con _apngSrc/_pngFrames
+  // todavía sin llegar, esa comprobación fallaba y la re-entrada no montaba
+  // nada. El montaje real solo acababa ocurriendo cuando la carga ORIGINAL
+  // (ya abandonada) terminaba por su cuenta, con lo que el temporizador de
+  // inicio arrancaba en un instante que ya no correspondía a cuándo el
+  // usuario había entrado de verdad. Arreglo, siguiendo tu propia idea: si
+  // ya hay una carga en curso para esta hoja, esperar a que termine (que
+  // "todo esté listo") antes de decidir nada, en vez de fiarse de
+  // _animDeferred.
+  if (_edDeferredLoadPromises[pageIdx]) {
+    _edDeferredLoadPromises[pageIdx].then(() => _edStartPageAnims(pageIdx));
+    return;
+  }
   // Si la página tiene layers diferidos (lazy loading), cargarlos de IDB primero.
   // Esto permite que el visor reproduzca animaciones en páginas no visitadas en el editor.
   const _hasDeferredAnims = page.layers.some(l => l && l.type === 'image' && l._animDeferred);
   if (_hasDeferredAnims) {
-    _edLoadPageAnims(pageIdx).then(() => _edStartPageAnims(pageIdx));
+    _edDeferredLoadPromises[pageIdx] = _edLoadPageAnims(pageIdx).then(() => {
+      delete _edDeferredLoadPromises[pageIdx];
+      _edStartPageAnims(pageIdx);
+    });
     return;
   }
   page.layers.forEach(function(l) {

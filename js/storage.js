@@ -325,43 +325,106 @@ const WorkStore = (() => {
      File System Access API — carpeta visible en PC
      Solo Chrome/Edge con esta API. Android: OPFS ya cubre.
      Primera vez: pide al usuario dónde guardar la carpeta ComiXou.
-     Luego: guarda silenciosamente.
+     Luego: el handle se persiste en IndexedDB (cxFsHandle) y se
+     reutiliza siempre, sin volver a preguntar — ver _fsAskDir.
   ══════════════════════════════════════════════════════════════ */
   const _FS_SUPPORTED = 'showDirectoryPicker' in window;
   let _fsDirHandle = null;
+  let _fsIdbDb = null;
+
+  // FileSystemDirectoryHandle es clonable por structured clone → se puede
+  // guardar en IndexedDB tal cual (no en localStorage, que solo admite JSON).
+  // Mismo patrón que _edAnimIdbOpen/_edAnimIdbLoad/_edAnimIdbSave (editor.js).
+  function _fsIdbOpen() {
+    if (_fsIdbDb) {
+      if (_fsIdbDb.objectStoreNames.contains('handles')) return Promise.resolve(_fsIdbDb);
+      try { _fsIdbDb.close(); } catch(_) {}
+      _fsIdbDb = null;
+    }
+    return new Promise((res, rej) => {
+      const req = indexedDB.open('cxFsHandle', 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore('handles');
+      req.onsuccess = e => {
+        _fsIdbDb = e.target.result;
+        _fsIdbDb.onversionchange = () => { _fsIdbDb.close(); _fsIdbDb = null; };
+        _fsIdbDb.onclose        = () => { _fsIdbDb = null; };
+        res(_fsIdbDb);
+      };
+      req.onerror = () => rej(req.error);
+    });
+  }
+  function _fsIdbLoadHandle() {
+    return _fsIdbOpen().then(db => new Promise(res => {
+      const r = db.transaction('handles').objectStore('handles').get('comixou');
+      r.onsuccess = e => res(e.target.result || null);
+      r.onerror   = () => res(null);
+    })).catch(() => null);
+  }
+  function _fsIdbSaveHandle(handle) {
+    return _fsIdbOpen().then(db => new Promise(res => {
+      const tx = db.transaction('handles', 'readwrite');
+      tx.objectStore('handles').put(handle, 'comixou');
+      tx.oncomplete = () => res();
+      tx.onerror    = () => res();
+    })).catch(() => {});
+  }
 
   async function _fsAskDir() {
     if (!_FS_SUPPORTED) return;
-    // Restaurar handle guardado
-    if (!_fsDirHandle) {
-      try {
-        const stored = localStorage.getItem('cx_fs_dir');
-        if (stored) {
-          // No podemos restaurar FileSystemDirectoryHandle desde JSON — pedir de nuevo si es necesario
-        }
-      } catch(e) {}
-    }
-    // Solo pedir la primera vez en sesión
     if (_fsDirHandle) return;
-    const asked = localStorage.getItem('cx_fs_asked');
-    if (asked === 'no') return; // usuario rechazó
-    // Solo preguntar en PC (no mobile)
+    // Solo preguntar/usar en PC (no mobile)
     const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
     if (isMobile) return;
-    if (asked === 'yes') {
-      // Ya preguntamos antes — no preguntar de nuevo (handle no persiste entre sesiones)
-      return;
+
+    // BUG CORREGIDO (v38.14 — Alberto: "arregla el punto uno para que
+    // siempre se use esa carpeta"). Antes, tras el primer permiso concedido,
+    // solo se guardaba en localStorage que "ya se había preguntado" — el
+    // propio FileSystemDirectoryHandle (el que de verdad apunta a la
+    // carpeta) nunca se guardaba en ningún sitio, así que en cada sesión
+    // nueva _fsDirHandle volvía a null y, como ya constaba "preguntado",
+    // jamás se volvía a pedir ni a escribir nada: la copia de seguridad
+    // visible funcionaba exactamente una vez, para siempre. Arreglo: el
+    // handle SÍ es serializable en IndexedDB (structured clone) — se
+    // guarda ahí la primera vez y se restaura siempre, reconfirmando el
+    // permiso con query/requestPermission (sin volver a abrir el selector
+    // de carpeta) salvo que el handle guardado deje de ser válido del
+    // todo (carpeta borrada/movida, o rechazo explícito anterior).
+    const _stored = await _fsIdbLoadHandle();
+    if (_stored) {
+      try {
+        let _perm = await _stored.queryPermission({ mode: 'readwrite' });
+        if (_perm !== 'granted') _perm = await _stored.requestPermission({ mode: 'readwrite' });
+        if (_perm === 'granted') { _fsDirHandle = _stored; return; }
+      } catch(e) { /* handle inválido — seguir abajo y pedir uno nuevo */ }
     }
-    // Primera vez: preguntar
+
+    const asked = localStorage.getItem('cx_fs_asked');
+    if (asked === 'no') return; // usuario rechazó explícitamente antes — no insistir
+    // Primera vez (o handle guardado ya no válido): preguntar
     try {
-      _fsDirHandle = await window.showDirectoryPicker({
+      const _picked = await window.showDirectoryPicker({
         id: 'comixou',
         mode: 'readwrite',
         startIn: 'documents',
       });
       localStorage.setItem('cx_fs_asked', 'yes');
-      // Crear subcarpeta ComiXou
-      _fsDirHandle = await _fsDirHandle.getDirectoryHandle('ComiXou', { create: true });
+      // BUG CORREGIDO (v38.13 — Alberto: "el directorio de obras de comxow es
+      // un puro delirio", carpetas "ComiXou" anidadas hasta 11 niveles de
+      // profundidad). Causa: showDirectoryPicker({id:'comixou'}) hace que el
+      // NAVEGADOR recuerde, para ese id, la última carpeta elegida — recuerdo
+      // que vive en el propio navegador, no en el localStorage de este sitio,
+      // así que sobrevive a que Alberto borre datos del sitio durante pruebas.
+      // Si la próxima vez que se pide (tras un borrado de localStorage) el
+      // selector reabre ya DENTRO de la "ComiXou" creada la vez anterior y el
+      // usuario simplemente acepta la carpeta ya abierta, este código creaba
+      // OTRA "ComiXou" dentro de ella sin comprobar nada — repetido a lo largo
+      // de muchas sesiones de pruebas, cada vez un nivel más profundo. Arreglo:
+      // si la carpeta elegida YA se llama "ComiXou", reutilizarla tal cual; si
+      // no, crear/entrar en la subcarpeta como antes.
+      _fsDirHandle = (_picked.name === 'ComiXou')
+        ? _picked
+        : await _picked.getDirectoryHandle('ComiXou', { create: true });
+      await _fsIdbSaveHandle(_fsDirHandle); // persistir para no volver a preguntar
     } catch(e) {
       // Usuario canceló
       localStorage.setItem('cx_fs_asked', 'no');
@@ -416,3 +479,20 @@ const WorkStore = (() => {
     getPublished,
   };
 })();
+
+// Aviso de "sin espacio" fuera del editor (Alberto: QuotaExceededError visto en
+// consola al guardar cs_comics, sin ningún aviso en pantalla). editor.js ya
+// escucha 'cx:storage:quota' con edToast() mientras el editor está abierto
+// (ver edInitEditor) — pero ese listener solo existe DURANTE esa sesión del
+// editor, así que si el fallo ocurre en cualquier otra vista (Mis obras, home,
+// sincronización en segundo plano...) no había ningún aviso visible, solo el
+// console.error de WorkStore.saveAll(). Este listener es global (vive mientras
+// dure la página, no una vista concreta) y se omite a sí mismo cuando el
+// editor está abierto (sessionStorage 'cx_editing', mismo flag que ya usa
+// pwa.js para lo mismo) para no duplicar el aviso de edToast().
+window.addEventListener('cx:storage:quota', () => {
+  if (sessionStorage.getItem('cx_editing')) return; // el editor ya avisa por su cuenta
+  if (typeof showToast === 'function' && typeof I18n !== 'undefined') {
+    showToast(I18n.t('ed_noSpaceWarn'), 5000);
+  }
+});
