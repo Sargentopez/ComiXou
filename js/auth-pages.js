@@ -136,6 +136,22 @@ function AuthView_init() {
 
       showToast(I18n.t('loginOk'));
       setTimeout(() => {
+        // Retomar guardado en la nube pendiente de cuando el usuario era
+        // anónimo (ver ed_confirmLoginCloud en editor.js) — v38.30, Alberto:
+        // la petición original era guardar en la nube, así que debe
+        // completarse ahora, no quedar solo disponible en local. Reabrimos
+        // la obra con el mismo mecanismo que usa "Mis obras" para editar
+        // (cx_edit_id) y EditorView_init dispara el guardado en la nube en
+        // cuanto la obra termine de cargar (ver window._edFullyLoadedPromise).
+        const _pendingCloud = sessionStorage.getItem('cx_pendingCloudSave');
+        sessionStorage.removeItem('cx_pendingCloudSave');
+        if (_pendingCloud) {
+          sessionStorage.setItem('cx_edit_id', _pendingCloud);
+          sessionStorage.setItem('cx_resumeCloudSave', _pendingCloud);
+          Router.go('editor');
+          requestAnimationFrame(() => Header.refresh());
+          return;
+        }
         // T7: ir a ruta pendiente si existe (ej: "Crear" sin sesión)
         const _pending = sessionStorage.getItem('pendingRoute');
         sessionStorage.removeItem('pendingRoute');

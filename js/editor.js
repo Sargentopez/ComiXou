@@ -23116,9 +23116,26 @@ async function _edCloudSaveInner() {
     // primer lugar — ver su comentario de cabecera).
     edToast(I18n.t('ed_loginToSaveCloud'));
     setTimeout(() => {
-      edConfirm(I18n.t('ed_confirmLoginCloud'), () => {
-        // Guardar localmente antes de salir al login
-        edSaveProject();
+      edConfirm(I18n.t('ed_confirmLoginCloud'), async () => {
+        // Guardar localmente antes de salir al login.
+        // v38.30 — Alberto: el objeto creado como invitado desaparecía tras
+        // iniciar sesión, aunque la obra sí apareciera en "Mis obras". Causa
+        // real (ver storage.js WorkStore.migrateAnonToUser): el guardado
+        // local se hacía bien, pero quedaba en la carpeta OPFS '_anon_'; al
+        // reclamar la obra tras login solo se reasignaban userId/username en
+        // cs_comics, nunca el archivo pesado — ya corregido en
+        // _claimGuestWorks (auth.js).
+        // Aparte, este guardado se lanzaba SIN esperar (fire-and-forget)
+        // justo antes de navegar a login. Ahora se espera a que termine de
+        // verdad, y solo si termina bien se marca la intención de retomar el
+        // guardado en la nube automáticamente al volver a entrar (ver
+        // auth-pages.js doLogin y EditorView_init) — así la petición
+        // original del usuario ("guardar en la nube") se completa de verdad
+        // tras autenticarse, en vez de dejar la obra solo en local.
+        await edSaveProject();
+        const _savedComic = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
+        const _savedOk = !!(_savedComic && _savedComic.editorData && _savedComic.editorData.pages && _savedComic.editorData.pages.length);
+        if (_savedOk) sessionStorage.setItem('cx_pendingCloudSave', edProjectId);
         Router.go('login');
       }, I18n.t('loginBtn'));
     }, 400);
@@ -27836,6 +27853,23 @@ function EditorView_init(){
     // la obra) y respeta "no volver a mostrar" — solo aparece una vez por
     // usuario hasta que la descarte.
     setTimeout(() => edHelpShow('editor'), 500);
+    // Retomar guardado en la nube pendiente de antes de iniciar sesión (ver
+    // ed_confirmLoginCloud / auth-pages.js doLogin) — v38.30. Se reutiliza
+    // edCloudSave() tal cual (mismo botón ☁️), nada nuevo: ya gestiona el
+    // overlay de progreso, el fallback incógnito/OPFS y los avisos de
+    // error/éxito. Comparamos cloudSavedAt antes/después porque edCloudSave
+    // no devuelve un booleano de éxito — solo si avanzó de verdad salimos a
+    // "Mis obras"; si falló (sin red, etc.) el usuario se queda en el
+    // editor, con su obra ya recuperada, para reintentar con el botón ☁️.
+    const _resumeCloudId = sessionStorage.getItem('cx_resumeCloudSave');
+    sessionStorage.removeItem('cx_resumeCloudSave');
+    if (_resumeCloudId && _resumeCloudId === editId && typeof edCloudSave === 'function') {
+      const _cloudAtBefore = WorkStore.getById(editId)?.cloudSavedAt || null;
+      edCloudSave().then(() => {
+        const _cloudAtAfter = WorkStore.getById(editId)?.cloudSavedAt || null;
+        if (_cloudAtAfter && _cloudAtAfter !== _cloudAtBefore) Router.go('my-works');
+      }).catch(() => {});
+    }
   }).catch(() => {
     window._edLoadingSuppressDirty = false;
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();

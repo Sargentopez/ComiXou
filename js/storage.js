@@ -270,13 +270,18 @@ const WorkStore = (() => {
      Soportado: Chrome 86+, Android Chrome 109+, Firefox 111+
      Sin permisos de usuario, privado, persistente
   ══════════════════════════════════════════════════════════════ */
-  async function _opfsRoot() {
+  // _forcedUid: opcional — permite pedir la subcarpeta de un usuario concreto
+  // en vez de la del usuario de la sesión actual. Lo usa migrateAnonToUser
+  // (ver más abajo) para leer explícitamente la carpeta '_anon_' y escribir
+  // en la del usuario recién autenticado dentro de la MISMA operación, sin
+  // depender de qué sesión esté activa en ese instante.
+  async function _opfsRoot(_forcedUid) {
     if (!navigator.storage || !navigator.storage.getDirectory) return null;
     try {
       const root  = await navigator.storage.getDirectory();
       const base  = await root.getDirectoryHandle('comixou', { create: true });
       // Aislar por userId — cada autor tiene su propia subcarpeta en OPFS
-      const _uid  = (() => {
+      const _uid  = _forcedUid || (() => {
         try {
           const s = JSON.parse(localStorage.getItem('cs_session') || 'null');
           return (s && s.id) ? String(s.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
@@ -319,6 +324,58 @@ const WorkStore = (() => {
     const dir = await _opfsRoot();
     if (!dir) return;
     try { await dir.removeEntry(id + '.json'); } catch(e) {}
+  }
+
+  // Mueve a la carpeta OPFS del usuario ya autenticado el archivo pesado
+  // (editorData/panels/coverDataUrl) de una obra creada como invitado.
+  //
+  // BUG CORREGIDO (v38.30 — Alberto: "creo un objeto siendo anónimo, guardo
+  // en la nube, me pide iniciar sesión, inicio sesión, la obra aparece en
+  // Mis obras pero SIN el objeto"). _claimGuestWorks (auth.js) reasignaba
+  // userId/username/anonymous en cs_comics (el índice ligero) pero nunca
+  // tocaba el archivo pesado real, que _opfsWrite había guardado en
+  // comixou/_anon_/{id}.json mientras no había sesión. Al reabrir la obra
+  // ya autenticado, _opfsRead miraba en comixou/{nuevoId}/ (la carpeta del
+  // usuario real) y no encontraba nada — la obra cargaba solo con los
+  // metadatos, sin ninguna capa. Este método copia ese archivo a la carpeta
+  // del nuevo usuario y borra la copia de invitado ya migrada.
+  //
+  // No hace falta migrar aparte las claves de IndexedDB (cxAnims, frames de
+  // animación): _pngFramesKey/animKey se guardan como string LITERAL dentro
+  // de cada capa serializada (fijado en el momento de crear el objeto) y se
+  // leen tal cual al recargar — no se reconstruyen a partir del uid de la
+  // sesión activa — así que siguen resolviendo bien aunque el prefijo de esa
+  // clave concreta sea '_anon_'. cxAutosave tampoco necesita migrarse: un
+  // guardado local completo con éxito ya borra su propio autosave (ver
+  // _edAutosaveClear en editor.js), así que no queda nada pendiente ahí.
+  async function migrateAnonToUser(id, newUid) {
+    if (!id || !newUid || newUid === '_anon_') return false;
+    try {
+      const anonDir = await _opfsRoot('_anon_');
+      if (!anonDir) return false;
+      let text;
+      try {
+        const fh   = await anonDir.getFileHandle(id + '.json');
+        const file = await fh.getFile();
+        text = await file.text();
+      } catch(_) {
+        return false; // no había datos locales de esta obra en modo invitado
+      }
+      const destDir = await _opfsRoot(newUid);
+      if (!destDir) return false;
+      const destFh = await destDir.getFileHandle(id + '.json', { create: true });
+      const ws = await destFh.createWritable();
+      await ws.write(text);
+      await ws.close();
+      // Limpieza: quitar la copia de invitado ya migrada (evita dejar datos
+      // huérfanos en '_anon_' que no se borrarían nunca — _purgeLocalData
+      // ya no encontraría esta obra ahí una vez reclamada por el usuario).
+      try { await anonDir.removeEntry(id + '.json'); } catch(_) {}
+      return true;
+    } catch(e) {
+      console.warn('[WorkStore] migrateAnonToUser:', e);
+      return false;
+    }
   }
 
   /* ══════════════════════════════════════════════════════════════
@@ -477,6 +534,7 @@ const WorkStore = (() => {
     createNew,
     getByUser,
     getPublished,
+    migrateAnonToUser,
   };
 })();
 

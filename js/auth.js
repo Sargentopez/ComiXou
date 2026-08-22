@@ -175,8 +175,11 @@ const Auth = (() => {
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
         // Migrar obras locales del ID antiguo al nuevo UUID de Supabase
         _migrateLocalWorks(data.user.id);
-        // Reclamar obras creadas en modo invitado para esta cuenta (ver _claimGuestWorks)
-        _claimGuestWorks(data.user.id, username);
+        // Reclamar obras creadas en modo invitado para esta cuenta (ver
+        // _claimGuestWorks) — awaited: incluye migrar su archivo OPFS
+        // pesado, y login() no debe darse por completado hasta que la obra
+        // reclamada sea de verdad accesible con la nueva sesión.
+        await _claimGuestWorks(data.user.id, username);
         return { ok: true, user: session };
       }
       const errMsg = (data.error_description || data.msg || '').toLowerCase();
@@ -338,7 +341,8 @@ const Auth = (() => {
   // Reasociarlas a la cuenta recién autenticada, en local únicamente — no
   // se suben solas a la nube, el usuario decide cuándo, igual que con
   // cualquier otra obra local.
-  function _claimGuestWorks(newId, username) {
+  async function _claimGuestWorks(newId, username) {
+    let _toMigrate = [];
     try {
       const store = JSON.parse(localStorage.getItem('cs_comics') || '{}');
       const _anonLabel = (typeof I18n !== 'undefined') ? I18n.t('mc_anonymous') : null;
@@ -352,10 +356,22 @@ const Auth = (() => {
           comic.username  = username;
           comic.anonymous = false;
           changed = true;
+          _toMigrate.push(comic.id);
         }
       });
       if (changed) localStorage.setItem('cs_comics', JSON.stringify(store));
     } catch(_) {}
+    // BUG CORREGIDO (v38.30) — lo de arriba solo reasigna los METADATOS
+    // (userId/username/anonymous) en el índice ligero cs_comics. El archivo
+    // pesado real (editorData con las capas/objetos) vive aparte, en OPFS,
+    // en una subcarpeta por userId (ver storage.js _opfsRoot) — mientras la
+    // obra se creó sin sesión, esa subcarpeta era '_anon_'. Sin este paso,
+    // la obra aparecía en "Mis obras" (los metadatos ya apuntaban al nuevo
+    // usuario) pero se abría vacía, porque _opfsRead buscaba en la carpeta
+    // del usuario YA autenticado y el archivo seguía en '_anon_'.
+    if (_toMigrate.length && typeof WorkStore !== 'undefined' && WorkStore.migrateAnonToUser) {
+      await Promise.all(_toMigrate.map(id => WorkStore.migrateAnonToUser(id, newId).catch(() => {})));
+    }
   }
 
   // Decodifica el payload de un JWT y devuelve el campo 'exp' (Unix timestamp)
