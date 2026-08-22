@@ -44,9 +44,9 @@ Router.register('home', {
         <div class="dropdown-menu page-nav-dropdown" id="filtrosMenu"></div>
       </div>
       <span class="page-nav-sep"></span>
-      <button class="page-nav-btn" id="novedadesBtn" data-i18n="novedades">Novedades</button>
+      <button class="page-nav-btn" id="novedadesBtn" data-i18n="novedades">Publicados</button>
       <span class="page-nav-sep"></span>
-      <button class="page-nav-btn page-nav-btn-create" id="createBtn" data-i18n="create">Mis Creaciones</button>
+      <button class="page-nav-btn" id="createBtn" data-i18n="create">Mis obras</button>
     </nav>
     <div class="home-empty hidden" id="emptyState">
         <span id="emptyStateIcon">📚</span>
@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.30</footer>
+    <footer class="app-version">v38.35</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -263,15 +263,15 @@ Router.register('my-works', {
     <!-- Barra de nav igual que home pero con sólo 2 opciones -->
     <nav class="page-nav" id="myWorksNav">
       <div class="page-nav-item">
-        <button class="page-nav-btn" id="mcBackBtn" data-i18n="mc_backToHome">← Expositor</button>
+        <button class="page-nav-btn" id="mcBackBtn" data-i18n="mc_backToHome">← Publicados</button>
       </div>
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
-        <button class="page-nav-btn" id="mcCloudLoadBtn" data-i18n="mc_cloudLoadBtnLabel" data-i18n-title="mc_cloudLoadBtnTitle" title="Cargar borradores guardados en la nube">☁️ Cargar de nube</button>
+        <button class="page-nav-btn" id="mcCloudLoadBtn" data-i18n="mc_cloudLoadBtnLabel" data-i18n-title="mc_cloudLoadBtnTitle" title="Cargar borradores guardados en la nube">☁️ Mis obras</button>
       </div>
       <div class="page-nav-sep"></div>
       <div class="page-nav-item">
-        <button class="page-nav-btn page-nav-btn-create" id="mcNewBtn" data-i18n="mc_createNewBtn">✚ Crear nuevo</button>
+        <button class="page-nav-btn" id="mcNewBtn" data-i18n="mc_createNewBtn">✚ Nueva obra</button>
       </div>
     </nav>
 
@@ -387,7 +387,7 @@ Router.register('editor', {
       <!-- ── BARRA SUPERIOR ── -->
       <div id="edTopbar">
         <div id="edTitlePill" aria-hidden="true"></div>
-        <button id="edBackBtn" data-i18n-title="ed_backToMyWorks" title="Volver a Mis Creaciones">◀</button>
+        <button id="edBackBtn" data-i18n-title="ed_backToMyWorks" title="Volver a Mis obras">◀</button>
         <span id="edProjectTitle" data-i18n="noWork">Sin título</span>
         <span class="ed-top-spacer"></span>
         <div class="ed-top-pagnav">

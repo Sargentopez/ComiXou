@@ -88,8 +88,25 @@
   bottom: 0; left: 10%; right: 10%;
   height: 2.5px; background: var(--black); border-radius: 2px;
 }
-.page-nav-btn-create { color: var(--blue); }
-.page-nav-btn-create:hover { color: var(--ink); }
+
+/* Barra de Home (Buscador / Publicados / Mis obras) — Alberto v38.31: colores
+   fijos, independientes del estado activo/hover. Selectores por ID (no por
+   clase) para que cada barra de navegación (Home / Mis obras) tenga sus
+   propios colores fijos sin interferirse entre sí a través de clases
+   compartidas. Un id tiene más especificidad que .page-nav-btn.active/:hover,
+   así que el color queda fijo pase lo que pase con esas clases. */
+#filtrosBtn,
+#createBtn   { color: var(--black); }
+#novedadesBtn { color: var(--blue); font-weight: 900; }
+
+/* Barra de "Mis obras" (Publicados / Mis obras / Nueva obra) — Alberto v38.31:
+   mismo criterio que la barra de Home. La clase .page-nav-btn-create (que
+   antes marcaba en azul el botón de crear) ya no se usa en ningún sitio —
+   se elimina para no dejar CSS muerto. */
+#mcBackBtn,
+#mcNewBtn      { color: var(--black); }
+#mcCloudLoadBtn { color: var(--blue); font-weight: 900; }
+#novedadesBtn { color: var(--blue); }
 
 /* Dropdown del menú de página */
 .page-nav-dropdown {

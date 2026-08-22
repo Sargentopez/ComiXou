@@ -125,6 +125,62 @@ html, body {
 .corner-btn:hover  { background: rgba(0,0,0,.55); }
 .corner-btn:active { background: rgba(0,0,0,.75); }
 
+/* ── Barra inferior: navegación por hoja ── */
+.page-nav-scrim {
+  position: fixed; inset: 0;
+  z-index: 140; /* por debajo de la barra (150), por encima del canvas/scroll */
+  background: transparent; /* invisible, solo absorbe el toque para cerrar */
+}
+.page-nav-bar {
+  position: fixed;
+  left: 50%; bottom: 18px;
+  transform: translateX(-50%);
+  width: min(320px, 84vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0,0,0,.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 16px;
+  padding: 12px 18px 16px;
+  z-index: 150;
+}
+.page-nav-bar-label {
+  color: #fff;
+  font-size: .85rem;
+  font-weight: 700;
+  text-shadow: 0 1px 3px #000;
+}
+.page-nav-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255,255,255,.3);
+  outline: none;
+  touch-action: none; /* el gesto de arrastre lo gestiona el propio slider, no el canvas de debajo */
+}
+.page-nav-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #f5c400;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+.page-nav-slider::-moz-range-thumb {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #f5c400;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+
 /* ── Pastilla inferior desktop: ya no se usa — eliminada ── */
 
 

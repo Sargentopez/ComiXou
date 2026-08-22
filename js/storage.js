@@ -155,6 +155,7 @@ const WorkStore = (() => {
   function remove(id) {
     saveAll(getAll().filter(c => c.id !== id));
     _opfsDelete(id).catch(() => {});
+    _fsDelete(id).catch(() => {});
     _purgeLocalData(id);
     _emit('remove', id);
   }
@@ -210,8 +211,19 @@ const WorkStore = (() => {
 
     // 4. IDB frames de animación (cxAnims): clave = {userId}__{comicId}_{pi}_{li}
     // Borrar todas las entradas que contengan el comicId en la clave
-    const _animPrefix1 = _uid + '__' + id + '_'; // nuevo formato
-    const _animPrefix2 = id + '_';                // formato antiguo (compatibilidad)
+    //
+    // BUG CORREGIDO (v38.34 — verificado con test real: sin _animPrefix3, una
+    // obra con un objeto animado recién insertado (frames externalizados por
+    // _asExternalize en editor.js con clave "as_{comicId}_...", ver
+    // _edAutosaveWrite) dejaba esos frames huérfanos en cxAnims al borrar la
+    // obra por cualquier vía que NO pase por el _edAutosaveClear() explícito
+    // del editor (p.ej. "Eliminar" desde Mis obras, o borrado desde el panel
+    // de administración) — _edAutosaveClear() ya cubre este prefijo, pero
+    // _purgeLocalData (la rutina central que usan TODAS las vías de borrado)
+    // no lo cubría.
+    const _animPrefix1 = _uid + '__' + id + '_';        // nuevo formato (capas ya guardadas)
+    const _animPrefix3 = _uid + '__as_' + id + '_';     // frames externalizados por autoguardado
+    const _animPrefix2 = id + '_';                       // formato antiguo (compatibilidad)
     try {
       const _r3 = indexedDB.open('cxAnims', 1);
       _r3.onsuccess = e => {
@@ -225,7 +237,7 @@ const WorkStore = (() => {
             const cursor = ev.target.result;
             if (!cursor) return;
             const k = String(cursor.key);
-            if (k.startsWith(_animPrefix1) || k.startsWith(_animPrefix2)) cursor.delete();
+            if (k.startsWith(_animPrefix1) || k.startsWith(_animPrefix2) || k.startsWith(_animPrefix3)) cursor.delete();
             cursor.continue();
           };
         } catch(_) {}
@@ -523,6 +535,24 @@ const WorkStore = (() => {
       await ws.write(JSON.stringify(payload));
       await ws.close();
     } catch(e) { console.warn('[FS] write error:', e); }
+  }
+
+  // Borra el respaldo de esta obra en la carpeta visible de PC, si existe.
+  //
+  // BUG CORREGIDO (v38.34 — verificado con test real contra un directorio
+  // simulado): remove() borraba el índice localStorage y el OPFS, pero nunca
+  // tocaba esta copia — _fsWrite() la escribe incluso para una obra recién
+  // creada sin ningún objeto todavía (basta con que la carpeta ya estuviera
+  // vinculada de una sesión anterior), así que al descartar una obra nueva
+  // con "No guardar" (o al eliminar cualquier obra desde "Mis obras")
+  // quedaba un archivo huérfano {id}.json en la carpeta ComiXou del usuario,
+  // visible en su explorador de archivos, aunque la obra ya no existiera en
+  // ningún otro sitio. No pide ni abre el selector de carpeta — si no hay un
+  // handle ya concedido en esta sesión, no hace nada (igual que _opfsDelete
+  // no hace nada si OPFS no está disponible).
+  async function _fsDelete(id) {
+    if (!_FS_SUPPORTED || !_fsDirHandle) return;
+    try { await _fsDirHandle.removeEntry(id + '.json'); } catch(e) {}
   }
 
   return {

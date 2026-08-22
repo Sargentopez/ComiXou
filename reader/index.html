@@ -49,16 +49,16 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.29">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.35">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.29">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.35">
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/fonts.css">
-  <link rel="stylesheet" href="reader.css?v=38.29">
+  <link rel="stylesheet" href="reader.css?v=38.35">
 </head>
 <script>
   if ('serviceWorker' in navigator)
@@ -69,7 +69,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=38.29" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=38.35" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
@@ -103,21 +103,31 @@
     <!-- Esquina superior derecha: cerrar -->
     <button id="closeBtn" class="corner-btn corner-tr" aria-label="Cerrar">&#x2715;</button>
 
+    <!-- Esquina inferior izquierda: abrir barra de navegación por hoja -->
+    <button id="pageNavToggle" class="corner-btn corner-bl" aria-label="Ir a hoja">1/1</button>
+
+    <!-- Scrim + barra inferior: seleccionar hoja arrastrando -->
+    <div id="pageNavScrim" class="page-nav-scrim hidden"></div>
+    <div id="pageNavBar" class="page-nav-bar hidden">
+      <div class="page-nav-bar-label" id="pageNavLabel">Hoja 1 de 1</div>
+      <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" aria-label="Seleccionar hoja">
+    </div>
+
 
     <!-- Toast de instrucciones de navegación -->
     <div id="readerToast" class="reader-toast"></div>
 
     <!-- Versión — desaparece tras 4s -->
-    <div id="readerVersion" style="position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.82</div>
+    <div id="readerVersion" style="position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.83</div>
 
   </div>
 
   <script src="../js/pako.min.js"></script>
   <script src="../js/UPNG.js"></script>
-  <script src="../js/fullscreen.js?v=38.29"></script>
+  <script src="../js/fullscreen.js?v=38.35"></script>
   <script src="../js/logo-data.js"></script>
   <script src="../js/icon-data.js"></script>
-  <script src="../js/anim-clock.js?v=38.29"></script>
-  <script src="reader.js?v=38.29"></script>
+  <script src="../js/anim-clock.js?v=38.35"></script>
+  <script src="reader.js?v=38.35"></script>
 </body>
 </html>

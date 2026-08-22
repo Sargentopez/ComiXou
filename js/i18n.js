@@ -38,7 +38,7 @@ const TRANSLATIONS = {
     tagline:          "IDEA Y COMPARTE",
     register:         "Regístrate",
     login:            "Entrar",
-    myWorks:         "Mis creaciones",
+    myWorks:         "Mis obras",
     logout:           "Cerrar sesión",
     adminPanel:       "⚙️ Panel admin",
     deleteAccount:    "Eliminar mi cuenta",
@@ -65,8 +65,8 @@ const TRANSLATIONS = {
 
     // Index / filtros
     filterBtn:        "Buscador ▾",
-    novedades:        "Novedades",
-    create:           "Mis Creaciones",
+    novedades:        "Publicados",
+    create:           "Mis obras",
     byGenre:          "Género ›",
     byAuthor:         "Autor ›",
     noGenres:         "Sin géneros disponibles",
@@ -90,7 +90,7 @@ const TRANSLATIONS = {
     delete:           "Eliminar",
 
     // Confirmaciones
-    confirmUnpublish: "¿Retirar esta obra del índice?\n\nPodrás seguir editándola desde \"Crear\" → \"Mis creaciones\".",
+    confirmUnpublish: "¿Retirar esta obra del índice?\n\nPodrás seguir editándola desde \"Crear\" → \"Mis obras\".",
     confirmDelete:    "Si eliminas este proyecto, ya no podrás acceder a él.\n\nSi solo quieres que no esté publicado pero quieres seguir editándolo, elige \"Dejar de publicar\".",
     confirmDeleteAccount: "Si eliminas tu cuenta se borrarán todos tus datos y obras.\n\nEsta acción no se puede deshacer.",
     unpublishOk:      "Obra retirada del índice",
@@ -234,10 +234,10 @@ const TRANSLATIONS = {
     header_installTip:      "Pulsa Compartir ↑ y luego \"Añadir a inicio\"",
 
     // Mis Creaciones — my-works.js + toolbar en views.js
-    mc_backToHome:       "← Expositor",
-    mc_cloudLoadBtnLabel:"☁️ Cargar de nube",
+    mc_backToHome:       "← Publicados",
+    mc_cloudLoadBtnLabel:"☁️ Mis obras",
     mc_cloudLoadBtnTitle:"Cargar borradores guardados en la nube",
-    mc_createNewBtn:     "✚ Crear nuevo",
+    mc_createNewBtn:     "✚ Nueva obra",
     mc_titlePlaceholder: "El nombre de tu obra",
     mc_genrePlaceholder: "Exposición, relato, cómic animado…",
     mc_navModeLabel:     "Modo de lectura",
@@ -448,7 +448,7 @@ const TRANSLATIONS = {
     td_pageToast:           "→ Página {n}",
 
     // Editor general — barra superior y menú principal (views.js + editor.js)
-    ed_backToMyWorks:       "Volver a Mis Creaciones",
+    ed_backToMyWorks:       "Volver a Mis obras",
     ed_previewTitle:        "Vista previa",
     ed_saveTitle:           "Guardar",
     ed_hideMenu:            "OCULTAR",
@@ -1017,8 +1017,8 @@ const TRANSLATIONS = {
     menuLanguage:     "Language",
 
     filterBtn:        "Filters ▾",
-    novedades:        "Latest",
-    create:           "Create",
+    novedades:        "Published",
+    create:           "My Works",
     byGenre:          "Genre ›",
     byAuthor:         "Author ›",
     noGenres:         "No genres available",
@@ -1181,10 +1181,10 @@ const TRANSLATIONS = {
     header_installTip:      "Tap Share ↑ then \"Add to Home Screen\"",
 
     // My Works — my-works.js + toolbar in views.js
-    mc_backToHome:       "← Home",
-    mc_cloudLoadBtnLabel:"☁️ Load from cloud",
+    mc_backToHome:       "← Published",
+    mc_cloudLoadBtnLabel:"☁️ My Works",
     mc_cloudLoadBtnTitle:"Load drafts saved in the cloud",
-    mc_createNewBtn:     "✚ Create new",
+    mc_createNewBtn:     "✚ New work",
     mc_titlePlaceholder: "Your work's name",
     mc_genrePlaceholder: "Exposition, story, animated comic…",
     mc_navModeLabel:     "Reading mode",

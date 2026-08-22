@@ -1888,6 +1888,8 @@ function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
 
+  _setupPageNavBar();
+
   // Arrancar loop de animación GIF si hay alguno en la obra
   const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2)));
   if (_hasGifs) {
@@ -2381,7 +2383,7 @@ function _positionScrollBtns(stateIdx) {
 
 function _positionBtns() {
   const PAD = 8, OFY = 10;
-  let cl, ct, cw;
+  let cl, ct, cw, ch;
 
   const scrollContainer = document.getElementById('scrollReader');
   const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
@@ -2395,17 +2397,20 @@ function _positionBtns() {
     cl = Math.round((vw - dw) / 2);
     ct = Math.round((vh - dh) / 2);
     cw = dw;
+    ch = dh;
   } else {
     // Modo fixed: el canvas tiene position:absolute con left/top explícitos
     const c = RS.canvas;
     if (!c) return;
-    cl = parseInt(c.style.left)  || 0;
-    ct = parseInt(c.style.top)   || 0;
-    cw = parseInt(c.style.width) || 0;
+    cl = parseInt(c.style.left)   || 0;
+    ct = parseInt(c.style.top)    || 0;
+    cw = parseInt(c.style.width)  || 0;
+    ch = parseInt(c.style.height) || 0;
   }
 
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
+  const fsBtn      = document.getElementById('fullscreenToggle');
+  const closeBtn    = document.getElementById('closeBtn');
+  const pageNavBtn  = document.getElementById('pageNavToggle');
 
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
@@ -2416,6 +2421,102 @@ function _positionBtns() {
     closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
     closeBtn.style.top  = (ct + OFY) + 'px';
   }
+  if (pageNavBtn) {
+    // Simétrico a fsBtn (esquina superior izquierda) pero pegado abajo
+    const btnH = pageNavBtn.getBoundingClientRect().height || 24;
+    pageNavBtn.style.left = (cl + PAD) + 'px';
+    pageNavBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
+  }
+}
+
+// ── BARRA DE NAVEGACIÓN POR HOJA ──────────────────────────────
+// Botón inferior izquierdo: muestra "hoja actual/total" y abre una barra
+// inferior con un slider para saltar directamente a cualquier hoja
+// arrastrando — mismo patrón que lectores de ebooks/PDF habituales (Kindle,
+// Apple Books, Google Play Books). El salto real reutiliza _rGoToPanel, ya
+// corregido para funcionar igual en los tres modos de navegación
+// (fixed/horizontal/vertical) — ver su comentario de cabecera.
+let _pageNavOpen      = false;
+let _pageNavDragging  = false;
+
+// Mantiene el botón (y la barra, si está abierta) al día con la hoja real.
+// Se llama desde _render(), así que cubre CUALQUIER vía de navegación
+// (swipe, teclado, botones "ir a hoja" dentro de la obra, o esta misma
+// barra) sin tener que enganchar el contador en cada sitio por separado.
+function _pageNavUpdate() {
+  const total   = RS.panels.length;
+  const current = RS.idx + 1;
+  const toggleBtn = document.getElementById('pageNavToggle');
+  if (toggleBtn) toggleBtn.textContent = current + '/' + total;
+  if (_pageNavOpen && !_pageNavDragging) {
+    const slider = document.getElementById('pageNavSlider');
+    const label  = document.getElementById('pageNavLabel');
+    if (slider) slider.value = current;
+    if (label)  label.textContent = 'Hoja ' + current + ' de ' + total;
+  }
+}
+
+function _pageNavOpenBar() {
+  const bar    = document.getElementById('pageNavBar');
+  const scrim  = document.getElementById('pageNavScrim');
+  const slider = document.getElementById('pageNavSlider');
+  const label  = document.getElementById('pageNavLabel');
+  if (!bar || !slider) return;
+  const total = RS.panels.length;
+  slider.max   = total;
+  slider.value = RS.idx + 1;
+  if (label) label.textContent = 'Hoja ' + (RS.idx + 1) + ' de ' + total;
+  bar.classList.remove('hidden');
+  if (scrim) scrim.classList.remove('hidden');
+  _pageNavOpen = true;
+}
+
+function _pageNavCloseBar() {
+  const bar   = document.getElementById('pageNavBar');
+  const scrim = document.getElementById('pageNavScrim');
+  if (bar)   bar.classList.add('hidden');
+  if (scrim) scrim.classList.add('hidden');
+  _pageNavOpen = false;
+}
+
+// Se llama una sola vez, desde startReader() — RS.panels ya está completo
+// en ese punto (incluida la hoja de créditos añadida al final).
+function _setupPageNavBar() {
+  const toggleBtn = document.getElementById('pageNavToggle');
+  const bar       = document.getElementById('pageNavBar');
+  const scrim     = document.getElementById('pageNavScrim');
+  const slider    = document.getElementById('pageNavSlider');
+  const label     = document.getElementById('pageNavLabel');
+  if (!toggleBtn || !bar || !slider) return;
+
+  slider.max = RS.panels.length;
+  _pageNavUpdate();
+
+  toggleBtn.addEventListener('click', () => {
+    if (_pageNavOpen) _pageNavCloseBar(); else _pageNavOpenBar();
+  });
+  toggleBtn.addEventListener('touchend', e => { e.stopPropagation(); }, { passive: false });
+
+  // Cerrar al tocar fuera: el scrim absorbe el toque para que no llegue al
+  // canvas/scroll de debajo y dispare, encima, un cambio de hoja por swipe.
+  if (scrim) scrim.addEventListener('pointerdown', _pageNavCloseBar);
+
+  // Arrastre: solo previsualiza la etiqueta (barato). Navegar en cada pixel
+  // de arrastre sería costoso — sobre todo en modo scroll, donde cada salto
+  // dispara un scrollTo — y daría sensación de tirón. El salto real ocurre
+  // al soltar (evento 'change').
+  slider.addEventListener('input', () => {
+    _pageNavDragging = true;
+    if (label) label.textContent = 'Hoja ' + slider.value + ' de ' + slider.max;
+  });
+  slider.addEventListener('change', () => {
+    _pageNavDragging = false;
+    _rGoToPanel(parseInt(slider.value, 10) - 1);
+  });
+  // Mientras el foco está en el slider, que las flechas lo muevan a él (su
+  // comportamiento nativo) y no, ADEMÁS, disparen advance()/goBack() vía el
+  // keydown global de _setupControls.
+  slider.addEventListener('keydown', e => e.stopPropagation());
 }
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
@@ -2462,6 +2563,11 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+
+  // Mantener el contador de hoja (botón inferior izquierdo + barra, si está
+  // abierta) siempre al día, sea cual sea la vía de navegación (swipe,
+  // teclado, botones "ir a hoja" dentro de la obra, o la propia barra).
+  _pageNavUpdate();
 
   // Panel de créditos — redibujar y remontar botones cada vez que se navega a él
   if (panel.isCredits) {
@@ -3170,6 +3276,31 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
 // Navegar a un panel específico respetando el estado del reader
 function _rGoToPanel(idx) {
   if (idx < 0 || idx >= RS.panels.length) return;
+  if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
+    // Modo scroll: desplazar el contenedor nativo — el listener 'scroll' de
+    // _startScrollReader ya se encarga de actualizar RS.idx, activar el
+    // canvas correcto, resetear animaciones y volver a renderizar en cuanto
+    // el scroll llega a la posición (ver ese listener más abajo).
+    //
+    // BUG CORREGIDO (v_reader — verificado con test real): sin esto,
+    // _rGoToPanel solo cambiaba RS.idx y volvía a renderizar sobre lo que
+    // en ese momento fuera RS.ctx (el canvas de la hoja QUE SE ESTABA
+    // VIENDO, no el destino) — el contenido de la hoja destino aparecía
+    // pintado encima de la hoja visible, sin que la vista se moviera de
+    // verdad a ninguna parte. Afectaba tanto a los botones "ir a hoja X" ya
+    // existentes dentro de una obra como a cualquier navegación programática
+    // a un índice concreto en modo scroll.
+    const container = document.getElementById('scrollReader');
+    if (container) {
+      const isH   = RS.navMode === 'horizontal';
+      const size  = isH ? container.clientWidth : container.clientHeight;
+      if (size) {
+        container.scrollTo({ left: isH ? idx * size : 0, top: isH ? 0 : idx * size, behavior: 'smooth' });
+        return;
+      }
+    }
+    // Sin contenedor o medida válida: seguir como red de seguridad con el camino de modo fixed.
+  }
   RS.idx = idx;
   RS.textStep = _initTextStep(idx);
   RS.fadeAlpha = 0;
