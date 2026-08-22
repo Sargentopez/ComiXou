@@ -3290,12 +3290,26 @@ function _rGoToPanel(idx) {
     // verdad a ninguna parte. Afectaba tanto a los botones "ir a hoja X" ya
     // existentes dentro de una obra como a cualquier navegación programática
     // a un índice concreto en modo scroll.
+    //
+    // BUG CORREGIDO (v_reader2 — Alberto, probando con obra de flujo de
+    // texto largo: "el deslizador no tiene claro en qué parte de la barra
+    // situarse"). Causa real: con behavior:'smooth', saltar de una hoja
+    // lejana a otra (p.ej. de la 3 a la 50) anima el scroll pasando de
+    // verdad por CADA hoja intermedia — y el listener 'scroll' de más abajo
+    // recalcula RS.idx en cada una mientras dura la animación, así que el
+    // valor del slider (actualizado desde _pageNavUpdate, dentro de
+    // _render()) iba saltando de posición en posición en vez de ir directo
+    // al destino. Cuantas más hojas de por medio, más visible el efecto.
+    // behavior:'instant' resuelve el scroll de una vez, sin pasar por las
+    // intermedias — el slider llega directo al valor final. El ARRASTRE del
+    // slider en sí (evento 'input', que solo previsualiza la etiqueta sin
+    // llamar aquí) no se toca y sigue exactamente igual.
     const container = document.getElementById('scrollReader');
     if (container) {
       const isH   = RS.navMode === 'horizontal';
       const size  = isH ? container.clientWidth : container.clientHeight;
       if (size) {
-        container.scrollTo({ left: isH ? idx * size : 0, top: isH ? 0 : idx * size, behavior: 'smooth' });
+        container.scrollTo({ left: isH ? idx * size : 0, top: isH ? 0 : idx * size, behavior: 'instant' });
         return;
       }
     }
