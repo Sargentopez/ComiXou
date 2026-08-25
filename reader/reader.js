@@ -2254,6 +2254,7 @@ function _startScrollReader() {
   // ── Estado ──
   RS.idx        = 0;
   RS.textStep   = 0;
+  _updateContainerTouchAction();
 
   function _activateCanvas(pi) {
     RS.canvas = _canvases[pi];
@@ -2497,6 +2498,7 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
+      _updateContainerTouchAction();
       _resetPanelAnims(si); // reiniciar animaciones al llegar a un nuevo panel
       const np    = RS.panels[si];
       const ntxts = np?.texts || [];
@@ -3940,6 +3942,35 @@ function _panelHasNavButton(panel) {
   if (!panel || !panel.layers) return false;
   return panel.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page');
 }
+
+// Fija el touch-action del contenedor de scroll según si la hoja actual
+// tiene botón propio (recorrido dirigido, ver _panelHasNavButton).
+//
+// BUG CORREGIDO — Alberto: "el botón funciona en PC, mal en táctil". Un
+// elemento con overflow:scroll se convierte, a efectos de touch-action, en
+// "el elemento que implementa el gesto de scroll" — y la restricción
+// touch-action:none de sus antepasados (html/body, en este proyecto) NO SE
+// PROPAGA dentro de él (documentado: MDN, y varios hilos de la spec de
+// touch-action/pointerevents). Esto significa que, en hardware táctil real,
+// el navegador puede empezar a desplazar #scrollReader de forma nativa, en
+// el hilo de composición (para máxima fluidez), ANTES de que el
+// preventDefault() del touchmove en JS (la corrección anterior) llegue a
+// ejecutarse — es una carrera que Chromium de escritorio (y los eventos
+// táctiles sintéticos que no son "trusted") no reproducen de la misma
+// forma, por eso no aparecía en las pruebas. Fijar touch-action:none aquí,
+// a nivel de CSS, elimina la carrera de raíz: el navegador ya sabe, antes
+// de que el gesto arranque, que no debe reservarse el scroll nativo para
+// esta hoja. Solo cubre el caso de bloqueo TOTAL (hoja con botón propio) —
+// el caso de "hoja destino, solo bloquear retroceso" sigue dependiendo del
+// preventDefault() en JS, ya que touch-action no tiene forma fiable de
+// expresar "permitir avanzar pero no retroceder" sin arriesgarse a
+// bloquear la dirección equivocada.
+function _updateContainerTouchAction() {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  container.style.touchAction = _panelHasNavButton(RS.panels[RS.idx]) ? 'none' : '';
+}
+
 // Combina los dos motivos por los que la navegación genérica puede estar
 // desactivada ahora mismo: el bloqueo transitorio (_navLocked) o que la
 // hoja actual sea de recorrido dirigido.
