@@ -2585,13 +2585,25 @@ function _startScrollReader() {
     const _cey = e.changedTouches[0].clientY;
     const _cadx = Math.abs(_cex - _csx), _cady = Math.abs(_cey - _csy);
     _csx = null;
+    // Botones de capa: prioridad absoluta — comprobarlo ANTES de la
+    // distancia de movimiento, igual que ya hacen el touchend gemelo de
+    // overlay (más arriba) y el de modo fijo (más abajo).
+    //
+    // BUG CORREGIDO — Alberto: "el botón no navega". Aquí la comprobación
+    // de distancia (línea de abajo, "solo taps < 30px") se hacía ANTES del
+    // hit-test del botón, así que si el dedo se movía 30px o más durante el
+    // propio toque — más probable ahora que el arrastre nativo ya no
+    // "absorbe" ese movimiento visualmente (ver el touchmove de arriba,
+    // que impide el scroll con preventDefault en una hoja con botón) — el
+    // código salía antes de comprobar siquiera si se había tocado el botón.
+    const _cbhit = _rBtnHitTestCanvas(_cex, _cey);
+    if (_cbhit) {
+      const _cba = _cbhit._buttonAction;
+      if (_cba.type === 'page') { _navGoToPanelLocked(_cba.pageIdx); return; }
+      if (_cba.type === 'url')  { window.open(_cba.url, '_blank', 'noopener'); return; }
+    }
     // Solo taps (< 30 px): los swipes los maneja el scroll nativo
     if (isH ? _cadx >= 30 : _cady >= 30) return;
-    const _cbhit = _rBtnHitTestCanvas(_cex, _cey);
-    if (!_cbhit) return;
-    const _cba = _cbhit._buttonAction;
-    if (_cba.type === 'page') _navGoToPanelLocked(_cba.pageIdx);
-    else if (_cba.type === 'url') window.open(_cba.url, '_blank', 'noopener');
   }, { passive: true });
 
   // PC: Ctrl+rueda para zoom hacia el cursor (llega aquí cuando el overlay
@@ -2623,12 +2635,15 @@ function _startScrollReader() {
     const _wasPanning = _smpPanning;
     _smpdX = null; _smpdY = null; _smpPanning = false;
     if (_wasPanning) return; // fue paneo, no un clic
-    if (_sdx > 15 || _sdy > 15) return; // fue arrastre, no clic
+    // Botones de capa: prioridad absoluta — mismo criterio que touchend,
+    // ver su comentario para el detalle del bug corregido.
     const _sbhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
-    if (!_sbhit) return;
-    const _sba = _sbhit._buttonAction;
-    if (_sba.type === 'page') _navGoToPanelLocked(_sba.pageIdx);
-    else if (_sba.type === 'url') window.open(_sba.url, '_blank', 'noopener');
+    if (_sbhit) {
+      const _sba = _sbhit._buttonAction;
+      if (_sba.type === 'page') { _navGoToPanelLocked(_sba.pageIdx); return; }
+      if (_sba.type === 'url')  { window.open(_sba.url, '_blank', 'noopener'); return; }
+    }
+    if (_sdx > 15 || _sdy > 15) return; // fue arrastre, no clic
   }, { passive: true });
 
   // ── Teclado PC ──
@@ -4441,12 +4456,15 @@ function _setupControls() {
     const _wasPanning = _mpPanning;
     _mpX = null; _mpY = null; _mpPanning = false;
     if (_wasPanning) return; // fue paneo, no un clic de botón
-    if (_mdx > 15 || _mdy > 15) return; // fue un arrastre, no un clic
+    // Botones de capa: prioridad absoluta — mismo criterio que el resto de
+    // manejadores (touchend de fixed/scroll, pointerup de scroll).
     const _bhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
-    if (!_bhit) return;
-    const _ba = _bhit._buttonAction;
-    if (_ba.type === 'page') _navGoToPanelLocked(_ba.pageIdx);
-    else if (_ba.type === 'url') window.open(_ba.url, '_blank', 'noopener');
+    if (_bhit) {
+      const _ba = _bhit._buttonAction;
+      if (_ba.type === 'page') { _navGoToPanelLocked(_ba.pageIdx); return; }
+      if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
+    }
+    if (_mdx > 15 || _mdy > 15) return; // fue un arrastre, no un clic
   }, { passive: true, ...sig });
 }
 
