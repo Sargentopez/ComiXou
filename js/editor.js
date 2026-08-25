@@ -27635,6 +27635,7 @@ function _edOpenBtnModal(la) {
       delete la._buttonAction;
     } else if (type === 'page') {
       la._buttonAction = { type: 'page', pageIdx: +(listEl?.dataset.sel ?? 0) };
+      edToast(I18n.t('ed_navBtnWarning'), 5000);
     } else if (type === 'url') {
       la._buttonAction = { type: 'url', url: (urlInput?.value?.trim() || '') };
     }

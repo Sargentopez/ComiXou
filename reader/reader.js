@@ -2137,6 +2137,9 @@ function _startScrollReader() {
       _activateCanvas(RS.idx);
       _render();
       _updateOverlay();
+    } else if (_panelIsJumpTarget(RS.idx)) {
+      // Hoja destino de un salto: no se puede pasar a la hoja anterior desde aquí.
+      return;
     } else {
       if (RS.idx > 0) _snapTo(RS.idx - 1);
     }
@@ -2153,6 +2156,24 @@ function _startScrollReader() {
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
       const goingBack = si < _prevSI;
+      // Hoja destino de un salto (Alberto): no se puede retroceder desde
+      // ella ni siquiera arrastrando con el dedo/ratón — el scroll nativo no
+      // pasa por _vsBack() (que sí respeta esta restricción), así que hay
+      // que interceptarlo aquí también. Recorre desde la posición actual
+      // hacia atrás buscando la hoja marcada más alta que se cruzaría — cubre
+      // tanto un paso sencillo (7→6) como un arrastre largo que salte varias
+      // hojas de golpe (10→2 cruzando la 7) — y recorta el aterrizaje justo
+      // en esa hoja en vez de dejarlo pasar de largo.
+      if (goingBack) {
+        let _jumpBoundary = null;
+        for (let i = _prevSI; i > si; i--) {
+          if (_panelIsJumpTarget(i)) { _jumpBoundary = i; break; }
+        }
+        if (_jumpBoundary !== null) {
+          container.scrollTo({ left: isH ? _jumpBoundary * size : 0, top: isH ? 0 : _jumpBoundary * size, behavior: 'instant' });
+          return;
+        }
+      }
       // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja — se
       // resetea la hoja que se abandona, así que si se vuelve a visitar más
       // tarde aparece de nuevo a tamaño normal (pedido explícito de Alberto).
@@ -3358,6 +3379,23 @@ function _navBlocked() {
   return _navLocked || _panelHasNavButton(RS.panels[RS.idx]);
 }
 
+// Hoja "destino de salto" (Alberto): si ALGÚN botón de autor en CUALQUIER
+// hoja de la obra apunta a esta hoja como destino, no se puede retroceder
+// DESDE ella — aunque esta hoja en concreto no tenga ningún botón propio.
+// Ej.: un botón salta a la hoja 7 → desde la 7 no se puede ir a la 6, pero
+// sí a la 8, 9, 10...; y de la 10 se puede volver a la 9, 8, 7 con
+// normalidad, pero de nuevo no más allá de la 7. Es decir: bloquea SOLO el
+// paso "hacia atrás" al salir de la hoja marcada, no el avance, y no afecta
+// a hojas intermedias que no sean, ellas mismas, destino de ningún botón.
+// Igual que _panelHasNavButton, se evalúa en el momento — no hay bandera
+// que mantener sincronizada al crear/editar/borrar botones, así que
+// funciona automáticamente con cualquier cambio guardado desde el editor.
+function _panelIsJumpTarget(idx) {
+  return RS.panels.some(p => p && p.layers && p.layers.some(
+    l => l && l._buttonAction && l._buttonAction.type === 'page' && l._buttonAction.pageIdx === idx
+  ));
+}
+
 // Navegar a un panel específico respetando el estado del reader
 function _rGoToPanel(idx) {
   if (idx < 0 || idx >= RS.panels.length) return;
@@ -3432,6 +3470,10 @@ function goBack() {
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
 
   if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
+  // Hoja destino de un salto (ver _panelIsJumpTarget): no se puede pasar a
+  // la hoja anterior desde aquí, aunque revelar texto hacia atrás en ESTA
+  // misma hoja (arriba) sigue funcionando con normalidad.
+  if (_panelIsJumpTarget(RS.idx)) return;
   if (RS.idx > 0) {
     RS.idx--;
     const pp = RS.panels[RS.idx];
