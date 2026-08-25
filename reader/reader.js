@@ -3968,7 +3968,32 @@ function _panelHasNavButton(panel) {
 function _updateContainerTouchAction() {
   const container = document.getElementById('scrollReader');
   if (!container) return;
-  container.style.touchAction = _panelHasNavButton(RS.panels[RS.idx]) ? 'none' : '';
+  const panel = RS.panels[RS.idx];
+  if (_panelHasNavButton(panel)) {
+    container.style.touchAction = 'none';
+    return;
+  }
+  if (_panelIsJumpTarget(RS.idx)) {
+    // Hoja destino de un salto: bloquear SOLO el retroceso, a nivel de CSS,
+    // igual de fiable que el bloqueo total de arriba — evita el mismo
+    // tirón/temblor en un gesto rápido (Alberto: "mejorar el desplazamiento
+    // por gesto rápido... para que no se quede temblando").
+    //
+    // Mapeo confirmado (MDN, CSS-Tricks): "pan-left" = el dedo se arrastra
+    // hacia la DERECHA (el contenido se desplaza a la izquierda); "pan-up" =
+    // el dedo se arrastra hacia ABAJO. En este lector, retroceder (idx--)
+    // es arrastrar el dedo hacia la derecha en horizontal (dx>0, ver
+    // 'goingBack' en el listener de scroll) o hacia abajo en vertical
+    // (dy>0) — es decir, exactamente "pan-left"/"pan-up". Permitir solo el
+    // sentido contrario dentro de ese eje ('pan-right'/'pan-down') deja
+    // avanzar con normalidad y bloquea el retroceso desde el primer
+    // instante del gesto, sin depender de que el preventDefault() de
+    // touchmove gane la carrera al scroll nativo.
+    const isH = RS.navMode === 'horizontal';
+    container.style.touchAction = isH ? 'pan-right' : 'pan-down';
+    return;
+  }
+  container.style.touchAction = '';
 }
 
 // Combina los dos motivos por los que la navegación genérica puede estar
