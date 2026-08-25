@@ -860,3 +860,22 @@ document.addEventListener('focusout', e => {
   clearInterval(_kbModalPollTimer);
   setTimeout(_kbModalAdjust, 50);
 });
+
+/* ============================================================
+   ICONOS DESHACER/REHACER (SVG vectorial aportado por Alberto)
+   ============================================================
+   Sustituyen a los caracteres unicode ↩/↪ que se usaban antes en todos los
+   botones de deshacer/rehacer de la app (toolbar principal, paneles de
+   dibujo/formas/recorte, editor de trayectorias, Trix). Un único origen
+   aquí (utils.js, carga antes que editor.js y views.js) en vez de repetir
+   el SVG en cada sitio.
+
+   fill="currentColor" (en vez del #000000 del archivo original) a
+   propósito: igual que el carácter unicode al que sustituyen, estos
+   botones aparecen tanto en paneles claros (icono debe verse negro) como
+   en barras oscuras (icono debe verse blanco) — currentColor hereda el
+   "color" CSS del botón en cada contexto, igual que hacía el texto.
+   Se usan como <svg> inline (interpolados en las plantillas de botón),
+   nunca como <img src>: una imagen no hereda color de esta forma. */
+const ICON_UNDO_SVG = '<svg viewBox="0 0 212 252" width="0.85em" height="1em" style="display:inline-block;vertical-align:-0.15em;flex-shrink:0" aria-hidden="true" focusable="false"><path transform="translate(105.683 125.631)" d="M -103.683 0.708 L 45.861 -123.631 L 43.067 -69.258 L 103.683 -68.134 L 102.109 75.468 L 43.067 76.188 L 42.963 123.631 L -103.683 0.708 Z" fill="currentColor"/></svg>';
+const ICON_REDO_SVG = '<svg viewBox="0 0 212 252" width="0.85em" height="1em" style="display:inline-block;vertical-align:-0.15em;flex-shrink:0" aria-hidden="true" focusable="false"><path transform="translate(105.683 125.631)" d="M 103.683 0.708 L -45.861 -123.631 L -43.067 -69.258 L -103.683 -68.134 L -102.109 75.468 L -43.067 76.188 L -42.963 123.631 L 103.683 0.708 Z" fill="currentColor"/></svg>';

@@ -2059,6 +2059,97 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
   requestAnimationFrame(_readerGifTick);
 }
 
+// ── FUENTES: detección y carga forzosa antes del primer dibujado ──────
+// BUG CORREGIDO — Alberto: "alguna obra no se puede leer correctamente
+// online en un dispositivo que no contiene las fuentes utilizadas".
+//
+// Causa real (confirmada en la documentación del propio CSS Font Loading
+// API, MDN): document.fonts.ready "se cumple cuando terminan de cargar
+// TODAS LAS FUENTES USADAS" — pero una fuente @font-face no se considera
+// "usada" hasta que algo la solicita de verdad, y el texto en canvas
+// (ctx.font + fillText) no siempre dispara esa solicitud a tiempo antes de
+// la propia llamada que lo dibuja: la primera vez se pinta con la fuente
+// de reserva del sistema, y como el canvas es un mapa de bits ya no se
+// vuelve a redibujar solo cuando la fuente real termina de llegar — queda
+// "grabado" mal para siempre en ese dispositivo. Por eso el fallo dependía
+// del dispositivo: variaba según si esa fuente concreta ya estaba cacheada
+// de una visita anterior a comxow.com o no.
+//
+// Solución: en vez de esperar pasivamente a document.fonts.ready, se
+// detectan las fuentes que la obra usa de verdad (recorriendo capas de
+// texto/bocadillo y texto enriquecido) y se solicita su carga de forma
+// EXPLÍCITA con document.fonts.load() antes del primer _render().
+
+// No se intenta replicar aquí toda la cadena de prioridades que usa el
+// motor de dibujado (t.fontFamily || bl.fontFamily || 'Patrick Hand', etc.)
+// — más simple y más seguro recoger CUALQUIER valor de fuente presente en
+// cualquiera de los campos donde puede aparecer, y cargarlos todos: como
+// mucho se solicita alguna fuente de más que quede sobreescrita por otro
+// campo con más prioridad, nunca se deja de cargar la que de verdad haga
+// falta por no haber replicado bien esa cadena.
+function _scanUsedFonts(panels) {
+  const fonts = new Set();
+  const _add = v => { if (v && typeof v === 'string' && v.trim()) fonts.add(v.trim()); };
+  const _scanTextish = obj => {
+    if (!obj) return;
+    _add(obj.font_family);
+    _add(obj.fontFamily);
+    _add(obj.richFontFamily);
+    if (Array.isArray(obj.richLines)) {
+      obj.richLines.forEach(line => {
+        (line.runs || []).forEach(r => { if (!r.mono) _add(r.fontFamily); });
+      });
+    }
+  };
+  let hasAnyText = false;
+  (panels || []).forEach(panel => {
+    (panel.texts || []).forEach(t => { hasAnyText = true; _scanTextish(t); });
+    (panel.layers || []).forEach(l => {
+      if (l.type === 'bubble' || l.type === 'text') { hasAnyText = true; _scanTextish(l); }
+    });
+  });
+  // Cubrir los valores por defecto del motor de dibujado (_drawBubble,
+  // _richFontStr) para cuando una capa de texto no especifica fuente
+  // explícita — no se puede saber sin repetir toda la cadena de fallback si
+  // ALGUNA capa concreta cae en el valor por defecto, así que si hay
+  // cualquier texto en la obra se cargan también los dos por si acaso.
+  if (hasAnyText) { fonts.add('Patrick Hand'); fonts.add('Lora'); }
+  return [...fonts];
+}
+
+async function _ensureFontsLoaded(panels) {
+  if (!document.fonts) return; // navegador sin CSS Font Loading API — degradar sin bloquear
+  const names = _scanUsedFonts(panels);
+  if (!names.length) return;
+  // Por cada fuente detectada, pedir las 4 combinaciones de peso/estilo
+  // (normal, negrita, cursiva, negrita cursiva) — igual que hace el editor
+  // interno para esta misma lista de fuentes (ver EditorView_init,
+  // _edFontVariants). Una capa con negrita/cursiva activa dispara una regla
+  // @font-face DISTINTA de la variante normal; pedir solo "16px FontName"
+  // no garantiza que esa variante concreta llegue a tiempo.
+  const specs = [];
+  names.forEach(name => {
+    const fam = name.includes(' ') ? '"' + name + '"' : name;
+    specs.push('400 16px ' + fam);
+    specs.push('700 16px ' + fam);
+    specs.push('400 italic 16px ' + fam);
+    specs.push('700 italic 16px ' + fam);
+  });
+  try {
+    await Promise.all(specs.map(spec => {
+      // .load() no debe hacer fallar todo el arranque si UNA combinación en
+      // concreto no existe o no llega a cargar (p.ej. nombre mal escrito
+      // por el autor, o una variante que esa fuente no tiene) — se ignora
+      // ese caso puntual y se sigue con las demás.
+      return document.fonts.load(spec).catch(() => {});
+    }));
+  } catch(_) {}
+  // Verificación final de conjunto — normalmente ya resuelto por las cargas
+  // explícitas de arriba, pero cubre cualquier otra fuente que sí se haya
+  // llegado a "usar" por otra vía mientras tanto.
+  try { await document.fonts.ready; } catch(_) {}
+}
+
 function startReader() {
   document.getElementById('loadingScreen').classList.add('hidden');
   document.getElementById('readerApp').classList.remove('hidden');
@@ -2085,7 +2176,7 @@ function startReader() {
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+  _ensureFontsLoaded(RS.panels).then(() => {
     _render();
     _showControls();
   });
@@ -2184,7 +2275,7 @@ function _startScrollReader() {
   }
 
   // ── Render inicial de todos los slides ──
-  (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+  _ensureFontsLoaded(RS.panels).then(() => {
     // Paso 1: renderizar todos los panels sin textos secuenciales
     RS.panels.forEach((panel, pi) => {
       _activateCanvas(pi);
@@ -2329,25 +2420,51 @@ function _startScrollReader() {
       if (!size) return;
       const si = Math.max(0, Math.min(RS.panels.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
-      const goingBack = si < _prevSI;
-      // Hoja destino de un salto (Alberto): no se puede retroceder desde
-      // ella ni siquiera arrastrando con el dedo/ratón — el scroll nativo no
-      // pasa por _vsBack() (que sí respeta esta restricción), así que hay
-      // que interceptarlo aquí también. Recorre desde la posición actual
-      // hacia atrás buscando la hoja marcada más alta que se cruzaría — cubre
-      // tanto un paso sencillo (7→6) como un arrastre largo que salte varias
-      // hojas de golpe (10→2 cruzando la 7) — y recorta el aterrizaje justo
-      // en esa hoja en vez de dejarlo pasar de largo.
-      if (goingBack) {
-        let _jumpBoundary = null;
-        for (let i = _prevSI; i > si; i--) {
-          if (_panelIsJumpTarget(i)) { _jumpBoundary = i; break; }
-        }
-        if (_jumpBoundary !== null) {
-          container.scrollTo({ left: isH ? _jumpBoundary * size : 0, top: isH ? 0 : _jumpBoundary * size, behavior: 'instant' });
+
+      // _navLocked (ver _navDisable/_navEnable, cabecera de _rGoToPanel) lo
+      // pone a true _navGoToPanelLocked() justo antes de lanzar el propio
+      // scrollTo() del botón de autor — es la señal de "este cambio de
+      // posición lo ha causado un salto deliberado, no un arrastre real del
+      // usuario". Sin comprobarla aquí, las dos protecciones de abajo
+      // interceptaban TAMBIÉN los saltos del propio botón que las originó:
+      // BUG CORREGIDO — Alberto: "el botón no envía a la hoja
+      // correspondiente" cuando el salto cruzaba de camino otra hoja
+      // marcada como destino de otro botón (ver bloque "hoja destino de un
+      // salto" más abajo), quedándose a mitad de camino en esa otra hoja en
+      // vez de llegar a su verdadero destino.
+      if (!_navLocked) {
+        // Hoja de recorrido dirigido (Alberto: botón de autor "ir a
+        // hoja..."): si la hoja que se abandona tiene su propio botón, TODA
+        // navegación genérica queda bloqueada — pero esa comprobación solo
+        // vivía en advance()/goBack()/_vsForward()/_vsBack(), que gestionan
+        // teclado y toque/clic discretos. El arrastre nativo del dedo no
+        // pasa por ninguna de esas funciones, así que se colaba igual.
+        // BUG CORREGIDO — Alberto: "permite el desplazamiento de hoja con
+        // gestos" en una hoja con botón propio.
+        if (_panelHasNavButton(RS.panels[_prevSI])) {
+          container.scrollTo({ left: isH ? _prevSI * size : 0, top: isH ? 0 : _prevSI * size, behavior: 'instant' });
           return;
         }
+        // Hoja destino de un salto: no se puede retroceder desde ella ni
+        // siquiera arrastrando con el dedo/ratón. Recorre desde la posición
+        // actual hacia atrás buscando la hoja marcada más alta que se
+        // cruzaría — cubre tanto un paso sencillo (7→6) como un arrastre
+        // largo que salte varias hojas de golpe (10→2 cruzando la 7) — y
+        // recorta el aterrizaje justo en esa hoja en vez de dejarlo pasar
+        // de largo.
+        const goingBack = si < _prevSI;
+        if (goingBack) {
+          let _jumpBoundary = null;
+          for (let i = _prevSI; i > si; i--) {
+            if (_panelIsJumpTarget(i)) { _jumpBoundary = i; break; }
+          }
+          if (_jumpBoundary !== null) {
+            container.scrollTo({ left: isH ? _jumpBoundary * size : 0, top: isH ? 0 : _jumpBoundary * size, behavior: 'instant' });
+            return;
+          }
+        }
       }
+      const goingBack = si < _prevSI;
       // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja — se
       // resetea la hoja que se abandona, así que si se vuelve a visitar más
       // tarde aparece de nuevo a tamaño normal (pedido explícito de Alberto).
