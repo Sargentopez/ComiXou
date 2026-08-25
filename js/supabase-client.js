@@ -539,6 +539,18 @@ const SupabaseClient = (() => {
             // _isFull:true para que edDeserLayer lo reconozca como nuevo formato
             _isFull: true,
           };
+          // BUG CORREGIDO — Alberto: un botón "ir a hoja..." puesto sobre un
+          // dibujo (fill/pencil/watercolor) nunca llegaba a funcionar en el
+          // lector, por mucho que se recreara. Esta lista de campos es
+          // CERRADA (a diferencia de _lClean más abajo, que parte de una
+          // copia de toda la capa) — cualquier campo no listado aquí
+          // explícitamente se pierde al guardar en la nube. _buttonAction
+          // no estaba en la lista, así que un botón sobre un dibujo se
+          // guardaba bien en local (edSerLayer sí lo incluye, ver su
+          // envoltorio) pero desaparecía en cuanto se subía a Supabase —
+          // el lector externo nunca podía verlo, porque el dato ni
+          // siquiera llegaba a la base de datos.
+          if (l._buttonAction) _groupData._buttonAction = Object.assign({}, l._buttonAction);
           // No comprimir: el dataUrl PNG ya es binario comprimido internamente
           const _ld = JSON.stringify(_groupData);
           layerRows.push({ panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null });
