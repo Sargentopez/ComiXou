@@ -2326,13 +2326,38 @@ function _startScrollReader() {
 
   overlay.addEventListener('touchmove', e => {
     if (e.touches.length >= 2) { _rzPinchMove(e.touches); return; }
-    if (_osx === null || !_oPanning) return;
-    RZ.tx = _oPanTx0 + (e.touches[0].clientX - _osx);
-    RZ.ty = _oPanTy0 + (e.touches[0].clientY - _osy);
-    _rzClamp(_oPanOrig);
-    _rzApply(RS.canvas);
-    _oPanned = true;
-  }, { passive: true });
+    if (_osx === null) return;
+    if (_oPanning) {
+      RZ.tx = _oPanTx0 + (e.touches[0].clientX - _osx);
+      RZ.ty = _oPanTy0 + (e.touches[0].clientY - _osy);
+      _rzClamp(_oPanOrig);
+      _rzApply(RS.canvas);
+      _oPanned = true;
+      return;
+    }
+    // Bloquear el arrastre DESDE EL PRIMER INSTANTE del gesto (no dejar que
+    // el scroll nativo llegue a moverse y corregirlo después) cuando la
+    // hoja actual no permite salir así — ver _panelHasNavButton (hoja de
+    // recorrido dirigido) / _panelIsJumpTarget (hoja destino, solo bloquea
+    // la dirección de retroceso).
+    //
+    // BUG CORREGIDO — Alberto: la versión anterior dejaba que el navegador
+    // moviera el contenido y lo corregía después (vía el listener 'scroll'
+    // más abajo), lo que producía un tirón/temblor visible y, peor,
+    // interfería con la detección del propio toque en el botón del autor
+    // de esa misma hoja — el botón dejaba de responder porque el gesto de
+    // "tocar el botón" arrancaba como un ligerísimo arrastre involuntario
+    // (habitual en pantallas táctiles reales) que el código de corrección
+    // interrumpía a mitad de camino. Con preventDefault() aquí, el
+    // navegador nunca llega a mover nada, así que no hay nada que corregir
+    // ni que pueda confundir al touchend que detecta el botón.
+    if (_panelHasNavButton(RS.panels[RS.idx])) { e.preventDefault(); return; }
+    if (_panelIsJumpTarget(RS.idx)) {
+      const dx = e.touches[0].clientX - _osx, dy = e.touches[0].clientY - _osy;
+      const goingBack = isH ? dx > 0 : dy > 0;
+      if (goingBack) e.preventDefault();
+    }
+  }, { passive: false });
 
   overlay.addEventListener('touchend', e => {
     if (_oArmTimer) { clearTimeout(_oArmTimer); _oArmTimer = null; }
@@ -2528,14 +2553,27 @@ function _startScrollReader() {
 
   container.addEventListener('touchmove', e => {
     if (e.touches.length >= 2) { _rzPinchMove(e.touches); e.preventDefault(); return; }
-    if (_csx === null || !_cPanning) return;
-    // Tomar el control sobre el scroll nativo mientras se panea con zoom activo
-    RZ.tx = _cPanTx0 + (e.touches[0].clientX - _csx);
-    RZ.ty = _cPanTy0 + (e.touches[0].clientY - _csy);
-    _rzClamp(_cPanOrig);
-    _rzApply(RS.canvas);
-    _cPanned = true;
-    e.preventDefault();
+    if (_csx === null) return;
+    if (_cPanning) {
+      // Tomar el control sobre el scroll nativo mientras se panea con zoom activo
+      RZ.tx = _cPanTx0 + (e.touches[0].clientX - _csx);
+      RZ.ty = _cPanTy0 + (e.touches[0].clientY - _csy);
+      _rzClamp(_cPanOrig);
+      _rzApply(RS.canvas);
+      _cPanned = true;
+      e.preventDefault();
+      return;
+    }
+    // Bloquear el arrastre DESDE EL PRIMER INSTANTE del gesto (no dejar que
+    // el scroll nativo llegue a moverse y corregirlo después) — mismo
+    // criterio y mismo bug corregido que en el touchmove gemelo de overlay,
+    // ver su comentario para el detalle completo.
+    if (_panelHasNavButton(RS.panels[RS.idx])) { e.preventDefault(); return; }
+    if (_panelIsJumpTarget(RS.idx)) {
+      const dx = e.touches[0].clientX - _csx, dy = e.touches[0].clientY - _csy;
+      const goingBack = isH ? dx > 0 : dy > 0;
+      if (goingBack) e.preventDefault();
+    }
   }, { passive: false });
 
   container.addEventListener('touchend', e => {
@@ -2869,7 +2907,7 @@ function _setupPageNavBar() {
   });
   slider.addEventListener('change', () => {
     _pageNavDragging = false;
-    _rGoToPanel(parseInt(slider.value, 10) - 1);
+    _navGoToPanelLocked(parseInt(slider.value, 10) - 1);
     // Alberto: cerrar la barra sola 1s después de levantar el dedo
     clearTimeout(_pageNavAutoCloseTimer);
     _pageNavAutoCloseTimer = setTimeout(_pageNavCloseBar, 1000);
