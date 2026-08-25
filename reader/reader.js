@@ -1876,7 +1876,9 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
       else if (panel._scrollCtx && !RS.isCredits) {
         const _sc = RS.idx; RS.idx = pi;
         const _sctx = RS.ctx; RS.ctx = panel._scrollCtx;
+        _pageNavSuppressUpdate = true;
         _render();
+        _pageNavSuppressUpdate = false;
         RS.idx = _sc; RS.ctx = _sctx;
       }
     }
@@ -2082,7 +2084,7 @@ function _startScrollReader() {
       const _obhit = _rBtnHitTestCanvas(ex, ey);
       if (_obhit) {
         const _oba = _obhit._buttonAction;
-        if (_oba.type === 'page') { _rGoToPanel(_oba.pageIdx); return; }
+        if (_oba.type === 'page') { _navGoToPanelLocked(_oba.pageIdx); return; }
         if (_oba.type === 'url')  { window.open(_oba.url, '_blank', 'noopener'); return; }
       }
     }
@@ -2098,17 +2100,8 @@ function _startScrollReader() {
     const goFwd = isH ? dx < 0 : dy < 0;
     const goBwd = isH ? dx > 0 : dy > 0;
 
-    if (goFwd && _hasPendingTexts()) {
-      _startFade();
-      RS.textStep++;
-      _activateCanvas(RS.idx);
-      _render();
-      _updateOverlay();
-    } else if (goFwd) {
-      if (RS.idx < RS.panels.length - 1) _snapTo(RS.idx + 1);
-    } else if (goBwd) {
-      _vsBack();
-    }
+    if (goFwd) _vsForward();
+    else if (goBwd) _vsBack();
   }, { passive: true });
 
   // PC: Ctrl+rueda para zoom hacia el cursor (llega aquí cuando el overlay
@@ -2116,8 +2109,25 @@ function _startScrollReader() {
   // container, para cuando el overlay tiene pointer-events:none)
   overlay.addEventListener('wheel', e => { _rzWheelZoom(e, RS.canvas); }, { passive: false });
 
-  // ── Retroceder ──
+  // ── Avanzar/Retroceder ──
+  // Centralizadas aquí (en vez de repetir la misma lógica en el touchend de
+  // arriba Y en el teclado, más abajo) para que el bloqueo de navegación
+  // (_navLocked — ver _navDisable/_navEnable, cabecera de _rGoToPanel) se
+  // compruebe en un único sitio por dirección, no en cada llamador.
+  function _vsForward() {
+    if (_navBlocked()) return;
+    if (_hasPendingTexts()) {
+      _startFade();
+      RS.textStep++;
+      _activateCanvas(RS.idx);
+      _render();
+      _updateOverlay();
+    } else if (RS.idx < RS.panels.length - 1) {
+      _snapTo(RS.idx + 1);
+    }
+  }
   function _vsBack() {
+    if (_navBlocked()) return;
     if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
     const panel = RS.panels[RS.idx];
     const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
@@ -2230,7 +2240,7 @@ function _startScrollReader() {
     const _cbhit = _rBtnHitTestCanvas(_cex, _cey);
     if (!_cbhit) return;
     const _cba = _cbhit._buttonAction;
-    if (_cba.type === 'page') _rGoToPanel(_cba.pageIdx);
+    if (_cba.type === 'page') _navGoToPanelLocked(_cba.pageIdx);
     else if (_cba.type === 'url') window.open(_cba.url, '_blank', 'noopener');
   }, { passive: true });
 
@@ -2267,7 +2277,7 @@ function _startScrollReader() {
     const _sbhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
     if (!_sbhit) return;
     const _sba = _sbhit._buttonAction;
-    if (_sba.type === 'page') _rGoToPanel(_sba.pageIdx);
+    if (_sba.type === 'page') _navGoToPanelLocked(_sba.pageIdx);
     else if (_sba.type === 'url') window.open(_sba.url, '_blank', 'noopener');
   }, { passive: true });
 
@@ -2275,14 +2285,7 @@ function _startScrollReader() {
   RS.keyHandler = e => {
     const fwd = ['ArrowRight','ArrowDown','Space','Enter'].includes(e.code);
     const bwd = ['ArrowLeft','ArrowUp'].includes(e.code);
-    if (fwd) {
-      e.preventDefault();
-      if (_hasPendingTexts()) {
-        _startFade(); RS.textStep++; _activateCanvas(RS.idx); _render(); _updateOverlay();
-      } else if (RS.idx < RS.panels.length - 1) {
-        _snapTo(RS.idx + 1);
-      }
-    }
+    if (fwd) { e.preventDefault(); _vsForward(); }
     if (bwd) { e.preventDefault(); _vsBack(); }
     if (e.key === 'Escape') {
       if (RS.isEmbed) { try { window.parent.postMessage({ type: 'reader:close' }, '*'); } catch(_) {} }
@@ -2438,16 +2441,38 @@ function _positionBtns() {
 // (fixed/horizontal/vertical) — ver su comentario de cabecera.
 let _pageNavOpen      = false;
 let _pageNavDragging  = false;
+// Ver _readerGifTick más arriba: al redibujar en segundo plano una hoja CON
+// ANIMACIÓN que no es la visible (para mantenerla al día aunque no se esté
+// mirando), ese código cambia RS.idx TEMPORALMENTE a esa otra hoja mientras
+// llama a _render() y lo restaura justo después. Sin esta bandera,
+// _pageNavUpdate() (llamada desde dentro de _render()) leía RS.idx justo en
+// ese instante y mostraba el número de ESA hoja de fondo en vez de la que de
+// verdad se está viendo — de ahí que el contador/slider "saltara" a la hoja
+// con la animación de forma intermitente (justo cuando le tocaba redibujar
+// un fotograma). BUG CORREGIDO — Alberto, verificado leyendo el código de
+// _readerGifTick, no es un problema de scroll ni de flujo de texto.
+let _pageNavSuppressUpdate = false;
+// Temporizador del cierre automático de la barra tras soltar el dedo.
+let _pageNavAutoCloseTimer = null;
 
 // Mantiene el botón (y la barra, si está abierta) al día con la hoja real.
 // Se llama desde _render(), así que cubre CUALQUIER vía de navegación
 // (swipe, teclado, botones "ir a hoja" dentro de la obra, o esta misma
 // barra) sin tener que enganchar el contador en cada sitio por separado.
 function _pageNavUpdate() {
-  const total   = RS.panels.length;
-  const current = RS.idx + 1;
+  if (_pageNavSuppressUpdate) return;
+  const total    = RS.panels.length;
+  const current  = RS.idx + 1;
   const toggleBtn = document.getElementById('pageNavToggle');
-  if (toggleBtn) toggleBtn.textContent = current + '/' + total;
+  // Hoja de recorrido dirigido (Alberto: botón de autor "ir a hoja...") — la
+  // barra tampoco debe poder usarse como atajo para saltarse esa restricción.
+  const restricted = _panelHasNavButton(RS.panels[RS.idx]);
+  if (toggleBtn) {
+    toggleBtn.textContent = current + '/' + total;
+    toggleBtn.disabled = restricted;
+    toggleBtn.classList.toggle('page-nav-restricted', restricted);
+  }
+  if (restricted && _pageNavOpen) _pageNavCloseBar();
   if (_pageNavOpen && !_pageNavDragging) {
     const slider = document.getElementById('pageNavSlider');
     const label  = document.getElementById('pageNavLabel');
@@ -2457,11 +2482,16 @@ function _pageNavUpdate() {
 }
 
 function _pageNavOpenBar() {
+  // Defensa adicional: aunque el botón esté deshabilitado (lo normal), no
+  // abrir si por lo que sea se llega a llamar igualmente en una hoja
+  // restringida.
+  if (_panelHasNavButton(RS.panels[RS.idx])) return;
   const bar    = document.getElementById('pageNavBar');
   const scrim  = document.getElementById('pageNavScrim');
   const slider = document.getElementById('pageNavSlider');
   const label  = document.getElementById('pageNavLabel');
   if (!bar || !slider) return;
+  clearTimeout(_pageNavAutoCloseTimer);
   const total = RS.panels.length;
   slider.max   = total;
   slider.value = RS.idx + 1;
@@ -2469,14 +2499,20 @@ function _pageNavOpenBar() {
   bar.classList.remove('hidden');
   if (scrim) scrim.classList.remove('hidden');
   _pageNavOpen = true;
+  // Mientras la barra está abierta (dedo/cursor sobre ella) la navegación
+  // normal (swipe/tap/teclado) queda desactivada — ver _navDisable, cabecera
+  // de _rGoToPanel. Se reactiva en _pageNavCloseBar.
+  _navDisable();
 }
 
 function _pageNavCloseBar() {
+  clearTimeout(_pageNavAutoCloseTimer);
   const bar   = document.getElementById('pageNavBar');
   const scrim = document.getElementById('pageNavScrim');
   if (bar)   bar.classList.add('hidden');
   if (scrim) scrim.classList.add('hidden');
   _pageNavOpen = false;
+  _navEnable();
 }
 
 // Se llama una sola vez, desde startReader() — RS.panels ya está completo
@@ -2507,11 +2543,16 @@ function _setupPageNavBar() {
   // al soltar (evento 'change').
   slider.addEventListener('input', () => {
     _pageNavDragging = true;
+    // El usuario sigue interactuando — cancelar cualquier cierre automático pendiente
+    clearTimeout(_pageNavAutoCloseTimer);
     if (label) label.textContent = 'Hoja ' + slider.value + ' de ' + slider.max;
   });
   slider.addEventListener('change', () => {
     _pageNavDragging = false;
     _rGoToPanel(parseInt(slider.value, 10) - 1);
+    // Alberto: cerrar la barra sola 1s después de levantar el dedo
+    clearTimeout(_pageNavAutoCloseTimer);
+    _pageNavAutoCloseTimer = setTimeout(_pageNavCloseBar, 1000);
   });
   // Mientras el foco está en el slider, que las flechas lo muevan a él (su
   // comportamiento nativo) y no, ADEMÁS, disparen advance()/goBack() vía el
@@ -3273,6 +3314,50 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   return null;
 }
 
+// ── Bloqueo de navegación ────────────────────────────────────
+// Reutilizable: cualquier acción que dispare una navegación DELIBERADA a una
+// hoja concreta — la barra de navegación por hoja (mientras hay un
+// dedo/cursor sobre ella) o un botón "ir a hoja..." colocado por el autor
+// dentro de la obra — debe "apagar" momentáneamente la navegación genérica
+// (swipe/tap/teclado de avance-retroceso normal). Sin esto, el mismo gesto
+// que activa el salto deliberado — o el que llega justo después, mientras
+// el salto todavía se está resolviendo (p.ej. el scroll instantáneo de
+// _rGoToPanel en modo scroll) — podría interpretarse ADEMÁS como un
+// avance/retroceso normal según en qué mitad de la pantalla cae.
+let _navLocked = false;
+function _navDisable() { _navLocked = true; }
+function _navEnable()  { _navLocked = false; }
+
+// Tiempo de margen tras un salto deliberado (botón de autor) antes de
+// reactivar la navegación normal — cubre el instante en que _rGoToPanel
+// todavía está resolviendo el scroll en modo horizontal/vertical.
+const _NAV_RELOCK_MS = 400;
+function _navGoToPanelLocked(idx) {
+  _navDisable();
+  _rGoToPanel(idx);
+  setTimeout(_navEnable, _NAV_RELOCK_MS);
+}
+
+// Hoja "de recorrido dirigido" (Alberto): si tiene AL MENOS un botón de
+// autor de tipo "ir a hoja...", la navegación normal (swipe/tap/teclado/
+// barra de hojas) queda desactivada mientras se está viendo — solo se puede
+// salir de ella usando alguno de esos botones. Se evalúa en el momento (no
+// se guarda en una bandera de estado que haya que refrescar en cada sitio
+// que cambia RS.idx) — siempre lee el panel actual directamente.
+// Solo cuenta el tipo "page" — un botón "url" abre un enlace externo y no
+// ofrece una salida real dentro del lector, así que su sola presencia no
+// debe dejar al lector atrapado sin más forma de avanzar/retroceder.
+function _panelHasNavButton(panel) {
+  if (!panel || !panel.layers) return false;
+  return panel.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page');
+}
+// Combina los dos motivos por los que la navegación genérica puede estar
+// desactivada ahora mismo: el bloqueo transitorio (_navLocked) o que la
+// hoja actual sea de recorrido dirigido.
+function _navBlocked() {
+  return _navLocked || _panelHasNavButton(RS.panels[RS.idx]);
+}
+
 // Navegar a un panel específico respetando el estado del reader
 function _rGoToPanel(idx) {
   if (idx < 0 || idx >= RS.panels.length) return;
@@ -3324,6 +3409,7 @@ function _rGoToPanel(idx) {
 }
 
 function advance() {
+  if (_navBlocked()) return;
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
   const tl    = panel?.texts || [];
@@ -3340,6 +3426,7 @@ function advance() {
 }
 
 function goBack() {
+  if (_navBlocked()) return;
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
@@ -3572,7 +3659,7 @@ function _mountCreditsButtons() {
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
-    if (isLink) { el.href = 'https://comxow.com/'; }
+    if (isLink) { el.href = 'https://comxow.com/'; el.target = '_blank'; el.rel = 'noopener'; }
     el.className = '_cxCreditBtn';
     // Coordenadas canvas → pantalla
     const screenX = rect.left + data.cx * sx;
@@ -3713,7 +3800,7 @@ function _setupControls() {
     const _bhit = _rBtnHitTestCanvas(endX, endY);
     if (_bhit) {
       const _ba = _bhit._buttonAction;
-      if (_ba.type === 'page') { _rGoToPanel(_ba.pageIdx); return; }
+      if (_ba.type === 'page') { _navGoToPanelLocked(_ba.pageIdx); return; }
       if (_ba.type === 'url')  { window.open(_ba.url, '_blank', 'noopener'); return; }
     }
 
@@ -3763,7 +3850,7 @@ function _setupControls() {
     const _bhit = _rBtnHitTestCanvas(e.clientX, e.clientY);
     if (!_bhit) return;
     const _ba = _bhit._buttonAction;
-    if (_ba.type === 'page') _rGoToPanel(_ba.pageIdx);
+    if (_ba.type === 'page') _navGoToPanelLocked(_ba.pageIdx);
     else if (_ba.type === 'url') window.open(_ba.url, '_blank', 'noopener');
   }, { passive: true, ...sig });
 }

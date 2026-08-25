@@ -125,6 +125,14 @@ html, body {
 .corner-btn:hover  { background: rgba(0,0,0,.55); }
 .corner-btn:active { background: rgba(0,0,0,.75); }
 
+/* Hoja de recorrido dirigido (Alberto: botón de autor "ir a hoja...") — el
+   botón de navegación por hoja se ve atenuado y no responde mientras la
+   hoja actual solo se puede abandonar usando ese botón del autor. */
+#pageNavToggle.page-nav-restricted {
+  opacity: .35;
+  cursor: default;
+}
+
 /* ── Barra inferior: navegación por hoja ── */
 .page-nav-scrim {
   position: fixed; inset: 0;
