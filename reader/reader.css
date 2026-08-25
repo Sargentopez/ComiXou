@@ -133,6 +133,12 @@ html, body {
   cursor: default;
 }
 
+/* Botón de descarga offline — estado "ya descargada" */
+#offlineDlBtn.offline-dl-saved {
+  color: #4caf50;
+  border-color: #4caf50;
+}
+
 /* ── Barra inferior: navegación por hoja ── */
 .page-nav-scrim {
   position: fixed; inset: 0;

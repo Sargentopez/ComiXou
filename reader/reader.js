@@ -1086,6 +1086,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('webkitfullscreenchange', _onFullscreenChange);
   }
 
+  // Archivo standalone (descargado para distribuir fuera de la app, ver
+  // _buildStandaloneBundle): la obra viene incrustada en la propia página,
+  // sin id ni token — no hace falta ni hay red de por medio.
+  if (window.__EMBEDDED_WORK__) {
+    _startFromOfflineSnapshot(window.__EMBEDDED_WORK__, { standalone: true });
+    return;
+  }
+
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
   showError('No se indicó ninguna obra. Comprueba el enlace.');
@@ -1129,10 +1137,19 @@ async function loadWork(workId) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(workId);
     document.title = (work[0].title || 'Obra') + ' — ComXow';
+    RS._workId     = workId;
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
+    // Copia "limpia" de los paneles tal como quedan justo aquí — sin el
+    // estado de ejecución (frames decodificados, canvases offscreen, etc.)
+    // que preloadImages() añade a continuación. Es la base de la que parte
+    // la descarga para lectura offline (ver _buildOfflineSnapshot) — así no
+    // hay que filtrar campos de ejecución de un objeto ya mutado, ni
+    // mantener una lista de qué excluir cada vez que algo nuevo se añada
+    // al pipeline de precarga.
+    RS._sourcePanels = JSON.parse(JSON.stringify(RS.panels));
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
     // Añadir hoja de créditos como último panel — se trata como hoja normal
@@ -1144,6 +1161,12 @@ async function loadWork(workId) {
 
   } catch(err) {
     console.error('Error:', err);
+    // Sin red (o Supabase inalcanzable): comprobar si hay una copia
+    // descargada para lectura offline de esta misma obra antes de rendirse.
+    try {
+      const _offline = await _offlineLoad(workId);
+      if (_offline) { await _startFromOfflineSnapshot(_offline); return; }
+    } catch(_e) {}
     showError('Error de conexión. Comprueba tu internet e inténtalo de nuevo.');
   }
 }
@@ -1170,10 +1193,15 @@ async function loadDraft(token) {
     setLoadingMsg('Cargando páginas...');
     await _loadPanels(token, useAuth);
     document.title = (work[0].title || 'Borrador') + ' — ComXow';
+    RS._workId     = token;
     RS._workAuthor = work[0].author_name || '';
     RS._workSocial = work[0].social      || '';
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
+    // Copia limpia para descarga/exportación offline — ver el mismo criterio
+    // en loadWork(). Alberto: los borradores también deben poder descargarse
+    // (un autor puede querer probar la distribución antes de publicar).
+    RS._sourcePanels = JSON.parse(JSON.stringify(RS.panels));
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
@@ -1182,8 +1210,153 @@ async function loadDraft(token) {
     startReader();
   } catch(err) {
     console.error('Error loadDraft:', err);
+    try {
+      const _offline = await _offlineLoad(token);
+      if (_offline) { await _startFromOfflineSnapshot(_offline); return; }
+    } catch(_e) {}
     showError('Error al cargar el borrador. Comprueba tu conexión e inténtalo de nuevo.');
   }
+}
+
+// ── DESCARGA PARA LECTURA OFFLINE ─────────────────────────────
+// Guarda en el propio dispositivo, en IndexedDB, todo lo que el LECTOR
+// necesita para mostrar la obra sin red — no una copia editable del
+// proyecto (eso vive aparte, en el almacenamiento del editor/WorkStore,
+// dentro de la app principal): solo lo que ya se descarga hoy para leer
+// (paneles, capas, textos, imágenes de fondo/animaciones ya resueltas a
+// data URL) más los metadatos mínimos (título, autor, red social, modo de
+// navegación). Base de datos separada de las del editor (cxAutosave,
+// cxAnims, cxBiblioteca) — el lector es un contexto de solo lectura.
+const _OFFLINE_DB   = 'cxReaderOffline';
+const _OFFLINE_STORE = 'works';
+
+function _offlineDbOpen() {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open(_OFFLINE_DB, 1);
+      req.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(_OFFLINE_STORE)) db.createObjectStore(_OFFLINE_STORE);
+      };
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror   = () => reject(req.error);
+    } catch(e) { reject(e); }
+  });
+}
+
+async function _offlineSave(workId, snapshot) {
+  const db = await _offlineDbOpen();
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(_OFFLINE_STORE, 'readwrite');
+      tx.objectStore(_OFFLINE_STORE).put(snapshot, workId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror    = () => reject(tx.error);
+    } catch(e) { reject(e); }
+  });
+}
+
+async function _offlineLoad(workId) {
+  try {
+    const db = await _offlineDbOpen();
+    return await new Promise(resolve => {
+      const tx  = db.transaction(_OFFLINE_STORE, 'readonly');
+      const req = tx.objectStore(_OFFLINE_STORE).get(workId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror   = () => resolve(null);
+    });
+  } catch(e) { return null; }
+}
+
+async function _offlineDelete(workId) {
+  try {
+    const db = await _offlineDbOpen();
+    return await new Promise(resolve => {
+      const tx = db.transaction(_OFFLINE_STORE, 'readwrite');
+      tx.objectStore(_OFFLINE_STORE).delete(workId);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror    = () => resolve(false);
+    });
+  } catch(e) { return false; }
+}
+
+// Construye la instantánea a partir de RS._sourcePanels (copia limpia,
+// tomada justo tras _loadPanels — ver loadWork). Lo único que en ese punto
+// todavía es una URL de red sin resolver es el GIF importado (layer._gifUrl,
+// bucket 'anims') — las imágenes estáticas ya vienen como data URL embebida
+// en layer_data, y el APNG animado ya se resolvió a _apngSrc durante
+// _loadPanels. Se descarga aquí, una sola vez, específicamente para la
+// instantánea (evita depender del estado ya decodificado en RS.panels, que
+// mezclaría campos de ejecución difíciles de enumerar por completo).
+async function _buildOfflineSnapshot() {
+  if (!RS._sourcePanels) return null;
+  const panels = await Promise.all(RS._sourcePanels.map(async panel => {
+    const layers = await Promise.all((panel.layers || []).map(async layer => {
+      if (layer.type === 'gif' && layer._gifUrl) {
+        try {
+          const r = await fetch(layer._gifUrl, { cache: 'no-store' });
+          if (r.ok) {
+            const blob = await r.blob();
+            layer._gifUrl = await new Promise(res => {
+              const fr = new FileReader();
+              fr.onload  = e => res(e.target.result);
+              fr.onerror = () => res(layer._gifUrl); // si falla, dejar la URL original
+              fr.readAsDataURL(blob);
+            });
+          }
+        } catch(_) {} // sin red para este GIF concreto: se queda con la URL — se reintentará en la próxima descarga
+      }
+      return layer;
+    }));
+    return { ...panel, layers };
+  }));
+  return {
+    workId:  RS._workId,
+    title:   RS._workTitle  || '',
+    author:  RS._workAuthor || '',
+    social:  RS._workSocial || '',
+    navMode: RS.navMode     || 'fixed',
+    panels,
+    savedAt: new Date().toISOString(),
+  };
+}
+
+// Arranca el lector a partir de una instantánea guardada (sin red). Reusa
+// preloadImages() tal cual: layer._gifUrl con un data: URL en vez de una
+// URL http funciona igual con fetch() (los data: URL están soportados de
+// forma nativa), así que no hace falta ninguna rama de código aparte para
+// decodificar GIF/APNG sin conexión.
+//
+// opts.standalone: true cuando se arranca desde un archivo HTML autónomo
+// exportado con _buildStandaloneBundle (obra + lector + fuentes incrustados
+// en un único archivo para distribuir fuera de la app) — a diferencia del
+// repliegue automático de loadWork() al fallar la red, aquí NO hay ningún
+// workId de la app al que asociar un futuro "volver a exportar", así que el
+// botón de descarga (inferior derecha) se mantiene oculto.
+async function _startFromOfflineSnapshot(snapshot, opts) {
+  const standalone = !!(opts && opts.standalone);
+  setLoadingMsg(standalone ? 'Cargando obra...' : 'Cargando copia guardada sin conexión...');
+  RS._workId     = snapshot.workId;
+  RS._workAuthor = snapshot.author  || '';
+  RS._workSocial = snapshot.social  || '';
+  RS._workTitle  = snapshot.title   || '';
+  RS.navMode     = snapshot.navMode || 'fixed';
+  document.title = (snapshot.title || 'Obra') + ' — ComXow';
+  // Clonar antes de usar — RS._sourcePanels debe quedar limpio para que una
+  // futura re-descarga desde esta misma copia offline no arrastre estado.
+  RS.panels        = JSON.parse(JSON.stringify(snapshot.panels));
+  RS._sourcePanels = JSON.parse(JSON.stringify(snapshot.panels));
+  const _lastPanel = RS.panels[RS.panels.length - 1];
+  RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
+  setLoadingMsg('Preparando imágenes...');
+  await preloadImages();
+  // Fijar ANTES de startReader(): esa función ya llama a _setupOfflineBtn()
+  // internamente, que se apoya en esta bandera para mantener oculto el
+  // botón de descarga (ni hay red que usar en un repliegue offline, ni
+  // tiene sentido "volver a exportar" desde dentro de un archivo standalone).
+  RS._isOfflineSession = true;
+  startReader();
+  if (!standalone) _readerToast('Viendo la copia guardada sin conexión', 3500);
 }
 
 // ── CARGA PANELES + CAPAS + TEXTOS ────────────────────────────
@@ -1891,6 +2064,7 @@ function startReader() {
   document.getElementById('readerApp').classList.remove('hidden');
 
   _setupPageNavBar();
+  _setupOfflineBtn();
 
   // Arrancar loop de animación GIF si hay alguno en la obra
   const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2)));
@@ -2435,6 +2609,7 @@ function _positionBtns() {
   const fsBtn      = document.getElementById('fullscreenToggle');
   const closeBtn    = document.getElementById('closeBtn');
   const pageNavBtn  = document.getElementById('pageNavToggle');
+  const offlineBtn  = document.getElementById('offlineDlBtn');
 
   if (fsBtn) {
     fsBtn.style.left = (cl + PAD) + 'px';
@@ -2450,6 +2625,13 @@ function _positionBtns() {
     const btnH = pageNavBtn.getBoundingClientRect().height || 24;
     pageNavBtn.style.left = (cl + PAD) + 'px';
     pageNavBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
+  }
+  if (offlineBtn) {
+    // Simétrico a closeBtn (esquina superior derecha) pero pegado abajo
+    const btnW = offlineBtn.getBoundingClientRect().width  || 32;
+    const btnH = offlineBtn.getBoundingClientRect().height || 24;
+    offlineBtn.style.left = (cl + cw - PAD - btnW) + 'px';
+    offlineBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
   }
 }
 
@@ -2580,6 +2762,222 @@ function _setupPageNavBar() {
   // keydown global de _setupControls.
   slider.addEventListener('keydown', e => e.stopPropagation());
 }
+
+// ── EXPORTAR COMO ARCHIVO STANDALONE (distribución fuera de la app) ──
+// Alberto: "un autor puede querer distribuir su obra fuera de la app". A
+// diferencia de la copia en IndexedDB (solo sirve en este mismo dispositivo,
+// para releer el mismo enlace más tarde), esto genera un único archivo
+// .html que lleva DENTRO el lector completo + la obra + las fuentes que usa
+// — se puede compartir por cualquier medio (email, USB, mensajería) y
+// abrirse en cualquier dispositivo con navegador, sin conexión, sin haber
+// visitado nunca comxow.com. La hoja de créditos (con el enlace a
+// comxow.com en pestaña nueva, ver _mountCreditsButtons) es la única vía de
+// vuelta a la app desde un archivo así — por eso _startFromOfflineSnapshot
+// la añade siempre, pase lo que pase.
+
+async function _fetchText(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error('No se pudo descargar ' + url);
+  return r.text();
+}
+async function _fetchDataUrl(url) {
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) throw new Error('No se pudo descargar ' + url);
+  const blob = await r.blob();
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload  = e => res(e.target.result);
+    fr.onerror = () => rej(new Error('No se pudo leer ' + url));
+    fr.readAsDataURL(blob);
+  });
+}
+
+// fonts.css tal cual, con cada url('XXX.woff2') sustituida por su data: URI
+// — se incrustan TODAS las fuentes disponibles (no solo las que usa esta
+// obra en concreto) para no depender de enumerar correctamente cada posible
+// campo de fuente (incluidos overrides por tramo de texto enriquecido);
+// ~900KB de más en el archivo final es un margen razonable a cambio de no
+// arriesgarse a que una burbuja se vea con una fuente equivocada.
+async function _buildFontsCssInline() {
+  const fontsUrl = new URL('../fonts/fonts.css', location.href).href;
+  let css = await _fetchText(fontsUrl);
+  const names = [...new Set([...css.matchAll(/url\('([^']+\.woff2)'\)/g)].map(m => m[1]))];
+  const resolved = {};
+  for (const fname of names) {
+    const fontUrl = new URL('../fonts/' + fname, location.href).href;
+    resolved[fname] = await _fetchDataUrl(fontUrl);
+  }
+  return css.replace(/url\('([^']+\.woff2)'\)/g, (full, fname) => "url('" + (resolved[fname] || full) + "')");
+}
+
+// Nombre de archivo seguro a partir del título de la obra
+function _safeFileName(title) {
+  const base = (title || 'obra').trim()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos
+    .replace(/[^a-zA-Z0-9 _-]/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+  return (base || 'obra') + '.html';
+}
+
+// Construye el documento HTML autocontenido completo. Usa una plantilla
+// estática (no el DOM en vivo de la sesión de lectura actual) a propósito:
+// el DOM en vivo puede tener posiciones/estados calculados para ESTA
+// ventana concreta (tamaño de pantalla, hoja actual, barra abierta, botón
+// ya en estado "descargada"...) que no deben quedar grabados en el archivo
+// — el archivo exportado debe arrancar siempre limpio, sea quien sea que lo
+// abra y en el dispositivo que sea.
+async function _buildStandaloneBundle() {
+  if (!RS._sourcePanels) return null;
+  const snapshot = await _buildOfflineSnapshot();
+  if (!snapshot) return null;
+
+  // IMPORTANTE: cada dependencia se incrusta DENTRO de una etiqueta
+  // <script>/<style> del propio documento generado — cualquier '</script'
+  // o '</style' que aparezca LITERALMENTE dentro de ese texto (p.ej.
+  // reader.js contiene, en su propio código fuente, la cadena '</script>'
+  // — la propia línea que construye las etiquetas de las demás
+  // dependencias, más abajo) cerraría esa etiqueta de golpe para el
+  // analizador HTML, dejando el resto del script como marcado suelto. La
+  // barra escapada (\/) no cambia el JS/CSS resultante en tiempo de
+  // ejecución, solo rompe la coincidencia literal para el parser HTML.
+  const _escClose = (s, tag) => s.replace(new RegExp('</' + tag, 'gi'), '<\\/' + tag);
+
+  const scriptSrcs = Array.from(document.querySelectorAll('script[src]')).map(el => el.src);
+  const scripts = [];
+  for (const src of scriptSrcs) scripts.push(_escClose(await _fetchText(src), 'script'));
+
+  const readerCss  = _escClose(await _fetchText(new URL('reader.css', location.href).href), 'style');
+  const fontsCss   = _escClose(await _buildFontsCssInline(), 'style');
+  const logoData   = await _fetchDataUrl(new URL('../logo.svg', location.href).href);
+  const loadingImg = await _fetchDataUrl(new URL('../loading-icon.png', location.href).href);
+
+  const title = (snapshot.title || 'Obra') + ' — ComXow';
+  const snapshotJson = JSON.stringify(snapshot).replace(/</g, '\\u003c'); // evitar cierre prematuro de </script>
+
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>${title.replace(/</g, '&lt;')}</title>
+<meta name="theme-color" content="#111111">
+<style>${fontsCss}</style>
+<style>${readerCss}</style>
+</head>
+<body>
+
+<div id="loadingScreen" class="loading-screen">
+  <div class="loading-logo">
+    <img src="${loadingImg}" alt="Cargando" style="height:40px;width:auto;">
+    <img src="${logoData}" alt="Comxow" style="height:40px;width:auto;">
+  </div>
+  <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
+  <div class="loading-progress-wrap">
+    <div class="loading-progress-bar" id="loadingBar"></div>
+  </div>
+  <div class="loading-progress-label" id="loadingLabel"></div>
+</div>
+
+<div id="errorScreen" class="error-screen hidden">
+  <div class="error-card">
+    <div class="error-icon">\u{1F4ED}</div>
+    <h2>Obra no disponible</h2>
+    <p id="errorMsg">Esta obra no existe o no está publicada.</p>
+    <a href="javascript:history.back()" class="btn-yellow">Volver</a>
+  </div>
+</div>
+
+<div id="readerApp" class="reader-app hidden">
+  <canvas id="readerCanvas"></canvas>
+  <div id="scrollReader"></div>
+  <button id="fullscreenToggle" class="corner-btn corner-tl" aria-label="Pantalla completa">[ ]</button>
+  <button id="closeBtn" class="corner-btn corner-tr" aria-label="Cerrar">&#x2715;</button>
+  <button id="pageNavToggle" class="corner-btn corner-bl" aria-label="Ir a hoja">1/1</button>
+  <button id="offlineDlBtn" class="corner-btn corner-br hidden" aria-label="Descargar para leer sin conexión">&#x2B07;</button>
+  <div id="pageNavScrim" class="page-nav-scrim hidden"></div>
+  <div id="pageNavBar" class="page-nav-bar hidden">
+    <div class="page-nav-bar-label" id="pageNavLabel">Hoja 1 de 1</div>
+    <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" aria-label="Seleccionar hoja">
+  </div>
+  <div id="readerToast" class="reader-toast"></div>
+</div>
+
+<script>window.__EMBEDDED_WORK__ = ${snapshotJson};</script>
+${scripts.map(s => '<script>' + s + '</script>').join('\n')}
+</body>
+</html>`;
+
+  return { html, fileName: _safeFileName(snapshot.title) };
+}
+
+async function _downloadStandaloneBundle() {
+  const bundle = await _buildStandaloneBundle();
+  if (!bundle) return false;
+  const blob = new Blob([bundle.html], { type: 'text/html' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = bundle.fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return true;
+}
+
+// ── BOTÓN DE DESCARGA OFFLINE ─────────────────────────────────
+// Disponible para cualquier obra cargada por red (RS._workId +
+// RS._sourcePanels — publicada o borrador, ver loadWork/loadDraft): no en
+// una sesión que ya está viendo una copia offline/standalone (no hay red
+// para descargar nada nuevo) ni embebida en un iframe ajeno. Se llama una
+// vez desde startReader().
+//
+// Cada clic hace DOS cosas: guarda una copia en IndexedDB de este mismo
+// dispositivo (para releer el mismo enlace más tarde, con o sin red) Y
+// descarga el archivo .html autocontenido para distribuir fuera de la app
+// (Alberto). Una sola acción cubre ambos usos.
+async function _setupOfflineBtn() {
+  const btn = document.getElementById('offlineDlBtn');
+  if (!btn) return;
+  if (!RS._workId || RS._isOfflineSession || RS.isEmbed) return;
+  btn.classList.remove('hidden');
+
+  const _refreshState = async () => {
+    const has = await _offlineLoad(RS._workId);
+    btn.textContent = has ? '\u2713' : '\u2B07'; // ✓ : ⬇
+    btn.classList.toggle('offline-dl-saved', !!has);
+    btn.title = has
+      ? 'Ya descargada — toca para actualizar o volver a exportar el archivo'
+      : 'Descargar para leer sin conexión';
+  };
+  await _refreshState();
+
+  btn.addEventListener('touchend', e => { e.stopPropagation(); }, { passive: false });
+  btn.addEventListener('click', async e => {
+    e.stopPropagation();
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = '\u2026'; // …
+    try {
+      const snapshot = await _buildOfflineSnapshot();
+      if (snapshot) {
+        await _offlineSave(RS._workId, snapshot);
+        await _downloadStandaloneBundle();
+        _readerToast('Obra descargada — guardada en este dispositivo y como archivo', 3500);
+      } else {
+        _readerToast('No se pudo preparar la descarga', 3000);
+      }
+    } catch(err) {
+      console.error('[offline] error al descargar:', err);
+      _readerToast('No se pudo completar la descarga', 3000);
+    }
+    await _refreshState();
+    btn.disabled = false;
+  });
+}
+
+
 
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
 function _panelDims(idx) {
