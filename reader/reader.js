@@ -3831,28 +3831,24 @@ function _rBtnHitTestCanvas(winX, winY) {
   const _tpx = (winX - _rect.left - _ox) / _sc;
   const _tpy = (winY - _rect.top  - _oy) / _sc;
   const _panel = RS.panels[RS.idx];
-  return _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph) : null;
+  return _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph, _panel) : null;
 }
 
-// Alpha hit testing: devuelve true si el píxel en (lx,ly) tiene alpha suficiente.
-// lx/ly son coordenadas locales centradas en 0,0 (rotación ya deshecha).
-// Soporta: GIF/APNG (canvas offscreen), e imágenes estáticas (draw, stroke, image, etc.)
-function _rAlphaHit(la, lx, ly, pw, ph) {
-  // 1. Animaciones (GIF/APNG): usar su canvas offscreen existente
-  const oc = la._animOc || la._gifOc;
-  if (oc) {
-    const w = (la.width  || 1) * pw;
-    const h = (la.height || 1) * ph;
-    const px = Math.round((lx + w / 2) / w * oc.width);
-    const py = Math.round((ly + h / 2) / h * oc.height);
-    if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
-    try {
-      return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
-    } catch(e) { return true; }
+// Comprueba el alfa de la imagen renderizada de UNA capa en (lx,ly) — offset en
+// px de página respecto a su propio centro, rotación ya deshecha. Devuelve
+// true/false si pudo comprobarlo, o null si esa capa no tiene imagen alguna
+// (ni _btnHitImg cacheado —solo se cachea ahí si la capa tiene botón— ni
+// entrada en panel.layerImgs, que sí existe para cualquier capa con dataUrl).
+// 'draw' (formato antiguo): la imagen cubre la página entera, origen (la.x,la.y).
+// Resto (stroke, fill, pencil, watercolor, etc.): imagen recortada a su propio
+// bbox — normalizar respecto al centro de esa caja.
+function _rAlphaHitOwnBitmap(la, lx, ly, pw, ph, layers, panel) {
+  let hitImg = la._btnHitImg;
+  if (!hitImg && panel && panel.layerImgs && layers) {
+    const idx = layers.indexOf(la);
+    if (idx >= 0) hitImg = panel.layerImgs[idx];
   }
-  // 2. Capas con bitmap estático (_btnHitImg cacheado durante la carga del panel)
-  const hitImg = la._btnHitImg;
-  if (!hitImg) return true; // sin imagen → solo bbox
+  if (!hitImg) return null;
   // Crear canvas offscreen la primera vez y cachearlo en la capa
   if (!la._btnAlphaOc) {
     const _oc = document.createElement('canvas');
@@ -3867,7 +3863,7 @@ function _rAlphaHit(la, lx, ly, pw, ph) {
       return true; // canvas CORS tainted → solo bbox
     }
   }
-  if (!la._btnAlphaOc) return true;
+  if (!la._btnAlphaOc) return null;
   const boc = la._btnAlphaOc;
   // Mapear coordenadas locales → normalizado [0,1] → pixel del canvas offscreen.
   // Capas 'draw': la imagen cubre la página entera (pw×ph); el origen es (la.x, la.y).
@@ -3887,7 +3883,51 @@ function _rAlphaHit(la, lx, ly, pw, ph) {
   } catch(e) { return true; }
 }
 
-function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
+// Alpha hit testing: devuelve true si el toque tiene alpha suficiente.
+// lx/ly son coordenadas locales centradas en 0,0 (rotación ya deshecha).
+// Soporta: GIF/APNG (canvas offscreen), e imágenes estáticas (draw, stroke, image, etc.)
+//
+// 'layers'/'panel' (opcionales): el botón de autor se asigna siempre a la capa
+// "representante" de un grupo de dibujo a mano (stroke/draw — así se edita el
+// grupo como una unidad desde el editor), pero si ese grupo se creó usando
+// solo relleno/lápiz/acuarela, la imagen de esa capa representante está vacía
+// y el contenido visible real está en la capa HERMANA (fill/pencil/watercolor,
+// vinculada por _uid/_drawLayerId). Si el toque no tiene alfa en la imagen
+// propia de 'la', se comprueban también las hermanas del mismo grupo antes de
+// descartarlo — mismo criterio que el visor interno del editor (_edAlphaHit).
+function _rAlphaHit(la, lx, ly, pw, ph, layers, panel) {
+  // 1. Animaciones (GIF/APNG): usar su canvas offscreen existente
+  const oc = la._animOc || la._gifOc;
+  if (oc) {
+    const w = (la.width  || 1) * pw;
+    const h = (la.height || 1) * ph;
+    const px = Math.round((lx + w / 2) / w * oc.width);
+    const py = Math.round((ly + h / 2) / h * oc.height);
+    if (px < 0 || py < 0 || px >= oc.width || py >= oc.height) return false;
+    try {
+      return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+    } catch(e) { return true; }
+  }
+  // 2. Bitmap estático de la propia capa
+  const ownHit = _rAlphaHitOwnBitmap(la, lx, ly, pw, ph, layers, panel);
+  if (ownHit === true) return true;
+  if (ownHit === false) {
+    if (Array.isArray(layers)) {
+      const gid = la._drawLayerId || la._uid;
+      if (gid) {
+        for (const sib of layers) {
+          if (!sib || sib === la) continue;
+          if (sib._drawLayerId !== gid && sib._uid !== gid) continue;
+          if (_rAlphaHitOwnBitmap(sib, lx, ly, pw, ph, layers, panel) === true) return true;
+        }
+      }
+    }
+    return false;
+  }
+  return true; // sin imagen en absoluto → solo bbox
+}
+
+function _rBtnHitTest(layers, tapPx, tapPy, pw, ph, panel) {
   for (let i = layers.length - 1; i >= 0; i--) {
     const la = layers[i];
     if (!la || !la._buttonAction) continue;
@@ -3900,7 +3940,7 @@ function _rBtnHitTest(layers, tapPx, tapPy, pw, ph) {
     const ang = -(la.rotation || 0) * Math.PI / 180;
     const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
     const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
-    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _rAlphaHit(la, lx, ly, pw, ph)) return la;
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _rAlphaHit(la, lx, ly, pw, ph, layers, panel)) return la;
   }
   return null;
 }

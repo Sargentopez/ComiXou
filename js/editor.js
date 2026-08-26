@@ -27658,9 +27658,43 @@ function _viewerGoToPage(pageIdx) {
   edUpdateViewer();
 }
 
+// Comprueba el alfa de un canvas propio (dc) perteneciente a la capa 'la' en el
+// punto local (lx,ly) — offset en px de página respecto al CENTRO de 'la',
+// con la rotación ya deshecha por el llamador.
+// 'draw' (formato antiguo, antes de existir StrokeLayer) usa un canvas que
+// cubre la página ENTERA con origen (la.x, la.y). El resto de tipos con
+// canvas propio (stroke, fill, pencil, watercolor) usan un canvas RECORTADO
+// a su propio bbox (width×pw, height×ph) — hay que normalizar lx/ly respecto
+// al centro de ESA caja, no de la página completa (mismo criterio que
+// FillLayer.contains()/StrokeLayer.contains(), que sí lo hacen bien).
+function _edCanvasAlphaAt(dc, la, lx, ly, pw, ph) {
+  let px, py;
+  if (la.type === 'draw') {
+    const nx = (lx + (la.x || 0.5) * pw) / pw;
+    const ny = (ly + (la.y || 0.5) * ph) / ph;
+    px = Math.round(nx * dc.width);
+    py = Math.round(ny * dc.height);
+  } else {
+    const w = (la.width  || 1) * pw;
+    const h = (la.height || 1) * ph;
+    px = Math.round((lx / w + 0.5) * dc.width);
+    py = Math.round((ly / h + 0.5) * dc.height);
+  }
+  if (px < 0 || py < 0 || px >= dc.width || py >= dc.height) return false;
+  return dc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10;
+}
+
 // Alpha hit testing para botones: solo hit si el píxel tiene alpha suficiente.
 // Usa el canvas offscreen de la animación (_animOc o _gifOc) cuando existe.
-function _edAlphaHit(la, lx, ly, pw, ph) {
+//
+// 'layers' (opcional): el botón de autor se asigna siempre a la capa
+// "representante" de un grupo de dibujo a mano (stroke/draw — así se edita el
+// grupo como una unidad), pero si ese grupo se creó usando solo relleno/lápiz/
+// acuarela, la tinta de esa capa representante está vacía y el contenido
+// visible real está en la capa HERMANA (fill/pencil/watercolor, vinculada por
+// _uid/_drawLayerId). Si el toque no tiene alfa en el canvas propio de 'la',
+// se comprueban también las hermanas del mismo grupo antes de descartarlo.
+function _edAlphaHit(la, lx, ly, pw, ph, layers) {
   // 1. Animaciones (GIF/APNG): usar su canvas offscreen
   const oc = la._animOc || la._gifOc;
   if (oc) {
@@ -27672,18 +27706,21 @@ function _edAlphaHit(la, lx, ly, pw, ph) {
     try { return oc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10; }
     catch(e) { return true; }
   }
-  // 2. Capas con canvas propio (draw, stroke, fill, pencil, watercolor, shape, line):
-  // el canvas cubre la página entera; el punto de referencia es (la.x, la.y).
-  // Normalizar lx/ly → [0,1] en coordenadas de página → pixel del canvas.
-  const dc = la._canvas;
-  if (dc && dc.width && dc.height) {
-    const nx = (lx + (la.x || 0.5) * pw) / pw;
-    const ny = (ly + (la.y || 0.5) * ph) / ph;
-    const px = Math.round(nx * dc.width);
-    const py = Math.round(ny * dc.height);
-    if (px < 0 || py < 0 || px >= dc.width || py >= dc.height) return false;
-    try { return dc.getContext('2d').getImageData(px, py, 1, 1).data[3] > 10; }
+  // 2. Capas con canvas propio
+  if (la._canvas && la._canvas.width && la._canvas.height) {
+    try { if (_edCanvasAlphaAt(la._canvas, la, lx, ly, pw, ph)) return true; }
     catch(e) { return true; }
+    const gid = la._drawLayerId || la._uid;
+    if (gid && Array.isArray(layers)) {
+      for (const sib of layers) {
+        if (!sib || sib === la) continue;
+        if (sib._drawLayerId !== gid && sib._uid !== gid) continue;
+        if (!sib._canvas || !sib._canvas.width || !sib._canvas.height) continue;
+        try { if (_edCanvasAlphaAt(sib._canvas, sib, lx, ly, pw, ph)) return true; }
+        catch(e) {}
+      }
+    }
+    return false;
   }
   return true; // sin canvas → solo bbox
 }
@@ -27701,7 +27738,7 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
     const ang = -(la.rotation || 0) * Math.PI / 180;
     const lx = dx * Math.cos(ang) - dy * Math.sin(ang);
     const ly = dx * Math.sin(ang) + dy * Math.cos(ang);
-    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _edAlphaHit(la, lx, ly, pw, ph)) return la;
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh && _edAlphaHit(la, lx, ly, pw, ph, layers)) return la;
   }
   return null;
 }
