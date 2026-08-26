@@ -2229,6 +2229,22 @@ function _startScrollReader() {
     slide.className = 'rs-slide';
     slide.style.width  = vw + 'px';
     slide.style.height = vh + 'px';
+    // Hoja con restricción direccional (con botón propio, o destino de un
+    // salto — ver más abajo _panelHasNavButton/_panelIsJumpTarget): impedir
+    // que un gesto rápido/enérgico la "salte" por encima durante el fling de
+    // scroll-snap nativo, sea cual sea el sentido que tenga bloqueado. Sin
+    // esto, el fling puede pasar de largo por esta hoja hacia otra más allá,
+    // y el listener 'scroll' de más abajo corrige la posición A POSTERIORI
+    // (rebote) mientras el fling nativo, que sigue en marcha, insiste en
+    // seguir moviéndose — de ahí el temblor/parpadeo que reportó Alberto.
+    // `scroll-snap-stop:always` resuelve esto a nivel nativo: el propio
+    // navegador se ve obligado a parar en esta hoja aunque el gesto sea muy
+    // rápido, sin necesidad de ninguna corrección por JS después del hecho.
+    // No afecta a saltos programáticos exactos (`container.scrollTo({left/
+    // top: destino})`, usados por el slider de hojas y por los botones de
+    // autor vía _rGoToPanel) — ver MDN/spec: scroll-snap-stop solo entra en
+    // juego en desplazamientos por inercia ("fling"), no en saltos directos.
+    if (_panelHasNavButton(panel) || _panelIsJumpTarget(pi)) slide.style.scrollSnapStop = 'always';
 
     const canvas = document.createElement('canvas');
     canvas.width  = pw;
@@ -2337,10 +2353,12 @@ function _startScrollReader() {
       return;
     }
     // Bloquear el arrastre DESDE EL PRIMER INSTANTE del gesto (no dejar que
-    // el scroll nativo llegue a moverse y corregirlo después) cuando la
-    // hoja actual no permite salir así — ver _panelHasNavButton (hoja de
-    // recorrido dirigido) / _panelIsJumpTarget (hoja destino, solo bloquea
-    // la dirección de retroceso).
+    // el scroll nativo llegue a moverse y corregirlo después) en el sentido
+    // que la hoja actual tenga prohibido — ver _panelHasNavButton (hoja con
+    // botón propio: prohibido AVANZAR, solo se avanza con el botón) y
+    // _panelIsJumpTarget (hoja destino de un salto: prohibido RETROCEDER).
+    // Cada una bloquea solo su propio sentido; el otro queda libre desde
+    // esta misma hoja.
     //
     // BUG CORREGIDO — Alberto: la versión anterior dejaba que el navegador
     // moviera el contenido y lo corregía después (vía el listener 'scroll'
@@ -2352,10 +2370,13 @@ function _startScrollReader() {
     // interrumpía a mitad de camino. Con preventDefault() aquí, el
     // navegador nunca llega a mover nada, así que no hay nada que corregir
     // ni que pueda confundir al touchend que detecta el botón.
-    if (_panelHasNavButton(RS.panels[RS.idx])) { e.preventDefault(); return; }
+    const _odx = e.touches[0].clientX - _osx, _ody = e.touches[0].clientY - _osy;
+    if (_panelHasNavButton(RS.panels[RS.idx])) {
+      const goingFwd = isH ? _odx < 0 : _ody < 0;
+      if (goingFwd) e.preventDefault();
+    }
     if (_panelIsJumpTarget(RS.idx)) {
-      const dx = e.touches[0].clientX - _osx, dy = e.touches[0].clientY - _osy;
-      const goingBack = isH ? dx > 0 : dy > 0;
+      const goingBack = isH ? _odx > 0 : _ody > 0;
       if (goingBack) e.preventDefault();
     }
   }, { passive: false });
@@ -2406,7 +2427,7 @@ function _startScrollReader() {
   // (_navLocked — ver _navDisable/_navEnable, cabecera de _rGoToPanel) se
   // compruebe en un único sitio por dirección, no en cada llamador.
   function _vsForward() {
-    if (_navBlocked()) return;
+    if (_navBlockedFwd()) return;
     if (_hasPendingTexts()) {
       _startFade();
       RS.textStep++;
@@ -2418,7 +2439,7 @@ function _startScrollReader() {
     }
   }
   function _vsBack() {
-    if (_navBlocked()) return;
+    if (_navLocked) return;
     if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
     const panel = RS.panels[RS.idx];
     const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
@@ -2429,10 +2450,13 @@ function _startScrollReader() {
       _render();
       _updateOverlay();
     } else if (_panelIsJumpTarget(RS.idx)) {
-      // Hoja destino de un salto: no se puede pasar a la hoja anterior desde aquí.
+      // Hoja destino de un salto: prohibido retroceder desde aquí (ver
+      // _panelIsJumpTarget) — revelar texto hacia atrás en ESTA misma hoja
+      // (arriba) sigue funcionando con normalidad, esto solo afecta al
+      // cambio de hoja.
       return;
-    } else {
-      if (RS.idx > 0) _snapTo(RS.idx - 1);
+    } else if (RS.idx > 0) {
+      _snapTo(RS.idx - 1);
     }
   }
 
@@ -2451,35 +2475,29 @@ function _startScrollReader() {
       // pone a true _navGoToPanelLocked() justo antes de lanzar el propio
       // scrollTo() del botón de autor — es la señal de "este cambio de
       // posición lo ha causado un salto deliberado, no un arrastre real del
-      // usuario". Sin comprobarla aquí, las dos protecciones de abajo
-      // interceptaban TAMBIÉN los saltos del propio botón que las originó:
-      // BUG CORREGIDO — Alberto: "el botón no envía a la hoja
-      // correspondiente" cuando el salto cruzaba de camino otra hoja
-      // marcada como destino de otro botón (ver bloque "hoja destino de un
-      // salto" más abajo), quedándose a mitad de camino en esa otra hoja en
-      // vez de llegar a su verdadero destino.
+      // usuario". Sin comprobarla aquí, la protección de abajo interceptaría
+      // TAMBIÉN los saltos del propio botón que la originan.
       if (!_navLocked) {
-        // Hoja de recorrido dirigido (Alberto: botón de autor "ir a
-        // hoja..."): si la hoja que se abandona tiene su propio botón, TODA
-        // navegación genérica queda bloqueada — pero esa comprobación solo
-        // vivía en advance()/goBack()/_vsForward()/_vsBack(), que gestionan
-        // teclado y toque/clic discretos. El arrastre nativo del dedo no
-        // pasa por ninguna de esas funciones, así que se colaba igual.
+        const _goingFwdNow  = si > _prevSI;
+        const _goingBackNow = si < _prevSI;
+        // Hoja con botón propio (prohibido AVANZAR desde ella — retroceder
+        // SÍ está permitido): si nos alejamos de ella hacia adelante sin
+        // usar el botón, corregir. El arrastre nativo del dedo no pasa por
+        // advance()/_vsForward(), que gestionan solo teclado y toque/clic
+        // discretos, así que se colaba igual sin esto.
         // BUG CORREGIDO — Alberto: "permite el desplazamiento de hoja con
         // gestos" en una hoja con botón propio.
-        if (_panelHasNavButton(RS.panels[_prevSI])) {
+        if (_goingFwdNow && _panelHasNavButton(RS.panels[_prevSI])) {
           container.scrollTo({ left: isH ? _prevSI * size : 0, top: isH ? 0 : _prevSI * size, behavior: 'instant' });
           return;
         }
-        // Hoja destino de un salto: no se puede retroceder desde ella ni
-        // siquiera arrastrando con el dedo/ratón. Recorre desde la posición
-        // actual hacia atrás buscando la hoja marcada más alta que se
-        // cruzaría — cubre tanto un paso sencillo (7→6) como un arrastre
-        // largo que salte varias hojas de golpe (10→2 cruzando la 7) — y
-        // recorta el aterrizaje justo en esa hoja en vez de dejarlo pasar
-        // de largo.
-        const goingBack = si < _prevSI;
-        if (goingBack) {
+        // Hoja destino de un salto (prohibido RETROCEDER desde ella —
+        // avanzar SÍ está permitido): recorre desde la posición actual
+        // hacia atrás buscando la hoja marcada más alta que se cruzaría —
+        // cubre tanto un paso sencillo (7→6) como un arrastre largo que
+        // salte varias hojas de golpe (10→2 cruzando la 7) — y recorta el
+        // aterrizaje justo en esa hoja en vez de dejarlo pasar de largo.
+        if (_goingBackNow) {
           let _jumpBoundary = null;
           for (let i = _prevSI; i > si; i--) {
             if (_panelIsJumpTarget(i)) { _jumpBoundary = i; break; }
@@ -2570,10 +2588,13 @@ function _startScrollReader() {
     // el scroll nativo llegue a moverse y corregirlo después) — mismo
     // criterio y mismo bug corregido que en el touchmove gemelo de overlay,
     // ver su comentario para el detalle completo.
-    if (_panelHasNavButton(RS.panels[RS.idx])) { e.preventDefault(); return; }
+    const _cdx = e.touches[0].clientX - _csx, _cdy = e.touches[0].clientY - _csy;
+    if (_panelHasNavButton(RS.panels[RS.idx])) {
+      const goingFwd = isH ? _cdx < 0 : _cdy < 0;
+      if (goingFwd) e.preventDefault();
+    }
     if (_panelIsJumpTarget(RS.idx)) {
-      const dx = e.touches[0].clientX - _csx, dy = e.touches[0].clientY - _csy;
-      const goingBack = isH ? dx > 0 : dy > 0;
+      const goingBack = isH ? _cdx > 0 : _cdy > 0;
       if (goingBack) e.preventDefault();
     }
   }, { passive: false });
@@ -3983,66 +4004,6 @@ function _panelHasNavButton(panel) {
   return panel.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page');
 }
 
-// Fija el touch-action del contenedor de scroll según si la hoja actual
-// tiene botón propio (recorrido dirigido, ver _panelHasNavButton).
-//
-// BUG CORREGIDO — Alberto: "el botón funciona en PC, mal en táctil". Un
-// elemento con overflow:scroll se convierte, a efectos de touch-action, en
-// "el elemento que implementa el gesto de scroll" — y la restricción
-// touch-action:none de sus antepasados (html/body, en este proyecto) NO SE
-// PROPAGA dentro de él (documentado: MDN, y varios hilos de la spec de
-// touch-action/pointerevents). Esto significa que, en hardware táctil real,
-// el navegador puede empezar a desplazar #scrollReader de forma nativa, en
-// el hilo de composición (para máxima fluidez), ANTES de que el
-// preventDefault() del touchmove en JS (la corrección anterior) llegue a
-// ejecutarse — es una carrera que Chromium de escritorio (y los eventos
-// táctiles sintéticos que no son "trusted") no reproducen de la misma
-// forma, por eso no aparecía en las pruebas. Fijar touch-action:none aquí,
-// a nivel de CSS, elimina la carrera de raíz: el navegador ya sabe, antes
-// de que el gesto arranque, que no debe reservarse el scroll nativo para
-// esta hoja. Solo cubre el caso de bloqueo TOTAL (hoja con botón propio) —
-// el caso de "hoja destino, solo bloquear retroceso" sigue dependiendo del
-// preventDefault() en JS, ya que touch-action no tiene forma fiable de
-// expresar "permitir avanzar pero no retroceder" sin arriesgarse a
-// bloquear la dirección equivocada.
-function _updateContainerTouchAction() {
-  const container = document.getElementById('scrollReader');
-  if (!container) return;
-  const panel = RS.panels[RS.idx];
-  if (_panelHasNavButton(panel)) {
-    container.style.touchAction = 'none';
-    return;
-  }
-  if (_panelIsJumpTarget(RS.idx)) {
-    // Hoja destino de un salto: bloquear SOLO el retroceso, a nivel de CSS,
-    // igual de fiable que el bloqueo total de arriba — evita el mismo
-    // tirón/temblor en un gesto rápido (Alberto: "mejorar el desplazamiento
-    // por gesto rápido... para que no se quede temblando").
-    //
-    // Mapeo confirmado (MDN, CSS-Tricks): "pan-left" = el dedo se arrastra
-    // hacia la DERECHA (el contenido se desplaza a la izquierda); "pan-up" =
-    // el dedo se arrastra hacia ABAJO. En este lector, retroceder (idx--)
-    // es arrastrar el dedo hacia la derecha en horizontal (dx>0, ver
-    // 'goingBack' en el listener de scroll) o hacia abajo en vertical
-    // (dy>0) — es decir, exactamente "pan-left"/"pan-up". Permitir solo el
-    // sentido contrario dentro de ese eje ('pan-right'/'pan-down') deja
-    // avanzar con normalidad y bloquea el retroceso desde el primer
-    // instante del gesto, sin depender de que el preventDefault() de
-    // touchmove gane la carrera al scroll nativo.
-    const isH = RS.navMode === 'horizontal';
-    container.style.touchAction = isH ? 'pan-right' : 'pan-down';
-    return;
-  }
-  container.style.touchAction = '';
-}
-
-// Combina los dos motivos por los que la navegación genérica puede estar
-// desactivada ahora mismo: el bloqueo transitorio (_navLocked) o que la
-// hoja actual sea de recorrido dirigido.
-function _navBlocked() {
-  return _navLocked || _panelHasNavButton(RS.panels[RS.idx]);
-}
-
 // Hoja "destino de salto" (Alberto): si ALGÚN botón de autor en CUALQUIER
 // hoja de la obra apunta a esta hoja como destino, no se puede retroceder
 // DESDE ella — aunque esta hoja en concreto no tenga ningún botón propio.
@@ -4058,6 +4019,64 @@ function _panelIsJumpTarget(idx) {
   return RS.panels.some(p => p && p.layers && p.layers.some(
     l => l && l._buttonAction && l._buttonAction.type === 'page' && l._buttonAction.pageIdx === idx
   ));
+}
+
+// Fija el touch-action del contenedor de scroll según el sentido que la
+// hoja actual tenga prohibido:
+//   - Con botón propio (_panelHasNavButton): prohibido AVANZAR — solo se
+//     avanza usando el botón; retroceder sigue funcionando con normalidad.
+//   - Destino de un salto (_panelIsJumpTarget): prohibido RETROCEDER — no
+//     se puede volver a la hoja anterior desde aquí; avanzar sigue
+//     funcionando con normalidad.
+// Estos dos casos son intencionadamente opuestos y pueden, en teoría,
+// coincidir en la misma hoja (tiene botón propio Y es además destino de
+// otro salto) — en ese caso quedan bloqueadas las dos direcciones a la vez.
+//
+// BUG CORREGIDO — Alberto: "el botón funciona en PC, mal en táctil". Un
+// elemento con overflow:scroll se convierte, a efectos de touch-action, en
+// "el elemento que implementa el gesto de scroll" — y la restricción
+// touch-action:none de sus antepasados (html/body, en este proyecto) NO SE
+// PROPAGA dentro de él (documentado: MDN, y varios hilos de la spec de
+// touch-action/pointerevents). Esto significa que, en hardware táctil real,
+// el navegador puede empezar a desplazar #scrollReader de forma nativa, en
+// el hilo de composición (para máxima fluidez), ANTES de que el
+// preventDefault() del touchmove en JS (la corrección anterior) llegue a
+// ejecutarse — es una carrera que Chromium de escritorio (y los eventos
+// táctiles sintéticos que no son "trusted") no reproducen de la misma
+// forma, por eso no aparecía en las pruebas. Fijar touch-action a nivel de
+// CSS aquí elimina la carrera de raíz: el navegador ya sabe, antes de que
+// el gesto arranque, qué sentido no debe reservarse para el scroll nativo.
+//
+// Mapeo confirmado (MDN, CSS-Tricks, contraintuitivo): el nombre del valor
+// describe hacia dónde se desplaza el CONTENIDO, no el dedo — "pan-left"
+// ocurre cuando el dedo se arrastra hacia la DERECHA (y "pan-up" cuando se
+// arrastra hacia ABAJO). En este lector, retroceder (idx--) es arrastrar el
+// dedo hacia la derecha en horizontal o hacia abajo en vertical — es decir,
+// "pan-left"/"pan-up" — y avanzar (idx++) es "pan-right"/"pan-down".
+function _updateContainerTouchAction() {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  const isH = RS.navMode === 'horizontal';
+  const blockFwd  = _panelHasNavButton(RS.panels[RS.idx]);
+  const blockBack = _panelIsJumpTarget(RS.idx);
+  if (blockFwd && blockBack) {
+    container.style.touchAction = 'none';
+  } else if (blockFwd) {
+    container.style.touchAction = isH ? 'pan-left' : 'pan-up';    // permite retroceder, bloquea avanzar
+  } else if (blockBack) {
+    container.style.touchAction = isH ? 'pan-right' : 'pan-down'; // permite avanzar, bloquea retroceder
+  } else {
+    container.style.touchAction = '';
+  }
+}
+
+// Bloqueo transitorio (_navLocked, mientras se resuelve un salto deliberado)
+// combinado con la prohibición de AVANZAR de una hoja con botón propio —
+// usado por advance()/_vsForward(). Retroceder tiene su propia condición
+// (_panelIsJumpTarget), comprobada aparte en goBack()/_vsBack() porque debe
+// dejar pasar primero la revelación de texto hacia atrás en la misma hoja.
+function _navBlockedFwd() {
+  return _navLocked || _panelHasNavButton(RS.panels[RS.idx]);
 }
 
 // Navegar a un panel específico respetando el estado del reader
@@ -4111,7 +4130,7 @@ function _rGoToPanel(idx) {
 }
 
 function advance() {
-  if (_navBlocked()) return;
+  if (_navBlockedFwd()) return;
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
   const tl    = panel?.texts || [];
@@ -4128,15 +4147,15 @@ function advance() {
 }
 
 function goBack() {
-  if (_navBlocked()) return;
+  if (_navLocked) return;
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
   const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
 
   if (isSeq && RS.textStep > 1) { RS.textStep--; RS.fadeAlpha = 0; _render(); return; }
-  // Hoja destino de un salto (ver _panelIsJumpTarget): no se puede pasar a
-  // la hoja anterior desde aquí, aunque revelar texto hacia atrás en ESTA
-  // misma hoja (arriba) sigue funcionando con normalidad.
+  // Hoja destino de un salto (ver _panelIsJumpTarget): prohibido retroceder
+  // desde aquí, aunque revelar texto hacia atrás en ESTA misma hoja (arriba)
+  // sigue funcionando con normalidad.
   if (_panelIsJumpTarget(RS.idx)) return;
   if (RS.idx > 0) {
     RS.idx--;
