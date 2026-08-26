@@ -32741,6 +32741,7 @@ function _gcpHandleDown(e) {
   // Dos dedos → pinch (cancelar rubber band si estaba pendiente)
   if (_gcpPtrMap.size === 2) {
     if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
+    window._gcpPendingRbC = null;
     if (window._gcpRubberBand) { window._gcpRubberBand = null; }
     edIsDragging = false; edIsResizing = false; edIsRotating = false;
     const _pts = [..._gcpPtrMap.values()];
@@ -32995,12 +32996,15 @@ function _gcpDoSelectDrag(e, c) {
       window._gcpSelIdx = -1;
       window._gcpRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
     } else {
-      // Táctil: longpress para activar rubber band
+      // Táctil: longpress para activar rubber band (o promoción inmediata si el
+      // dedo se mueve antes de que expire — ver el guard al inicio de _gcpHandleMove)
       window._gcpSelIdx = -1;
       const _rbC = { ...c };
+      window._gcpPendingRbC = { nx: _rbC.nx, ny: _rbC.ny };
       clearTimeout(window._gcpRbTimer);
       window._gcpRbTimer = setTimeout(() => {
         window._gcpRbTimer = null;
+        window._gcpPendingRbC = null;
         if (!edIsDragging && !edIsResizing && !edIsRotating) {
           window._gcpRubberBand = { x0: _rbC.nx, y0: _rbC.ny, x1: _rbC.nx, y1: _rbC.ny };
           _gcpRedraw();
@@ -33452,10 +33456,32 @@ function _gcpRemoveCircularInterp() {
 }
 
 function _gcpHandleMove(e) {
-  // Cancelar timer de rubber band táctil si el dedo se mueve
-  if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
   // Actualizar pointer en el mapa propio del GCP (siempre, aunque no estuviera rastreado)
   _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // Longpress de rubber band táctil pendiente: si el dedo se mueve ANTES de que
+  // expiren los 400ms, promoverlo YA a rubber band real (desde el punto de toque
+  // original) en vez de cancelarlo sin más. Antes se cancelaba incondicionalmente
+  // aquí mismo — un dedo real nunca está perfectamente quieto (temblor fisiológico
+  // normal de cualquier toque en pantalla capacitiva genera pointermove aunque el
+  // usuario "no mueva" el dedo), así que el timer se cancelaba casi al instante en
+  // el 100% de los casos reales y el cuadro de selección nunca llegaba a aparecer,
+  // arrastre inmediato o no (reportado por Alberto, solo en dispositivo táctil real).
+  // Mismo patrón de "promoción por movimiento" que ya usa el editor general para su
+  // timer gemelo (_edPendingRbC/_edRbTouchTimer en edOnMove) — GCP reimplementaba el
+  // longpress de forma independiente, sin esa promoción.
+  if (window._gcpRbTimer && window._gcpPendingRbC && _gcpPtrMap.size === 1) {
+    clearTimeout(window._gcpRbTimer);
+    window._gcpRbTimer = null;
+    const _rbP = window._gcpPendingRbC;
+    window._gcpPendingRbC = null;
+    if (!edIsDragging && !edIsResizing && !edIsRotating) {
+      window._gcpRubberBand = { x0: _rbP.nx, y0: _rbP.ny, x1: _rbP.nx, y1: _rbP.ny };
+    }
+    // Continuar el flujo normal de abajo para procesar el rubber band en este mismo frame
+  } else if (window._gcpRbTimer) {
+    // Segundo dedo u otro estado inesperado antes de expirar → cancelar de verdad
+    clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; window._gcpPendingRbC = null;
+  }
   // ── Pinch: objeto seleccionado → escalar+rotar; sin objeto → zoom+pan cámara ──
   if (_gcpPinching && _gcpPtrMap.size >= 2) {
     const pts  = [..._gcpPtrMap.values()].slice(0, 2);
@@ -33618,6 +33644,7 @@ function _gcpHandleUp(e) {
   }
   // Cancelar timer de rubber band táctil si el dedo se levanta
   if (window._gcpRbTimer) { clearTimeout(window._gcpRbTimer); window._gcpRbTimer = null; }
+  window._gcpPendingRbC = null;
   window._edMoved = false;
   // ── Confirmar rubber band GCP → activar multiselect sin menú ──────────────
   if (window._gcpRubberBand) {
