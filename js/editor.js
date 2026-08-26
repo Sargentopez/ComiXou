@@ -18304,14 +18304,14 @@ function _edShowColorPicker(onColorChange, initialColor){
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:14px;padding:20px 18px;width:min(320px,90vw);box-shadow:0 8px 32px rgba(0,0,0,.3)">
       <div id="ecp-preview" style="width:100%;height:44px;border-radius:8px;margin-bottom:14px;background:${preview};border:1px solid #ddd"></div>
-      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Tono</label>
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">${I18n.t('ed_hue')}</label>
       <input type="range" id="ecp-h" min="0" max="360" value="${h}" style="width:100%;margin-bottom:10px;accent-color:hsl(${h},100%,50%)">
-      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Saturación <span id="ecp-sv">${s}%</span></label>
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">${I18n.t('ed_saturation')} <span id="ecp-sv">${s}%</span></label>
       <input type="range" id="ecp-s" min="0" max="100" value="${s}" style="width:100%;margin-bottom:10px;accent-color:hsl(${h},${s}%,50%)">
-      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">Luminosidad <span id="ecp-lv">${l}%</span></label>
+      <label style="font-size:.7rem;font-weight:900;color:#666;text-transform:uppercase;letter-spacing:.05em">${I18n.t('ed_lightness')} <span id="ecp-lv">${l}%</span></label>
       <input type="range" id="ecp-l" min="0" max="100" value="${l}" style="width:100%;margin-bottom:16px;accent-color:hsl(${h},100%,${l}%)">
       <div style="display:flex;gap:10px">
-        <button id="ecp-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer">Cancelar</button>
+        <button id="ecp-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer">${I18n.t('cancel')}</button>
         <button id="ecp-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer">OK</button>
       </div>
     </div>`;
@@ -19204,7 +19204,7 @@ function edRenderOptionsPanel(mode){
           <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>
           <button class="op-btn" id="pp-grp-mirror" title="${I18n.t('op_mirrorTitle')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
           <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?I18n.t('ly_unlockGroup'):I18n.t('ly_lockGroup')}" style="flex-shrink:0;background:var(--gray-100);opacity:${_grpAllLocked?'1':'0.4'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">🔒</button>
-          <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">⊟ Desagrupar</button>
+          <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
       panel.classList.add('open');
@@ -26082,6 +26082,24 @@ function _edOpenViewerScroll(navMode) {
   edViewerIdx      = 0;
   edViewerTextStep = 0;
 
+  // Fija el touch-action del contenedor de scroll según el sentido que la
+  // hoja actual tenga prohibido (ver _edPanelHasNavButton/_edPanelIsJumpTarget
+  // más arriba, mismo criterio que _updateContainerTouchAction en reader.js).
+  function _updateViewerTouchAction() {
+    const blockFwd  = _edPanelHasNavButton(edPages[edViewerIdx]);
+    const blockBack = _edPanelIsJumpTarget(edViewerIdx);
+    if (blockFwd && blockBack) {
+      sc.style.touchAction = 'none';
+    } else if (blockFwd) {
+      sc.style.touchAction = isH ? 'pan-left' : 'pan-up';    // permite retroceder, bloquea avanzar
+    } else if (blockBack) {
+      sc.style.touchAction = isH ? 'pan-right' : 'pan-down'; // permite avanzar, bloquea retroceder
+    } else {
+      sc.style.touchAction = '';
+    }
+  }
+  _updateViewerTouchAction();
+
   function _activateCanvas(pi) {
     edViewerCanvas = _canvases[pi];
     edViewerCtx    = _canvases[pi]?.getContext('2d');
@@ -26148,7 +26166,11 @@ function _edOpenViewerScroll(navMode) {
     const hit = _vsBtnHit(winX, winY);
     if (!hit) return false;
     const ba = hit._buttonAction;
-    if (ba.type === 'page') _snapTo(ba.pageIdx);
+    if (ba.type === 'page') {
+      _edNavDisable();
+      _snapTo(ba.pageIdx);
+      setTimeout(_edNavEnable, _ED_NAV_RELOCK_MS);
+    }
     else if (ba.type === 'url') window.open(ba.url, '_blank', 'noopener');
     return true;
   }
@@ -26160,6 +26182,23 @@ function _edOpenViewerScroll(navMode) {
     _osx = e.touches[0].clientX;
     _osy = e.touches[0].clientY;
   }, { passive: true });
+
+  // Bloquear el arrastre DESDE EL PRIMER INSTANTE del gesto en el sentido
+  // que la hoja actual tenga prohibido (mismo criterio y mismo bug evitado
+  // que en reader.js — ver ahí el detalle completo de la carrera entre el
+  // scroll nativo y el touch-action/preventDefault).
+  overlay.addEventListener('touchmove', e => {
+    if (_osx === null || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - _osx, dy = e.touches[0].clientY - _osy;
+    if (_edPanelHasNavButton(edPages[edViewerIdx])) {
+      const goingFwd = isH ? dx < 0 : dy < 0;
+      if (goingFwd) e.preventDefault();
+    }
+    if (_edPanelIsJumpTarget(edViewerIdx)) {
+      const goingBack = isH ? dx > 0 : dy > 0;
+      if (goingBack) e.preventDefault();
+    }
+  }, { passive: false });
 
   overlay.addEventListener('touchend', e => {
     if (_osx === null) return;
@@ -26179,16 +26218,18 @@ function _edOpenViewerScroll(navMode) {
     const goFwd = isH ? dx < 0 : dy < 0;
     const goBwd = isH ? dx > 0 : dy > 0;
 
-    if (goFwd && _hasPendingTexts()) {
-      // Avanzar bocadillo con fade (idéntico al modo fijo)
-      _vStartBubbleFade();
-      edViewerTextStep++;
-      _activateCanvas(edViewerIdx);
-      edUpdateViewer();
-      _updateOverlay();
-    } else if (goFwd) {
-      // Todos los bocadillos mostrados — deslizar a la siguiente hoja
-      if (edViewerIdx < edPages.length - 1) _snapTo(edViewerIdx + 1);
+    if (goFwd && !_edNavBlockedFwd()) {
+      if (_hasPendingTexts()) {
+        // Avanzar bocadillo con fade (idéntico al modo fijo)
+        _vStartBubbleFade();
+        edViewerTextStep++;
+        _activateCanvas(edViewerIdx);
+        edUpdateViewer();
+        _updateOverlay();
+      } else if (edViewerIdx < edPages.length - 1) {
+        // Todos los bocadillos mostrados — deslizar a la siguiente hoja
+        _snapTo(edViewerIdx + 1);
+      }
     } else if (goBwd) {
       _vsBack();
     }
@@ -26196,6 +26237,7 @@ function _edOpenViewerScroll(navMode) {
 
   // ── Retroceder ──
   function _vsBack() {
+    if (_edNavLocked) return;
     if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
     const page  = edPages[edViewerIdx];
     const isSeq = (page?.textMode || 'sequential') === 'sequential';
@@ -26206,6 +26248,9 @@ function _edOpenViewerScroll(navMode) {
       _activateCanvas(edViewerIdx);
       edUpdateViewer();
       _updateOverlay();
+    } else if (_edPanelIsJumpTarget(edViewerIdx)) {
+      // Hoja destino de un salto: prohibido retroceder desde aquí.
+      return;
     } else {
       // Sin bocadillos que retroceder — deslizar a la hoja anterior
       if (edViewerIdx > 0) _snapTo(edViewerIdx - 1);
@@ -26218,6 +26263,21 @@ function _edOpenViewerScroll(navMode) {
     if (e.touches.length !== 1) { _vsCsx = null; return; }
     _vsCsx = e.touches[0].clientX; _vsCsy = e.touches[0].clientY;
   }, { passive: true });
+  // Bloquear el arrastre DESDE EL PRIMER INSTANTE del gesto — mismo criterio
+  // y mismo bug evitado que en el touchmove gemelo de overlay, ver su
+  // comentario para el detalle completo.
+  sc.addEventListener('touchmove', e => {
+    if (_vsCsx === null || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - _vsCsx, dy = e.touches[0].clientY - _vsCsy;
+    if (_edPanelHasNavButton(edPages[edViewerIdx])) {
+      const goingFwd = isH ? dx < 0 : dy < 0;
+      if (goingFwd) e.preventDefault();
+    }
+    if (_edPanelIsJumpTarget(edViewerIdx)) {
+      const goingBack = isH ? dx > 0 : dy > 0;
+      if (goingBack) e.preventDefault();
+    }
+  }, { passive: false });
   sc.addEventListener('touchend', e => {
     if (_vsCsx === null) return;
     const _cex = e.changedTouches[0].clientX, _cey = e.changedTouches[0].clientY;
@@ -26252,11 +26312,44 @@ function _edOpenViewerScroll(navMode) {
       if (!size) return;
       const si = Math.max(0, Math.min(edPages.length - 1, Math.round(pos / size)));
       if (si === _prevSI) return;
+
+      // _edNavLocked lo pone a true _snapTo()/_edNavGoToPageLocked() justo
+      // antes de lanzar el propio scrollTo() de un salto deliberado (botón
+      // de autor) — señal de "este cambio de posición no es un arrastre
+      // real del usuario". Sin comprobarla aquí, las protecciones de abajo
+      // interceptarían también los saltos del propio botón que las origina.
+      if (!_edNavLocked) {
+        const _goingFwdNow  = si > _prevSI;
+        const _goingBackNow = si < _prevSI;
+        // Hoja con botón propio (prohibido AVANZAR desde ella — retroceder
+        // SÍ está permitido): si nos alejamos de ella hacia adelante sin
+        // usar el botón, corregir.
+        if (_goingFwdNow && _edPanelHasNavButton(edPages[_prevSI])) {
+          sc.scrollTo({ left: isH ? _prevSI * size : 0, top: isH ? 0 : _prevSI * size, behavior: 'instant' });
+          return;
+        }
+        // Hoja destino de un salto (prohibido RETROCEDER desde ella —
+        // avanzar SÍ está permitido): recorre desde la posición actual
+        // hacia atrás buscando la hoja marcada más alta que se cruzaría —
+        // cubre tanto un paso sencillo como un arrastre largo que salte
+        // varias hojas de golpe — y recorta el aterrizaje justo ahí.
+        if (_goingBackNow) {
+          let _jumpBoundary = null;
+          for (let i = _prevSI; i > si; i--) {
+            if (_edPanelIsJumpTarget(i)) { _jumpBoundary = i; break; }
+          }
+          if (_jumpBoundary !== null) {
+            sc.scrollTo({ left: isH ? _jumpBoundary * size : 0, top: isH ? 0 : _jumpBoundary * size, behavior: 'instant' });
+            return;
+          }
+        }
+      }
       const goingBack = si < _prevSI;
       _edResetPageAnims(_prevSI);   // parar animaciones de la hoja que se deja
       _prevSI      = si;
       edViewerIdx  = si;
       _activateCanvas(si);
+      _updateViewerTouchAction();
       _edStartPageAnims(si);        // arrancar animaciones de la nueva hoja desde frame 0
       const np  = edPages[si];
       const ntl = (np?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
@@ -26559,7 +26652,57 @@ function _edStartPageAnims(pageIdx) {
   });
 }
 
+// ── Bloqueo de navegación de autor (visor interno) ──────────────────────
+// Mismo sistema que el lector externo (reader/reader.js: _panelHasNavButton/
+// _panelIsJumpTarget/_navBlockedFwd/_navLocked/_navGoToPanelLocked/
+// _updateContainerTouchAction) — ver ese archivo para el razonamiento
+// completo y el historial de bugs reales ya corregidos ahí (carrera de
+// touch-action, temblor en gestos rápidos, etc.). Aquí solo se adapta a los
+// nombres del editor (edPages/edViewerIdx en vez de RS.panels/RS.idx).
+//
+//   - Hoja CON botón propio (_edPanelHasNavButton): prohibido AVANZAR — solo
+//     se avanza usando el botón; retroceder funciona con normalidad.
+//   - Hoja DESTINO de un salto (_edPanelIsJumpTarget): prohibido RETROCEDER
+//     — no se puede volver a la hoja anterior desde aquí; avanzar funciona
+//     con normalidad.
+// Estos dos casos son intencionadamente opuestos y pueden, en teoría,
+// coincidir en la misma hoja (tiene botón propio Y es además destino de
+// otro salto) — en ese caso quedan bloqueadas las dos direcciones a la vez.
+let _edNavLocked = false;
+function _edNavDisable() { _edNavLocked = true; }
+function _edNavEnable()  { _edNavLocked = false; }
+// Margen tras un salto deliberado (botón de autor) antes de reactivar la
+// navegación normal — cubre el instante en que el scroll (modo horizontal/
+// vertical) todavía se está resolviendo.
+const _ED_NAV_RELOCK_MS = 400;
+
+function _edPanelHasNavButton(page) {
+  if (!page || !page.layers) return false;
+  return page.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page');
+}
+function _edPanelIsJumpTarget(idx) {
+  return edPages.some(p => p && p.layers && p.layers.some(
+    l => l && l._buttonAction && l._buttonAction.type === 'page' && l._buttonAction.pageIdx === idx
+  ));
+}
+// Combina el bloqueo transitorio (_edNavLocked, mientras se resuelve un
+// salto deliberado) con la prohibición de AVANZAR de una hoja con botón
+// propio — usado por _viewerAdvance()/el "goFwd" del modo scroll. Retroceder
+// tiene su propia condición (_edPanelIsJumpTarget), comprobada aparte porque
+// debe dejar pasar primero la revelación de texto hacia atrás en la hoja.
+function _edNavBlockedFwd() {
+  return _edNavLocked || _edPanelHasNavButton(edPages[edViewerIdx]);
+}
+// Envoltorio para saltos deliberados vía botón de autor en modo fijo (ver
+// _snapTo en modo scroll para el equivalente ahí, con el mismo criterio).
+function _edNavGoToPageLocked(idx) {
+  _edNavDisable();
+  _viewerGoToPage(idx);
+  setTimeout(_edNavEnable, _ED_NAV_RELOCK_MS);
+}
+
 function _viewerAdvance(){
+  if (_edNavBlockedFwd()) return;
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
   const page = edPages[edViewerIdx];
   const tl = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
@@ -26579,12 +26722,18 @@ function _viewerAdvance(){
   }
 }
 function _viewerBack(){
+  if (_edNavLocked) return;
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; _vPrevBubbleFade=0; }
   const page = edPages[edViewerIdx];
   const isSeq = page?.textMode === 'sequential';
   if(isSeq && edViewerTextStep > 1){
     edViewerTextStep--;
     edUpdateViewer();
+  } else if (_edPanelIsJumpTarget(edViewerIdx)) {
+    // Hoja destino de un salto: prohibido retroceder desde aquí — revelar
+    // texto hacia atrás en ESTA misma hoja (arriba) sigue funcionando con
+    // normalidad, esto solo afecta al cambio de hoja.
+    return;
   } else if(edViewerIdx > 0){
     _edResetPageAnims(edViewerIdx);
     edViewerIdx--;
@@ -26595,6 +26744,7 @@ function _viewerBack(){
     edUpdateViewer();
   }
 }
+
 
 function edInitViewerTap(){
   const viewer = $('editorViewer');
@@ -26635,7 +26785,7 @@ function edInitViewerTap(){
     const _vHit = _vPg ? _edBtnHitTest(_vPg.layers || [], _vtpx, _vtpy, _vpw, _vph) : null;
     if (!_vHit) return false;
     const _ba = _vHit._buttonAction;
-    if (_ba.type === 'page') _viewerGoToPage(_ba.pageIdx);
+    if (_ba.type === 'page') _edNavGoToPageLocked(_ba.pageIdx);
     else if (_ba.type === 'url') window.open(_ba.url, '_blank', 'noopener');
     return true;
   };

@@ -1013,7 +1013,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (history.length > 1) { history.back(); return; }
     window.close();
     setTimeout(() => {
-      _readerToast('Cierra esta pestaña con el botón ✕ del navegador', 4000);
+      _readerToast(I18n.t('reader_closeTabHint'), 4000);
     }, 300);
   };
 
@@ -1096,7 +1096,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (draft) { loadDraft(draft); return; }
   if (id)    { loadWork(id);     return; }
-  showError('No se indicó ninguna obra. Comprueba el enlace.');
+  showError(I18n.t('reader_errorNoWorkId'));
 });
 
 function _toggleFullscreen() {
@@ -1129,14 +1129,14 @@ function _embedClose() {
 
 // ── CARGA DESDE SUPABASE ─────────────────────────────────────
 async function loadWork(workId) {
-  setLoadingMsg('Cargando obra...');
+  setLoadingMsg(I18n.t('reader_loadingWork'));
   try {
     const work = await sbGet('works?id=eq.' + workId + '&published=eq.true');
-    if (!work || !work.length) { showError('Esta obra no existe o no está publicada.'); return; }
+    if (!work || !work.length) { showError(I18n.t('reader_errorWorkNotFound')); return; }
 
-    setLoadingMsg('Cargando páginas...');
+    setLoadingMsg(I18n.t('reader_loadingPages'));
     await _loadPanels(workId);
-    document.title = (work[0].title || 'Obra') + ' — ComXow';
+    document.title = (work[0].title || I18n.t('reader_defaultWorkTitle')) + ' — ComXow';
     RS._workId     = workId;
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
@@ -1155,7 +1155,7 @@ async function loadWork(workId) {
     // Añadir hoja de créditos como último panel — se trata como hoja normal
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-    setLoadingMsg('Preparando imágenes...');
+    setLoadingMsg(I18n.t('reader_preparingImages'));
     await preloadImages();
     startReader();
 
@@ -1167,13 +1167,13 @@ async function loadWork(workId) {
       const _offline = await _offlineLoad(workId);
       if (_offline) { await _startFromOfflineSnapshot(_offline); return; }
     } catch(_e) {}
-    showError('Error de conexión. Comprueba tu internet e inténtalo de nuevo.');
+    showError(I18n.t('reader_errorConnection'));
   }
 }
 
 // ── CARGA BORRADOR (obra no publicada, acceso por token) ─────
 async function loadDraft(token) {
-  setLoadingMsg('Cargando borrador...');
+  setLoadingMsg(I18n.t('reader_loadingDraft'));
   try {
     // Intento 1: acceso público por UUID (funciona cuando la RLS lo permite para todos)
     let work = null;
@@ -1186,13 +1186,13 @@ async function loadDraft(token) {
     }
 
     if (!work || !work.length) {
-      showError('Este borrador no está disponible. Comprueba que el enlace es correcto o que la obra no ha sido eliminada.');
+      showError(I18n.t('reader_errorDraftNotAvailable'));
       return;
     }
 
-    setLoadingMsg('Cargando páginas...');
+    setLoadingMsg(I18n.t('reader_loadingPages'));
     await _loadPanels(token, useAuth);
-    document.title = (work[0].title || 'Borrador') + ' — ComXow';
+    document.title = (work[0].title || I18n.t('reader_defaultDraftTitle')) + ' — ComXow';
     RS._workId     = token;
     RS._workAuthor = work[0].author_name || '';
     RS._workSocial = work[0].social      || '';
@@ -1205,7 +1205,7 @@ async function loadDraft(token) {
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
     const _lastPanel = RS.panels[RS.panels.length - 1];
     RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-    setLoadingMsg('Preparando imágenes...');
+    setLoadingMsg(I18n.t('reader_preparingImages'));
     await preloadImages();
     startReader();
   } catch(err) {
@@ -1214,7 +1214,7 @@ async function loadDraft(token) {
       const _offline = await _offlineLoad(token);
       if (_offline) { await _startFromOfflineSnapshot(_offline); return; }
     } catch(_e) {}
-    showError('Error al cargar el borrador. Comprueba tu conexión e inténtalo de nuevo.');
+    showError(I18n.t('reader_errorLoadingDraft'));
   }
 }
 
@@ -1335,20 +1335,20 @@ async function _buildOfflineSnapshot() {
 // botón de descarga (inferior derecha) se mantiene oculto.
 async function _startFromOfflineSnapshot(snapshot, opts) {
   const standalone = !!(opts && opts.standalone);
-  setLoadingMsg(standalone ? 'Cargando obra...' : 'Cargando copia guardada sin conexión...');
+  setLoadingMsg(standalone ? I18n.t('reader_loadingWork') : I18n.t('reader_loadingOfflineCopy'));
   RS._workId     = snapshot.workId;
   RS._workAuthor = snapshot.author  || '';
   RS._workSocial = snapshot.social  || '';
   RS._workTitle  = snapshot.title   || '';
   RS.navMode     = snapshot.navMode || 'fixed';
-  document.title = (snapshot.title || 'Obra') + ' — ComXow';
+  document.title = (snapshot.title || I18n.t('reader_defaultWorkTitle')) + ' — ComXow';
   // Clonar antes de usar — RS._sourcePanels debe quedar limpio para que una
   // futura re-descarga desde esta misma copia offline no arrastre estado.
   RS.panels        = JSON.parse(JSON.stringify(snapshot.panels));
   RS._sourcePanels = JSON.parse(JSON.stringify(snapshot.panels));
   const _lastPanel = RS.panels[RS.panels.length - 1];
   RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-  setLoadingMsg('Preparando imágenes...');
+  setLoadingMsg(I18n.t('reader_preparingImages'));
   await preloadImages();
   // Fijar ANTES de startReader(): esa función ya llama a _setupOfflineBtn()
   // internamente, que se apoya en esta bandera para mantener oculto el
@@ -1356,7 +1356,7 @@ async function _startFromOfflineSnapshot(snapshot, opts) {
   // tiene sentido "volver a exportar" desde dentro de un archivo standalone).
   RS._isOfflineSession = true;
   startReader();
-  if (!standalone) _readerToast('Viendo la copia guardada sin conexión', 3500);
+  if (!standalone) _readerToast(I18n.t('reader_viewingOfflineCopy'), 3500);
 }
 
 // ── CARGA PANELES + CAPAS + TEXTOS ────────────────────────────
@@ -1438,7 +1438,7 @@ async function _czDecompress(str) {
 async function _loadPanels(workId, useAuth) {
   const _sbFetch = useAuth ? sbGetAuth : sbGet;
   const panels = await _sbFetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
-  if (!panels || !panels.length) { showError('Esta obra no tiene páginas guardadas.'); return; }
+  if (!panels || !panels.length) { showError(I18n.t('reader_errorNoPages')); return; }
 
   const panelIds = panels.map(p => p.id).join(',');
 
@@ -1528,7 +1528,7 @@ async function preloadImages() {
   // Cargar todos los paneles en paralelo (máximo rendimiento)
   // El progreso se actualiza con un contador atómico conforme cada panel termina.
   // Esto evita el problema de cargar secuencialmente (N veces más lento).
-  setLoadingMsg('Cargando imágenes...');
+  setLoadingMsg(I18n.t('reader_loadingImages'));
   await Promise.all(RS.panels.map(async (panel, pi) => {
     panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
       // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
@@ -1601,7 +1601,7 @@ async function preloadImages() {
     if (!panel.isCredits && (panel.layers||[]).length > 0) {
       loadedPanels++;
       const pct = totalPanels > 0 ? (loadedPanels / totalPanels) * 95 : 0;
-      setLoadingMsg('Cargando hoja ' + loadedPanels + ' de ' + totalPanels + '...');
+      setLoadingMsg(I18n.t('reader_loadingPageOf', { loaded: loadedPanels, total: totalPanels }));
       setLoadingProgress(pct, '');
     }
   }));
@@ -2188,8 +2188,8 @@ function startReader() {
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
-    ? 'Toca izquierda/derecha para pasar página  👆'
-    : 'Desplázate con las flechas del teclado  ◀ ▶';
+    ? I18n.t('reader_navTouchFixed')
+    : I18n.t('reader_navKeyboardFixed');
   _readerToast(msg, 4000);
 }
 
@@ -2733,8 +2733,8 @@ function _startScrollReader() {
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   _readerToast(
-    isH ? (isTouch ? 'Desliza ◀ ▶ para cambiar de hoja' : 'Flechas ◀ ▶ para navegar')
-        : (isTouch ? 'Desliza ▲ ▼ para cambiar de hoja' : 'Flechas ▲ ▼ para navegar'),
+    isH ? (isTouch ? I18n.t('reader_navSwipeH') : I18n.t('reader_navKeysH'))
+        : (isTouch ? I18n.t('reader_navSwipeV') : I18n.t('reader_navKeysV')),
     4000
   );
 }
@@ -2873,7 +2873,7 @@ function _pageNavUpdate() {
     const slider = document.getElementById('pageNavSlider');
     const label  = document.getElementById('pageNavLabel');
     if (slider) slider.value = current;
-    if (label)  label.textContent = 'Hoja ' + current + ' de ' + total;
+    if (label)  label.textContent = I18n.t('reader_pageOf', { current, total });
   }
 }
 
@@ -2891,7 +2891,7 @@ function _pageNavOpenBar() {
   const total = RS.panels.length;
   slider.max   = total;
   slider.value = RS.idx + 1;
-  if (label) label.textContent = 'Hoja ' + (RS.idx + 1) + ' de ' + total;
+  if (label) label.textContent = I18n.t('reader_pageOf', { current: RS.idx + 1, total });
   bar.classList.remove('hidden');
   if (scrim) scrim.classList.remove('hidden');
   _pageNavOpen = true;
@@ -2941,7 +2941,7 @@ function _setupPageNavBar() {
     _pageNavDragging = true;
     // El usuario sigue interactuando — cancelar cualquier cierre automático pendiente
     clearTimeout(_pageNavAutoCloseTimer);
-    if (label) label.textContent = 'Hoja ' + slider.value + ' de ' + slider.max;
+    if (label) label.textContent = I18n.t('reader_pageOf', { current: slider.value, total: slider.max });
   });
   slider.addEventListener('change', () => {
     _pageNavDragging = false;
@@ -3005,12 +3005,12 @@ async function _buildFontsCssInline() {
 
 // Nombre de archivo seguro a partir del título de la obra
 function _safeFileName(title) {
-  const base = (title || 'obra').trim()
+  const base = (title || I18n.t('reader_defaultWorkTitle').toLowerCase()).trim()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos
     .replace(/[^a-zA-Z0-9 _-]/g, '')
     .replace(/\s+/g, '_')
     .slice(0, 80);
-  return (base || 'obra') + '.html';
+  return (base || 'work') + '.html';
 }
 
 // Construye el documento HTML autocontenido completo. Usa una plantilla
@@ -3045,11 +3045,11 @@ async function _buildStandaloneBundle() {
   const logoData   = await _fetchDataUrl(new URL('../logo.svg', location.href).href);
   const loadingImg = await _fetchDataUrl(new URL('../loading-icon.png', location.href).href);
 
-  const title = (snapshot.title || 'Obra') + ' — ComXow';
+  const title = (snapshot.title || I18n.t('reader_defaultWorkTitle')) + ' — ComXow';
   const snapshotJson = JSON.stringify(snapshot).replace(/</g, '\\u003c'); // evitar cierre prematuro de </script>
 
   const html = `<!DOCTYPE html>
-<html lang="es">
+<html lang="${I18n.getLang()}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -3062,10 +3062,10 @@ async function _buildStandaloneBundle() {
 
 <div id="loadingScreen" class="loading-screen">
   <div class="loading-logo">
-    <img src="${loadingImg}" alt="Cargando" style="height:40px;width:auto;">
+    <img src="${loadingImg}" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
     <img src="${logoData}" alt="Comxow" style="height:40px;width:auto;">
   </div>
-  <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
+  <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">${I18n.t('reader_loadingWork')}</div>
   <div class="loading-progress-wrap">
     <div class="loading-progress-bar" id="loadingBar"></div>
   </div>
@@ -3075,23 +3075,23 @@ async function _buildStandaloneBundle() {
 <div id="errorScreen" class="error-screen hidden">
   <div class="error-card">
     <div class="error-icon">\u{1F4ED}</div>
-    <h2>Obra no disponible</h2>
-    <p id="errorMsg">Esta obra no existe o no está publicada.</p>
-    <a href="javascript:history.back()" class="btn-yellow">Volver</a>
+    <h2 data-i18n="reader_workNotAvailableTitle">${I18n.t('reader_workNotAvailableTitle')}</h2>
+    <p id="errorMsg" data-i18n="reader_errorWorkNotFound">${I18n.t('reader_errorWorkNotFound')}</p>
+    <a href="javascript:history.back()" class="btn-yellow" data-i18n="intro_back">${I18n.t('intro_back')}</a>
   </div>
 </div>
 
 <div id="readerApp" class="reader-app hidden">
   <canvas id="readerCanvas"></canvas>
   <div id="scrollReader"></div>
-  <button id="fullscreenToggle" class="corner-btn corner-tl" aria-label="Pantalla completa">[ ]</button>
-  <button id="closeBtn" class="corner-btn corner-tr" aria-label="Cerrar">&#x2715;</button>
-  <button id="pageNavToggle" class="corner-btn corner-bl" aria-label="Ir a hoja">1/1</button>
-  <button id="offlineDlBtn" class="corner-btn corner-br hidden" aria-label="Descargar para leer sin conexión">&#x2B07;</button>
+  <button id="fullscreenToggle" class="corner-btn corner-tl" data-i18n-aria="reader_fullscreenLabel" aria-label="${I18n.t('reader_fullscreenLabel')}">[ ]</button>
+  <button id="closeBtn" class="corner-btn corner-tr" data-i18n-aria="reader_closeLabel" aria-label="${I18n.t('reader_closeLabel')}">&#x2715;</button>
+  <button id="pageNavToggle" class="corner-btn corner-bl" data-i18n-aria="reader_goToPageLabel" aria-label="${I18n.t('reader_goToPageLabel')}">1/1</button>
+  <button id="offlineDlBtn" class="corner-btn corner-br hidden" data-i18n-aria="reader_downloadOfflineTitle" aria-label="${I18n.t('reader_downloadOfflineTitle')}">&#x2B07;</button>
   <div id="pageNavScrim" class="page-nav-scrim hidden"></div>
   <div id="pageNavBar" class="page-nav-bar hidden">
-    <div class="page-nav-bar-label" id="pageNavLabel">Hoja 1 de 1</div>
-    <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" aria-label="Seleccionar hoja">
+    <div class="page-nav-bar-label" id="pageNavLabel">${I18n.t('reader_pageOf', { current: 1, total: 1 })}</div>
+    <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" data-i18n-aria="reader_selectPageLabel" aria-label="${I18n.t('reader_selectPageLabel')}">
   </div>
   <div id="readerToast" class="reader-toast"></div>
 </div>
@@ -3141,8 +3141,8 @@ async function _setupOfflineBtn() {
     btn.textContent = has ? '\u2713' : '\u2B07'; // ✓ : ⬇
     btn.classList.toggle('offline-dl-saved', !!has);
     btn.title = has
-      ? 'Ya descargada — toca para actualizar o volver a exportar el archivo'
-      : 'Descargar para leer sin conexión';
+      ? I18n.t('reader_alreadyDownloadedTitle')
+      : I18n.t('reader_downloadOfflineTitle');
   };
   await _refreshState();
 
@@ -3157,13 +3157,13 @@ async function _setupOfflineBtn() {
       if (snapshot) {
         await _offlineSave(RS._workId, snapshot);
         await _downloadStandaloneBundle();
-        _readerToast('Obra descargada — guardada en este dispositivo y como archivo', 3500);
+        _readerToast(I18n.t('reader_downloadedToast'), 3500);
       } else {
-        _readerToast('No se pudo preparar la descarga', 3000);
+        _readerToast(I18n.t('reader_downloadPrepareFail'), 3000);
       }
     } catch(err) {
       console.error('[offline] error al descargar:', err);
-      _readerToast('No se pudo completar la descarga', 3000);
+      _readerToast(I18n.t('reader_downloadFail'), 3000);
     }
     await _refreshState();
     btn.disabled = false;
@@ -3659,7 +3659,11 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
 
   // Texto centrado
   ctx.font = (fontItalic_ ? 'italic ' : '') + (fontBold_ ? 'bold ' : '') + fs + 'px ' + fontFamily_;
-  const isPlaceholder = (t.text||'') === 'Escribe aquí';
+  // Comparar contra el placeholder en AMBOS idiomas: lo puso el editor de
+  // quien creó la obra, en el idioma de SU dispositivo en aquel momento —
+  // no necesariamente el mismo idioma en el que se está leyendo ahora aquí.
+  const isPlaceholder = (t.text||'') === TRANSLATIONS.es.ed_writeHerePlaceholder
+                      || (t.text||'') === TRANSLATIONS.en.ed_writeHerePlaceholder;
   ctx.fillStyle = isPlaceholder ? '#999999' : textColor_;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const lines = _getLines(t.text || '');
@@ -4311,16 +4315,17 @@ function _renderCredits() {
     }
     const sloganY = rightStartY + sloganFS * 2;
     ctx.font = '400 ' + sloganFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#555';
-    ctx.fillText('IDEA Y COMPARTE', rightCX, sloganY);
+    ctx.fillText(I18n.t('tagline'), rightCX, sloganY);
     const linkY = sloganY + sloganFS * 3;
     ctx.font = '400 ' + linkFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#1a73e8';
-    ctx.fillText('Visita más obras del autor', rightCX, linkY);
-    const lw = ctx.measureText('Visita más obras del autor').width;
+    const _visitTxt = I18n.t('reader_visitMoreWorks');
+    ctx.fillText(_visitTxt, rightCX, linkY);
+    const lw = ctx.measureText(_visitTxt).width;
     ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
     ctx.moveTo(rightCX - lw/2, linkY + linkFS * 0.6); ctx.lineTo(rightCX + lw/2, linkY + linkFS * 0.6); ctx.stroke();
     const restartFS = socialFS, restartY = linkY + linkFS * 2.2;
     ctx.font = '600 ' + restartFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#888';
-    ctx.fillText('↩ Volver a leer', rightCX, restartY);
+    ctx.fillText(I18n.t('reader_backToReading'), rightCX, restartY);
     // Guardar coordenadas canvas para los botones HTML
     RS._creditsLink    = { cx: rightCX, cy: linkY,    fs: linkFS,    pw, ph };
     RS._creditsRestart = { cx: rightCX, cy: restartY, fs: restartFS, pw, ph };
@@ -4355,16 +4360,17 @@ function _renderCredits() {
     }
     const sloganFS = Math.round(fRef * 0.042), sloganY = logoY + sloganFS * 2;
     ctx.font = '400 ' + sloganFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#555';
-    ctx.fillText('IDEA Y COMPARTE', cx, sloganY);
+    ctx.fillText(I18n.t('tagline'), cx, sloganY);
     const linkFS = socialFS, linkY = sloganY + sloganFS * 3;
     ctx.font = '400 ' + linkFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#1a73e8';
-    ctx.fillText('Visita más obras del autor', cx, linkY);
-    const lw = ctx.measureText('Visita más obras del autor').width;
+    const _visitTxt2 = I18n.t('reader_visitMoreWorks');
+    ctx.fillText(_visitTxt2, cx, linkY);
+    const lw = ctx.measureText(_visitTxt2).width;
     ctx.beginPath(); ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = Math.max(1, linkFS * 0.06);
     ctx.moveTo(cx - lw/2, linkY + linkFS * 0.6); ctx.lineTo(cx + lw/2, linkY + linkFS * 0.6); ctx.stroke();
     const restartFS = socialFS, restartY = linkY + linkFS * 2.2;
     ctx.font = '600 ' + restartFS + 'px Arial, Helvetica, sans-serif'; ctx.fillStyle = '#888';
-    ctx.fillText('↩ Volver a leer', cx, restartY);
+    ctx.fillText(I18n.t('reader_backToReading'), cx, restartY);
     RS._creditsLink    = { cx, cy: linkY,    fs: linkFS,    pw, ph };
     RS._creditsRestart = { cx, cy: restartY, fs: restartFS, pw, ph };
   }
@@ -4614,7 +4620,7 @@ function setLoadingProgress(pct, label) {
 
 function _updateOGMeta(title, author, coverUrl) {
   const t = (title || 'ComXow') + ' — ComXow';
-  const d = author ? `Una obra de ${author} en ComXow` : 'Abre esta obra en el reproductor de ComXow';
+  const d = author ? I18n.t('reader_ogDescriptionWithAuthor', { author }) : I18n.t('reader_ogDescriptionDefault');
   document.title = t;
   document.querySelector('meta[property="og:title"]')       ?.setAttribute('content', t);
   document.querySelector('meta[property="og:description"]') ?.setAttribute('content', d);

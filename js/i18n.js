@@ -479,6 +479,10 @@ const TRANSLATIONS = {
     ed_jpgWhiteBg:          "JPG (fondo blanco)",
     ed_group:               "⊞ Agrupar",
     ed_ungroup:             "⊟ Desagrupar",
+    // Selector de color HSL (_edShowColorPicker)
+    ed_hue:                 "Tono",
+    ed_saturation:          "Saturación",
+    ed_lightness:           "Luminosidad",
     ed_arrangeBtn:          "↕ Ordenar ▸",
     // Variante para el editor de animaciones (GCP): ahí "Ordenar" es un
     // botón de PRIMER NIVEL en la barra (▾, como "Guías ▾"/"Matriz ▾"), no
@@ -987,6 +991,48 @@ const TRANSLATIONS = {
     intro_termsLoadError:   "No se pudieron cargar las condiciones de uso. Inténtalo de nuevo más tarde.",
     intro_termsTitle:       "Condiciones de uso",
     intro_back:             "Volver",
+
+    // ── Lector externo (reader/reader.js, reader/index.html) — antes sin
+    // i18n en absoluto, todo el texto salía siempre en español pasara lo que
+    // pasara el idioma del dispositivo (Alberto). Prefijo reader_.
+    reader_loadingWork:          "Cargando obra...",
+    reader_loadingPages:         "Cargando páginas...",
+    reader_loadingDraft:         "Cargando borrador...",
+    reader_loadingOfflineCopy:   "Cargando copia guardada sin conexión...",
+    reader_preparingImages:      "Preparando imágenes...",
+    reader_loadingImages:        "Cargando imágenes...",
+    reader_loadingPageOf:        "Cargando hoja {loaded} de {total}...",
+    reader_errorNoWorkId:        "No se indicó ninguna obra. Comprueba el enlace.",
+    reader_errorWorkNotFound:    "Esta obra no existe o no está publicada.",
+    reader_errorConnection:      "Error de conexión. Comprueba tu internet e inténtalo de nuevo.",
+    reader_errorDraftNotAvailable: "Este borrador no está disponible. Comprueba que el enlace es correcto o que la obra no ha sido eliminada.",
+    reader_errorLoadingDraft:    "Error al cargar el borrador. Comprueba tu conexión e inténtalo de nuevo.",
+    reader_errorNoPages:         "Esta obra no tiene páginas guardadas.",
+    reader_viewingOfflineCopy:   "Viendo la copia guardada sin conexión",
+    reader_closeTabHint:         "Cierra esta pestaña con el botón ✕ del navegador",
+    reader_navTouchFixed:        "Toca izquierda/derecha para pasar página  👆",
+    reader_navKeyboardFixed:     "Desplázate con las flechas del teclado  ◀ ▶",
+    reader_navSwipeH:            "Desliza ◀ ▶ para cambiar de hoja",
+    reader_navKeysH:             "Flechas ◀ ▶ para navegar",
+    reader_navSwipeV:            "Desliza ▲ ▼ para cambiar de hoja",
+    reader_navKeysV:             "Flechas ▲ ▼ para navegar",
+    reader_pageOf:               "Hoja {current} de {total}",
+    reader_downloadedToast:      "Obra descargada — guardada en este dispositivo y como archivo",
+    reader_downloadPrepareFail:  "No se pudo preparar la descarga",
+    reader_downloadFail:         "No se pudo completar la descarga",
+    reader_alreadyDownloadedTitle: "Ya descargada — toca para actualizar o volver a exportar el archivo",
+    reader_downloadOfflineTitle: "Descargar para leer sin conexión",
+    reader_fullscreenLabel:      "Pantalla completa",
+    reader_closeLabel:           "Cerrar",
+    reader_goToPageLabel:        "Ir a hoja",
+    reader_selectPageLabel:      "Seleccionar hoja",
+    reader_workNotAvailableTitle: "Obra no disponible",
+    reader_defaultWorkTitle:     "Obra",
+    reader_defaultDraftTitle:    "Borrador",
+    reader_visitMoreWorks:       "Visita más obras del autor",
+    reader_backToReading:        "↩ Volver a leer",
+    reader_ogDescriptionWithAuthor: "Una obra de {author} en ComXow",
+    reader_ogDescriptionDefault: "Abre esta obra en el reproductor de ComXow",
   },
   en: {
     tagline:          "CREATE & SHARE",
@@ -1427,6 +1473,10 @@ const TRANSLATIONS = {
     ed_jpgWhiteBg:          "JPG (white background)",
     ed_group:               "⊞ Group",
     ed_ungroup:             "⊟ Ungroup",
+    // Selector de color HSL (_edShowColorPicker)
+    ed_hue:                 "Hue",
+    ed_saturation:          "Saturation",
+    ed_lightness:           "Lightness",
     ed_arrangeBtn:          "↕ Arrange ▸",
     gcp_arrangeBtn:         "↕ Arrange ▾",
     ed_alignLeft:           "⇤ Align left",
@@ -1931,6 +1981,47 @@ const TRANSLATIONS = {
     intro_termsLoadError:   "We couldn't load the terms of use. Please try again later.",
     intro_termsTitle:       "Terms of use",
     intro_back:             "Back",
+
+    // ── External reader (reader/reader.js, reader/index.html) — see the
+    // matching Spanish block above for context.
+    reader_loadingWork:          "Loading work...",
+    reader_loadingPages:         "Loading pages...",
+    reader_loadingDraft:         "Loading draft...",
+    reader_loadingOfflineCopy:   "Loading offline saved copy...",
+    reader_preparingImages:      "Preparing images...",
+    reader_loadingImages:        "Loading images...",
+    reader_loadingPageOf:        "Loading page {loaded} of {total}...",
+    reader_errorNoWorkId:        "No work was specified. Check the link.",
+    reader_errorWorkNotFound:    "This work doesn't exist or isn't published.",
+    reader_errorConnection:      "Connection error. Check your internet connection and try again.",
+    reader_errorDraftNotAvailable: "This draft isn't available. Check that the link is correct or that the work hasn't been deleted.",
+    reader_errorLoadingDraft:    "Error loading the draft. Check your connection and try again.",
+    reader_errorNoPages:         "This work has no saved pages.",
+    reader_viewingOfflineCopy:   "Viewing the offline saved copy",
+    reader_closeTabHint:         "Close this tab using your browser's ✕ button",
+    reader_navTouchFixed:        "Tap left/right to turn the page  👆",
+    reader_navKeyboardFixed:     "Navigate with the keyboard arrows  ◀ ▶",
+    reader_navSwipeH:            "Swipe ◀ ▶ to change page",
+    reader_navKeysH:             "Arrow keys ◀ ▶ to navigate",
+    reader_navSwipeV:            "Swipe ▲ ▼ to change page",
+    reader_navKeysV:             "Arrow keys ▲ ▼ to navigate",
+    reader_pageOf:               "Page {current} of {total}",
+    reader_downloadedToast:      "Work downloaded — saved on this device and as a file",
+    reader_downloadPrepareFail:  "Couldn't prepare the download",
+    reader_downloadFail:         "Couldn't complete the download",
+    reader_alreadyDownloadedTitle: "Already downloaded — tap to update or re-export the file",
+    reader_downloadOfflineTitle: "Download to read offline",
+    reader_fullscreenLabel:      "Fullscreen",
+    reader_closeLabel:           "Close",
+    reader_goToPageLabel:        "Go to page",
+    reader_selectPageLabel:      "Select page",
+    reader_workNotAvailableTitle: "Work not available",
+    reader_defaultWorkTitle:     "Work",
+    reader_defaultDraftTitle:    "Draft",
+    reader_visitMoreWorks:       "Visit more works by this author",
+    reader_backToReading:        "↩ Back to reading",
+    reader_ogDescriptionWithAuthor: "A work by {author} on ComXow",
+    reader_ogDescriptionDefault: "Open this work in the ComXow reader",
   }
 };
 
@@ -1984,6 +2075,16 @@ const I18n = (() => {
     });
     document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
       el.setAttribute('placeholder', t(el.dataset.i18nPlaceholder));
+    });
+    // Añadidos para el lector externo (reader/index.html), que hasta ahora
+    // no tenía ningún soporte de idioma (Alberto) — alt de imágenes y
+    // aria-label de botones/controles de accesibilidad, mismo patrón que
+    // data-i18n-title/data-i18n-placeholder de arriba.
+    document.querySelectorAll('[data-i18n-alt]').forEach(el => {
+      el.setAttribute('alt', t(el.dataset.i18nAlt));
+    });
+    document.querySelectorAll('[data-i18n-aria]').forEach(el => {
+      el.setAttribute('aria-label', t(el.dataset.i18nAria));
     });
   }
 

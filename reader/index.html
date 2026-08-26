@@ -49,17 +49,18 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.54">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.57">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.54">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.57">
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/fonts.css">
-  <link rel="stylesheet" href="reader.css?v=38.54">
+  <link rel="stylesheet" href="reader.css?v=38.57">
 </head>
+<script src="../js/i18n.js"></script>
 <script>
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
@@ -69,10 +70,10 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=38.54" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=38.57" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
-    <div id="loadingMsg" class="loading-msg">Cargando obra...</div>
+    <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">Cargando obra...</div>
     <div class="loading-progress-wrap">
       <div class="loading-progress-bar" id="loadingBar"></div>
     </div>
@@ -83,9 +84,9 @@
   <div id="errorScreen" class="error-screen hidden">
     <div class="error-card">
       <div class="error-icon">📭</div>
-      <h2>Obra no disponible</h2>
-      <p id="errorMsg">Esta obra no existe o no está publicada.</p>
-      <a href="javascript:history.back()" class="btn-yellow">Volver</a>
+      <h2 data-i18n="reader_workNotAvailableTitle">Obra no disponible</h2>
+      <p id="errorMsg" data-i18n="reader_errorWorkNotFound">Esta obra no existe o no está publicada.</p>
+      <a href="javascript:history.back()" class="btn-yellow" data-i18n="intro_back">Volver</a>
     </div>
   </div>
 
@@ -98,22 +99,22 @@
     <div id="scrollReader"></div>
 
     <!-- Esquina superior izquierda: fullscreen -->
-    <button id="fullscreenToggle" class="corner-btn corner-tl" aria-label="Pantalla completa">[ ]</button>
+    <button id="fullscreenToggle" class="corner-btn corner-tl" data-i18n-aria="reader_fullscreenLabel" aria-label="Pantalla completa">[ ]</button>
 
     <!-- Esquina superior derecha: cerrar -->
-    <button id="closeBtn" class="corner-btn corner-tr" aria-label="Cerrar">&#x2715;</button>
+    <button id="closeBtn" class="corner-btn corner-tr" data-i18n-aria="reader_closeLabel" aria-label="Cerrar">&#x2715;</button>
 
     <!-- Esquina inferior izquierda: abrir barra de navegación por hoja -->
-    <button id="pageNavToggle" class="corner-btn corner-bl" aria-label="Ir a hoja">1/1</button>
+    <button id="pageNavToggle" class="corner-btn corner-bl" data-i18n-aria="reader_goToPageLabel" aria-label="Ir a hoja">1/1</button>
 
     <!-- Esquina inferior derecha: descargar para lectura offline -->
-    <button id="offlineDlBtn" class="corner-btn corner-br hidden" aria-label="Descargar para leer sin conexión">&#x2B07;</button>
+    <button id="offlineDlBtn" class="corner-btn corner-br hidden" data-i18n-aria="reader_downloadOfflineTitle" aria-label="Descargar para leer sin conexión">&#x2B07;</button>
 
     <!-- Scrim + barra inferior: seleccionar hoja arrastrando -->
     <div id="pageNavScrim" class="page-nav-scrim hidden"></div>
     <div id="pageNavBar" class="page-nav-bar hidden">
       <div class="page-nav-bar-label" id="pageNavLabel">Hoja 1 de 1</div>
-      <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" aria-label="Seleccionar hoja">
+      <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" data-i18n-aria="reader_selectPageLabel" aria-label="Seleccionar hoja">
     </div>
 
 
@@ -130,10 +131,10 @@
 
   <script src="../js/pako.min.js"></script>
   <script src="../js/UPNG.js"></script>
-  <script src="../js/fullscreen.js?v=38.54"></script>
+  <script src="../js/fullscreen.js?v=38.57"></script>
   <script src="../js/logo-data.js"></script>
   <script src="../js/icon-data.js"></script>
-  <script src="../js/anim-clock.js?v=38.54"></script>
-  <script src="reader.js?v=38.54"></script>
+  <script src="../js/anim-clock.js?v=38.57"></script>
+  <script src="reader.js?v=38.57"></script>
 </body>
 </html>
