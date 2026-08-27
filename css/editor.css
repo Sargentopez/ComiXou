@@ -1486,6 +1486,83 @@ body.ed-scale-tablet .ed-modal-sheet {
 .tool-multiselect { cursor: crosshair !important; }
 
 /* ══════════════════════════════════════════════════════
+   BARRA ARRASTRABLE "IR A HOJA/FOTOGRAMA" — botón corto en edQuickTools /
+   gcpQuickTools (número "actual/total") que abre una barra inferior con
+   slider para saltar arrastrando. Mismo patrón visual que la navegación
+   por hoja del lector externo (ver reader/reader.css .page-nav-*), con
+   clases propias porque vive en un documento distinto. Se comparte clase
+   entre editor general y GCP porque el estilo es idéntico — solo cambian
+   los id (edPageJump*/gcpFrameJump*), que sí son propios de cada uno.
+   Totalmente ADICIONAL a la navegación ya existente (edPagePrev/edPageNext,
+   ddNavPages, gcpFramePrev/gcpFrameNext, gcpFramesBar) — Alberto pidió
+   expresamente no tocar esa.
+   ══════════════════════════════════════════════════════ */
+#edQuickTools .ed-pagejump-toggle,
+#gcpQuickTools .ed-pagejump-toggle {
+  width: auto;
+  min-width: 44px;
+  padding: 0 6px;
+  font-size: .68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ed-pagejump-scrim {
+  position: fixed; inset: 0;
+  z-index: 780; /* por debajo de la barra (800), por encima del canvas */
+  background: transparent; /* invisible, solo absorbe el toque para cerrar */
+  pointer-events: auto; /* obligatorio dentro de gcpShell, que tiene pointer-events:none */
+}
+.ed-pagejump-bar {
+  position: fixed;
+  left: 50%; bottom: 18px;
+  transform: translateX(-50%);
+  width: min(320px, 84vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: rgba(20,20,20,.93);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 16px;
+  padding: 12px 18px 16px;
+  z-index: 800;
+  pointer-events: auto; /* obligatorio dentro de gcpShell, que tiene pointer-events:none */
+}
+.ed-pagejump-bar-label {
+  color: #fff;
+  font-size: .85rem;
+  font-weight: 700;
+}
+.ed-pagejump-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255,255,255,.3);
+  outline: none;
+  touch-action: none; /* el gesto de arrastre lo gestiona el propio slider, no el canvas de debajo */
+}
+.ed-pagejump-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #FFE135;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+.ed-pagejump-slider::-moz-range-thumb {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: #FFE135;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+}
+
+/* ══════════════════════════════════════════════════════
    OVERLAYS DE CAPAS Y HOJAS
    Pantalla completa sobre el editor, mismo estilo que
    los modales de "nueva creación"
@@ -2386,6 +2463,21 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
   z-index: 499;
   position: fixed;
   top: auto;
+}
+
+/* NUEVO: ocultar por completo la barra "ir a hoja" del editor general
+   mientras el editor GCP está abierto — edQuickTools (con el botón dentro)
+   NO se oculta por defecto al entrar en GCP, así que sin esto el botón
+   seguía interactivo por detrás/al lado del editor de animaciones y su
+   barra (edPageJumpBar, position:fixed) podía quedar visualmente por
+   ENCIMA de gcpShell (que sí acota su z-index local a 500 desde la raíz),
+   mostrando "Hoja X de Y" en vez de la barra de fotogramas de GCP. El
+   forzado en JS (_edPageJumpCloseBar en gcpOpen) cubre el estado; esto es
+   el respaldo visual/táctil por si acaso. */
+#editorShell.gcp-open #edPageJumpToggle,
+#editorShell.gcp-open #edPageJumpBar,
+#editorShell.gcp-open #edPageJumpScrim {
+  display: none !important;
 }
 
 /* edOptionsPanel por encima del editor de textos (tdShell, z-index 600) —

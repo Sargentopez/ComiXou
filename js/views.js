@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.58</footer>
+    <footer class="app-version">v38.60</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -631,6 +631,19 @@ Router.register('editor', {
         <button class="ed-undo-redo-btn" id="edUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>${ICON_UNDO_SVG}</button>
         <button class="ed-undo-redo-btn" id="edRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>${ICON_REDO_SVG}</button>
         <button class="ed-undo-redo-btn" id="edZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
+        <!-- NUEVO: botón "ir a hoja" — barra flotante, adicional a edPagePrev/
+             edPageNext (topbar) y al desplegable ddNavPages, que no se tocan.
+             Solo visible con más de 1 hoja (ver _edPageJumpUpdate). -->
+        <button class="ed-undo-redo-btn ed-pagejump-toggle" id="edPageJumpToggle" style="display:none" data-i18n-title="reader_goToPageLabel" title="Ir a hoja">1/1</button>
+      </div>
+
+      <!-- Barra arrastrable "ir a hoja" (petición de Alberto: navegación
+           rápida igual que en el lector externo). Independiente de
+           edPagePrev/edPageNext y de ddNavPages — ver _edPageJump* en editor.js. -->
+      <div id="edPageJumpScrim" class="ed-pagejump-scrim" style="display:none"></div>
+      <div id="edPageJumpBar" class="ed-pagejump-bar" style="display:none">
+        <div class="ed-pagejump-bar-label" id="edPageJumpLabel"></div>
+        <input type="range" id="edPageJumpSlider" class="ed-pagejump-slider" min="1" max="1" value="1" step="1" data-i18n-aria="reader_selectPageLabel" aria-label="Seleccionar hoja">
       </div>
 
       <!-- ── PANEL DE OPCIONES CONTEXTUAL ── -->
@@ -1139,6 +1152,21 @@ Router.register('editor', {
         <button class="ed-undo-redo-btn" id="gcpUndoBtn" data-i18n-title="td_undo" title="Deshacer" disabled>${ICON_UNDO_SVG}</button>
         <button class="ed-undo-redo-btn" id="gcpRedoBtn" data-i18n-title="td_redo" title="Rehacer" disabled>${ICON_REDO_SVG}</button>
         <button class="ed-undo-redo-btn" id="gcpZoomResetBtn" data-i18n-title="ed_zoomResetTitle" title="Ver lienzo completo / workspace">🔍</button>
+        <!-- NUEVO: botón "ir a fotograma" — barra flotante, adicional a
+             gcpFramePrev/gcpFrameNext (topbar, solo fotogramas clave) y a la
+             matriz gcpFramesBar, que no se tocan. Solo visible con más de 1
+             frame (ver _gcpFrameJumpUpdate). -->
+        <button class="ed-undo-redo-btn ed-pagejump-toggle" id="gcpFrameJumpToggle" style="display:none" data-i18n-title="gcp_goToFrameLabel" title="Ir a fotograma">1/1</button>
+      </div>
+
+      <!-- Barra arrastrable "ir a fotograma" (petición de Alberto: navegación
+           rápida igual que en el lector externo). Independiente de
+           gcpFramePrev/gcpFrameNext y de gcpFramesBar — ver _gcpFrameJump*
+           en editor.js. Recorre TODO el timeline, no solo los fotogramas clave. -->
+      <div id="gcpFrameJumpScrim" class="ed-pagejump-scrim" style="display:none"></div>
+      <div id="gcpFrameJumpBar" class="ed-pagejump-bar" style="display:none">
+        <div class="ed-pagejump-bar-label" id="gcpFrameJumpLabel"></div>
+        <input type="range" id="gcpFrameJumpSlider" class="ed-pagejump-slider" min="1" max="1" value="1" step="1" data-i18n-aria="gcp_selectFrameLabel" aria-label="Seleccionar fotograma">
       </div>
 
       <!-- Panel de frames: toggle, deslizante horizontal, miniaturas 88×88 -->

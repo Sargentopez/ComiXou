@@ -6982,6 +6982,14 @@ function edLoadPage(idx){
   });
 }
 function edUpdateNavPages(){
+  // NUEVO: barra flotante "ir a hoja" (botón corto en edQuickTools + barra
+  // arrastrable) — independiente de todo lo que sigue en esta función
+  // (flechas edPagePrev/edPageNext, desplegable ddNavPages con miniaturas),
+  // que Alberto pidió expresamente no tocar. Se llama aquí, al principio y
+  // sin condición, para cubrir TODAS las vías que ya disparan
+  // edUpdateNavPages (carga de página, deshacer, añadir/eliminar página,
+  // carga inicial) sin depender de los "return" tempranos de abajo.
+  _edPageJumpUpdate();
   // Actualizar número de página en topbar
   const pnum=$('edPageNum');
   const _pnumChanged = pnum && pnum.textContent !== String(edCurrentPage+1);
@@ -7025,6 +7033,108 @@ function edUpdateNavPages(){
   // Marcar orientación activa
   $('dd-orientv')?.classList.toggle('active',edOrientation==='vertical');
   $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BARRA ARRASTRABLE "IR A HOJA" — botón corto (hoja actual/total) en la
+// barra flotante edQuickTools que abre una barra inferior con slider para
+// saltar de hoja arrastrando. Mismo patrón que la navegación por hoja del
+// lector externo (reader/reader.js: _pageNavOpenBar/_pageNavCloseBar/
+// _setupPageNavBar) — petición explícita de Alberto ("similar al del
+// reproductor externo"). Totalmente ADICIONAL: no sustituye ni modifica las
+// flechas edPagePrev/edPageNext del topbar ni el desplegable "Ir a página"
+// (ddNavPages) con miniaturas — Alberto pidió expresamente no tocarlos.
+// Solo visible cuando hay más de 1 hoja (petición explícita).
+// ══════════════════════════════════════════════════════════════════
+let _edPageJumpOpen            = false;
+let _edPageJumpDragging        = false;
+let _edPageJumpAutoCloseTimer  = null;
+
+// Mantiene el botón (y la barra, si está abierta) al día — se llama desde
+// edUpdateNavPages(), así que cubre cualquier vía de navegación sin tener
+// que engancharse por separado en cada sitio que cambia de hoja.
+function _edPageJumpUpdate() {
+  const toggleBtn = $('edPageJumpToggle');
+  if (!toggleBtn) return;
+  const total = edPages.length;
+  if (total <= 1) {
+    if (_edPageJumpOpen) _edPageJumpCloseBar();
+    toggleBtn.style.display = 'none';
+    return;
+  }
+  const current = edCurrentPage + 1;
+  toggleBtn.style.display = 'flex';
+  toggleBtn.textContent = current + '/' + total;
+  if (_edPageJumpOpen && !_edPageJumpDragging) {
+    const slider = $('edPageJumpSlider');
+    const label  = $('edPageJumpLabel');
+    if (slider) slider.value = current;
+    if (label)  label.textContent = I18n.t('reader_pageOf', { current, total });
+  }
+}
+
+function _edPageJumpOpenBar() {
+  const bar    = $('edPageJumpBar');
+  const scrim  = $('edPageJumpScrim');
+  const slider = $('edPageJumpSlider');
+  const label  = $('edPageJumpLabel');
+  if (!bar || !slider) return;
+  clearTimeout(_edPageJumpAutoCloseTimer);
+  const total = edPages.length;
+  slider.max   = total;
+  slider.value = edCurrentPage + 1;
+  if (label) label.textContent = I18n.t('reader_pageOf', { current: edCurrentPage + 1, total });
+  bar.style.display = 'flex';
+  if (scrim) scrim.style.display = 'block';
+  _edPageJumpOpen = true;
+}
+
+function _edPageJumpCloseBar() {
+  clearTimeout(_edPageJumpAutoCloseTimer);
+  const bar   = $('edPageJumpBar');
+  const scrim = $('edPageJumpScrim');
+  if (bar)   bar.style.display = 'none';
+  if (scrim) scrim.style.display = 'none';
+  _edPageJumpOpen = false;
+}
+
+// Se llama una sola vez, desde EditorView_init().
+function _edSetupPageJumpBar() {
+  const toggleBtn = $('edPageJumpToggle');
+  const bar       = $('edPageJumpBar');
+  const scrim     = $('edPageJumpScrim');
+  const slider    = $('edPageJumpSlider');
+  if (!toggleBtn || !bar || !slider) return;
+
+  toggleBtn.addEventListener('click', () => {
+    if (_edPageJumpOpen) _edPageJumpCloseBar(); else _edPageJumpOpenBar();
+  });
+
+  // Cerrar al tocar fuera: el scrim absorbe el toque para que no llegue al
+  // canvas de debajo (mismo motivo que en el lector: evitar que ese mismo
+  // toque, además de cerrar la barra, dispare algo en el lienzo).
+  if (scrim) scrim.addEventListener('pointerdown', _edPageJumpCloseBar);
+
+  // Arrastre: solo previsualiza la etiqueta (barato). El salto real de hoja
+  // ocurre al soltar (evento 'change') — saltar en cada píxel de arrastre
+  // sería costoso (edLoadPage recarga capas/canvas) y daría sensación de tirón.
+  slider.addEventListener('input', () => {
+    _edPageJumpDragging = true;
+    clearTimeout(_edPageJumpAutoCloseTimer);
+    const label = $('edPageJumpLabel');
+    if (label) label.textContent = I18n.t('reader_pageOf', { current: slider.value, total: slider.max });
+  });
+  slider.addEventListener('change', () => {
+    _edPageJumpDragging = false;
+    const idx = parseInt(slider.value, 10) - 1;
+    if (idx !== edCurrentPage) edLoadPage(idx);
+    // Cerrar la barra sola 1s después de soltar el dedo (mismo patrón que el lector)
+    clearTimeout(_edPageJumpAutoCloseTimer);
+    _edPageJumpAutoCloseTimer = setTimeout(_edPageJumpCloseBar, 1000);
+  });
+  // Que las flechas del teclado muevan el slider (su comportamiento nativo)
+  // y no, además, disparen atajos globales del editor.
+  slider.addEventListener('keydown', e => e.stopPropagation());
 }
 
 // Regenera solo el thumb de la hoja actual en el nav (sin reconstruir todo el nav)
@@ -10055,7 +10165,13 @@ function edOnStart(e){
                tgt.closest('#edProjectModal') ||
                tgt.closest('#edConfirmModal') ||
                tgt.closest('.ed-autosave-dlg') ||
-               tgt.closest('#edPanelTab');
+               tgt.closest('#edPanelTab')      ||
+               // NUEVO: barra arrastrable "ir a hoja" — sin esto, los
+               // tap/arrastres sobre edPageJumpBar/edPageJumpScrim los
+               // procesaba también edOnStart como si fueran del canvas
+               // (rubber band, dibujo, etc.), y el slider nunca los recibía.
+               tgt.closest('#edPageJumpBar')   ||
+               tgt.closest('#edPageJumpScrim');
   if(isUI) return;
 
   // ── MODO RECORTE: interceptar todos los toques en el canvas ──
@@ -29012,6 +29128,7 @@ function EditorView_init(){
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
   // edMenuMinBtn eliminado — el único botón ocultar es edMinimizeBtn (fuera del scroll)
+  _edSetupPageJumpBar(); // NUEVO: barra flotante "ir a hoja" (ver su cabecera)
   _edShapePushHistory();
   edInitFloatDrag();
   edInitDrawBar();
@@ -33944,6 +34061,24 @@ function _gcpGetPrevKeyFrameIdx(fi) {
   return -1;
 }
 
+// NUEVO: inversa de _gcpGetKeyFrameNumber — índice GLOBAL del fotograma
+// clave n-ésimo (1-based). -1 si n está fuera de rango. La usa la barra
+// arrastrable "ir a fotograma" (_gcpFrameJump*) para convertir la posición
+// del slider (que solo recorre fotogramas clave, nunca interpolados —
+// petición explícita de Alberto) a un índice de frame real con el que
+// llamar a _gcpGoToFrame.
+function _gcpGetKeyFrameGlobalIdx(n) {
+  const total = _gcpGetTotalFrames();
+  let count = 0;
+  for (let fi = 0; fi < total; fi++) {
+    if (_gcpIsKeyFrame(fi)) {
+      count++;
+      if (count === n) return fi;
+    }
+  }
+  return -1;
+}
+
 // Inicializar _frames de un layer en el frame de inserción
 function _gcpInitLayerFrames(la, startFi) {
   const _snap = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
@@ -35004,6 +35139,14 @@ function _gcpFrameThumb(fi) {
 // Actualizar contador en topbar — muestra solo fotogramas CLAVE (autor).
 // Los interpolados no cuentan ni se muestran.
 function _gcpUpdateFrameNav() {
+  // NUEVO: barra flotante "ir a fotograma" (botón corto en gcpQuickTools +
+  // barra arrastrable) — independiente de todo lo que sigue en esta función
+  // (gcpFrameNum/gcpFramePrev/gcpFrameNext, que solo saltan entre
+  // fotogramas CLAVE), que Alberto pidió expresamente no tocar. Al principio
+  // y sin condición para cubrir también los "return" tempranos de abajo
+  // (p.ej. sin capas todavía) — ver _gcpFrameJumpUpdate, que recalcula el
+  // total por su cuenta y se oculta sola cuando corresponde.
+  _gcpFrameJumpUpdate();
   const nav = document.getElementById('gcpFrameNav');
   const num = document.getElementById('gcpFrameNum');
   if (!nav || !num) return;
@@ -35024,6 +35167,121 @@ function _gcpUpdateFrameNav() {
   // Flechas deshabilitadas si no hay fotograma clave en esa dirección
   if (prev) prev.disabled = total === 0 || _gcpGetPrevKeyFrameIdx(window._gcpGlobalFrameIdx) < 0;
   if (next) next.disabled = total === 0 || _gcpGetNextKeyFrameIdx(window._gcpGlobalFrameIdx) < 0;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BARRA ARRASTRABLE "IR A FOTOGRAMA" — botón corto (fotograma actual/total)
+// en la barra flotante gcpQuickTools que abre una barra inferior con
+// slider para saltar arrastrando. Mismo patrón que _edPageJump* del editor
+// general y que la navegación por hoja del lector externo — petición
+// explícita de Alberto ("similar al del reproductor externo"). A
+// diferencia de gcpFramePrev/gcpFrameNext (que solo saltan entre
+// fotogramas CLAVE del autor), esta barra recorre TODO el timeline —
+// incluidos los interpolados — para poder revisar la animación completa
+// arrastrando. Totalmente ADICIONAL: no sustituye ni modifica
+// gcpFrameNum/gcpFramePrev/gcpFrameNext ni la matriz gcpFramesBar —
+// Alberto pidió expresamente no tocarlos. Solo visible con más de 1 frame.
+// ══════════════════════════════════════════════════════════════════
+let _gcpFrameJumpOpen           = false;
+let _gcpFrameJumpDragging       = false;
+let _gcpFrameJumpAutoCloseTimer = null;
+
+// Ordinal (1-based) del fotograma clave "actual" a efectos de esta barra:
+// si el frame global activo ya es clave, es su propio ordinal; si es un
+// interpolado (p.ej. en mitad de una interpolación), se usa el del
+// fotograma clave anterior más cercano — la barra SOLO conoce fotogramas
+// clave (petición explícita de Alberto: "no debe navegar entre frames
+// interpolados, solo fotogramas clave"), así que siempre necesita caer en
+// uno real, nunca en un valor 0/inexistente.
+function _gcpCurrentKeyOrdinal() {
+  const nearestFi = _gcpNearestPrevKeyFrame(window._gcpGlobalFrameIdx || 0);
+  return _gcpGetKeyFrameNumber(nearestFi);
+}
+
+// Se llama desde _gcpUpdateFrameNav(), así que cubre cualquier vía que ya
+// dispare esa función (incluidos sus "return" tempranos, ver su cabecera).
+function _gcpFrameJumpUpdate() {
+  const toggleBtn = document.getElementById('gcpFrameJumpToggle');
+  if (!toggleBtn) return;
+  const totalKey = _gcpGetTotalKeyFrames();
+  if (totalKey <= 1) {
+    if (_gcpFrameJumpOpen) _gcpFrameJumpCloseBar();
+    toggleBtn.style.display = 'none';
+    return;
+  }
+  const current = _gcpCurrentKeyOrdinal();
+  toggleBtn.style.display = 'flex';
+  toggleBtn.textContent = current + '/' + totalKey;
+  if (_gcpFrameJumpOpen && !_gcpFrameJumpDragging) {
+    const slider = document.getElementById('gcpFrameJumpSlider');
+    const label  = document.getElementById('gcpFrameJumpLabel');
+    if (slider) slider.value = current;
+    if (label)  label.textContent = I18n.t('gcp_frameOf', { current, total: totalKey });
+  }
+}
+
+function _gcpFrameJumpOpenBar() {
+  const bar    = document.getElementById('gcpFrameJumpBar');
+  const scrim  = document.getElementById('gcpFrameJumpScrim');
+  const slider = document.getElementById('gcpFrameJumpSlider');
+  const label  = document.getElementById('gcpFrameJumpLabel');
+  if (!bar || !slider) return;
+  clearTimeout(_gcpFrameJumpAutoCloseTimer);
+  const totalKey = _gcpGetTotalKeyFrames();
+  const current  = _gcpCurrentKeyOrdinal();
+  slider.max   = totalKey;
+  slider.value = current;
+  if (label) label.textContent = I18n.t('gcp_frameOf', { current, total: totalKey });
+  bar.style.display = 'flex';
+  if (scrim) scrim.style.display = 'block';
+  _gcpFrameJumpOpen = true;
+}
+
+function _gcpFrameJumpCloseBar() {
+  clearTimeout(_gcpFrameJumpAutoCloseTimer);
+  const bar   = document.getElementById('gcpFrameJumpBar');
+  const scrim = document.getElementById('gcpFrameJumpScrim');
+  if (bar)   bar.style.display = 'none';
+  if (scrim) scrim.style.display = 'none';
+  _gcpFrameJumpOpen = false;
+}
+
+// Se llama una sola vez, desde gcpOpen() (dentro del guard shell._gcpBound,
+// igual que el resto de botones de gcpQuickTools/gcpTopbar).
+function _gcpSetupFrameJumpBar() {
+  const toggleBtn = document.getElementById('gcpFrameJumpToggle');
+  const bar       = document.getElementById('gcpFrameJumpBar');
+  const scrim     = document.getElementById('gcpFrameJumpScrim');
+  const slider    = document.getElementById('gcpFrameJumpSlider');
+  if (!toggleBtn || !bar || !slider) return;
+
+  toggleBtn.addEventListener('click', () => {
+    if (_gcpFrameJumpOpen) _gcpFrameJumpCloseBar(); else _gcpFrameJumpOpenBar();
+  });
+  if (scrim) scrim.addEventListener('pointerdown', _gcpFrameJumpCloseBar);
+
+  // Arrastre: solo previsualiza la etiqueta (el ordinal de fotograma clave,
+  // no un índice de frame real). El salto real ocurre al soltar (evento
+  // 'change') — saltar en cada píxel de arrastre reconstruiría el frame en
+  // cada paso y daría sensación de tirón.
+  slider.addEventListener('input', () => {
+    _gcpFrameJumpDragging = true;
+    clearTimeout(_gcpFrameJumpAutoCloseTimer);
+    const label = document.getElementById('gcpFrameJumpLabel');
+    if (label) label.textContent = I18n.t('gcp_frameOf', { current: slider.value, total: slider.max });
+  });
+  slider.addEventListener('change', () => {
+    _gcpFrameJumpDragging = false;
+    // El slider recorre ORDINALES de fotograma clave (1..totalKey), nunca
+    // frames interpolados — petición explícita de Alberto. Se convierte al
+    // índice global real con _gcpGetKeyFrameGlobalIdx antes de navegar.
+    const n  = parseInt(slider.value, 10);
+    const fi = _gcpGetKeyFrameGlobalIdx(n);
+    if (fi >= 0 && fi !== window._gcpGlobalFrameIdx) _gcpGoToFrame(fi);
+    clearTimeout(_gcpFrameJumpAutoCloseTimer);
+    _gcpFrameJumpAutoCloseTimer = setTimeout(_gcpFrameJumpCloseBar, 1000);
+  });
+  slider.addEventListener('keydown', e => e.stopPropagation());
 }
 
 // Refrescar miniatura del frame activo (no-op ahora que la barra se reconstruye entera)
@@ -37503,6 +37761,12 @@ function gcpOpen(edLayerIdx) {
   if (_sbH) _sbH.style.zIndex = '11';
   if (_sbV) _sbV.style.zIndex = '11';
   document.getElementById('editorShell')?.classList.add('gcp-open');
+  // NUEVO: cerrar la barra "ir a hoja" del editor general si estuviera
+  // abierta — si no, quedaba flotando por encima del editor GCP (mismo
+  // z-index visual desde el contexto raíz) y mostraba "Hoja X de Y" en vez
+  // de la barra de fotogramas de GCP. edQuickTools (y su botón) también se
+  // ocultan por CSS mientras dure .gcp-open (ver css/editor.css).
+  if (typeof _edPageJumpCloseBar === 'function') _edPageJumpCloseBar();
 
 
 
@@ -37602,6 +37866,9 @@ function gcpOpen(edLayerIdx) {
       const _nk = _gcpGetNextKeyFrameIdx(window._gcpGlobalFrameIdx);
       if (_nk >= 0) _gcpGoToFrame(_nk);
     });
+    // NUEVO: barra flotante "ir a fotograma" (gcpQuickTools) — adicional a
+    // los botones de arriba, ver cabecera de _gcpSetupFrameJumpBar
+    _gcpSetupFrameJumpBar();
     // Botón Guardar Frame
     document.getElementById('gcpSaveFrameBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpSaveFrame();
@@ -37958,6 +38225,11 @@ function _gcpDoClose() {
   gcpCanvas = null; gcpCtx = null;
   document.getElementById('editorShell')?.classList.remove('gcp-open');
   document.getElementById('editorCanvas')?.classList.remove('gcp-active');
+  // NUEVO: cerrar la barra "ir a fotograma" de GCP si estuviera abierta,
+  // para no dejar el timer de autocierre colgando ni el estado interno
+  // _gcpFrameJumpOpen desincronizado (el shell ya se oculta arriba, esto
+  // es limpieza de estado, no visual).
+  if (typeof _gcpFrameJumpCloseBar === 'function') _gcpFrameJumpCloseBar();
   const blocker = document.getElementById('gcpBlocker');
   if (blocker) { blocker.style.display = 'none'; blocker.style.right = ''; blocker.style.bottom = ''; }
   _gcpHintStop();

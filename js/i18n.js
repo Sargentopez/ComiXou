@@ -632,6 +632,11 @@ const TRANSLATIONS = {
     // Shell estático del editor GCP (Trozo E)
     gcp_prevKeyframe:       "Fotograma clave anterior",
     gcp_nextKeyframe:       "Fotograma clave siguiente",
+    // NUEVO: barra flotante "ir a fotograma" (gcpQuickTools) — adicional a
+    // las 2 claves de arriba, que no se tocan.
+    gcp_goToFrameLabel:     "Ir a fotograma",
+    gcp_selectFrameLabel:   "Seleccionar fotograma",
+    gcp_frameOf:            "Fotograma {current} de {total}",
     gcp_previewVerb:        "Previsualizar",
     gcp_saveCurrentFrameTitle: "Guardar frame actual",
     gcp_matrixBtn:          "Matriz ▾",
@@ -1622,6 +1627,11 @@ const TRANSLATIONS = {
     // Static GCP editor shell (Chunk E)
     gcp_prevKeyframe:       "Previous keyframe",
     gcp_nextKeyframe:       "Next keyframe",
+    // NEW: floating "go to frame" bar (gcpQuickTools) — additional to the 2
+    // keys above, which are untouched.
+    gcp_goToFrameLabel:     "Go to frame",
+    gcp_selectFrameLabel:   "Select frame",
+    gcp_frameOf:            "Frame {current} of {total}",
     gcp_previewVerb:        "Preview",
     gcp_saveCurrentFrameTitle: "Save current frame",
     gcp_matrixBtn:          "Matrix ▾",
