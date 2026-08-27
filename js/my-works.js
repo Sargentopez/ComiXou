@@ -890,14 +890,16 @@ function _mcRenderList() {
 
         </div>
         <div class="work-row-actions">
-          <!-- "Leer" solo si la obra ya tiene supabaseId (subida a la nube,
+          <!-- "Leer" únicamente en función de supabaseId (subida a la nube,
                aunque sea como borrador) — petición explícita de Alberto:
-               una obra guardada SOLO en local (p.ej. recién renombrada, que
-               se bifurca a un id nuevo sin supabaseId hasta el siguiente
-               guardado en la nube — ver _edForkToId en editor.js) no debe
-               ofrecer "Leer" en absoluto, en vez de ofrecerlo y fallar al
-               tocarlo. -->
-          ${pages > 0 && comic.supabaseId ? `<button class="work-row-btn" data-action="read" data-id="${comic.id}">${I18n.t('read')}</button>` : ''}
+               CUALQUIER obra con supabaseId debe ofrecer "Leer", sin
+               condición adicional sobre "pages" (que puede salir 0/falso en
+               el índice local aunque la obra tenga contenido real en la
+               nube). Una obra guardada SOLO en local (p.ej. recién
+               renombrada, que se bifurca a un id nuevo sin supabaseId hasta
+               el siguiente guardado en la nube — ver _edForkToId en
+               editor.js) sigue sin mostrarlo, porque no tiene supabaseId. -->
+          ${comic.supabaseId ? `<button class="work-row-btn" data-action="read" data-id="${comic.id}">${I18n.t('read')}</button>` : ''}
           <button class="work-row-btn edit" data-action="edit" data-id="${comic.id}">${I18n.t('edit')}</button>
           ${comic.approved
             ? `<button class="work-row-btn unpub" data-action="unpublish" data-id="${comic.id}">${I18n.t('mc_unpubPublished')}</button>`
