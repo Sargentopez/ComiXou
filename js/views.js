@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.70</footer>
+    <footer class="app-version">v38.71</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -887,6 +887,7 @@ Router.register('editor', {
           <h3 class="ed-modal-title" data-i18n="ed_saveModalTitle">Guardar</h3>
         </div>
         <div class="ed-modal-body">
+          <p class="ed-save-choice-note" data-i18n="ed_saveChoicePrivacyNote">Solo tú podrás acceder a las obras que guardes, no serán públicas si no las compartes o las envías a publicar.</p>
           <button class="ed-save-choice-opt" id="edSaveChoiceLocal">
             <span class="ed-save-choice-icon">💾</span>
             <span class="ed-save-choice-text"><strong data-i18n="ed_saveLocally">Guardar localmente</strong><small data-i18n="ed_onThisDevice">En este dispositivo</small></span>
