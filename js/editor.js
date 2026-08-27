@@ -5826,10 +5826,19 @@ function edDrawSel(){
 /* ══════════════════════════════════════════
    PÁGINAS
    ══════════════════════════════════════════ */
-function edAddPage(){
+function edAddPage(jumpToNewPage = true){
   edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation,_dirtyCountLocal:1,_dirtyCountCloud:1});
   _edMarkPagesStructureDirty();
-  edLoadPage(edPages.length-1);
+  // jumpToNewPage=false: petición de Alberto — al añadir hoja desde la
+  // ventana de hojas (edOpenPages/edPagesAdd), NO saltar directamente a
+  // editarla; solo debe verse su miniatura en blanco ahí mismo. Puede que
+  // antes de entrar a editarla haga falta cambiarle la orientación, y eso
+  // ya se puede hacer sin saltar (botón ⟲ de la propia miniatura,
+  // _pgRotatePage, que rota cualquier página por índice sin necesidad de
+  // que sea la activa). El resto de llamadores (p.ej. el desplegable
+  // "Hoja ▾" antiguo, dd-addpage) no pasan el argumento y conservan el
+  // comportamiento de siempre (saltar a la nueva hoja).
+  if (jumpToNewPage) edLoadPage(edPages.length-1);
   edToast(I18n.t('ed_pageAdded'));
 }
 
@@ -12562,6 +12571,15 @@ function edOnMove(e){
         _prev ? _prev.wx : null, _prev ? _prev.wy : null
       );
       edRedraw();
+    } else if (_edFillGradActive && edPainting && _edGradPtStart) {
+      // Degradado: redibujar la línea de extensión en cada pointermove
+      // mientras se arrastra. Bug reportado por Alberto ("la línea no se
+      // visualiza, y antes tampoco"): la llamada a _edDrawGradPreview vivía
+      // por error dentro de edOnEnd (pointerup), DESPUÉS del bloque que ya
+      // aplica el degradado y sale con "return" — así que en la práctica
+      // nunca llegaba a ejecutarse (ver el bloque muerto eliminado de
+      // edOnEnd). Esta es la llamada real, en el sitio correcto.
+      _edDrawGradPreview(e);
     }
     edMoveBrush(e);return;
   }
@@ -13367,11 +13385,12 @@ function edOnEnd(e){
     edPinchEnd();
     return;
   }
-  // Modo degradado: dibujar preview de la línea sobre el canvas
-  if (_edFillGradActive && edPainting && _edGradPtStart) {
-    _edDrawGradPreview(e);
-    return;
-  }
+  // (bloque muerto eliminado aquí: "Modo degradado: dibujar preview de la
+  // línea" — vivía en edOnEnd/pointerup, DESPUÉS del bloque de más arriba
+  // que ya aplica el degradado y sale con "return", así que nunca se
+  // ejecutaba. La llamada real a _edDrawGradPreview vive ahora en edOnMove,
+  // que es donde corresponde — ver ese archivo, dentro de
+  // "if(edActiveTool==='fill'){...}". Bug reportado por Alberto.)
   if(edPainting && (edActiveTool !== 'fill' || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
     // Nuevo sistema cursor: el trazo lo gestiona _cofHandleUp → no duplicar
     if(_cof.on && _cof._strokeStarted) return;
@@ -14969,20 +14988,32 @@ function _edDrawGradPreview(e) {
   const cy1 = window._edGradPtStartClient.y;
   const cx2 = e.clientX;
   const cy2 = e.clientY;
-  // Sombra
+  // Línea de extensión: discontinua en blanco y negro, SIN huecos
+  // transparentes — así se ve siempre, sea cual sea el fondo. Antes se
+  // coloreaba con el propio degradado elegido (_edGradC1→_edGradC2), lo que
+  // la hacía invisible justo donde ese color coincidía con el del fondo, y
+  // era fácil salirse de la extensión pretendida sin darse cuenta
+  // (reportado por Alberto). Patrón clásico de "hormigas marchantes": dos
+  // trazados con el MISMO guion, uno negro y otro blanco desplazado
+  // exactamente el hueco del otro — juntos cubren la línea entera sin
+  // ningún hueco, solo alterna el color.
+  const _gradDashLen = 6;
   ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2);
-  ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.stroke();
-  // Línea degradada
-  const g = ctx.createLinearGradient(cx1, cy1, cx2, cy2);
-  g.addColorStop(0, _edGradC1); g.addColorStop(1, _edGradC2);
-  ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2);
-  ctx.strokeStyle = g; ctx.lineWidth = 3.5; ctx.stroke();
-  // Punto inicial (Color 1)
-  ctx.beginPath(); ctx.arc(cx1, cy1, 10, 0, Math.PI*2);
+  ctx.lineWidth = 3;
+  ctx.setLineDash([_gradDashLen, _gradDashLen]);
+  ctx.lineDashOffset = 0;
+  ctx.strokeStyle = '#000';
+  ctx.stroke();
+  ctx.lineDashOffset = _gradDashLen;
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+  ctx.setLineDash([]); // restaurar — los círculos de abajo no deben salir discontinuos
+  // Punto inicial (Color 1) — radio a la mitad (petición de Alberto: 10→5)
+  ctx.beginPath(); ctx.arc(cx1, cy1, 5, 0, Math.PI*2);
   ctx.fillStyle = _edGradC1; ctx.fill();
   ctx.strokeStyle = 'white'; ctx.lineWidth = 2.5; ctx.stroke();
-  // Punto final (Color 2)
-  ctx.beginPath(); ctx.arc(cx2, cy2, 10, 0, Math.PI*2);
+  // Punto final (Color 2) — radio a la mitad (petición de Alberto: 10→5)
+  ctx.beginPath(); ctx.arc(cx2, cy2, 5, 0, Math.PI*2);
   ctx.fillStyle = _edGradC2; ctx.fill();
   ctx.strokeStyle = 'white'; ctx.lineWidth = 2.5; ctx.stroke();
   ctx.restore();
@@ -15044,61 +15075,71 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
     if (a >= 128) { fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
   }
 
-  // ── Multi-seed flood fill a lo largo de la línea ──────────────────────────
+  // ── Flood fill de UN SOLO origen: el PRIMER punto de toque (ax,ay) ────────
+  // Petición explícita de Alberto: el degradado se aplica SOLO a la región
+  // cerrada que contiene el punto donde se empezó a arrastrar la línea —
+  // nunca a otras regiones que el resto de la línea pueda atravesar más
+  // adelante (p.ej.: cuadrado cerrado, primer toque dentro, extremo final
+  // fuera → debe pintarse solo el interior del cuadrado, nunca el exterior).
+  // Antes se sembraba en varios puntos muestreados a lo largo de TODA la
+  // línea (multi-semilla): si el extremo caía en otra región separada por
+  // tinta, esa región también se rellenaba, aunque no tuviera nada que ver
+  // con el punto de partida. El color de cada píxel (t, más abajo) sigue
+  // calculándose sobre la línea COMPLETA sin cambios — si el extremo queda
+  // fuera de la región rellenada, el borde de esa región recibe un punto
+  // intermedio del degradado (p.ej. gris en vez de blanco puro, en un
+  // degradado negro→blanco), nunca el color final, porque su proyección
+  // sobre la línea completa nunca llega a t=1. Así, "el espacio se
+  // determina en el primer punto" pero "el degradado tiene en cuenta la
+  // longitud total de la línea", exactamente como pidió Alberto.
   const TOL = 15;
   const filled = new Uint8Array(fw * fh); // 0=libre, 1=rellenado
-  const nSamples = Math.max(Math.ceil(len * 2), 4);
 
-  for (let si = 0; si <= nSamples; si++) {
-    const t = si / nSamples;
-    const sx = Math.round(ax + ldx * t), sy = Math.round(ay + ldy * t);
-    if (sx < 0 || sx >= fw || sy < 0 || sy >= fh) continue;
-    const sIdx = sy * fw + sx;
-    if (filled[sIdx]) continue;           // ya visitado por semilla anterior
-    if (inkData[sIdx*4+3] >= 128) continue; // es tinta — no sembrar aquí
+  if (ax >= 0 && ax < fw && ay >= 0 && ay < fh) {
+    const sIdx = ay * fw + ax;
+    if (inkData[sIdx*4+3] < 128) { // el primer punto no es tinta → sembrar
+      const tR=fd[sIdx*4], tG=fd[sIdx*4+1], tB=fd[sIdx*4+2], tA=fd[sIdx*4+3];
+      filled[sIdx] = 1;
+      const stack = [];
+      stack.push({y:ay, left:ax, right:ax, dy:1});
+      stack.push({y:ay, left:ax, right:ax, dy:-1});
 
-    // Color del píxel de semilla (define qué vecinos son "del mismo fondo")
-    const tR=fd[sIdx*4], tG=fd[sIdx*4+1], tB=fd[sIdx*4+2], tA=fd[sIdx*4+3];
-    filled[sIdx] = 1;
-    const stack = [];
-    stack.push({y:sy, left:sx, right:sx, dy:1});
-    stack.push({y:sy, left:sx, right:sx, dy:-1});
-
-    while (stack.length) {
-      const {y, left, right, dy} = stack.pop();
-      const ny2 = y + dy;
-      if (ny2 < 0 || ny2 >= fh) continue;
-      let x = left;
-      while (x > 0) {
-        const ci=(ny2*fw+(x-1))*4;
-        if (filled[ny2*fw+(x-1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
-            Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
-        x--;
-      }
-      let rx = right;
-      while (rx < fw-1) {
-        const ci=(ny2*fw+(rx+1))*4;
-        if (filled[ny2*fw+(rx+1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
-            Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
-        rx++;
-      }
-      let segStart = -1;
-      for (let px = x; px <= rx; px++) {
-        const pIdx=ny2*fw+px, ci=pIdx*4;
-        const ok = !filled[pIdx] && Math.abs(fd[ci]-tR)<=TOL && Math.abs(fd[ci+1]-tG)<=TOL &&
-                   Math.abs(fd[ci+2]-tB)<=TOL && Math.abs(fd[ci+3]-tA)<=TOL;
-        if (ok) {
-          if (segStart===-1) segStart=px;
-          filled[pIdx]=1;
-        } else if (segStart!==-1) {
-          stack.push({y:ny2, left:segStart, right:px-1, dy});
-          stack.push({y:ny2, left:segStart, right:px-1, dy:-dy});
-          segStart=-1;
+      while (stack.length) {
+        const {y, left, right, dy} = stack.pop();
+        const ny2 = y + dy;
+        if (ny2 < 0 || ny2 >= fh) continue;
+        let x = left;
+        while (x > 0) {
+          const ci=(ny2*fw+(x-1))*4;
+          if (filled[ny2*fw+(x-1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
+              Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
+          x--;
         }
-      }
-      if (segStart!==-1) {
-        stack.push({y:ny2, left:segStart, right:rx, dy});
-        stack.push({y:ny2, left:segStart, right:rx, dy:-dy});
+        let rx = right;
+        while (rx < fw-1) {
+          const ci=(ny2*fw+(rx+1))*4;
+          if (filled[ny2*fw+(rx+1)] || Math.abs(fd[ci]-tR)>TOL || Math.abs(fd[ci+1]-tG)>TOL ||
+              Math.abs(fd[ci+2]-tB)>TOL || Math.abs(fd[ci+3]-tA)>TOL) break;
+          rx++;
+        }
+        let segStart = -1;
+        for (let px = x; px <= rx; px++) {
+          const pIdx=ny2*fw+px, ci=pIdx*4;
+          const ok = !filled[pIdx] && Math.abs(fd[ci]-tR)<=TOL && Math.abs(fd[ci+1]-tG)<=TOL &&
+                     Math.abs(fd[ci+2]-tB)<=TOL && Math.abs(fd[ci+3]-tA)<=TOL;
+          if (ok) {
+            if (segStart===-1) segStart=px;
+            filled[pIdx]=1;
+          } else if (segStart!==-1) {
+            stack.push({y:ny2, left:segStart, right:px-1, dy});
+            stack.push({y:ny2, left:segStart, right:px-1, dy:-dy});
+            segStart=-1;
+          }
+        }
+        if (segStart!==-1) {
+          stack.push({y:ny2, left:segStart, right:rx, dy});
+          stack.push({y:ny2, left:segStart, right:rx, dy:-dy});
+        }
       }
     }
   }
@@ -24246,18 +24287,15 @@ function _edShiftUnit(layers, u, dx, dy){
    desplazamiento para ESE conjunto, y se aplica el MISMO desplazamiento a
    cada miembro — así el grupo se mueve entero, sin romper la disposición
    relativa de sus piezas internas.
-   Alinear izquierda/derecha/arriba/abajo: mueve cada unidad para que su
-   borde correspondiente coincida con el borde más extremo de toda la
-   selección (el mismo comportamiento estándar de Illustrator/Figma/
-   PowerPoint: se alinean ENTRE SÍ, no contra el lienzo).
-   Centrar: mueve el CENTRO de cada unidad al centro del bounding box
-   conjunto de toda la selección, en ambos ejes A LA VEZ (con dos objetos,
-   el resultado es dejarlos superpuestos por su centro).
-   Centrado horizontal / Centrado vertical: igual que "Centrar" pero en UN
-   SOLO eje — horizontal iguala los centros X sin tocar Y (completa el
-   hueco entre "izquierda" y "derecha"), vertical iguala los centros Y sin
-   tocar X (completa el hueco entre "arriba" y "abajo") — mismo patrón de 6
-   alineaciones + centrado combinado que Figma/Illustrator. */
+   Referencia de alineación: el PRIMER objeto seleccionado (units[0], que
+   corresponde a selIdxs[0]) — petición explícita de Alberto: "el primer
+   objeto seleccionado sea el referente para el resto, todos se ajustarán
+   con él". Izquierda/derecha/arriba/abajo mueven cada unidad para que su
+   borde correspondiente coincida con el de ESE primer objeto (no con el
+   borde más extremo de toda la selección). Centrar/centrado horizontal/
+   centrado vertical mueven el centro de cada unidad al centro del primer
+   objeto (no al centro del bounding box conjunto). El primer objeto nunca
+   se mueve a sí mismo (su propio dx/dy siempre da 0). */
 function _edComputeAlignUnits(layers, selIdxs, mode, pw, ph){
   const units = [];
   const seenGroups = new Set();
@@ -24289,43 +24327,45 @@ function _edComputeAlignUnits(layers, selIdxs, mode, pw, ph){
     u.box = {x0,y0,x1,y1};
   });
 
+  // Referencia: SIEMPRE el PRIMER objeto seleccionado (units[0]), nunca un
+  // agregado de toda la selección (antes "left"/"right"/"top"/"bottom"
+  // usaban el extremo entre todos, y "center"/"centerH"/"centerV" el centro
+  // de la caja conjunta) — petición explícita de Alberto: "el primer objeto
+  // seleccionado sea el referente para el resto, todos se ajustarán con él".
+  // units[0] corresponde a selIdxs[0] (mismo orden con el que se construyó
+  // el array): el primero añadido con Shift+clic en el editor general, o el
+  // de menor índice de capa (z-order) si la selección vino de un rubber
+  // band — igual en editor general (edMultiSel) y en GCP (window._gcpMultiSel),
+  // ambos alimentan esta misma función. Con esto, units[0] siempre calcula
+  // dx=0/dy=0 (no se mueve a sí mismo) y el resto se ajusta a él.
+  const ref = units[0].box;
+
   if(mode === 'left'){
-    const t = Math.min(...units.map(u=>u.box.x0));
-    units.forEach(u => { u.dx = t - u.box.x0; u.dy = 0; });
+    units.forEach(u => { u.dx = ref.x0 - u.box.x0; u.dy = 0; });
   } else if(mode === 'right'){
-    const t = Math.max(...units.map(u=>u.box.x1));
-    units.forEach(u => { u.dx = t - u.box.x1; u.dy = 0; });
+    units.forEach(u => { u.dx = ref.x1 - u.box.x1; u.dy = 0; });
   } else if(mode === 'top'){
-    const t = Math.min(...units.map(u=>u.box.y0));
-    units.forEach(u => { u.dx = 0; u.dy = t - u.box.y0; });
+    units.forEach(u => { u.dx = 0; u.dy = ref.y0 - u.box.y0; });
   } else if(mode === 'bottom'){
-    const t = Math.max(...units.map(u=>u.box.y1));
-    units.forEach(u => { u.dx = 0; u.dy = t - u.box.y1; });
+    units.forEach(u => { u.dx = 0; u.dy = ref.y1 - u.box.y1; });
   } else if(mode === 'center'){
-    const minX0=Math.min(...units.map(u=>u.box.x0)), maxX1=Math.max(...units.map(u=>u.box.x1));
-    const minY0=Math.min(...units.map(u=>u.box.y0)), maxY1=Math.max(...units.map(u=>u.box.y1));
-    const cx=(minX0+maxX1)/2, cy=(minY0+maxY1)/2;
+    const cx=(ref.x0+ref.x1)/2, cy=(ref.y0+ref.y1)/2;
     units.forEach(u => {
       const ucx=(u.box.x0+u.box.x1)/2, ucy=(u.box.y0+u.box.y1)/2;
       u.dx = cx-ucx; u.dy = cy-ucy;
     });
   } else if(mode === 'centerH'){
     // Centrado horizontal: iguala el centro X (horizontal) de cada unidad
-    // al centro X del conjunto de la selección — el eje Y no se toca.
-    // Completa el hueco entre "izquierda" y "derecha" en el eje horizontal,
-    // igual que hace "centrar" con los dos ejes a la vez.
-    const minX0=Math.min(...units.map(u=>u.box.x0)), maxX1=Math.max(...units.map(u=>u.box.x1));
-    const cx=(minX0+maxX1)/2;
+    // al centro X del PRIMER objeto seleccionado — el eje Y no se toca.
+    const cx=(ref.x0+ref.x1)/2;
     units.forEach(u => {
       const ucx=(u.box.x0+u.box.x1)/2;
       u.dx = cx-ucx; u.dy = 0;
     });
   } else if(mode === 'centerV'){
     // Centrado vertical: iguala el centro Y (vertical) de cada unidad al
-    // centro Y del conjunto de la selección — el eje X no se toca.
-    // Completa el hueco entre "arriba" y "abajo" en el eje vertical.
-    const minY0=Math.min(...units.map(u=>u.box.y0)), maxY1=Math.max(...units.map(u=>u.box.y1));
-    const cy=(minY0+maxY1)/2;
+    // centro Y del PRIMER objeto seleccionado — el eje X no se toca.
+    const cy=(ref.y0+ref.y1)/2;
     units.forEach(u => {
       const ucy=(u.box.y0+u.box.y1)/2;
       u.dx = 0; u.dy = cy-ucy;
@@ -32961,6 +33001,15 @@ function _gcpHandleDown(e) {
     if (_gcpHandled) { _gcpRedraw(); return; }
 
     // ── Fuera del bbox: Shift+clic (PC) → toggle; sin Shift → rubber band ──
+    // IMPORTANTE: guardar una COPIA de la multiselección ANTERIOR (2+) antes
+    // de vaciarla. Bug reportado por Alberto: con 2 objetos ya seleccionados,
+    // Shift+clic en un tercero deseleccionaba los 2 primeros y dejaba solo el
+    // tercero — porque _prev se construía a partir de window._gcpSelIdx, que
+    // aquí SIEMPRE vale -1 mientras hay una multiselección activa (_gcpSelIdx
+    // y _gcpMultiSel son mutuamente excluyentes en GCP), así que la
+    // selección previa real (window._gcpMultiSel, ya vaciada en la línea de
+    // abajo) se perdía sin más. Ahora _prev parte de esa copia, no de _gcpSelIdx.
+    const _prevMultiSel = window._gcpMultiSel.slice();
     window._gcpMultiSel = []; window._gcpMultiBbox = null;
     if (e.shiftKey && e.pointerType !== 'touch') {
       let _sfound = -1;
@@ -32969,7 +33018,7 @@ function _gcpHandleDown(e) {
         if (_l && _l._gcpVisible !== false && !_l.locked && _l.contains?.(c.nx, c.ny)) { _sfound = _i; break; }
       }
       if (_sfound >= 0) {
-        const _prev = window._gcpSelIdx >= 0 ? [window._gcpSelIdx] : [];
+        const _prev = _prevMultiSel.slice();
         const _si = _prev.indexOf(_sfound);
         if (_si >= 0) _prev.splice(_si, 1); else _prev.push(_sfound);
         if (_prev.length >= 2) {
@@ -33085,6 +33134,32 @@ function _gcpDoSelectDrag(e, c) {
     }
   }
   if (hit >= 0) {
+    // ── Shift+clic (solo PC): combinar selección previa + nueva en
+    // multiselección — mismo comportamiento que edOnStart en el editor
+    // general (líneas ~11754-11765 de este archivo): seleccionar un objeto
+    // y luego Shift+clicar otro deja ambos seleccionados. Petición
+    // explícita de Alberto ("que también funcione en el editor GCP"). El
+    // caso "ya hay 2+ seleccionados, Shift+clic fuera de su bbox hace
+    // toggle" ya existe por separado en _gcpHandleDown — a este punto de
+    // _gcpDoSelectDrag solo se llega cuando esa multiselección de 2+ NO
+    // está activa todavía, así que aquí solo hace falta la transición
+    // 1→2 (combinar el objeto ya seleccionado + el nuevo).
+    if (e.shiftKey && e.pointerType !== 'touch') {
+      const _prev = window._gcpSelIdx >= 0 ? [window._gcpSelIdx] : [];
+      const _combined = [...new Set([..._prev, hit])];
+      if (_combined.length >= 2) {
+        window._gcpSelIdx = -1;
+        window._gcpMultiSel = _combined;
+        window._gcpMultiGroupRot = 0;
+        _gcpWithEditorContext(() => { _msRecalcBbox(); });
+      } else {
+        // Shift+clic sobre el mismo objeto ya seleccionado (o nada previo
+        // que combinar): sin cambios, se queda como selección simple.
+        window._gcpSelIdx = _combined[0] ?? -1;
+      }
+      _gcpRedraw();
+      return;
+    }
     window._gcpSelIdx = hit;
     const _hitLa = window._gcpLayers[hit];
     // Doble tap sobre objeto → abrir panel de propiedades (igual que editor general)

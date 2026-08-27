@@ -79,8 +79,19 @@ function edOpenPages() {
 
   overlay.querySelector('#edPagesClose').addEventListener('click', edClosePages);
   overlay.querySelector('#edPagesAdd').addEventListener('click', () => {
-    edClosePages();
-    edAddPage();
+    // Petición de Alberto: NO cerrar la ventana ni saltar a la nueva hoja —
+    // solo debe verse su miniatura en blanco aquí, por si antes hace falta
+    // cambiarle la orientación (botón ⟲ de su propia tarjeta, _pgRotatePage,
+    // que ya rota cualquier página por índice sin necesidad de saltar a
+    // ella). Mismo guard anti-doble-disparo que duplicar/rotar/eliminar/
+    // reordenar (ver cabecera del archivo) — más necesario aún ahora que la
+    // ventana se queda abierta tras añadir.
+    if (_pgActionLocked()) return;
+    edAddPage(false);
+    _pgRender();
+    // Desplazar la rejilla para que la tarjeta nueva (siempre la última) sea visible
+    const _newCard = document.getElementById('edPagesGrid')?.lastElementChild;
+    if (_newCard) _newCard.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
   });
   overlay.addEventListener('pointerdown', e => {
     if (e.target === overlay) edClosePages();

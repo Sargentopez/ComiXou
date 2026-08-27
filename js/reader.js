@@ -69,11 +69,32 @@ window.addEventListener('resize', () => {
   window._readerTitlePillRaf = requestAnimationFrame(_readerUpdateTitlePill);
 });
 
-function ReaderView_init(params) {
+async function ReaderView_init(params) {
   const comicId = (params && params.id) ? params.id : new URLSearchParams(window.location.search).get('id');
   if (!comicId) { Router.go('home'); return; }
 
-  const comic = WorkStore.getById(comicId);
+  // BUG CORREGIDO (reportado por Alberto): usar SIEMPRE la versión COMPLETA
+  // de la obra (con el dataUrl real de cada panel, leído de OPFS) — antes se
+  // usaba WorkStore.getById(), que solo devuelve el índice LIGERO de
+  // localStorage (panels[].dataUrl siempre null; ver _stripHeavy en
+  // storage.js, que los vacía antes de guardar el índice). El array de
+  // panels seguía teniendo la longitud correcta, así que nunca saltaba el
+  // aviso de "obra no encontrada" de abajo — el visor se abría igual, pero
+  // completamente en blanco.
+  // Esto pasaba desapercibido casi siempre porque el botón "Leer" de Mis
+  // Obras solo cae en este visor interno cuando la obra NO tiene supabaseId
+  // todavía (si lo tiene, usa el reproductor externo) — y la mayoría de
+  // obras lo consiguen pronto tras el primer guardado en la nube. Pero al
+  // renombrar una obra desde "Proyecto → Editar datos de la obra", esta se
+  // bifurca a un id nuevo (ver _edForkToId en editor.js, "obra
+  // independiente de verdad") que SÍ empieza sin supabaseId si solo se
+  // guarda en local — así que sí caía por este camino, y ahí se veía el
+  // fallo. Mismo patrón ya usado en edLoadProject y en el botón "Editar" de
+  // Mis Obras (ambos SÍ funcionaban bien): WorkStore.getByIdFull si existe,
+  // si no getById como respaldo.
+  const comic = WorkStore.getByIdFull
+    ? await WorkStore.getByIdFull(comicId)
+    : WorkStore.getById(comicId);
   if (!comic || !comic.panels || comic.panels.length === 0) {
     showToast(I18n.t('workNotFound'));
     setTimeout(() => Router.go('home'), 1500);
