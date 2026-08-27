@@ -13411,8 +13411,21 @@ function edOnEnd(e){
     if(_pi >= 0) edLayers[_pi] = _ll;
     _edPendingShape = null; _edShapeStart = null; _edShapePreview = null;
     edSelectedIdx = edLayers.indexOf(_ll);
+    // Registrar la creación en el historial de sesión vectorial (_vsHistory):
+    // hasta ahora nada lo hacía en este punto, así que aunque _vsHistory ya no
+    // se vaciara (fix de arriba), seguía sin haber nada que deshacer tras crear
+    // el objeto. _edShapePushHistory() empuja el snapshot y llama a _vsPush().
+    _edShapePushHistory();
+    // edPushHistory() ANTES de cambiar edActiveTool: el detector de "sesión
+    // vectorial huérfana" (edPushHistory, ~línea 4152) comprueba edActiveTool
+    // === 'shape'/'line' para saber si debe bloquear el push global y
+    // conservar _vsHistory. Si aquí ya valiera 'select' (como antes),
+    // consideraba la sesión huérfana y vaciaba _vsHistory recién creado —
+    // por eso Deshacer no estaba disponible justo después de crear el
+    // objeto (bug confirmado por Alberto).
+    edPushHistory();
     _edLineType = 'select'; edActiveTool = 'select'; edCanvas.className = '';
-    edPushHistory(); edRedraw();
+    edRedraw();
     _edActivateLineTool(false, true); // true = objeto recién creado
     // Actualizar botón Fusionar de la barra flotante tras crear una forma cerrada
     if (typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
@@ -13963,8 +13976,17 @@ function _edShapeApplyHistory(snapshot){
   edRedraw();
 }
 
+// isNew=true: solo hay algo que deshacer si se ha creado/cambiado algo real
+// más allá del snapshot inicial de sesión (idx 0). Antes de eso, deshacer
+// no debe hacer nada — y mucho menos cerrar el panel (bug reportado por
+// Alberto: el panel solo se cierra con el botón OK).
+// isNew=false: solo activo si hay cambios reales más allá del snapshot inicial.
+function _vsCanUndo(){
+  return _vsIsNew ? _vsHistory.length > 1 : _vsHistIdx > 0;
+}
+
 function edShapeUndo(){
-  if(_vsHistory.length === 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
+  if(!_vsCanUndo()){ edToast(I18n.t('ed_nothingToUndo')); return; }
   _vsUndo();
 }
 
@@ -13974,9 +13996,7 @@ function edShapeRedo(){
 }
 
 function _edShapeUpdateUndoRedoBtns(){
-  // isNew=true: activo con cualquier historia (undo en idx=0 = cancelar creación)
-  // isNew=false: solo activo si hay cambios reales más allá del snapshot inicial
-  const canUndo = _vsIsNew ? _vsHistory.length > 0 : _vsHistIdx > 0;
+  const canUndo = _vsCanUndo();
   const canRedo = _vsHistIdx < _vsHistory.length - 1;
   const su=$('op-shape-undo'), sr=$('op-shape-redo');
   if(su) su.disabled = !canUndo;
@@ -17068,6 +17088,7 @@ function _edActivateShapeTool(isNew, isCreating) {
     <button id="op-shape-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-shape-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_UNDO_SVG}</button>
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_REDO_SVG}</button>
+    <button id="op-shape-help" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
 
     <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':I18n.t('op_noObject')}</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
@@ -17330,6 +17351,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   _updURShape();
   $('op-shape-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-shape-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
+  $('op-shape-help')?.addEventListener('click',()=>{ _edHelpShowRef('vector-draw'); });
   if(isNew) requestAnimationFrame(edFitCanvas);
 }
 
@@ -17375,8 +17397,9 @@ function _edActivateLineTool(isNew, isCreating) {
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
-  <div id="edPanelHeader"><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
-  <!-- FILA 1: Tipo de objeto + selección -->
+  <!-- FILA 1: Tipo de objeto + selección + OK (a la derecha) — el botón OK
+       vivía antes en su propia cabecera (edPanelHeader); Alberto pidió
+       moverlo aquí y eliminar el hueco blanco que dejaba esa cabecera. -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch">
     <button id="op-line-draw-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='draw'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edLineType==='draw'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="${I18n.t('op_polygonTool')}"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg></button>
     <button id="op-line-segment-btn" style="flex-shrink:0;border:2px solid ${_edLineType==='segment'&&edActiveTool==='line'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 5px;cursor:pointer;background:${_edLineType==='segment'&&edActiveTool==='line'?'rgba(0,0,0,.08)':'transparent'}" title="${I18n.t('op_segmentTool')}"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg></button>
@@ -17384,6 +17407,7 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-line-ellipse-btn" style="flex-shrink:0;border:2px solid ${edActiveTool==='shape'&&_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${edActiveTool==='shape'&&_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-line-select-btn" style="flex-shrink:0;border:2px solid ${isSelectMode?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${isSelectMode?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div id="op-line-close-sep" style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;display:${_showCloseBtn?'':'none'}"></div><button id="op-line-close-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700);display:${_showCloseBtn?'':'none'}">${I18n.t('op_closeObjectBtn')}</button>
+    <button id="op-draw-ok" style="flex-shrink:0;margin-left:auto;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: color + grosor + opacidad -->
@@ -17435,6 +17459,7 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-line-del" style="flex-shrink:0;border:1px solid #fcc;border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:#c00">✕</button>
     <button id="op-line-undo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_UNDO_SVG}</button>
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_REDO_SVG}</button>
+    <button id="op-line-help" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
 
     <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
@@ -17851,6 +17876,7 @@ function _edActivateLineTool(isNew, isCreating) {
   _updUR();
   $('op-line-undo')?.addEventListener('click',()=>{ edShapeUndo(); });
   $('op-line-redo')?.addEventListener('click',()=>{ edShapeRedo(); });
+  $('op-line-help')?.addEventListener('click',()=>{ _edHelpShowRef('vector-draw'); });
   // No mover cámara al abrir panel line
 }
 
@@ -18737,6 +18763,8 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_REDO_SVG}</button>
     <button id="op-zoom-btn"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" title="${I18n.t('op_zoomToolTitle')}">🔍</button>
+    <button id="op-draw-help"
+      style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
     <span id="op-draw-info"
       style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
@@ -18879,6 +18907,10 @@ function edRenderOptionsPanel(mode){
     $('op-zoom-btn')?.addEventListener('click', e => {
       e.stopPropagation();
       _edZoomPick($('op-zoom-btn'));
+    });
+    $('op-draw-help')?.addEventListener('click', e => {
+      e.stopPropagation();
+      _edHelpShowRef('draw-tools');
     });
     $('op-color-erase')?.addEventListener('click', () => {
       _edDodgeBurnActive = false;
@@ -23152,9 +23184,9 @@ const _edHelpContent = {
     const nodesChip = `<span style="display:inline-block;vertical-align:middle;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;color:var(--gray-700)">${I18n.t('ed_nodesLabel')}</span>`;
     // Icono ⊕: mismo SVG exacto que usa op-line-fuse-btn (panel de polígonos/segmentos).
     const icoFuse = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="20" height="20" style="display:inline-block;vertical-align:middle;flex-shrink:0"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg>';
-    // Icono cursor desplazado: mismo SVG exacto que usa op-vcof-btn (pestaña
-    // Líneas — es donde existen nodos de verdad para elipse/rectángulo también,
-    // ver carta de entrega). El botón real no lleva texto, solo este icono.
+    // Icono cursor desplazado: mismo SVG exacto que usa op-vcof-btn. Ya no
+    // hay pestañas Objeto/Líneas (panel único) — el botón está siempre en
+    // este mismo panel. El botón real no lleva texto, solo este icono.
     const icoCursor = '<svg width="14" height="22" viewBox="0 0 14 22" style="display:inline-block;vertical-align:middle;flex-shrink:0;color:var(--gray-700)"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg>';
     const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
     return `
@@ -23170,8 +23202,11 @@ const _edHelpContent = {
       <div style="margin-bottom:14px">
         <b>4.</b> ${I18n.t('ed_helpVectorP4')}
       </div>
-      <div>
+      <div style="margin-bottom:14px">
         <b>5.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
+      </div>
+      <div>
+        <b>6.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
       </div>
     `;
     })()
@@ -28707,13 +28742,20 @@ function EditorView_init(){
       _edShapeType = shapeType;
       edActiveTool = 'shape';
       edCanvas.className = 'tool-shape';
-      setTimeout(() => _edActivateShapeTool(!_esbContSession, _esbContSession), 0);
     } else {
       _edLineType = lineType || 'draw';
       edActiveTool = 'line';
       edCanvas.className = 'tool-line';
-      setTimeout(() => _edActivateLineTool(false, _esbContSession), 0);
     }
+    // Un solo panel para todo el dibujo vectorial — petición de Alberto tras
+    // el bug de Deshacer: Rectángulo/Elipse abrían _edActivateShapeTool (panel
+    // y sesión _vs* propios) y al completar el trazo se convertían a LineLayer
+    // saltando a _edActivateLineTool, perdiendo la sincronía de _vsIsNew/
+    // _vsHistory por el camino. Ahora los 4 (rect/elipse/polígono/segmento)
+    // entran siempre por _edActivateLineTool, con los mismos parámetros que ya
+    // usan op-line-rect-btn/op-line-ellipse-btn (que hacen exactamente este
+    // mismo cambio de tipo estando ya dentro del panel de líneas).
+    setTimeout(() => _edActivateLineTool(false, _esbContSession), 0);
     // Igual que en Herramientas de dibujo: panel primero, ayuda medio segundo
     // después (si no se ha desactivado antes para este usuario). Cubre los
     // 4 accesos del submenú Dibujo vectorial (Rectángulo/Elipse comparten
