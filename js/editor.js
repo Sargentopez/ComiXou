@@ -23143,6 +23143,39 @@ const _edHelpContent = {
     `;
     })()
   },
+  'vector-draw': {
+    title: I18n.t('ed_helpVectorTitle'),
+    body: (() => {
+    // Chip "NODOS": no es un icono sino un botón de texto — se reproduce
+    // tal cual (mismo borde/relleno/tipografía) que op-shape-curve-btn /
+    // op-line-curve-btn, en vez de inventar un icono que no existe en el panel.
+    const nodesChip = `<span style="display:inline-block;vertical-align:middle;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.78rem);font-weight:900;background:transparent;color:var(--gray-700)">${I18n.t('ed_nodesLabel')}</span>`;
+    // Icono ⊕: mismo SVG exacto que usa op-line-fuse-btn (panel de polígonos/segmentos).
+    const icoFuse = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 26" width="20" height="20" style="display:inline-block;vertical-align:middle;flex-shrink:0"><circle cx="13" cy="13" r="13" fill="white"/><path d="M13,1 A12,12,0,0,0,13,25 Z" fill="black"/><circle cx="13" cy="7" r="6" fill="black"/><circle cx="13" cy="19" r="6" fill="white"/><circle cx="13" cy="13" r="12" fill="none" stroke="#444" stroke-width="1"/><circle cx="13" cy="7" r="3" fill="white"/><circle cx="13" cy="19" r="3" fill="black"/></svg>';
+    // Icono cursor desplazado: mismo SVG exacto que usa op-vcof-btn (pestaña
+    // Líneas — es donde existen nodos de verdad para elipse/rectángulo también,
+    // ver carta de entrega). El botón real no lleva texto, solo este icono.
+    const icoCursor = '<svg width="14" height="22" viewBox="0 0 14 22" style="display:inline-block;vertical-align:middle;flex-shrink:0;color:var(--gray-700)"><circle cx="7" cy="4" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="7" y1="8" x2="7" y2="16" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="16" width="8" height="6" rx="1" fill="currentColor" opacity="0.7"/></svg>';
+    const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
+    return `
+      <div style="margin-bottom:14px">
+        <b>1.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>2.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>3.</b> ${I18n.t('ed_helpVectorP3')}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>4.</b> ${I18n.t('ed_helpVectorP4')}
+      </div>
+      <div>
+        <b>5.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
+      </div>
+    `;
+    })()
+  },
 };
 
 function _edHelpDismissedKey() {
@@ -28568,6 +28601,10 @@ function EditorView_init(){
     edCloseMenus();
     _edHelpShowRef('draw-tools');
   });
+  $('dd-help-vector')?.addEventListener('click', () => {
+    edCloseMenus();
+    _edHelpShowRef('vector-draw');
+  });
   $('dd-help-editor')?.addEventListener('click', () => {
     edCloseMenus();
     _edHelpShowRef('editor');
@@ -28677,6 +28714,11 @@ function EditorView_init(){
       edCanvas.className = 'tool-line';
       setTimeout(() => _edActivateLineTool(false, _esbContSession), 0);
     }
+    // Igual que en Herramientas de dibujo: panel primero, ayuda medio segundo
+    // después (si no se ha desactivado antes para este usuario). Cubre los
+    // 4 accesos del submenú Dibujo vectorial (Rectángulo/Elipse comparten
+    // _edActivateShapeTool; Polígonos/Segmentos comparten _edActivateLineTool).
+    setTimeout(() => edHelpShow('vector-draw'), 500);
   }
   $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
   $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
