@@ -227,6 +227,8 @@ const TRANSLATIONS = {
     home_searchAuthor: "Autor…",
     home_searchTitle:  "Nombre de la obra…",
     home_contact:      "Contacto",
+    home_copyEmailTitle: "Copiar correo",
+    home_contactCopied: "✅ Correo copiado",
     home_share:        "Comparte",
 
     // Cabecera — header.js (correcciones)
@@ -1239,6 +1241,8 @@ const TRANSLATIONS = {
     home_searchAuthor: "Author…",
     home_searchTitle:  "Work name…",
     home_contact:      "Contact",
+    home_copyEmailTitle: "Copy email",
+    home_contactCopied: "✅ Email copied",
     home_share:        "Share",
 
     // Header — header.js (fixes)

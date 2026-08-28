@@ -136,7 +136,10 @@ const Header = (() => {
                 + '<a href="#" class="dropdown-item" id="dotsLanguage">🌐 ' + T('menuLanguage') + '</a>'
                 + '<a href="#" class="dropdown-item" id="dotsTerms">📄 ' + T('intro_termsTitle') + '</a>'
                 + '<a href="#" class="dropdown-item" id="dotsInfo">ℹ️ Info</a>'
-                + '<span class="dropdown-item disabled-item">✉️ ' + T('home_contact') + '</span>'
+                + '<div class="dropdown-item" style="display:flex;align-items:center;gap:8px">'
+                  + '<a href="mailto:contacto@comxow.com" style="flex:1;min-width:0;color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✉️ contacto@comxow.com</a>'
+                  + '<button id="dotsContactCopy" title="' + T('home_copyEmailTitle') + '" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;padding:2px 4px;font-size:1rem;color:inherit;line-height:1">📋</button>'
+                + '</div>'
               + '</div>'
             + '</div>'
           + '</div>'
@@ -168,6 +171,26 @@ const Header = (() => {
     }
     bindDropdown('avatarBtn', 'avatarMenu');
     bindDropdown('dotsBtn', 'dotsMenu');
+
+    /* ── Copiar correo de contacto — mismo patrón que "Copiar enlace"
+       (navigator.clipboard + showToast, con appAlert como fallback si el
+       navegador no lo soporta o deniega el permiso). No debe abrir también
+       el cliente de correo: por eso preventDefault+stopPropagation, ya que
+       este botón vive junto al enlace mailto:, no dentro de él. ── */
+    var contactCopyBtn = document.getElementById('dotsContactCopy');
+    if (contactCopyBtn) {
+      contactCopyBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var email = 'contacto@comxow.com';
+        navigator.clipboard.writeText(email).then(function() {
+          showToast(T('home_contactCopied'));
+        }).catch(function() {
+          appAlert(email);
+        });
+      });
+    }
+
     document.addEventListener('click', function() {
       document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
     });
