@@ -4163,6 +4163,15 @@ function edPushHistory(force, movedLayer){
   // DIAG: registrar cada push
   if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
+  // NOTA: edHistory ya no puede contener entradas de otra página — el
+  // cambio de hoja reinicia el historial por completo (ver edLoadPage), así
+  // que aquí no hace falta ni comprobar ni sincronizar nada de página: todo
+  // lo que hay en edHistory es, por construcción, de edCurrentPage. Esto
+  // sustituye a un diseño anterior más complejo (checkpoints de "llegada" +
+  // búsqueda por página en deshacer/rehacer) que Alberto pidió retirar tras
+  // varias rondas de fallos sutiles — deshacer/rehacer ya no pueden navegar
+  // a otra hoja bajo ningún concepto, porque sencillamente no hay nada de
+  // otra hoja que aplicar.
   if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
     if(last.layersJSON === layersJSON){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
@@ -4178,14 +4187,17 @@ function edPushHistory(force, movedLayer){
   edUpdateUndoRedoBtns();
 }
 
+// edUndo/edRedo NUNCA pueden hacer que se cambie de página: edLoadPage()
+// reinicia por completo edHistory/edHistoryIdx en cada cambio de hoja (ver
+// más abajo), así que edHistory solo contiene, por construcción, entradas
+// de la página que se está viendo ahora mismo. No hace falta buscar ni
+// filtrar por página aquí — es la lógica original, simple, de antes de que
+// existiera el problema (varias rondas de fallos sutiles con un diseño más
+// complejo de historial compartido entre páginas, que Alberto pidió
+// retirar).
 function edUndo(){
   if(_edLoadProjectInProgress){ edToast(I18n.t('admin_loading')); return; }
   if(edHistoryIdx <= 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
-  // Verificar que el snapshot al que vamos tiene layers (no es un estado vacío de carga)
-  const _prevSnap = edHistory[edHistoryIdx - 1];
-  if(!_prevSnap || !_prevSnap.layersJSON) { edToast(I18n.t('ed_nothingToUndo')); return; }
-  const _prevLayers = JSON.parse(_prevSnap.layersJSON);
-  // No bloquear deshacer a estado vacío — es válido (canvas antes del primer objeto)
   edHistoryIdx--;
   edApplyHistory(edHistory[edHistoryIdx]);
 }
@@ -4499,7 +4511,6 @@ function edUpdateUndoRedoBtns(){
   const u = $('edUndoBtn'), r = $('edRedoBtn');
   if(u) u.disabled = edHistoryIdx <= 0;
   if(r) r.disabled = edHistoryIdx >= edHistory.length - 1;
-
 }
 
 /* ── edFitCanvas ──────────────────────────────────────────────────
@@ -6954,11 +6965,13 @@ function edLoadPage(idx){
   // Limpiar sesión vectorial al cambiar de página
   if(typeof _vsClear==='function') _vsClear();
 
+  const _isRealPageChange = (idx !== edCurrentPage);
+
   // Cachear miniatura + liberar animaciones/canvas pesados de la página anterior.
   // ORDEN IMPORTANTE: la miniatura debe generarse ANTES de liberar los canvas
   // reales — si se invirtiera, la miniatura saldría en blanco (canvas ya
   // reducidos a un placeholder de 1×1).
-  if (idx !== edCurrentPage) {
+  if (_isRealPageChange) {
     _edCachePageThumb(edCurrentPage);
     _edUnloadPageAnims(edCurrentPage);
     _edUnloadPageCanvases(edCurrentPage);
@@ -6980,6 +6993,20 @@ function edLoadPage(idx){
     });
   }
   edRedraw();edUpdateNavPages();edRenderOptionsPanel();
+  // Cambio de hoja real → reiniciar el historial de deshacer/rehacer por
+  // completo (petición explícita de Alberto, tras varias rondas de fallos
+  // sutiles intentando compartirlo entre páginas de forma "inteligente":
+  // siempre acababa habiendo algún caso raro que dejaba un salto de hoja no
+  // deseado al deshacer o rehacer). Volver más tarde a esta misma página NO
+  // recupera ningún deshacer de lo que se hizo antes de salir de ella — es
+  // la limitación aceptada a cambio de que deshacer/rehacer YA NUNCA puedan
+  // cambiar de página, bajo ningún concepto.
+  if(_isRealPageChange && !window._edLoadProjectInProgress){
+    edHistory = [];
+    edHistoryIdx = -1;
+    edPushHistory(true);
+  }
+  edUpdateUndoRedoBtns();
   // Cargar bajo demanda los _animFrames de la nueva página (liberados al salir de otras)
   _edLoadPageAnims(idx).then(() => {
     if (edCurrentPage === idx) edRedraw();
