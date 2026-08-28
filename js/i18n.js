@@ -69,8 +69,10 @@ const TRANSLATIONS = {
     create:           "Mis obras",
     byGenre:          "Género ›",
     byAuthor:         "Autor ›",
+    byTitle:          "Nombre de la obra ›",
     noGenres:         "Sin géneros disponibles",
     noAuthors:        "Sin autores disponibles",
+    noTitles:         "Sin obras disponibles",
     noComics:         "Aún no hay obras publicadas.",
     beFirst:          "¡Sé el primero en crear uno!",
     // Distinto de noComics/beFirst a propósito: esto se muestra cuando la
@@ -223,6 +225,7 @@ const TRANSLATIONS = {
     // Home — home.js (ampliación)
     home_searchGenre:  "Género…",
     home_searchAuthor: "Autor…",
+    home_searchTitle:  "Nombre de la obra…",
     home_contact:      "Contacto",
     home_share:        "Comparte",
 
@@ -1083,8 +1086,10 @@ const TRANSLATIONS = {
     create:           "My Works",
     byGenre:          "Genre ›",
     byAuthor:         "Author ›",
+    byTitle:          "Work name ›",
     noGenres:         "No genres available",
     noAuthors:        "No authors available",
+    noTitles:         "No works available",
     noComics:         "No works published yet.",
     beFirst:          "Be the first to create one!",
     // Deliberately distinct from noComics/beFirst: shown when loading works
@@ -1232,6 +1237,7 @@ const TRANSLATIONS = {
     // Home — home.js (expansion)
     home_searchGenre:  "Genre…",
     home_searchAuthor: "Author…",
+    home_searchTitle:  "Work name…",
     home_contact:      "Contact",
     home_share:        "Share",
 

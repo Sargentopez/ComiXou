@@ -433,7 +433,20 @@ a { color: inherit; text-decoration: none; }
   align-self: flex-start;
 }
 .home-logo-area .logo-main { font-size: 1.8rem; line-height: 1; }
-.logo-img-link { display: flex; align-items: center; }
+.logo-img-link { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.home-icon-img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
+/* Petición de Alberto: en pantallas estrechas (móvil) el icono no debe
+   arriesgarse a solapar con el resto de la cabecera (botón pantalla
+   completa en fila 1, avatar/menú ⋮ en fila 2) — se oculta y solo queda
+   el logotipo, igual que antes de este cambio. Mismo breakpoint (600px)
+   que ya usa el resto de la cabecera en modo móvil. */
+@media(max-width:600px){
+  .home-icon-img { display: none; }
+}
 .logo-img {
   height: 26px;
   width: auto;

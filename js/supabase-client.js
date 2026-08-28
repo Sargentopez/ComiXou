@@ -1151,20 +1151,21 @@ const SupabaseClient = (() => {
     let filter = 'published=eq.true';
     if (opts && opts.genre)  filter += `&genre=eq.${encodeURIComponent(opts.genre)}`;
     if (opts && opts.author) filter += `&author_name=eq.${encodeURIComponent(opts.author)}`;
+    if (opts && opts.title)  filter += `&title=eq.${encodeURIComponent(opts.title)}`;
     return _fetchWorksPage(filter, cursor, opts && opts.limit);
   }
 
-  // Universo COMPLETO de géneros/autores publicados, para el menú de
+  // Universo COMPLETO de géneros/autores/títulos publicados, para el menú de
   // Filtros — deliberadamente separada de fetchPublishedWorksPage: el menú
-  // de filtros tiene que poder ofrecer un género/autor aunque sus obras
-  // aún no se hayan cargado en pantalla (solo las primeras páginas están
-  // cargadas en un momento dado). Trae solo genre/author_name (sin
-  // miniaturas ni el resto de columnas) para que sea ligera incluso con
+  // de filtros tiene que poder ofrecer un género/autor/título aunque sus
+  // obras aún no se hayan cargado en pantalla (solo las primeras páginas
+  // están cargadas en un momento dado). Trae solo genre/author_name/title
+  // (sin miniaturas ni el resto de columnas) para que sea ligera incluso con
   // miles de filas — es la misma idea que las apps grandes llaman
   // "facets"/"filtros disponibles", resuelta aparte del listado principal.
   async function fetchPublishedFacets() {
-    const rows = await _get(`works?published=eq.true&select=genre,author_name`);
-    return (rows || []).map(r => ({ genre: r.genre || '', username: r.author_name || '' }));
+    const rows = await _get(`works?published=eq.true&select=genre,author_name,title`);
+    return (rows || []).map(r => ({ genre: r.genre || '', username: r.author_name || '', title: r.title || '' }));
   }
 
   // Convierte una fila de Supabase al formato compatible con home/admin/my-works

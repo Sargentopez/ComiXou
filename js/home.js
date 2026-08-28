@@ -130,6 +130,7 @@ function _homeRenderLocalFallback() {
   let comics = [...source].sort((a, b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
   if (activeFilter.type === 'genre')  comics = comics.filter(c => c.genre === activeFilter.value);
   if (activeFilter.type === 'author') comics = comics.filter(c => c.username === activeFilter.value);
+  if (activeFilter.type === 'title')  comics = comics.filter(c => c.title === activeFilter.value);
 
   grid.innerHTML = '';
   if (comics.length === 0) {
@@ -350,6 +351,7 @@ async function _homeLoadNextPage() {
     const filterOpts = {};
     if (activeFilter.type === 'genre')  filterOpts.genre  = activeFilter.value;
     if (activeFilter.type === 'author') filterOpts.author = activeFilter.value;
+    if (activeFilter.type === 'title')  filterOpts.title  = activeFilter.value;
     const page = await _withTimeout(
       SupabaseClient.fetchPublishedWorksPage(_homeCursor, filterOpts),
       _HOME_PAGE_TIMEOUT_MS
@@ -488,11 +490,10 @@ function setupPageNav() {
     if (!_homeFacets) _homeLoadFacets();
   });
 
-  // PC: cerrar y resetear al salir con el ratón
-  filtrosMenu?.addEventListener('mouseleave', () => {
-    filtrosMenu.classList.remove('open');
-    showFiltrosLevel1();
-  });
+  // Cierre solo al ejecutar la búsqueda (applyFilter ya cierra el menú) o al
+  // tocar/clicar fuera (listener de document más abajo) — ya NO se cierra al
+  // salir con el ratón: eso cerraba el buscador mientras aún se estaba
+  // escribiendo si el cursor quedaba fuera del área del menú.
 
   // Móvil + PC: cerrar al tocar/clicar fuera
   document.addEventListener('click', (e) => {
@@ -530,6 +531,7 @@ function showFiltrosLevel1() {
 
   menu.appendChild(buildFilterItem(I18n.t('byGenre'), () => showFiltrosLevel2('genre'), false));
   menu.appendChild(buildFilterItem(I18n.t('byAuthor'),  () => showFiltrosLevel2('author'), false));
+  menu.appendChild(buildFilterItem(I18n.t('byTitle'),  () => showFiltrosLevel2('title'), false));
 }
 
 function showFiltrosLevel2(type) {
@@ -551,6 +553,8 @@ function showFiltrosLevel2(type) {
 
   const allItems = type === 'genre'
     ? [...new Set(published.map(c => c.genre).filter(Boolean))].sort((a,b) => genreLabel(a).localeCompare(genreLabel(b), 'es'))
+    : type === 'title'
+    ? [...new Set(published.map(c => c.title).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'))
     : [...new Set(published.map(c => c.username).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'es'));
 
   // Campo de búsqueda con icono lupa
@@ -561,7 +565,7 @@ function showFiltrosLevel2(type) {
   lupa.style.cssText = 'font-size:.85rem;flex-shrink:0';
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = type === 'genre' ? I18n.t('home_searchGenre') : I18n.t('home_searchAuthor');
+  input.placeholder = type === 'genre' ? I18n.t('home_searchGenre') : type === 'title' ? I18n.t('home_searchTitle') : I18n.t('home_searchAuthor');
   input.style.cssText = 'border:none;outline:none;font-family:var(--font-body);font-size:.85rem;font-weight:700;width:100%;background:transparent;color:var(--ink)';
   searchWrap.appendChild(lupa);
   searchWrap.appendChild(input);
@@ -578,7 +582,7 @@ function showFiltrosLevel2(type) {
       ? allItems.filter(i => normalize(type === 'genre' ? genreLabel(i) : i).startsWith(norm))
       : allItems;
     if (!visible.length) {
-      itemsWrap.appendChild(emptyItem(I18n.t(type === 'genre' ? 'noGenres' : 'noAuthors')));
+      itemsWrap.appendChild(emptyItem(I18n.t(type === 'genre' ? 'noGenres' : type === 'title' ? 'noTitles' : 'noAuthors')));
       return;
     }
     visible.forEach(id => {
@@ -606,6 +610,11 @@ function applyFilter(type, value) {
   updateFiltrosLabel();
   setActiveBtn('filtrosBtn');
   document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  // Bug reportado por Alberto: al no resetear aquí, la siguiente vez que se
+  // abría "Filtros" seguía mostrando el nivel 2 (con el cuadro de búsqueda y
+  // el texto) de la búsqueda anterior, en vez de volver a Género/Autor/
+  // Nombre de la obra para poder buscar algo distinto.
+  showFiltrosLevel1();
   _homeStartLoading();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
