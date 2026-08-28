@@ -300,14 +300,28 @@ const Header = (() => {
       if (typeof Fullscreen !== 'undefined') Fullscreen._updateBtn();
     }
 
-    /* ── Botón "Abrir app" ── */
+    /* ── Botón "Abrir app" ──
+       Dos arreglos (bug reportado por Alberto):
+       1) Idioma: se pasa como parámetro en la URL para que la app instalada
+          abra en el mismo idioma que se estaba viendo en el navegador,
+          aunque su almacenamiento no esté compartido con el de la app
+          (ver detectLang() en i18n.js, que ahora lee este parámetro).
+       2) Pantalla completa: window.open(..., '_blank') crea lo que Chrome
+          considera un "contexto de navegación auxiliar", y esas navegaciones
+          quedan explícitamente excluidas del "navigation capturing" (la
+          función que decide si una navegación abre la PWA instalada o una
+          pestaña normal — ver developer.chrome.com/docs/capabilities/
+          pwa-navigation-management) — por eso siempre se quedaba como
+          pestaña más del navegador. Con una navegación real (location.href)
+          si la PWA está instalada y la URL cae dentro de su scope (aquí
+          "./", todo el sitio), Chrome sí puede capturarla y abrirla en su
+          propia ventana a pantalla completa. */
     var openAppBtn = document.getElementById('hdrOpenAppBtn');
     if (openAppBtn) {
       openAppBtn.addEventListener('click', function(e) {
         e.stopPropagation();
-        /* Intentar abrir la PWA instalada via manifest start_url */
-        var startUrl = '/index.html'; // ajustar si el manifest tiene otro
-        window.open(startUrl, '_blank');
+        var startUrl = '/index.html?lang=' + encodeURIComponent(I18n.getLang());
+        location.href = startUrl;
       });
     }
   }

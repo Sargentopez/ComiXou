@@ -2075,6 +2075,19 @@ const I18n = (() => {
   // a 'en' solo se aplica cuando el idioma detectado no coincide con NINGUNA
   // de las traducciones disponibles.
   function detectLang() {
+    // Prioridad máxima: ?lang= en la URL — usado por el botón "Abrir app"
+    // de la cabecera para que la PWA instalada abra en el mismo idioma que
+    // se estaba viendo en el navegador, incluso si su almacenamiento local
+    // no estuviera compartido con el del navegador (bug reportado por
+    // Alberto). Se persiste igual que setLang() para que el resto de la
+    // sesión en la app se quede en ese idioma.
+    if (typeof location !== 'undefined' && location.search) {
+      const urlLang = new URLSearchParams(location.search).get('lang');
+      if (urlLang && TRANSLATIONS[urlLang]) {
+        localStorage.setItem('cs_lang', urlLang);
+        return urlLang;
+      }
+    }
     const saved = localStorage.getItem('cs_lang');
     if (saved && TRANSLATIONS[saved]) return saved;
     const nav = (navigator.language || navigator.userLanguage || '').slice(0, 2).toLowerCase();
