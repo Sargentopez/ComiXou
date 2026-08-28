@@ -38,6 +38,10 @@
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Comxow — Lector</title>
+  <!-- TEMPORAL: bloquea la indexación en buscadores mientras la app esté en
+       fase previa al lanzamiento. Quitar esta línea cuando se quiera permitir
+       la indexación pública. -->
+  <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#111111">
 
   <!-- Open Graph / WhatsApp / Telegram / Twitter preview -->
@@ -49,16 +53,16 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.57">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=38.58">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.57">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=38.58">
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/fonts.css">
-  <link rel="stylesheet" href="reader.css?v=38.57">
+  <link rel="stylesheet" href="reader.css?v=38.58">
 </head>
 <script src="../js/i18n.js"></script>
 <script>
@@ -70,7 +74,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=38.57" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=38.58" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">Cargando obra...</div>
@@ -125,16 +129,16 @@
          izquierdo de navegación por hoja, corner-bl). Se deja en el DOM
          por si hace falta reactivarla para pruebas: basta con quitar
          "display:none;" del style. -->
-    <div id="readerVersion" style="display:none;position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.97</div>
+    <div id="readerVersion" style="display:none;position:fixed;bottom:8px;left:8px;font-size:11px;color:rgba(255,255,255,0.7);background:rgba(0,0,0,0.45);padding:2px 7px;border-radius:8px;z-index:9999;pointer-events:none;">v30.98</div>
 
   </div>
 
   <script src="../js/pako.min.js"></script>
   <script src="../js/UPNG.js"></script>
-  <script src="../js/fullscreen.js?v=38.57"></script>
+  <script src="../js/fullscreen.js?v=38.58"></script>
   <script src="../js/logo-data.js"></script>
   <script src="../js/icon-data.js"></script>
-  <script src="../js/anim-clock.js?v=38.57"></script>
-  <script src="reader.js?v=38.57"></script>
+  <script src="../js/anim-clock.js?v=38.58"></script>
+  <script src="reader.js?v=38.58"></script>
 </body>
 </html>

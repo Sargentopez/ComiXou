@@ -1,0 +1,8 @@
+# TEMPORAL — quitar/editar antes del lanzamiento público.
+# La app está en fase previa al lanzamiento: se pide a los rastreadores
+# educados que no indexen nada. Esto por sí solo NO garantiza que una URL
+# no acabe indexada si algún enlace externo apunta a ella algún día — quien
+# de verdad impide la indexación es la etiqueta
+# <meta name="robots" content="noindex"> en index.html y reader/index.html.
+User-agent: *
+Disallow: /
