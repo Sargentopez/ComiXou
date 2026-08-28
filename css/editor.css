@@ -1445,7 +1445,12 @@ body.ed-scale-tablet .ed-modal-sheet {
    ══════════════════════════════════════════ */
 #edQuickTools {
   position: absolute;
-  top: 92px;   /* edTopbar (52px) + edMenuBar (40px) */
+  /* Centrada verticalmente en el canvas visible (todo lo que queda por
+     debajo de edTopbar+edMenuBar, 92px) — petición de Alberto, antes se
+     quedaba fija pegada justo debajo de esa franja. Se sigue calculando
+     desde ese mismo 92px para no descuadrarse si esa altura cambiara. */
+  top: calc(92px + (100% - 92px) / 2);
+  transform: translateY(-50%);
   left: 0;
   z-index: 150;   /* por DEBAJO de edOptionsPanel (200): los paneles de dibujo/propiedades
                      deben cubrirlo cuando se abren (mismo criterio que gcpQuickTools=510
