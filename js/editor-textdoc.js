@@ -2941,18 +2941,22 @@ function _tdWireImageResize(){
 // inicios de párrafo", que es el único uso pedido. Solo en dispositivos
 // táctiles (ver _tdIsTouchPrimary): en PC ya existe la propia tecla Tab,
 // pedido explícito de Alberto que no aparezca ahí también.
-// Detecta si el cursor está justo al PRINCIPIO de una línea de párrafo:
-// o bien al principio absoluto del documento, o bien justo después de un
-// salto de línea (\n) — Trix representa así tanto el final de cada bloque
-// como un salto manual (Intro dentro de un mismo bloque, que es como este
-// editor trata la mayoría de "nuevos párrafos" en el uso normal, ver
-// comentario de _tdWireTabButton) — o justo después de una IMAGEN
-// insertada en el flujo de texto (comprobado con Trix real: una imagen
-// cuenta como un único carácter especial, U+FFFC, no como un \n — un
-// punto y aparte puede tener perfectamente una imagen en vez de texto
-// justo antes, y el botón debe aparecer igual al principio del párrafo
-// siguiente). Comprobar el CARÁCTER anterior cubre los tres casos por
-// igual sin tener que distinguirlos.
+// Detecta si el cursor está en un punto donde tiene sentido seguir
+// indentando: justo al PRINCIPIO absoluto del documento, o justo después
+// de un salto de línea (\n) — Trix representa así tanto el final de cada
+// bloque como un salto manual (Intro dentro de un mismo bloque, que es
+// como este editor trata la mayoría de "nuevos párrafos" en el uso
+// normal, ver comentario de _tdWireTabButton) —, o justo después de una
+// IMAGEN insertada en el flujo de texto (comprobado con Trix real: una
+// imagen cuenta como un único carácter especial, U+FFFC, no como un \n —
+// un punto y aparte puede tener perfectamente una imagen en vez de texto
+// justo antes), o justo después de OTRO tabulador — en táctil, sin tecla
+// Tab física, hay que poder tocar el botón varias veces seguidas para
+// insertar más de un tabulador (mismo resultado que pulsar Tab dos veces
+// en PC, ver "Tabs consecutivos" en las pruebas) — si no, tras el primer
+// toque el botón desaparecería y sería imposible indentar más de un nivel.
+// Comprobar el CARÁCTER anterior cubre los cuatro casos por igual sin
+// tener que distinguirlos.
 function _tdIsAtBlockStart(editor){
   try{
     const range = editor.getSelectedRange();
@@ -2965,7 +2969,7 @@ function _tdIsAtBlockStart(editor){
       flat += String(blocksJSON[i].text);
     }
     const prevChar = flat.charAt(pos - 1);
-    return prevChar === '\n' || prevChar === '\uFFFC';
+    return prevChar === '\n' || prevChar === '\uFFFC' || prevChar === '\t';
   }catch(_e){ return false; }
 }
 
