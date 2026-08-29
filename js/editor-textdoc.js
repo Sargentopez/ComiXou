@@ -2946,8 +2946,13 @@ function _tdWireImageResize(){
 // salto de línea (\n) — Trix representa así tanto el final de cada bloque
 // como un salto manual (Intro dentro de un mismo bloque, que es como este
 // editor trata la mayoría de "nuevos párrafos" en el uso normal, ver
-// comentario de _tdWireTabButton), así que comprobar el CARÁCTER anterior
-// cubre los dos casos por igual sin tener que distinguirlos.
+// comentario de _tdWireTabButton) — o justo después de una IMAGEN
+// insertada en el flujo de texto (comprobado con Trix real: una imagen
+// cuenta como un único carácter especial, U+FFFC, no como un \n — un
+// punto y aparte puede tener perfectamente una imagen en vez de texto
+// justo antes, y el botón debe aparecer igual al principio del párrafo
+// siguiente). Comprobar el CARÁCTER anterior cubre los tres casos por
+// igual sin tener que distinguirlos.
 function _tdIsAtBlockStart(editor){
   try{
     const range = editor.getSelectedRange();
@@ -2959,7 +2964,8 @@ function _tdIsAtBlockStart(editor){
     for(let i = 0; i < blocksJSON.length && flat.length < pos; i++){
       flat += String(blocksJSON[i].text);
     }
-    return flat.charAt(pos - 1) === '\n';
+    const prevChar = flat.charAt(pos - 1);
+    return prevChar === '\n' || prevChar === '\uFFFC';
   }catch(_e){ return false; }
 }
 
@@ -2992,21 +2998,55 @@ function _tdSyncTabButton(){
       // botón, no hace falta calcularlo aquí).
       anchorX = rect.left; top = rect.top; height = rect.height;
     } else {
-      // Un párrafo recién creado (Intro) y aún vacío no tiene ningún
-      // carácter que darle una posición — getClientRectAtPosition devuelve
-      // null en ese caso (comprobado con Playwright), aunque es,
-      // precisamente, el caso más habitual para querer indentarlo desde el
-      // principio. Se usa el propio bloque (el <div>/<h1>/... que contiene
-      // la selección) como aproximación — su borde izquierdo (donde
-      // empezaría a escribirse, salvo alineación centrada/derecha, caso
-      // raro para este botón que no vale la pena complicar más).
       const sel = window.getSelection();
-      let node = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
-      if(node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
-      const block = node && editorEl.contains(node) ? node.closest('div,h1,li,blockquote') : null;
-      const brect = block ? block.getBoundingClientRect() : null;
-      if(!brect || (!brect.width && !brect.height)){ btn.classList.remove('visible'); return; }
-      anchorX = brect.left; top = brect.top; height = brect.height;
+      const r0 = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      const anchorNode = r0 ? r0.startContainer : null;
+      const anchorOffset = r0 ? r0.startOffset : 0;
+      // Justo tras una imagen insertada en el flujo de texto (ver
+      // _tdInsertImage/runsFromInline): comprobado con Trix real, el
+      // cursor ahí cae ENTRE los elementos que Trix pone alrededor de la
+      // figura (unos <span data-trix-cursor-target> a cada lado, para que
+      // el navegador tenga dónde enganchar el cursor junto a un elemento
+      // no editable) — el nodo de la selección es entonces el propio
+      // bloque contenedor, no un nodo de texto, y ni
+      // getClientRectAtPosition ni un Range nativo dan un rectángulo
+      // útil. Se busca la figura más cercana retrocediendo por los
+      // hermanos desde el punto de inserción, y se usa su ESQUINA
+      // INFERIOR IZQUIERDA — ahí es donde arrancaría la línea siguiente.
+      let fig = null;
+      if(anchorNode && anchorNode.nodeType === Node.ELEMENT_NODE && editorEl.contains(anchorNode)){
+        for(let i = anchorOffset - 1; i >= 0; i--){
+          const child = anchorNode.childNodes[i];
+          if(!child) continue;
+          if(child.nodeType === Node.ELEMENT_NODE && child.tagName === 'FIGURE'){ fig = child; break; }
+          // Los <span data-trix-cursor-target> a los lados de la figura no
+          // cuentan como "hay contenido real de por medio" — cualquier
+          // otra cosa (texto de verdad, un <br>, otro bloque) sí, y ahí se
+          // deja de buscar: no hay ninguna imagen inmediatamente antes.
+          if(child.nodeType === Node.TEXT_NODE && child.textContent.length > 0) break;
+          if(child.nodeType === Node.ELEMENT_NODE && child.tagName !== 'SPAN') break;
+        }
+      }
+      if(fig){
+        const frect = fig.getBoundingClientRect();
+        anchorX = frect.left; top = frect.bottom; height = 0;
+      } else {
+        // Un párrafo recién creado (Intro) y aún vacío, sin imagen de por
+        // medio, tampoco tiene ningún carácter que darle una posición —
+        // getClientRectAtPosition devuelve null en ese caso también
+        // (comprobado con Playwright), aunque es, precisamente, el caso
+        // más habitual para querer indentarlo desde el principio. Se usa
+        // el propio bloque (el <div>/<h1>/... que contiene la selección)
+        // como aproximación — su borde izquierdo (donde empezaría a
+        // escribirse, salvo alineación centrada/derecha, caso raro para
+        // este botón que no vale la pena complicar más).
+        let node = anchorNode;
+        if(node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+        const block = node && editorEl.contains(node) ? node.closest('div,h1,li,blockquote') : null;
+        const brect = block ? block.getBoundingClientRect() : null;
+        if(!brect || (!brect.width && !brect.height)){ btn.classList.remove('visible'); return; }
+        anchorX = brect.left; top = brect.top; height = brect.height;
+      }
     }
     btn.style.left = anchorX + 'px';
     btn.style.top = (top + height / 2) + 'px';
