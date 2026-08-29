@@ -202,7 +202,9 @@ function edOpenTextDoc(editLayer){
       _tdEditingSourcePageRelIdx = _tdRelIdx >= 0 ? _tdRelIdx : null;
     }
     const _tdHtmlToLoad = editLayer.sourceHTML || _tdOwnerHTML;
-    if(editorEl && editorEl.editor) editorEl.editor.loadHTML(_tdHtmlToLoad);
+    if(editorEl && editorEl.editor){
+      editorEl.editor.loadHTML(_tdHtmlToLoad);
+    }
     const _tdDetected = _tdDetectUniformFont(_tdHtmlToLoad);
     _tdDocFontSize = _tdDetected.fontSize;
     _tdDocFontFamily = _tdDetected.fontFamily;
@@ -228,6 +230,7 @@ function edOpenTextDoc(editLayer){
     _tdSyncLineHeightMenuActive();
     _tdSyncFontMenuActive();
     _tdSyncAlignMenuActive();
+    _tdSyncTabButton();
     const areaElInit = document.getElementById('tdPageArea');
     if(areaElInit) areaElInit.scrollTop = 0;
     _tdCenterOnSourcePage(editLayer);
@@ -705,6 +708,29 @@ function _tdInitOnce(){
         _tdCenterActiveLine('keydown Enter (30ms)');
       }, 30);
     });
+    // Tecla Tab → insertar un tabulador real (ver barra de tabuladores,
+    // _tdLayoutPages). Comprobado con Trix real (Playwright, foco de
+    // teclado de verdad — ver investigación previa): dentro de una lista
+    // (viñetas/numerada), Trix YA gestiona Tab a su manera (anida el
+    // elemento con canIncreaseNestingLevel()/increaseNestingLevel(), sus
+    // propios métodos públicos del Editor) y SÍ hace preventDefault —
+    // e.defaultPrevented ya estará a true cuando llegue aquí en ese caso,
+    // así que basta con comprobar ESO (en vez de reimplementar a mano la
+    // condición exacta de Trix para "¿estoy en una lista?") para no pisar
+    // ese comportamiento — se adapta solo a cualquier otro caso especial
+    // que Trix pueda tener, sin tener que enumerarlos aquí. Fuera de una
+    // lista, Trix NO hace nada con Tab (el foco se iría al siguiente
+    // elemento de la página, comportamiento por defecto del navegador) —
+    // ahí es donde se intercepta para insertar el tabulador.
+    editorEl.addEventListener('keydown', e => {
+      if(e.key !== 'Tab') return;
+      if(e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      if(e.defaultPrevented) return;
+      e.preventDefault();
+      const editor = editorEl.editor;
+      if(!editor) return;
+      editor.insertString('\t');
+    });
     editorEl.addEventListener('trix-selection-change', () => {
       if(_tdFollowTimer) _tdLogScroll('cancela timer pendiente', 'origen=trix-selection-change (_tdFollowTimer)');
       clearTimeout(_tdFollowTimer);
@@ -880,6 +906,7 @@ function _tdInitOnce(){
   _tdWireFontControls();
   _tdWireParrafoControls();
   _tdWireInsertImage();
+  _tdWireTabButton();
 
   // Flechas del teclado (PC): pasan de página — SOLO cuando el cursor no está
   // escribiendo en el propio texto (si el trix-editor tiene el foco, las
@@ -2907,6 +2934,111 @@ function _tdWireImageResize(){
   }, {passive:true});
 }
 
+// ── Botón de tabulador táctil (Android no tiene tecla Tab) ─────────────
+// Aparece pegado a la IZQUIERDA de la primera letra del párrafo (o de
+// donde iría, si está vacío) SOLO cuando la selección está colapsada y
+// cae exactamente al PRINCIPIO de un párrafo — para "adelantar los
+// inicios de párrafo", que es el único uso pedido. Solo en dispositivos
+// táctiles (ver _tdIsTouchPrimary): en PC ya existe la propia tecla Tab,
+// pedido explícito de Alberto que no aparezca ahí también.
+// Detecta si el cursor está justo al PRINCIPIO de una línea de párrafo:
+// o bien al principio absoluto del documento, o bien justo después de un
+// salto de línea (\n) — Trix representa así tanto el final de cada bloque
+// como un salto manual (Intro dentro de un mismo bloque, que es como este
+// editor trata la mayoría de "nuevos párrafos" en el uso normal, ver
+// comentario de _tdWireTabButton), así que comprobar el CARÁCTER anterior
+// cubre los dos casos por igual sin tener que distinguirlos.
+function _tdIsAtBlockStart(editor){
+  try{
+    const range = editor.getSelectedRange();
+    if(!range || range[0] !== range[1]) return false;
+    const pos = range[0];
+    if(pos === 0) return true;
+    const blocksJSON = editor.getDocument().toJSON();
+    let flat = '';
+    for(let i = 0; i < blocksJSON.length && flat.length < pos; i++){
+      flat += String(blocksJSON[i].text);
+    }
+    return flat.charAt(pos - 1) === '\n';
+  }catch(_e){ return false; }
+}
+
+// (pointer:coarse) es el estándar para "el puntero PRINCIPAL de este
+// dispositivo es un dedo, no ratón/trackpad" — más fiable que mirar solo
+// si hay soporte táctil (bastantes portátiles con pantalla táctil tienen
+// AMBOS, y ahí sí hay tecla Tab de verdad, así que no debe aparecer el
+// botón) o que mirar el user-agent.
+function _tdIsTouchPrimary(){
+  try{ return window.matchMedia && window.matchMedia('(pointer: coarse)').matches; }
+  catch(_e){ return false; }
+}
+
+function _tdSyncTabButton(){
+  const btn = document.getElementById('tdTabBtn');
+  if(!btn) return;
+  const editorEl = document.getElementById('tdEditor');
+  if(!_tdIsTouchPrimary() || !editorEl || !editorEl.editor || document.activeElement !== editorEl || !_tdIsAtBlockStart(editorEl.editor)){
+    btn.classList.remove('visible');
+    return;
+  }
+  try{
+    const editor = editorEl.editor;
+    const rect = editor.getClientRectAtPosition(editor.getSelectedRange()[0]);
+    let anchorX, top, height;
+    if(rect && (rect.width || rect.height)){
+      // Caso normal: la posición real del cursor (un rectángulo estrecho,
+      // el de un carácter) — el botón se pega a su izquierda (ver
+      // transform en css/editor.css, que desplaza el propio ancho del
+      // botón, no hace falta calcularlo aquí).
+      anchorX = rect.left; top = rect.top; height = rect.height;
+    } else {
+      // Un párrafo recién creado (Intro) y aún vacío no tiene ningún
+      // carácter que darle una posición — getClientRectAtPosition devuelve
+      // null en ese caso (comprobado con Playwright), aunque es,
+      // precisamente, el caso más habitual para querer indentarlo desde el
+      // principio. Se usa el propio bloque (el <div>/<h1>/... que contiene
+      // la selección) como aproximación — su borde izquierdo (donde
+      // empezaría a escribirse, salvo alineación centrada/derecha, caso
+      // raro para este botón que no vale la pena complicar más).
+      const sel = window.getSelection();
+      let node = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+      if(node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+      const block = node && editorEl.contains(node) ? node.closest('div,h1,li,blockquote') : null;
+      const brect = block ? block.getBoundingClientRect() : null;
+      if(!brect || (!brect.width && !brect.height)){ btn.classList.remove('visible'); return; }
+      anchorX = brect.left; top = brect.top; height = brect.height;
+    }
+    btn.style.left = anchorX + 'px';
+    btn.style.top = (top + height / 2) + 'px';
+    btn.classList.add('visible');
+  }catch(_e){ btn.classList.remove('visible'); }
+}
+
+function _tdWireTabButton(){
+  const editorEl = document.getElementById('tdEditor');
+  const btn = document.getElementById('tdTabBtn');
+  if(!editorEl || !btn) return;
+  editorEl.addEventListener('trix-selection-change', _tdSyncTabButton);
+  editorEl.addEventListener('trix-change', _tdSyncTabButton);
+  // Al enfocar por primera vez un párrafo vacío no hay ningún cambio de
+  // selección "desde" nada (trix-selection-change puede no llegar a
+  // dispararse) — comprobado con Playwright: sin este listener aparte, el
+  // botón no aparecía hasta el primer cambio real de selección.
+  editorEl.addEventListener('focus', () => setTimeout(_tdSyncTabButton, 0));
+  editorEl.addEventListener('blur', () => btn.classList.remove('visible'));
+  // pointerdown + preventDefault, no click: mismo motivo que el resto de
+  // botones de esta zona del archivo (fuente/tamaño/alineación/párrafo) —
+  // con "click" el editor ya habría perdido el foco/la selección real para
+  // cuando llega el evento, y aquí hace falta la posición EXACTA del
+  // cursor en ese instante para insertar el tabulador en el sitio correcto.
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const editor = editorEl.editor;
+    if(!editor) return;
+    editor.insertString('\t');
+    _tdSyncTabButton();
+  });
+}
 
 // ── Paginación EN VIVO mientras se escribe (hojas A4 reales; la línea activa
 //    se mantiene centrada y visible, incluso por debajo de la cabecera) ─────
@@ -4238,6 +4370,38 @@ function _tdRegisterCustomTrixAttributes(){
 }
 _tdRegisterCustomTrixAttributes();
 
+// ── Tabulador simple ──────────────────────────────────────────────────
+// A petición expresa de Alberto: nada de paradas personalizadas por
+// párrafo, ni tipos (izquierda/centro/derecha/decimal), ni regla visual.
+// Solo lo mínimo: pulsar Tab (PC) o el botón táctil (ver _tdWireTabButton
+// más abajo) inserta un carácter de tabulador real, y aquí se calcula
+// cuánto avanza — siempre a la cuadrícula fija por defecto, sin
+// excepciones ni configuración por párrafo. El paso de la cuadrícula es
+// el ANCHO REAL de una "M" mayúscula EN LA MISMA FUENTE/TAMAÑO del texto
+// donde se inserta el tabulador (pedido explícito de Alberto: "no debería
+// ser mayor que el ancho de una M mayúscula") — medido con ctx.measureText,
+// no un múltiplo fijo del tamaño de letra: varía bastante de una fuente a
+// otra (comprobado: ~0.92× en Lora, pero este editor permite fuentes muy
+// distintas — Bangers, Bebas Neue, Press Start 2P…), así que un valor fijo
+// sería impreciso para cualquier fuente que no fuera la que se usó para
+// calcularlo.
+const TD_TAB_MIN_ADVANCE_PX = 1; // salto mínimo hacia delante, solo para evitar un avance nulo/negativo por redondeo de coma flotante justo en el límite de una parada — con la parada a un ancho de M (mucho más estrecha que la cuadrícula anterior de 4×letra), un mínimo en em habría dominado el cálculo en vez de servir solo de margen de seguridad.
+
+// Distancia (píxeles) que debe avanzar el tabulador desde posFromIndent
+// (posición actual en la línea, relativa al inicio de la columna de texto)
+// hasta la siguiente parada de la cuadrícula — SIEMPRE hacia delante,
+// nunca a la misma posición en la que ya se está. w: la propia "palabra"
+// tabulador, con su fuente/tamaño/estilo (heredados del run donde se
+// escribió, ver tokenizador más abajo) para medir la M con esos mismos
+// ajustes — ctx ya viene con el font correcto puesto por el bucle
+// llamante en el momento de invocar esto.
+function _tdTabJump(posFromIndent, ctx, w){
+  ctx.font = _tdFontStr(w.fontSize, w.bold, w.italic, w.mono, w.fontFamily);
+  const interval = Math.max(4, ctx.measureText('M').width);
+  const gridPos = (Math.floor(posFromIndent / interval) + 1) * interval;
+  return Math.max(TD_TAB_MIN_ADVANCE_PX, gridPos - posFromIndent);
+}
+
 // ── Maquetación + paginación ────────────────────────────────────────────
 // Devuelve {pages}: array de páginas; cada página = array de líneas
 // {y, indent, kind, fontSize, marker, runs:[{text,x,width,bold,italic,strike,mono}]}
@@ -4484,9 +4648,16 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     else if(block.kind === 'quote'){ indentPx = TD_QUOTE_INDENT; }
     indentPx += (block.indent || 0) * TD_QUOTE_INDENT;
 
-    // Tokenizar runs en "palabras" preservando estilo y saltos de línea manuales
-    // (<br>). fontSize/fontFamily por palabra: los que vengan del propio run
-    // (selección con tamaño/fuente aplicados) o, si no, el tamaño base del bloque.
+    // Tokenizar runs en "palabras" preservando estilo, saltos de línea
+    // manuales (<br>) y tabuladores (\t, ver interceptor de tecla Tab en
+    // _tdInitOnce). El texto se separa por tabuladores ANTES de aplicar el
+    // separado habitual por espacios — hacerlo con una única expresión
+    // regular que incluyera \t junto a \s+ NO aísla cada tabulador de forma
+    // fiable: \s+ es voraz y absorbería un tabulador pegado a un espacio
+    // (p.ej. "Nombre: \tJuan") como parte de ESE mismo tramo de espacio,
+    // perdiéndolo como palabra "isTab" propia. Separando primero por '\t'
+    // (split de cadena simple, sin ese problema) cada tabulador queda
+    // aislado pase lo que pase alrededor.
     let words = [];
     (block.runs || []).forEach(run => {
       if(run.break){ words.push({break:true}); return; }
@@ -4494,13 +4665,21 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
       // como una "palabra" especial más; el bucle de más abajo la reconoce
       // por w.isImage y corta la línea de texto en ese punto.
       if(run.isImage){ words.push({isImage:true, src:run.src, heightEm:run.heightEm, aspect:run.aspect, widthFrac:run.widthFrac}); return; }
-      const parts = (run.text || '').split(/(\s+)/).filter(s => s.length);
-      parts.forEach(p => words.push({
-        text:p, bold: isHeading ? true : !!run.bold, italic:!!run.italic, strike:!!run.strike, mono:!!run.mono,
-        fontSize: run.fontSize ? run.fontSize * fontSizeScale : baseFontSize,
-        fontFamily: run.fontFamily || null, // null = usar richFontFamily del documento
-        isSpace: /^\s+$/.test(p)
-      }));
+      const tabSegs = (run.text || '').split('\t');
+      tabSegs.forEach((seg, segIdx) => {
+        if(segIdx > 0) words.push({
+          isTab:true, bold: isHeading ? true : !!run.bold, italic:!!run.italic, mono:!!run.mono,
+          fontSize: run.fontSize ? run.fontSize * fontSizeScale : baseFontSize,
+          fontFamily: run.fontFamily || null
+        });
+        const parts = seg.split(/(\s+)/).filter(s => s.length);
+        parts.forEach(p => words.push({
+          text:p, bold: isHeading ? true : !!run.bold, italic:!!run.italic, strike:!!run.strike, mono:!!run.mono,
+          fontSize: run.fontSize ? run.fontSize * fontSizeScale : baseFontSize,
+          fontFamily: run.fontFamily || null, // null = usar richFontFamily del documento
+          isSpace: /^\s+$/.test(p)
+        }));
+      });
     });
 
     if(words.length === 0){
@@ -4524,7 +4703,16 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     let lastLineOfBlock = null; // la última línea empujada de este bloque — el justificado no la estira (convención tipográfica: la última línea de un párrafo se queda a su ancho natural)
 
     function flushLine(){
-      while(lineRuns.length && lineRuns[lineRuns.length - 1].isSpace) lineRuns.pop();
+      // Recorta también un tabulador colgante al final de línea (no solo
+      // espacios sueltos, ya recortados antes de este cambio): un tabulador
+      // que quedó como última pieza de la línea (p.ej. el usuario pulsó Tab
+      // justo antes de un salto de línea, o el propio ajuste empujó todo lo
+      // que le seguía a la línea siguiente) no tiene contenido visible
+      // propio — dejar su anchura (a veces grande, según a qué parada
+      // apuntara) metida en la línea desvirtuaría el centrado/alineación a
+      // la derecha/justificado de ESA línea sin que se vea nada que lo
+      // justifique.
+      while(lineRuns.length && (lineRuns[lineRuns.length - 1].isSpace || lineRuns[lineRuns.length - 1].isTab)) lineRuns.pop();
       // Línea vacía (p.ej. dos <br> seguidos, sin ninguna palabra real entre
       // ellos) — nunca se fijó lineMaxFontSize, se usa el tamaño por
       // defecto del bloque como única opción razonable para su altura.
@@ -4559,6 +4747,33 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         // — y como esa desviación nunca se corregía sola en los saltos
         // siguientes, se iba arrastrando y creciendo página tras página.
         curLineStartOffset = charsSoFar;
+        return;
+      }
+      if(w.isTab){
+        // Tabulador simple (tecla Tab en PC o botón táctil, ver
+        // _tdInitOnce/_tdWireTabButton): siempre a la cuadrícula fija por
+        // defecto, sin paradas personalizables — pedido explícito de
+        // Alberto. No dibuja nada por sí mismo (run con text:'' —
+        // _drawRichLines/_drawRichTextLines no hacen nada con texto vacío,
+        // no hace falta tocarlos), solo aporta la anchura del salto
+        // calculada por _tdTabJump como si fuera una "palabra" de ancho fijo.
+        const availT = Math.max(20, textW - indentPx);
+        let jump = _tdTabJump(lineWidth, ctx, w);
+        // Si el salto no cabe ya en lo que quede de línea Y la línea tiene
+        // contenido previo, cortar aquí y volver a resolver desde el
+        // principio de una línea nueva — igual criterio que una palabra
+        // normal que no cabe (más abajo). Sin bucle: si aun así no cupiera
+        // al principio de una línea en blanco (indent muy grande — caso
+        // raro pero posible), se deja pasar tal cual en vez de intentar
+        // partirlo de nuevo, evitando cualquier riesgo de bucle infinito.
+        if(lineWidth + jump > availT && lineRuns.length > 0){
+          flushLine();
+          jump = _tdTabJump(0, ctx, w);
+        }
+        if(lineRuns.length === 0) curLineStartOffset = charsSoFar;
+        lineRuns.push({text:'', width:jump, isTab:true, isSpace:false, x:0});
+        lineWidth += jump;
+        charsSoFar += 1; // el propio carácter \t — mismo recuento verbatim que _tdBlocksFlatText
         return;
       }
       if(w.isImage){

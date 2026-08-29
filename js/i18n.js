@@ -417,6 +417,8 @@ const TRANSLATIONS = {
     td_alignCenter:         "Centrado",
     td_alignRight:          "A la derecha",
     td_alignJustify:        "Justificado",
+    // Barra de tabuladores (regla) — ver _tdWireRuler en editor-textdoc.js.
+    td_tabBtnTitle:         "Insertar tabulador",
     td_undo:                "Deshacer",
     td_redo:                "Rehacer",
     td_boldTitle:           "Negrita",
@@ -1431,6 +1433,8 @@ const TRANSLATIONS = {
     td_alignCenter:         "Center",
     td_alignRight:          "Right",
     td_alignJustify:        "Justify",
+    // Tab-stop ruler — see _tdWireRuler in editor-textdoc.js.
+    td_tabBtnTitle:         "Insert tab",
     td_undo:                "Undo",
     td_redo:                "Redo",
     td_boldTitle:           "Bold",

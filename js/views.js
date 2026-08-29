@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.94</footer>
+    <footer class="app-version">v38.98</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1318,6 +1318,11 @@ Router.register('editor', {
         <div class="td-rz-handle td-rz-sw" data-corner="sw"></div>
         <div class="td-rz-handle td-rz-se" data-corner="se"></div>
       </div>
+      <!-- Botón de tabulador táctil — ver _tdWireTabButton en
+           editor-textdoc.js. Solo aparece pegado al cursor cuando está
+           exactamente al principio de un párrafo; hace lo mismo que la
+           tecla Tab (que el teclado de Android no tiene). -->
+      <button type="button" id="tdTabBtn" aria-hidden="true" tabindex="-1" data-i18n-title="td_tabBtnTitle" title="Insertar tabulador">⇥</button>
     </div>
 
     <div id="edBrushCursor"></div>

@@ -3157,6 +3157,24 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
   font-size: 1.05rem;
   line-height: 1.6;
   color: var(--ink);
+  /* BUG REAL ENCONTRADO Y CORREGIDO (Playwright, con teclado real — no un
+     caso hipotético): sin esto, insertar un tabulador real (tecla Tab, ver
+     _tdWireRuler/interceptor de Tab en _tdInitOnce) deja el cursor
+     lógicamente bien situado (Trix y document.getSelection() lo confirman
+     los dos) pero la SIGUIENTE letra escrita aterriza ANTES del tabulador
+     en vez de después — el white-space por defecto del navegador colapsa
+     el tabulador de un modo que descoloca dónde el propio navegador cree
+     que debe insertarse el siguiente carácter al escribir con teclado real,
+     aunque la posición lógica reportada sea correcta. pre-wrap es el
+     tratamiento estándar para editores de texto enriquecido que necesitan
+     tabuladores/espacios múltiples significativos, y de paso hace que la
+     vista previa en vivo COINCIDA con el lienzo final: _tdLayoutPages ya
+     mide cada espacio con su ancho real (ctx.measureText, sin colapsar)
+     para el dibujo final, así que esto solo alinea lo que se VE mientras
+     se escribe con lo que YA se dibujaba en el lienzo. Sigue ajustando el
+     texto al ancho del contenedor con normalidad (a diferencia de
+     white-space:pre, que fuerza scroll horizontal). */
+  white-space: pre-wrap;
 }
 .td-editor h1 {
   font-family: 'Lora', serif;
@@ -3229,3 +3247,34 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
 #tdImgResizeBox .td-rz-ne { left: 100%; top: 0;   cursor: nesw-resize; }
 #tdImgResizeBox .td-rz-sw { left: 0;   top: 100%; cursor: nesw-resize; }
 #tdImgResizeBox .td-rz-se { left: 100%; top: 100%; cursor: nwse-resize; }
+
+/* Botón de tabulador táctil — ver _tdWireTabButton en editor-textdoc.js.
+   Aparece pegado a la IZQUIERDA de la primera letra del párrafo, SOLO
+   cuando el cursor está justo ahí; hace lo mismo que la tecla Tab (que el
+   teclado de Android no tiene) — por eso solo se muestra en dispositivos
+   táctiles (ver _tdIsTouchPrimary), nunca en PC, donde ya está la propia
+   tecla. position:fixed + left/top puestos por JS en cada cambio de
+   selección, con el punto de referencia siendo el INICIO del texto (o de
+   la línea vacía) — translate(calc(-100% - 4px), -50%) coloca el BORDE
+   DERECHO del botón 4px a la izquierda de ese punto (en vez de calcular a
+   mano el ancho del botón en JS) y lo centra verticalmente sobre la línea. */
+#tdTabBtn {
+  display: none;
+  position: fixed;
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  border: 1.5px solid #1A1A1A;
+  background: #fff;
+  color: #1A1A1A;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  z-index: 750;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  transform: translate(calc(-100% - 4px), -50%);
+}
+#tdTabBtn.visible { display: flex; align-items: center; justify-content: center; }
+
+
+
