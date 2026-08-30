@@ -1511,7 +1511,7 @@ window.addEventListener('resize', () => {
 // A diferencia de _edUpdateTitlePill (que va desde el borde de la PÁGINA,
 // por ser la topbar principal), aquí la franja va desde el borde de la
 // VENTANA, ya que son modales centrados, no barras a todo lo ancho.
-const _edWinTitleHeaderSel = '.ed-modal-header, .ed-fulloverlay-header, #edShortcutsModal .sc-header, #edAnimTutorialModal .sc-header, #edHelpRefModal .sc-header';
+const _edWinTitleHeaderSel = '.ed-modal-header, .ed-fulloverlay-header, #edShortcutsModal .sc-header, #edHelpRefModal .sc-header';
 const _edWinTitleSel = '.ed-modal-title, .ed-fulloverlay-title, .sc-title';
 function _edFitWindowTitlePill(header){
   if (!header || header.offsetParent === null) return; // oculto: no medir
@@ -1547,7 +1547,7 @@ function _edInitWindowTitlePillObserver(){
     window._edWinTitlePillRaf = requestAnimationFrame(_edFitAllWindowTitlePills);
   };
   const _obs = new MutationObserver(_cb);
-  ['edProjectModal','edShortcutsModal','edAnimTutorialModal','edHelpRefModal','edMpBehaviourModal','edSaveChoiceModal'].forEach(id => {
+  ['edProjectModal','edShortcutsModal','edHelpRefModal','edMpBehaviourModal','edSaveChoiceModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el) _obs.observe(el, { attributes: true, attributeFilter: ['class'] });
   });
@@ -23238,6 +23238,45 @@ const _edHelpContent = {
     `;
     })()
   },
+  'gcp-anim': {
+    title: I18n.t('gcp_helpAnimTitle'),
+    body: (() => {
+    // Iconos: MISMO glifo/estilo que los botones reales de la Matriz y la
+    // barra superior del editor de animaciones (ver, en este mismo archivo,
+    // los botones ojo/interpolación/▲▼/T dentro de la construcción de
+    // gcpFramesBar, y gcpPreviewBtn/gcpSaveFrameBtn/gcpAddFrameBtn/
+    // gcpSaveAppBtn/pp-path-btn en views.js) — todos son texto/emoji
+    // sencillos en la UI real (no imágenes SVG), así que se reproducen tal
+    // cual en vez de inventar un dibujo aparte, con un pequeño marco a
+    // juego con el estilo real del botón cuando lo tiene (círculo, chip…).
+    const icoEye = '👁';
+    const icoInsert = '📥';
+    const icoAddFrame = '<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--black);color:var(--white);font-size:14px;font-weight:900;line-height:1;vertical-align:middle;flex-shrink:0;">＋</span>';
+    const icoSaveFrame = '<span style="display:inline-block;white-space:nowrap;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:2px 8px;font-weight:700;font-size:.78rem;vertical-align:middle;">💾 Frame</span>';
+    const icoInterp = '<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--gray-300);color:var(--gray-400);font-size:11px;font-weight:900;vertical-align:middle;flex-shrink:0;">⟳</span>';
+    const icoUpDown = '<span style="display:inline-flex;gap:3px;vertical-align:middle;color:var(--gray-500);font-weight:900;font-size:13px;flex-shrink:0;"><span>▲</span><span>▼</span></span>';
+    const icoTime = '<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:7px;border:1px solid var(--gray-300);color:var(--gray-600);font-size:12px;font-weight:900;vertical-align:middle;flex-shrink:0;">T</span>';
+    const icoPreview = '<span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:20px;border-radius:4px;background:var(--black);color:var(--white);font-size:10px;vertical-align:middle;flex-shrink:0;">▶</span>';
+    // Mismo texto exacto (con su propio emoji 🛤️ ya incluido) que usa el
+    // botón real pp-path-btn — ver op_addPathBtn en i18n.js.
+    const icoAddPath = '<span style="display:inline-block;white-space:nowrap;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:2px 8px;font-weight:900;font-size:.78rem;vertical-align:middle;">' + I18n.t('op_addPathBtn') + '</span>';
+    return `
+      <div style="margin-bottom:14px"><b>1.</b> ${I18n.t('gcp_helpAnimP1')}</div>
+      <div style="margin-bottom:14px"><b>2.</b> ${I18n.t('gcp_helpAnimP2')}</div>
+      <div style="margin-bottom:14px"><b>3.</b> ${I18n.t('gcp_helpAnimP3', { saveFrame: icoSaveFrame })}</div>
+      <div style="margin-bottom:14px"><b>4.</b> ${I18n.t('gcp_helpAnimP4', { addFrame: icoAddFrame })}</div>
+      <div style="margin-bottom:14px"><b>5.</b> ${I18n.t('gcp_helpAnimP5', { eye: icoEye })}</div>
+      <div style="margin-bottom:14px"><b>6.</b> ${I18n.t('gcp_helpAnimP6', { interp: icoInterp })}</div>
+      <div style="margin-bottom:14px"><b>7.</b> ${I18n.t('gcp_helpAnimP7', { updown: icoUpDown })}</div>
+      <div style="margin-bottom:14px"><b>8.</b> ${I18n.t('gcp_helpAnimP8', { time: icoTime })}</div>
+      <div style="margin-bottom:14px"><b>9.</b> ${I18n.t('gcp_helpAnimP9')}</div>
+      <div style="margin-bottom:14px"><b>10.</b> ${I18n.t('gcp_helpAnimP10', { preview: icoPreview })}</div>
+      <div style="margin-bottom:14px"><b>11.</b> ${I18n.t('gcp_helpAnimP11', { insert: icoInsert })}</div>
+      <div style="margin-bottom:14px"><b>12.</b> ${I18n.t('gcp_helpAnimP12', { addPath: icoAddPath })}</div>
+      <div><b>13.</b> ${I18n.t('gcp_helpAnimP13')}</div>
+    `;
+    })()
+  },
 };
 
 function _edHelpDismissedKey() {
@@ -28643,15 +28682,7 @@ function EditorView_init(){
   });
   $('dd-anim-tutorial')?.addEventListener('click', () => {
     edCloseMenus();
-    const m = document.getElementById('edAnimTutorialModal');
-    if (m) m.classList.add('open');
-  });
-  $('edAnimTutorialClose')?.addEventListener('click', () => {
-    document.getElementById('edAnimTutorialModal')?.classList.remove('open');
-  });
-  document.getElementById('edAnimTutorialModal')?.addEventListener('pointerdown', e => {
-    if (e.target === document.getElementById('edAnimTutorialModal'))
-      document.getElementById('edAnimTutorialModal').classList.remove('open');
+    _edHelpShowRef('gcp-anim');
   });
   // ── Ventanas de ayuda también accesibles desde el menú Ayuda ──
   // Mismo contenido/iconos que la ventana emergente (_edHelpContent), pero
@@ -28684,7 +28715,7 @@ function EditorView_init(){
   // listeners globales del editor — en concreto edOnMove (registrado sobre
   // document), que paneaba la cámara del canvas al hacer scroll dentro del
   // cuerpo del modal en vez de scrollear el propio modal.
-  ['edShortcutsModal', 'edAnimTutorialModal', 'edHelpRefModal', 'edProjectModal', 'edSaveChoiceModal'].forEach(_mid => {
+  ['edShortcutsModal', 'edHelpRefModal', 'edProjectModal', 'edSaveChoiceModal'].forEach(_mid => {
     const _mEl = document.getElementById(_mid);
     if (!_mEl) return;
     ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
@@ -29492,9 +29523,6 @@ function EditorView_init(){
       // Cerrar modal de atajos si está abierto
       const scModal = document.getElementById('edShortcutsModal');
       if(scModal && scModal.classList.contains('open')){ scModal.classList.remove('open'); return; }
-      // Cerrar modal de animaciones si está abierto
-      const atModal = document.getElementById('edAnimTutorialModal');
-      if(atModal && atModal.classList.contains('open')){ atModal.classList.remove('open'); return; }
       // Cerrar modal de guardado si está abierto
       const saveModal=document.querySelector('div[style*="z-index:99999"]');
       if(saveModal){ e.preventDefault(); saveModal.remove(); return; }
@@ -37958,6 +37986,11 @@ function gcpOpen(edLayerIdx) {
 
   // Mostrar overlay y bloqueante
   shell.style.display = 'block';
+  // Ayuda "Crear Animación" — se abre sola la primera vez (o siempre que no
+  // se haya marcado "No volver a mostrar"), mismo sistema que el resto de
+  // ayudas de la app (_edHelpContent/edHelpRefModal, ver más arriba en este
+  // archivo) — sin ventana propia duplicada.
+  edHelpShow('gcp-anim');
   // La primera llamada a _gcpUpdateTitlePill() (más arriba, justo tras fijar el
   // texto) se hace con gcpShell aún en display:none — getBoundingClientRect()
   // devuelve tamaño 0 y la píldora nunca se dibuja. Recalcular ahora que el
@@ -38025,8 +38058,7 @@ function gcpOpen(edLayerIdx) {
     });
     document.getElementById('gcp-dd-anim-tutorial')?.addEventListener('click', () => {
       _gcpCloseAllDropdowns();
-      const m = document.getElementById('edAnimTutorialModal');
-      if (m) m.classList.add('open');
+      _edHelpShowRef('gcp-anim');
     });
     document.getElementById('gcpBibBtn')?.addEventListener('click', () => {
       const panel = $('edOptionsPanel');

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v38.101</footer>
+    <footer class="app-version">v39.04</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -610,7 +610,7 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-help">
               <button class="ed-dropdown-item" id="dd-help-editor" data-i18n="ed_helpEditorTitle">Editor</button>
               <button class="ed-dropdown-item" id="dd-shortcuts" data-i18n="ed_shortcuts">Atajos de teclado</button>
-              <button class="ed-dropdown-item" id="dd-anim-tutorial" data-i18n="ed_createAnimations">Crear animaciones</button>
+              <button class="ed-dropdown-item" id="dd-anim-tutorial" data-i18n="ed_createAnimations">Crear Animación</button>
               <button class="ed-dropdown-item" id="dd-help-draw-tools" data-i18n="ed_drawTools">Herramientas de dibujo</button>
               <button class="ed-dropdown-item" id="dd-help-vector" data-i18n="ed_helpVectorTitle">Dibujo vectorial</button>
             </div>
@@ -963,19 +963,6 @@ Router.register('editor', {
       </div>
     </div>
 
-    <!-- Modal de tutorial Crear animaciones -->
-    <div id="edAnimTutorialModal">
-      <div class="sc-box">
-        <div class="sc-header">
-          <span class="sc-title" data-i18n="ed_createAnimations">Crear animaciones</span>
-          <button class="sc-close" id="edAnimTutorialClose">✕</button>
-        </div>
-        <div class="sc-body">
-          <p style="text-align:center;color:var(--gray-500);font-style:italic;padding:24px 0;" data-i18n="ed_comingSoon">Próximamente...</p>
-        </div>
-      </div>
-    </div>
-
     <!-- Modal de ayuda de referencia (menú Ayuda): mismo contenido que las
          ventanas de ayuda emergentes, con el estilo común de "Atajos de
          teclado" — accesible siempre, aunque el usuario haya marcado
@@ -1139,7 +1126,7 @@ Router.register('editor', {
             <button class="ed-menu-btn" data-gcpmenu="gcp-help" data-i18n="ed_menuHelp">Ayuda ▾</button>
             <div class="ed-dropdown" id="gdd-gcp-help">
               <button class="ed-dropdown-item" id="gcp-dd-shortcuts" data-i18n="ed_shortcuts">Atajos de teclado</button>
-              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial" data-i18n="ed_createAnimations">Crear animaciones</button>
+              <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial" data-i18n="ed_createAnimations">Crear Animación</button>
             </div>
           </div>
         </div>
