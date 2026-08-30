@@ -2410,7 +2410,14 @@ body.ed-scale-tablet .ed-fulloverlay-box {
    obligatorio: gcpShell (el contenedor raíz) tiene pointer-events:none. */
 #gcpQuickTools {
   position: absolute;
-  top: 92px;   /* gcpTopbar (52px) + gcpMenuBar (40px) */
+  /* Centrada verticalmente en el canvas visible (todo lo que queda por
+     debajo de gcpTopbar+gcpMenuBar, 92px) — petición de Alberto, igual que
+     ya estaba #edQuickTools en el editor general (antes aquí se quedaba
+     fija pegada justo debajo de esa franja, sin centrar). Se sigue
+     calculando desde ese mismo 92px para no descuadrarse si esa altura
+     cambiara. */
+  top: calc(92px + (100% - 92px) / 2);
+  transform: translateY(-50%);
   left: 0;
   z-index: 510;
   display: flex;
@@ -2479,10 +2486,18 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
    ENCIMA de gcpShell (que sí acota su z-index local a 500 desde la raíz),
    mostrando "Hoja X de Y" en vez de la barra de fotogramas de GCP. El
    forzado en JS (_edPageJumpCloseBar en gcpOpen) cubre el estado; esto es
-   el respaldo visual/táctil por si acaso. */
+   el respaldo visual/táctil por si acaso.
+   AÑADIDO — petición de Alberto: el propio #edQuickTools (deshacer/rehacer/
+   lupa) también se ocultaba por completo aquí (no solo edPageJumpToggle,
+   ya cubierto arriba): como el canvas de GCP (#gcpCanvas) es transparente
+   por diseño (para ver el dibujo de fondo mientras se anima), la barra del
+   editor GENERAL se seguía viendo A TRAVÉS de él — su propio #gcpQuickTools
+   (mismos tres botones) ya existe para GCP, así que el de abajo sobraba y
+   además confundía (dos barras casi idénticas superpuestas). */
 #editorShell.gcp-open #edPageJumpToggle,
 #editorShell.gcp-open #edPageJumpBar,
-#editorShell.gcp-open #edPageJumpScrim {
+#editorShell.gcp-open #edPageJumpScrim,
+#editorShell.gcp-open #edQuickTools {
   display: none !important;
 }
 
