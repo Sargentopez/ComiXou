@@ -547,6 +547,28 @@ function _tdRegisterBackInterceptor(){
     }
     const shell = document.getElementById('tdShell');
     if(shell && shell.style.display !== 'none' && shell.style.display !== ''){
+      // BUG CORREGIDO (reportado por Alberto: "casos en los que no detecta
+      // cambios y se sale directamente"): con cambios sin guardar, el
+      // botón/gesto atrás cerraba directamente sin preguntar —
+      // edCloseTextDoc(true) se salta a propósito la comprobación de
+      // _tdDirty (ver su comentario: no se puede "cancelar" un popstate ya
+      // consumido). El navegador YA sacó de la pila la entrada
+      // {tdShellOpen:true} de edOpenTextDoc antes de que este interceptor se
+      // ejecute — no hay forma de recuperar ESA entrada exacta, pero SÍ se
+      // puede reponer una equivalente ahora mismo (pushState no dispara
+      // popstate, así que esto no reentra en este interceptor) para que la
+      // pila quede tal cual estaba antes del atrás. Con eso repuesto, el
+      // mismo aviso del botón de cerrar (_tdShowSavePrompt) sirve tal cual:
+      // si el usuario confirma guardar o descartar, edCloseTextDoc()/
+      // _tdApplyToCanvas ya saben hacer su propio history.back() (ver
+      // finishClose), porque history.state.tdShellOpen vuelve a ser true. Si
+      // el usuario toca fuera del cuadro (cancelar), la pila también se
+      // queda correcta tal cual, sin tocar nada más.
+      if(_tdDirty){
+        history.pushState({ tdShellOpen: true }, '', location.href);
+        _tdShowSavePrompt();
+        return true;
+      }
       edCloseTextDoc(true); // true: ya se consumió la entrada de historial vía popstate
       return true;
     }
@@ -5298,6 +5320,17 @@ function _tdApplyToCanvas(){
         pg.layers = pg.layers || [];
         pg.layers.push(_tdMakeTextLayer(pages[i], _tdNewFlowOwnerAssigned ? '' : html, flowId, lineHeightMult, undefined, []));
         _tdNewFlowOwnerAssigned = true;
+        // BUG CORREGIDO (reportado por Alberto: "asegúrate de que cada
+        // cambio ensucia su hoja o hojas correspondientes"): esta hoja YA
+        // EXISTÍA antes de crear este texto y acaba de recibir una capa
+        // nueva — sin marcarla sucia individualmente aquí, solo la hoja
+        // "actual" quedaba marcada (más abajo, vía edPushHistory → startIdx
+        // únicamente). Con un texto nuevo que ocupara varias hojas ya
+        // existentes, todas las hojas salvo la primera se saltaban el
+        // guardado en nube (que decide qué subir mirando solo estos flags —
+        // ver _edPageDirtyCloud/_dirtyPageIndices) y no se detectaban como
+        // pendientes de guardar.
+        if (typeof _edMarkPageDirty === 'function') _edMarkPageDirty(pg);
       }
       // Si el texto sigue más allá de las hojas ya existentes, las que faltan
       // se crean nuevas al final — con la orientación de la última hoja de la obra.

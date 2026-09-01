@@ -4075,6 +4075,17 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   '#edFsBtn',                     // pantalla completa
   '#edDiagBtn',                   // diagnóstico
   '#edHelpRefModal',              // ventana de ayuda entera (contenido, cerrar, "no volver a mostrar")
+  // BUG CORREGIDO (expuesto al arreglar _edHasUnsavedLocalChanges — ver su
+  // comentario): #edBackBtn (salir del editor) faltaba en esta lista. Salir
+  // no modifica el contenido de la obra, igual que #edPagePrev/#edPageNext
+  // de arriba — pero al faltar aquí, el simple gesto de pulsar "salir"
+  // ensuciaba la hoja activa como efecto colateral, ANTES de que el propio
+  // botón llegara a comprobar si de verdad hay cambios sin guardar. Con el
+  // aviso de salida ahora basado en el seguimiento granular por página (más
+  // fiable que el contador de deshacer/rehacer de antes), ese efecto
+  // colateral disparaba el aviso SIEMPRE al salir, incluso en una obra
+  // recién creada e intacta.
+  '#edBackBtn',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
@@ -4112,6 +4123,32 @@ function _edPageDirtyCloud(p) {
   if (p._dirtyCloud !== false) return true;
   if (typeof p._dirtyCountCloud !== 'number') return true; // nunca establecido → sucia por defecto
   return p._dirtyCountCloud !== 0;
+}
+// ¿Hay algo sin guardar LOCALMENTE en la obra entera? — fuente única para el
+// aviso al cerrar la obra, el autoguardado, y el aviso nativo del navegador
+// (beforeunload).
+//
+// BUG CORREGIDO (reportado por Alberto: "he detectado casos en los que no
+// detecta cambios y se sale directamente"). Los tres sitios de arriba
+// comparaban antes edHistoryIdx !== _edSavedHistoryIdx — pero edHistory se
+// reinicia POR COMPLETO en cada cambio de hoja (ver edLoadPage: "cambio de
+// hoja real → reiniciar el historial de deshacer/rehacer por completo"), así
+// que edHistoryIdx es un contador que empieza de cero en CADA hoja distinta
+// y no guarda ninguna relación con _edSavedHistoryIdx, que es un único
+// número global capturado en el momento del último guardado explícito —
+// posiblemente estando en OTRA hoja. Con valores pequeños y muy repetidos
+// como 0 o 1 (típico de "edité un texto y apliqué", una sola llamada a
+// edPushHistory por aplicación — ver _tdApplyToCanvas/_tdReflowFlowInPlace),
+// esos dos contadores podían coincidir por pura casualidad aunque hubiera
+// cambios reales sin guardar en una hoja distinta a la del último guardado
+// — la app entonces no detectaba nada y salía/no avisaba/no autoguardaba.
+// El seguimiento granular por página (_edPageDirtyLocal/_edMarkPageDirty)
+// ya existe, ya es la fuente que usa el guardado real para decidir qué
+// reserializar, y no depende de en qué hoja esté el usuario ahora mismo —
+// así que es la fuente correcta para esta pregunta también.
+function _edHasUnsavedLocalChanges() {
+  if (window._edPagesStructureDirtyLocal) return true;
+  return edPages.some(p => _edPageDirtyLocal(p));
 }
 
 function edPushHistory(force, movedLayer){
@@ -25681,7 +25718,10 @@ async function _edAutosaveWrite() {
   // No escribir si las páginas están vacías (edLoadProject aún no completó)
   if (edPages.every(p => !p.layers || p.layers.length === 0)) return;
   // Solo escribir si hay cambios reales desde el último guardado explícito
-  if (edHistoryIdx === _edSavedHistoryIdx) return;
+  // — ver _edHasUnsavedLocalChanges (antes comparaba edHistoryIdx con
+  // _edSavedHistoryIdx, que no detectaba cambios hechos en una hoja distinta
+  // a la del último guardado).
+  if (!_edHasUnsavedLocalChanges()) return;
   try {
     // Incluir biblioteca en el snapshot
     let bibData = null;
@@ -26032,11 +26072,22 @@ async function edLoadProject(id){
       return _newPage;
     });
   }else{
-    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical',_dirtyCountLocal:1,_dirtyCountCloud:1}];
+    // BUG CORREGIDO (expuesto al arreglar el punto 3 de más abajo —
+    // _edHasUnsavedLocalChanges): esta hoja en blanco de una obra RECIÉN
+    // CREADA nunca fijaba _dirtyLocal, así que _edPageDirtyLocal la daba por
+    // sucia desde el primer instante (undefined !== false) sin que la
+    // persona hubiera tocado nada todavía — con el aviso de "cambios sin
+    // guardar" ahora basado en ese mecanismo granular (más fiable que el
+    // contador de deshacer/rehacer, ver el comentario junto a
+    // _edHasUnsavedLocalChanges), toda obra nueva disparaba el aviso al
+    // salir aunque estuviera intacta. Una hoja en blanco recién creada no
+    // tiene contenido real que perder, así que empieza limpia en LOCAL —
+    // la nube se deja tal cual (sigue sin existir en ningún sitio todavía).
+    edOrientation='vertical';edPages=[{layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:'vertical',_dirtyLocal:false,_dirtyCountLocal:0,_dirtyCountCloud:1}];
     edRules=[];
     edRuleNodes=[];
   }
-  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',_dirtyCountLocal:1,_dirtyCountCloud:1});
+  if(!edPages.length)edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',_dirtyLocal:false,_dirtyCountLocal:0,_dirtyCountCloud:1});
   edCurrentPage=0;edLayers=edPages[0].layers;
   // Aplicar la orientación REAL de la primera hoja (puede diferir de la orientación global de la obra)
   edOrientation = edPages[0].orientation || edOrientation;
@@ -28462,7 +28513,7 @@ function EditorView_init(){
       return;
     }
 
-    const hasUnsaved = edHistoryIdx !== _edSavedHistoryIdx;
+    const hasUnsaved = _edHasUnsavedLocalChanges();
     if (!hasUnsaved) {
       // Esperar a que biblioteca IDB haya completado antes de salir
       if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-works'));
@@ -29326,7 +29377,7 @@ function EditorView_init(){
   _edAutosaveStart();
   // Aviso nativo al cerrar pestaña/navegador si hay cambios sin guardar
   window._edBeforeUnloadFn = e => {
-    if (edHistoryIdx !== _edSavedHistoryIdx) {
+    if (_edHasUnsavedLocalChanges()) {
       e.preventDefault();
       e.returnValue = '';
     }
