@@ -1294,8 +1294,27 @@ const SupabaseClient = (() => {
         // práctico de tamaño de petición y fallar la sincronización sin avisar.
         const _ldRaw = JSON.stringify(_payload);
         const _ld = _ldRaw.length >= _CZ_MIN ? await _czCompress(_ldRaw) : _ldRaw;
+        // BUG CORREGIDO — el cuello de botella real de "la biblioteca no
+        // sincroniza" (reportado por Alberto tras varios intentos previos
+        // que no llegaban a la causa). biblioteca.id es PRIMARY KEY GLOBAL
+        // en Supabase (ver CARTA_SIGUIENTE_INSTANCIA_v12_58, SQL original de
+        // la tabla) — a diferencia de folder_id, que sí lleva el prefijo
+        // workId:: desde v12.73 para aislar por obra. La biblioteca está
+        // pensada a propósito para reutilizarse ENTRE obras (mismo objeto,
+        // mismo id local, usado en varias) — así que en cuanto ese id ya
+        // está insertado en la nube desde OTRA obra (p.ej. "otra obra
+        // distinta se guardó bien" que compartía recursos con esta), el
+        // INSERT de ESTA obra choca con la clave ya existente. bibSync
+        // manda todas las filas en una única petición POST — un solo choque
+        // de clave hace fallar la subida ENTERA, sin relación con el
+        // tamaño de nada (de ahí que ningún objeto pareciera "muy grande").
+        // Se prefija también el id de fila con workId:: — igual que ya se
+        // hace con folder_id — para que cada obra tenga su propia copia con
+        // clave única en la nube. bibDownload deshace este mismo prefijo al
+        // reconstruir el id local, con el mismo criterio que ya usa para
+        // folder_id.
         rows.push({
-          id:          entry.id,
+          id:          prefix + entry.id,
           author_id:   authorId,
           layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
           layer_data:  _ld,
@@ -1405,8 +1424,12 @@ continue;
             _apngSrc = await _animDownload(r.anim_url);
           } catch(e) { console.warn('bibDownload APNG:', e); }
         }
+        // Deshacer el prefijo workId:: del id de fila (ver bibSync) —
+        // mismo criterio que ya se usa arriba para folder_id/fid, para que
+        // el id local reconstruido sea idéntico al que tenía antes de subir.
+        const _rid = prefix && r.id.startsWith(prefix) ? r.id.slice(prefix.length) : r.id;
         folderMap.get(fid).items.push({
-          id:             r.id,
+          id:             _rid,
           timestamp:      new Date(r.created_at).getTime(),
           isGroup:        false,
           isGifAnim:      true,
@@ -1435,8 +1458,11 @@ continue;
         delete _layerDataClean._orientation;
         delete _layerDataClean._isGroup;
         delete _layerDataClean._layers;
+        // Deshacer el prefijo workId:: del id de fila (ver bibSync y la
+        // misma corrección en la rama gif de arriba).
+        const _rid = prefix && r.id.startsWith(prefix) ? r.id.slice(prefix.length) : r.id;
         const _item = {
-          id:            r.id,
+          id:            _rid,
           timestamp:     new Date(r.created_at).getTime(),
           isGroup:       _isGroup,
           layerData:     _isGroup ? null : _layerDataClean,
