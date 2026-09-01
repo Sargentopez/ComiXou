@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.07</footer>
+    <footer class="app-version">v39.08</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -398,16 +398,11 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto,
-             v37.32): usado durante la investigación del bug "salto de
-             página del editor de textos no coincide con el editor
-             general" (resuelto en v37.30-v37.32 — ver
-             CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo).
-             Para volver a mostrarlo, descomentar la línea siguiente; toda
-             la instrumentación (_edRepairDuplicateIds, _edFCL/
-             window._edFCLog) sigue activa en editor.js aunque el botón
-             esté oculto. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+        <!-- Botón de diagnóstico — vuelto a mostrar a petición explícita de
+             Alberto (para investigar por qué la biblioteca de una obra no
+             sube a la nube). Si vuelve a sobrar, comentar la línea de abajo
+             de nuevo (mismo criterio que la vez anterior, v37.32). -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 

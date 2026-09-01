@@ -66,7 +66,23 @@ async function _czCompress(jsonStr) {
       for (let j = i; j < end; j++) bin += String.fromCharCode(merged[j]);
       b64 += btoa(bin);
     }
-    return _CZ_PFX + b64;
+    const _compressed = _CZ_PFX + b64;
+    // BUG CORREGIDO (reportado por Alberto: "un objeto o grupo muy grande"
+    // no se sube a la nube; confirmado con datos reales — ver comentario de
+    // bibSync/_uploadPanels). gzip apenas reduce datos de ALTA ENTROPÍA
+    // (una imagen o dibujo YA comprimido, embebido como dataUrl base64 —
+    // justo lo más probable en un objeto/grupo grande) porque ya no tienen
+    // la redundancia que gzip explota — y luego hace falta volver a
+    // codificar el resultado en base64 para poder guardarlo como texto, lo
+    // que añade ~33% MÁS por sí solo. Con contenido así, "comprimir" podía
+    // acabar dando un resultado IGUAL o MAYOR que el original — justo en
+    // los objetos con más probabilidad de rozar el límite de tamaño de
+    // subida, la "compresión" los empujaba por encima en vez de ayudar.
+    // Con datos vectoriales/repetitivos (trazos, puntos) sigue reduciendo
+    // muchísimo (comprobado: a una quinta parte) — el problema es solo con
+    // datos ya comprimidos. Arreglo estándar: quedarse con la versión
+    // comprimida SOLO si de verdad pesa menos que el original.
+    return (_compressed.length < jsonStr.length) ? _compressed : jsonStr;
   } catch(e) { return jsonStr; } // fallback: sin comprimir
 }
 

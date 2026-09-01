@@ -39811,6 +39811,73 @@ async function _edRunDiag() {
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
 
+  // ── BIBLIOTECA: tamaño real de cada objeto al subir a la nube (petición
+  // explícita de Alberto: "no sube la biblioteca... dice que puede haber un
+  // objeto o grupo muy grande"). Replica EXACTAMENTE la construcción del
+  // payload que hace bibSync (ver supabase-client.js) para cada item, y
+  // muestra tanto el tamaño en crudo como el que de verdad se enviaría tras
+  // comprimir (ver _czCompress — desde este mismo diagnóstico se detectó y
+  // corrigió que comprimir podía dar un resultado igual o mayor que el
+  // original con imágenes/dibujos ya comprimidos, justo el caso más
+  // probable en un objeto grande). No hay forma de saber desde aquí cuál es
+  // el límite exacto del servidor — se ordena de mayor a menor y se marca
+  // con ⚠️ lo que supere 1 MB ya comprimido, como referencia para localizar
+  // el candidato más probable, no como límite confirmado.
+  L('');
+  L('── BIBLIOTECA: tamaño por objeto (crudo → tras comprimir) ──');
+  try {
+    const _bib = (typeof _bibLoad === 'function') ? _bibLoad() : null;
+    if (!_bib || !Array.isArray(_bib.folders) || !_bib.folders.some(f => (f.items||[]).length)) {
+      L('  (biblioteca vacía o no cargada todavía)');
+    } else {
+      const _bibRows = [];
+      for (const folder of _bib.folders) {
+        for (const entry of (folder.items || [])) {
+          let _payload;
+          if (entry.isGifAnim) {
+            _payload = {
+              isGifAnim: true, gifDataUrl: entry.gifDataUrl, gcpFrameDelay: entry.gcpFrameDelay,
+              gcpRepeatCount: entry.gcpRepeatCount, gcpStopAtEnd: entry.gcpStopAtEnd,
+              gcpLayersData: entry.gcpLayersData || null, gcpFramesData: entry.gcpFramesData || null,
+              gcpLayerNames: entry.gcpLayerNames || null, normW: entry.normW || null, normH: entry.normH || null,
+            };
+          } else {
+            _payload = {
+              ...entry.layerData,
+              ...(entry.fillLayerData ? { _fillLayerData: entry.fillLayerData } : {}),
+              ...(entry.orientation   ? { _orientation:   entry.orientation   } : {}),
+              ...(entry.isGroup       ? { _isGroup: true, _layers: entry.layers } : {}),
+            };
+          }
+          let _raw = '';
+          try { _raw = JSON.stringify(_payload); } catch(_jse) { _raw = ''; }
+          const _rawLen = _raw.length;
+          let _finalLen = _rawLen, _comprimido = false;
+          if (_rawLen >= 512 && typeof _czCompress === 'function') {
+            try {
+              const _final = await _czCompress(_raw);
+              _finalLen = _final.length;
+              _comprimido = _final.startsWith('gz:');
+            } catch(_cze) { /* deja _finalLen = _rawLen */ }
+          }
+          _bibRows.push({
+            folder: folder.name, id: entry.id, tipo: entry.isGifAnim ? 'gif' : (entry.isGroup ? 'grupo' : ((entry.layerData && entry.layerData.type) || '?')),
+            rawKB: (_rawLen/1024).toFixed(1), finalKB: (_finalLen/1024).toFixed(1),
+            comprimido: _comprimido, finalLen: _finalLen,
+          });
+        }
+      }
+      _bibRows.sort((a,b) => b.finalLen - a.finalLen);
+      const _totalFinalKB = (_bibRows.reduce((n,r)=>n+r.finalLen,0)/1024).toFixed(1);
+      L('  ' + _bibRows.length + ' objeto(s) — total tal como se subiría: ' + _totalFinalKB + ' KB');
+      _bibRows.forEach(r => {
+        const _marca = r.finalLen > 1024*1024 ? ' ⚠️ >1MB' : '';
+        L('  [' + r.folder + '] ' + r.id + ' (' + r.tipo + '): ' + r.rawKB + ' KB → ' + r.finalKB + ' KB'
+          + (r.comprimido ? ' (comprimido)' : ' (sin comprimir' + (parseFloat(r.rawKB) >= 0.5 ? ', no ayudaba' : '') + ')') + _marca);
+      });
+    }
+  } catch(_bibDiagErr) { L('  Error calculando tamaños de biblioteca: ' + (_bibDiagErr.message || _bibDiagErr)); }
+
   // ── LOG DE CREACIÓN DE DIBUJO/RELLENO (investigación: "el relleno
   // desaparece al crear" — ver _edFCL/window._edFCLog). Se limpia solo al
   // ABRIR una sesión nueva de dibujo (_edDrawInitHistory) — reproduce el
