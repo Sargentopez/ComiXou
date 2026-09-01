@@ -1319,35 +1319,58 @@ const SupabaseClient = (() => {
     } catch(_e) { /* no bloquear si falla la limpieza */ }
 
     // Borrar todos los rows existentes del autor/workId y luego insertar limpio
-    // (merge-duplicates no borra los items que ya no existen en local)
-    if (window._authTryRefresh) await window._authTryRefresh();
-    // Borrar items de esta obra (con prefijo workId::) Y items sin prefijo del autor
-    // (items legacy sin workId que serán reinsertados con el prefijo correcto)
+    // (merge-duplicates no borra los items que ya no existen en local).
+    //
+    // BUG CORREGIDO (biblioteca de una obra seguía sin sincronizar pese a que
+    // ningún objeto se acerca al tamaño que sugería el aviso — confirmado con
+    // el diagnóstico 🩺: 716 KB en total, el mayor 164 KB). Estos DELETE
+    // usaban ".catch(()=>{})", el mismo patrón "tragar en silencio" que YA
+    // se identificó y corrigió para _animDelete/_gifDelete (ver
+    // _deleteWithRetry más arriba: token de sesión caducado → 401 en el
+    // borrado → huérfanos, silenciado sin dejar rastro). Si ESTOS DELETE
+    // fallan igual, las filas antiguas con el mismo id nunca se borran antes
+    // del INSERT de más abajo — que sí lanza de verdad el error de bibSync —
+    // y ese INSERT choca con la clave ya existente. Se reutiliza
+    // _deleteWithRetry (refresca el token, reintenta una vez, deja
+    // constancia en consola si sigue fallando) en vez de silenciarlo sin más.
     if (workId) {
       // Borrar con prefijo
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=like.${workId}::*`, {
+      await _deleteWithRetry('biblioteca:' + workId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=like.${workId}::*`, {
         method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
+      }));
       // Borrar sin prefijo (legacy — no contienen '::')
       // PostgREST no soporta NOT LIKE directamente en todos los contextos,
       // así que borramos los que tienen folder_id exactamente '__root__' o '__anim__'
       // que son los únicos folder_id posibles sin prefijo
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`, {
+      await _deleteWithRetry('biblioteca:legacy:' + authorId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`, {
         method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
+      }));
     } else {
-      await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}`, {
+      await _deleteWithRetry('biblioteca:todo:' + authorId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}`, {
         method: 'DELETE', headers: _hdrsUser(),
-      }).catch(()=>{});
+      }));
     }
 
     if (!rows.length) return;
+    // Refrescar el token justo antes del INSERT final — es la única petición
+    // de bibSync que de verdad puede lanzar (ver más abajo), así que es la
+    // que más falta le hace llegar con un token fresco.
+    if (window._authTryRefresh) await window._authTryRefresh();
     const r = await fetch(`${BASE}/biblioteca`, {
       method:  'POST',
       headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
       body:    JSON.stringify(rows),
     });
-    if (!r.ok) throw new Error(`bibSync: ${r.status} ${await r.text()}`);
+    if (!r.ok) {
+      const _errBody = await r.text();
+      // Detalle completo del fallo real (no una suposición) — ver
+      // window._edLastBibSyncError en editor.js/edCloudSave, mostrado en el
+      // diagnóstico 🩺 ("Último error de bibSync").
+      if (typeof window !== 'undefined') {
+        window._edLastBibSyncError = { status: r.status, body: _errBody.slice(0, 2000), rows: rows.length, ts: new Date().toISOString() };
+      }
+      throw new Error(`bibSync: ${r.status} ${_errBody}`);
+    }
   }
 
   // Descarga biblioteca desde Supabase y reconstruye la estructura de carpetas.

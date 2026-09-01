@@ -23654,6 +23654,9 @@ async function _edCloudSaveInner() {
           await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
           // Confirmar la huella SOLO tras éxito — igual que con las páginas
           try { localStorage.setItem(_bibHashKey, _bibHashNow); } catch(_) {}
+          // Éxito: limpiar cualquier error anterior para que el diagnóstico
+          // no siga mostrando un fallo ya resuelto.
+          window._edLastBibSyncError = null;
 
           // En modo incógnito, mostrar resultado del bibSync en la ventana de aviso
           if (_bibIdbUnavailable && typeof _edShowIncognitoWarning === 'function') {
@@ -23662,6 +23665,24 @@ async function _edCloudSaveInner() {
         }
       } catch(e) {
         console.warn('bibSync error:', e);
+        // BUG CORREGIDO (biblioteca seguía sin sincronizar y el aviso decía
+        // "puede ser un objeto muy grande" sin serlo — confirmado con el
+        // diagnóstico 🩺, ningún objeto se acercaba a 1 MB). Antes el error
+        // real solo iba a console.warn, invisible en Android — así que
+        // averiguar la causa real dependía de adivinar. Ahora se guarda para
+        // que el diagnóstico ("Último error de bibSync") lo muestre tal
+        // cual lo devolvió el servidor, en vez de solo la suposición
+        // genérica del aviso. Si el fallo vino del INSERT final (el caso
+        // más común), bibSync ya dejó ahí mismo su propio detalle completo
+        // (status+cuerpo de la respuesta+nº de filas) justo antes de lanzar
+        // — no se pisa; esto es solo el respaldo mínimo por si el fallo
+        // viniera de algún otro punto que no llegó a dejar ese detalle.
+        if (!window._edLastBibSyncError) {
+          window._edLastBibSyncError = {
+            message: (e && e.message) || String(e),
+            ts: new Date().toISOString(),
+          };
+        }
         // La obra (páginas) ya se guardó bien en este punto — no reventar el
         // flujo de guardado en nube por esto, pero avisar: antes este error se
         // tragaba en silencio y la biblioteca de la nube podía quedar
@@ -28029,21 +28050,39 @@ async function _edForkToId(_targetId) {
   // Si _targetId ya tenía su propia biblioteca (obra sobrescrita), queda
   // reemplazada por la de la obra actual — mismo criterio que el resto del
   // contenido al sobrescribir.
+  //
+  // BUG CORREGIDO (encontrado al comprobar, a petición de Alberto, que
+  // renombrar cree de verdad una biblioteca independiente en la nube):
+  // esta copia no se esperaba (".then()" sin await) antes de seguir hacia
+  // edSaveProject() — que sí espera de verdad, y cuyo _bibFlush() escribe el
+  // _bibCache EN MEMORIA (ya al día) en esa MISMA clave nueva. Esta copia,
+  // en cambio, lee de IDB, no de memoria — si justo al renombrar había una
+  // escritura de _bibSave() todavía en vuelo (p.ej. se acababa de añadir un
+  // objeto a la biblioteca segundos antes), podía leer una versión un paso
+  // por detrás. Sin esperarla, ambas escrituras a la misma clave nueva
+  // quedaban sin orden garantizado: si esta copia (más lenta, de por sí)
+  // terminaba DESPUÉS del guardado fresco de edSaveProject, lo pisaba en
+  // silencio con la versión más vieja. Esperándola aquí, el guardado fresco
+  // de edSaveProject queda siempre como la última escritura de verdad.
   const _oldBibId = edProjectId;
   const _newBibId = _newId;
-  _bibOpenIdb().then(db => {
+  try {
+    const db = await _bibOpenIdb();
     const _oldKey = _BIB_KEY_PREFIX + '_' + _oldBibId;
     const _newKey = _BIB_KEY_PREFIX + '_' + _newBibId;
-    const tx = db.transaction('bib', 'readwrite');
-    const store = tx.objectStore('bib');
-    const req = store.get(_oldKey);
-    req.onsuccess = () => {
-      if (req.result) {
-        store.put(req.result, _newKey); // copiar al nuevo ID
-        // NO borrar el antiguo aquí — edSaveProject actualizará _bibCache con el nuevo ID
-      }
-    };
-  }).catch(() => {});
+    await new Promise((resolve) => {
+      const tx = db.transaction('bib', 'readwrite');
+      const store = tx.objectStore('bib');
+      const req = store.get(_oldKey);
+      req.onsuccess = () => {
+        if (req.result) store.put(req.result, _newKey); // copiar al nuevo ID
+        // NO borrar el antiguo aquí — edSaveProject actualizará la clave
+        // nueva con el _bibCache en memoria justo después.
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = resolve; // no bloquear el fork si esto falla — es solo una base de partida
+    });
+  } catch(_e) { /* no bloquear el fork si IDB falla aquí */ }
 
   // Cambiar al nuevo id
   edProjectId = _newId;
@@ -40393,6 +40432,24 @@ async function _edRunDiag() {
     }
   } else {
     L('  Sin datos (no se pulsó "Editar" desde my-works en esta sesión, o la app se recargó después)');
+  }
+  // Último error real de bibSync (ver window._edLastBibSyncError en
+  // edCloudSave/SupabaseClient.bibSync) — siempre visible, a diferencia de
+  // "Último bibSync" de arriba, que solo se muestra si no hay otros errores
+  // de guardado. Petición explícita de Alberto: saber por qué falla de
+  // verdad, no solo la suposición genérica del aviso ("objeto muy grande").
+  L('\n── Último error de bibSync ──');
+  if (window._edLastBibSyncError) {
+    const _be = window._edLastBibSyncError;
+    L('  ts: ' + _be.ts);
+    if (_be.status !== undefined) {
+      L('  HTTP ' + _be.status + (_be.rows !== undefined ? ' (' + _be.rows + ' fila(s) en el intento de subida)' : ''));
+      L('  Respuesta del servidor: ' + (_be.body || '(vacía)'));
+    } else {
+      L('  ' + _be.message);
+    }
+  } else {
+    L('  (sin errores registrados — o se limpió tras el último guardado en la nube con éxito)');
   }
   // Estado actual de _bibCache
   L('\n── bibCache actual ──');
