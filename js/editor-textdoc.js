@@ -4384,6 +4384,28 @@ function _tdParseBlocks(html){
   return blocks;
 }
 
+
+// Analiza hacia arriba, por la cadena de etiquetas EN LÍNEA (las que Trix
+// anida para negrita/cursiva/tachado/enlace/código, más <span>), buscando un
+// estilo CSS concreto en el nodo dado o en cualquiera de sus ancestros — se
+// detiene en el primero que lo tenga, o al salir de esa cadena (llegar a un
+// bloque como <div>/<p>/<li>, o al límite de profundidad de seguridad).
+// Usado como "parser" de fontSize/fontFamily en _tdRegisterCustomTrixAttributes
+// — ver el porqué completo justo ahí.
+function _tdInlineStyleParser(styleProp){
+  return function(element){
+    let el = element, depth = 0;
+    while(el && el.nodeType === 1 && depth < 8){
+      if(el.style && el.style[styleProp]) return el.style[styleProp];
+      const tag = el.tagName && el.tagName.toLowerCase();
+      if(tag && !['strong','b','em','i','del','s','a','code','span'].includes(tag)) break;
+      el = el.parentElement;
+      depth++;
+    }
+    return null;
+  };
+}
+
 // ── Registro de atributos personalizados de Trix (fontSize, fontFamily,
 //    salto de página, alineación, interlineado por párrafo) — extensión
 //    oficial vía Trix.config, no un fork ni un hack sobre internals. Ver
@@ -4394,8 +4416,34 @@ function _tdParseBlocks(html){
 function _tdRegisterCustomTrixAttributes(){
   if(typeof Trix === 'undefined' || window._tdTrixAttrsRegistered) return;
   window._tdTrixAttrsRegistered = true;
-  Trix.config.textAttributes.fontSize   = { styleProperty: 'font-size',   inheritable: true };
-  Trix.config.textAttributes.fontFamily = { styleProperty: 'font-family', inheritable: true };
+  // BUG CORREGIDO (reportado por Alberto: un texto en negrita+cursiva vuelve
+  // a "tipo Lora, tamaño normal" cada vez que se reedita, por más veces que
+  // se corrija). Causa real, confirmada de forma aislada con el propio
+  // trix.umd.min.js de este proyecto (sin ningún código de la app de por
+  // medio) y coincide con un límite conocido de Trix (ver su propio
+  // repositorio, issue #655 — "Custom color-tool formatting is lost after
+  // load"): al combinar negrita+cursiva con fontFamily/fontSize
+  // personalizados, el SERIALIZADOR de Trix (createElement, dentro de
+  // trix.umd.min.js) coloca el style="..." en la etiqueta MÁS EXTERNA de las
+  // anidadas — con negrita+cursiva juntas, en <strong>, envolviendo a <em> —
+  // en vez de crear un <span> propio, por optimización (menos anidamiento).
+  // Pero el ANALIZADOR de Trix (getTextAttributes, también dentro de
+  // trix.umd.min.js) que decide qué atributos tiene un fragmento de texto al
+  // volver a cargar el HTML (editor.loadHTML, usado al reeditar — ver
+  // edOpenTextDoc) solo mira el estilo del nodo EXACTO que procesa para un
+  // atributo declarado con "styleProperty" — a diferencia de "tagName"
+  // (negrita/cursiva), que SÍ sube por los ancestros. Con negrita+cursiva
+  // juntas, ese nodo exacto es <em> (un nivel más adentro que donde está de
+  // verdad el style, en <strong>) — así que fontFamily/fontSize no se
+  // encuentran y se pierden, aunque el HTML guardado (sourceHTML) siempre
+  // tuvo el dato correcto: por eso corregirlo a mano no servía de nada, se
+  // volvía a perder en la SIGUIENTE reedición, no en el guardado.
+  // Arreglo: se añade un "parser" propio a cada atributo (función que sí
+  // sube por la cadena de etiquetas en línea, ver _tdInlineStyleParser) sin
+  // quitar "styleProperty" — la serialización (que nunca estuvo rota) sigue
+  // dependiendo de él; el análisis al recargar pasa a usar el parser nuevo.
+  Trix.config.textAttributes.fontSize   = { styleProperty: 'font-size',   inheritable: true, parser: _tdInlineStyleParser('fontSize') };
+  Trix.config.textAttributes.fontFamily = { styleProperty: 'font-family', inheritable: true, parser: _tdInlineStyleParser('fontFamily') };
   Trix.config.blockAttributes.pageBreak = { tagName: 'aside', terminal: true, breakOnReturn: true, group: false };
   // Alineación: Trix no soporta estilos en blockAttributes (solo tagName),
   // así que — patrón documentado por la comunidad de Trix para este caso
