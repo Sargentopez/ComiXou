@@ -23610,11 +23610,27 @@ async function _edCloudSaveInner() {
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
     // Sincronizar biblioteca con la nube — solo si su contenido cambió de
-    // verdad desde el último guardado en la nube. La huella se persiste en
-    // localStorage (por usuario, no por obra) porque la biblioteca es
-    // conceptualmente compartida por todas las obras del usuario en la
-    // nube — aunque cada obra mantenga su propia caché local en IDB, lo que
-    // importa aquí es si hace falta volver a subirla.
+    // verdad desde el último guardado en la nube DE ESTA OBRA.
+    //
+    // BUG CORREGIDO (reportado por Alberto: la biblioteca de una obra
+    // concreta no llegaba a la nube — 785 KB en local, muy por debajo del
+    // límite de tamaño de la obra, pero cero filas subidas). La huella se
+    // guardaba SOLO por usuario (localStorage 'cx_bib_synced_hash_' +
+    // user.id), sin distinguir de qué OBRA venía — pero la subida real
+    // (bibSync, ver más abajo y supabase-client.js) SÍ es por obra: cada
+    // fila lleva folder_id prefijado con comic.supabaseId + '::', y borra e
+    // inserta solo las filas de ESE prefijo. La biblioteca es, a propósito,
+    // un fondo de recursos que se reutiliza ENTRE obras (mismas imágenes,
+    // mismas animaciones) — así que es normal que dos obras compartan buena
+    // parte de su contenido, sobre todo si una se creó reutilizando otra
+    // (cambiándole el nombre). Guardar en la nube UNA obra dejaba la huella
+    // fijada con el hash de SU biblioteca en ese instante; si esa huella
+    // coincidía con la de OTRA obra distinta — algo casi asegurado si
+    // comparten recursos — la segunda obra se saltaba la subida creyendo
+    // que "no había cambiado nada", aunque sus propias filas (con SU
+    // prefijo de supabaseId) nunca se habían creado en la nube. Ahora la
+    // huella se guarda por obra (comic.supabaseId incluido en la clave),
+    // coherente con cómo ya funciona la subida/descarga real.
     const user = Auth?.currentUser?.();
     if (user && user.id) {
       try {
@@ -23626,7 +23642,7 @@ async function _edCloudSaveInner() {
         // funcionara, y se resubiría la biblioteca en cada guardado en nube.
         const _bibJson = JSON.stringify({ folders: (_bib && _bib.folders) || [] });
         const _bibHashNow = _cxSimpleHash(_bibJson);
-        const _bibHashKey = 'cx_bib_synced_hash_' + user.id;
+        const _bibHashKey = 'cx_bib_synced_hash_' + user.id + '_' + comic.supabaseId;
         const _bibHashPrev = localStorage.getItem(_bibHashKey);
         if (_bibHashPrev === _bibHashNow) {
           // Sin cambios desde el último guardado en la nube — no subir nada
