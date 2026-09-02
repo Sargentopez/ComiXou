@@ -4579,8 +4579,16 @@ function edFitCanvas(resetCamera){
   const newW = Math.round(availW);
   const newH = Math.round(availH);
 
-  // Detectar cambio de VENTANA (no de panel de opciones)
-  // _edWinW/_edWinH solo cambian con resize de ventana real
+  // Detectar cambio de VENTANA real (pantalla completa, redimensión de la
+  // ventana) frente a un cambio de LAYOUT dentro de la misma ventana (abrir/
+  // cerrar el panel de opciones, que solo mueve totalBarsH pero no cambia
+  // window.innerWidth/innerHeight). _edWinW/_edWinH ya existían con este
+  // propósito exacto pero nunca llegaron a compararse contra nada — bug
+  // reportado por Alberto: al pasar a pantalla completa (o volver), el
+  // lienzo no quedaba centrado en el mismo punto del área de trabajo que
+  // antes del cambio.
+  const _windowItselfResized = window._edWinW !== undefined &&
+    (window._edWinW !== window.innerWidth || window._edWinH !== window.innerHeight);
   // Actualizar dimensiones conocidas — sin resetear cámara automáticamente
   // La cámara solo se resetea cuando se pide explícitamente (primera carga, lupa, orientación)
   window._edWinW = window.innerWidth;
@@ -4592,10 +4600,23 @@ function edFitCanvas(resetCamera){
   if(_sizeChanged){
     edCanvas.width  = newW;
     edCanvas.height = newH;
-    // Compensar cámara en ambas direcciones para que el contenido no salte visualmente
-    // cuando el panel de opciones se abre o se colapsa.
     if(!_doReset){
-      _savedCam.y -= (_prevH - newH); // negativo si crece (panel cierra), positivo si encoge (panel abre)
+      if(_windowItselfResized){
+        // Pantalla completa / redimensión real de ventana: mantener
+        // centrado el mismo punto del área de trabajo que había antes del
+        // cambio, en los dos ejes — cam.x/cam.y se desplazan la MITAD del
+        // cambio de tamaño (no todo, esa es la diferencia con el caso del
+        // panel de abajo): para que (nuevoAncho/2 - cam.x)/z siga apuntando
+        // al mismo punto tras el resize, cam.x debe crecer (nuevoAncho-
+        // anchoAnterior)/2, e igual en Y.
+        _savedCam.x += (newW - _prevW) / 2;
+        _savedCam.y += (newH - _prevH) / 2;
+      } else {
+        // Panel de opciones abriéndose/cerrándose (no cambia el ancho de
+        // ventana, ver arriba) — comportamiento EXISTENTE, sin tocar: ancla
+        // el borde INFERIOR del contenido visible, no el centro.
+        _savedCam.y -= (_prevH - newH); // negativo si crece (panel cierra), positivo si encoge (panel abre)
+      }
     }
   }
   edCanvas.style.width  = newW + 'px';
