@@ -2048,7 +2048,7 @@ class TextLayer extends BaseLayer {
     this.text=text;this.fontSize=30;this.fontFamily='Arial';
     this.fontBold=false;this.fontItalic=true;
     this.color='#000000';this.backgroundColor='#ffffff';this.bgOpacity=1;
-    this.borderColor='#000000';this.borderWidth=0;this.padding=10;
+    this.borderColor='#000000';this.borderWidth=0;this.padding=10;this.frameMarginPx=10;
   }
   getLines(){return this.text.split('\n');}
   _fontStr(){ const _ff=this.fontFamily.includes(' ')?`"${this.fontFamily}"`:this.fontFamily; return `${this.fontItalic?'italic ':''}${this.fontBold?'bold ':''}${this.fontSize}px ${_ff}`; }
@@ -2147,13 +2147,26 @@ class TextLayer extends BaseLayer {
     const px=edMarginX()+_tlCurX*pw, py=edMarginY()+_tlCurY*ph;
     ctx.save();
     ctx.translate(px,py); ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
-    // Fondo y borde se dibujan en espacio local (tras la rotación)
+    // Fondo y borde se dibujan en espacio local (tras la rotación). Para un
+    // flujo de texto paginado CON marco, tanto el relleno como el propio
+    // marco se retranquean del borde del lienzo la distancia indicada en
+    // frameMarginPx (petición explícita de Alberto — el marco de un flujo
+    // de texto ocupa siempre TODA la página, ver el comentario en
+    // contains() más abajo, así que sin este retranqueo quedaba pegado al
+    // borde físico de la hoja). Puramente visual — no toca en absoluto la
+    // maquetación/paginado real del texto, que se sigue calculando sobre el
+    // tamaño íntegro de la página (ver editor-textdoc.js); el propio margen
+    // de escritura (marginXFrac, el control "Márgenes" de este panel) ya
+    // suele dejar de sobra más hueco que el retranqueo por defecto (10px)
+    // para que marco y texto no lleguen a tocarse.
+    const _fm = (this.richLines && this.richLines.length && this.borderWidth>0) ? (this.frameMarginPx||0) : 0;
+    const _fx=-w/2+_fm, _fy=-h/2+_fm, _fw=w-_fm*2, _fh=h-_fm*2;
     const _bgo=this.bgOpacity??1;
     const _ctxAlpha=ctx.globalAlpha;
-    if(_bgo>0){ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=_ctxAlpha;}
+    if(_bgo>0){ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(_fx,_fy,_fw,_fh);ctx.globalAlpha=_ctxAlpha;}
     if(this.borderWidth>0){
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
-      ctx.strokeRect(-w/2,-h/2,w,h);
+      ctx.strokeRect(_fx,_fy,_fw,_fh);
     }
     // Hoja de texto paginada (Editor de textos): formato enriquecido ya maquetado
     if(this.richLines && this.richLines.length){
@@ -19855,7 +19868,12 @@ function edRenderOptionsPanel(mode){
         // de origen. Color/fondo/marco sí se aplican de forma genérica (ver
         // TextLayer.draw()), así que se mantienen como controles normales.
         html+=`
-        <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
+        <div id="edPanelHeader">
+          <label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:700;cursor:pointer;margin-right:auto;color:var(--gray-700)" title="${I18n.t('op_applyAllPagesLabel')}">
+            <input type="checkbox" id="pp-apply-all-pages"> ${I18n.t('op_applyAllPagesLabel')}
+          </label>
+          <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button>
+        </div>
         <div class="op-prop-row">
           <button id="pp-td-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editTextBtn')}</button>
         </div>
@@ -19873,6 +19891,10 @@ function edRenderOptionsPanel(mode){
           <span id="pp-bgop-val" style="font-size:.75rem;font-weight:900;min-width:28px;text-align:left">${Math.round((la.bgOpacity??1)*100)}%</span>
           <input type="range" id="pp-bgop" min="0" max="100" value="${Math.round((la.bgOpacity??1)*100)}" style="flex:1;min-width:40px;accent-color:var(--black)">
         </div>
+        ${la.borderWidth>0 ? `
+        <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_frameGapLabel')}</span>
+          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-frame-gap" value="${la.frameMarginPx??10}" min="0" max="200" style="width:60px">px
+        </div>` : ''}
         <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_marginsLabel')}</span>
           <select id="pp-td-margin">
             <option value="0.02" ${Math.abs((la.marginXFrac??TD_MARGIN_FRAC)-0.02)<0.005?'selected':''}>${I18n.t('op_marginNarrow')}</option>
@@ -20067,7 +20089,17 @@ function edRenderOptionsPanel(mode){
         else if(id==='pp-bg')     la.backgroundColor=e.target.value;
         else if(id==='pp-bgop'){const v=parseInt(e.target.value)||0;la.bgOpacity=v/100;const lbl=$('pp-bgop-val');if(lbl)lbl.textContent=v+'%';}
         else if(id==='pp-bc')     la.borderColor=e.target.value;
-        else if(id==='pp-bw')     la.borderWidth=parseInt(e.target.value);
+        else if(id==='pp-bw'){
+          la.borderWidth=parseInt(e.target.value);
+          edRedraw();
+          // Volver a pintar el panel entero: la fila de "Separación del
+          // marco" solo se muestra si hay marco (ver la plantilla HTML de
+          // más arriba) — sin este re-render quedaría oculta/visible según
+          // el estado ANTERIOR hasta cerrar y reabrir el panel.
+          edRenderOptionsPanel('props');
+          return;
+        }
+        else if(id==='pp-frame-gap') la.frameMarginPx=Math.max(0,parseInt(e.target.value)||0);
         else if(id==='pp-td-margin'){
           la.marginXFrac = parseFloat(e.target.value) || (typeof TD_MARGIN_FRAC!=='undefined'?TD_MARGIN_FRAC:0.045);
           if(typeof _tdReflowAfterMarginChange==='function') _tdReflowAfterMarginChange(la);
@@ -20110,7 +20142,28 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
-    $('pp-ok')?.addEventListener('click',()=>{ edCloseOptionsPanel(); _edResetCameraToFit(); });
+    $('pp-ok')?.addEventListener('click',()=>{
+      const _laOk = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+      if(_laOk && _laOk._tdFlowId && $('pp-apply-all-pages')?.checked){
+        const _flowId = _laOk._tdFlowId;
+        edPages.forEach(p => {
+          (p.layers||[]).forEach(l => {
+            if(l && l!==_laOk && l._tdFlowId===_flowId){
+              l.color=_laOk.color; l.backgroundColor=_laOk.backgroundColor; l.bgOpacity=_laOk.bgOpacity;
+              l.borderColor=_laOk.borderColor; l.borderWidth=_laOk.borderWidth; l.frameMarginPx=_laOk.frameMarginPx;
+              // marginXFrac NO se copia aquí a propósito: cambiarlo ya
+              // reordena el flujo ENTERO por sí solo (ver el caso
+              // pp-td-margin más arriba, _tdReflowAfterMarginChange /
+              // _tdReflowFlowInPlace) — hacerlo también aquí, hoja a hoja,
+              // interferiría con ese mecanismo en vez de ayudarlo.
+              if(typeof _edMarkPageDirty==='function') _edMarkPageDirty(p);
+            }
+          });
+        });
+        edPushHistory();
+      }
+      edCloseOptionsPanel(); _edResetCameraToFit();
+    });
     $('pp-td-edit')?.addEventListener('click',()=>{
       const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
       if(_la && typeof edOpenTextDoc==='function') edOpenTextDoc(_la);
@@ -25164,7 +25217,7 @@ function edSerLayer(l){
     _hasText:!!(l.text&&l.text!==I18n.t('ed_writeHerePlaceholder')),
     text:l.text,fontSize:l.fontSize,fontFamily:l.fontFamily,fontBold:l.fontBold||false,fontItalic:l.fontItalic||false,color:l.color,
     backgroundColor:l.backgroundColor,bgOpacity:l.bgOpacity??1,borderColor:l.borderColor,borderWidth:l.borderWidth,
-    padding:l.padding||10,...op};
+    padding:l.padding||10,frameMarginPx:l.frameMarginPx??10,...op};
     if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true;
     // Hoja de texto paginada (Editor de textos): líneas ya maquetadas + HTML de origen (Trix)
     if(l.richLines) _o.richLines=l.richLines;

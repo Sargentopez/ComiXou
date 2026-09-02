@@ -3608,14 +3608,22 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     }
     ctx.closePath();
   } else if (type === 'text') {
-    // Caja de texto: rectángulo con esquinas ligeramente redondeadas
-    const rr = Math.min(6 * scale, w/2, h/2);
+    // Caja de texto: rectángulo con esquinas ligeramente redondeadas.
+    // Flujo de texto paginado CON marco: relleno y marco se retranquean del
+    // borde de la página (frameMarginPx, 10px por defecto) — mismo ajuste y
+    // misma razón que en editor.js (TextLayer.draw): el marco de un flujo
+    // ocupa siempre toda la página, así que sin este retranqueo quedaba
+    // pegado al borde físico de la hoja. Escalado igual que bw (=
+    // borderW_*scale) por ser la misma clase de valor.
+    const _fm = (richSource && bw > 0) ? (t.frameMarginPx ?? 10) * scale : 0;
+    const _fL = -w/2+_fm, _fR = w/2-_fm, _fT = -h/2+_fm, _fB = h/2-_fm;
+    const rr = Math.min(6 * scale, (_fR-_fL)/2, (_fB-_fT)/2);
     ctx.beginPath();
-    ctx.moveTo(-w/2+rr, -h/2);
-    ctx.lineTo( w/2-rr, -h/2); ctx.arcTo( w/2,-h/2,  w/2,-h/2+rr, rr);
-    ctx.lineTo( w/2,    h/2-rr); ctx.arcTo( w/2, h/2,  w/2-rr, h/2, rr);
-    ctx.lineTo(-w/2+rr, h/2); ctx.arcTo(-w/2,  h/2, -w/2, h/2-rr, rr);
-    ctx.lineTo(-w/2,   -h/2+rr); ctx.arcTo(-w/2,-h/2, -w/2+rr,-h/2, rr);
+    ctx.moveTo(_fL+rr, _fT);
+    ctx.lineTo( _fR-rr, _fT); ctx.arcTo( _fR,_fT,  _fR,_fT+rr, rr);
+    ctx.lineTo( _fR,    _fB-rr); ctx.arcTo( _fR, _fB,  _fR-rr, _fB, rr);
+    ctx.lineTo(_fL+rr, _fB); ctx.arcTo(_fL,  _fB, _fL, _fB-rr, rr);
+    ctx.lineTo(_fL,   _fT+rr); ctx.arcTo(_fL,_fT, _fL+rr,_fT, rr);
     ctx.closePath();
   } else if (isSingle) {
     ctx.beginPath(); ctx.arc(0, 0, Math.min(w,h)/2, 0, Math.PI*2);
