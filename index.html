@@ -63,8 +63,8 @@
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="css/main.css?v=39.19">
-  <link rel="stylesheet" href="css/home.css?v=39.19">
+  <link rel="stylesheet" href="css/main.css?v=39.20">
+  <link rel="stylesheet" href="css/home.css?v=39.20">
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="fonts/fonts.css">
   <!-- Ventana de bienvenida/condiciones de uso (ver #cxIntro más abajo, justo tras
@@ -158,7 +158,7 @@
        con el primer parseo del HTML, antes de que se ejecute ningún script. -->
   <div id="cxIntro">
     <div id="cxIntroCard">
-      <img src="intro-anim.png?v=39.19" alt="Comxow — IDEA Y COMPARTE">
+      <img src="intro-anim.png?v=39.20" alt="Comxow — IDEA Y COMPARTE">
       <div id="cxIntroGate">
         <label>
           <input type="checkbox" id="cxIntroCheck">
@@ -185,18 +185,35 @@
       if (hash === 'terms') { ov.style.display = 'none'; return; }
 
       var already = !!localStorage.getItem(KEY);
-      // Duración del primer bucle completo de intro-anim.png: 42 frames a 71ms
-      // + 1 frame de 500ms + el frame final de 6000ms (COMXOW / IDEA Y COMPARTE)
-      // = 9482ms. Si el archivo de la animación cambia alguna vez, este número
-      // hay que recalcularlo a mano (no hay forma estándar de leer la duración
-      // de los frames de un APNG desde <img> con JS del navegador).
-      var ANIM_LOOP_MS = 9482;
-      // Petición explícita de Alberto: la animación debe reproducirse
-      // COMPLETAMENTE al menos una vez antes de poder ocultarse — antes se
-      // recortaban los últimos 5s (el aguante del frame final) para no
-      // hacer esperar de más si las obras ya habían cargado; ahora ese
-      // recorte se ha quitado, el mínimo es el bucle entero.
-      var MIN_SHOW_MS = ANIM_LOOP_MS; // 9482ms — un bucle completo
+      // Estructura real de intro-anim.png, verificada leyendo directamente
+      // los chunks APNG del propio archivo (acTL/fcTL) en vez de fiarse de
+      // un cálculo a mano: 42 frames de movimiento (20 a 71ms + 1 a 500ms +
+      // 22 a 71ms = 3482ms) y UN frame final quieto (el logo COMXOW / IDEA
+      // Y COMPARTE) que se mantiene 6000ms más — total del bucle: 9482ms.
+      // acTL confirma además num_plays=0 (bucle infinito nativo del propio
+      // archivo, el navegador lo repite solo sin ayuda de JS). Si el
+      // archivo de la animación cambia alguna vez, estos números hay que
+      // recalcularlos (no hay forma estándar de leer la duración de los
+      // frames de un APNG desde <img> con JS del navegador — sí se puede
+      // leyendo los chunks del PNG a mano, como se ha hecho aquí para
+      // verificarlo).
+      var ANIM_MOTION_MS = 3482; // hasta que el logo queda quieto — esto es "reproducirse", lo que sigue es solo aguante
+      var ANIM_HOLD_MS   = 6000; // aguante estático del logo final
+      var ANIM_LOOP_MS   = ANIM_MOTION_MS + ANIM_HOLD_MS; // 9482ms — bucle completo
+      // BUG CORREGIDO (reportado por Alberto: la animación se quedaba fija
+      // demasiado tiempo tras su primera reproducción). "Terminar de
+      // reproducirse" se refiere al MOVIMIENTO (ANIM_MOTION_MS), no al
+      // aguante estático posterior — si las obras ya están cargadas, cerrar
+      // como mucho 1s después de eso (petición explícita de Alberto), no
+      // esperar al bucle completo: con el bucle completo, aunque las obras
+      // llevaran rato listas, se veían igualmente los 6s enteros del logo
+      // quieto sin ningún motivo. Si las obras NO están listas a tiempo, la
+      // propia animación (bucle infinito nativo, ver arriba) sigue
+      // reproduciéndose sola de todos modos — y en cuanto carguen, ya no es
+      // "la primera reproducción", así que se cierra de inmediato, sin
+      // margen (ver hideRespectingMinimum más abajo: pasado este mínimo,
+      // oculta ya sin esperar nada).
+      var MIN_SHOW_MS = ANIM_MOTION_MS + 1000; // 4482ms
       var startedAt = Date.now();
 
       function hide() {
@@ -283,50 +300,50 @@
   <div class="toast" id="toast"></div>
 
   <!-- Core -->
-  <script src="js/utils.js?v=39.19"></script>
-  <script src="js/anim-clock.js?v=39.19"></script>
-  <script src="js/i18n.js?v=39.19"></script>
-  <script src="js/auth.js?v=39.19"></script>
-  <script src="js/storage.js?v=39.19"></script>
-  <script src="js/pako.min.js?v=39.19"></script>
-  <script src="js/trix.umd.min.js?v=39.19"></script>
-  <script src="js/supabase-client.js?v=39.19"></script>
-  <script src="js/genres.js?v=39.19"></script>
+  <script src="js/utils.js?v=39.20"></script>
+  <script src="js/anim-clock.js?v=39.20"></script>
+  <script src="js/i18n.js?v=39.20"></script>
+  <script src="js/auth.js?v=39.20"></script>
+  <script src="js/storage.js?v=39.20"></script>
+  <script src="js/pako.min.js?v=39.20"></script>
+  <script src="js/trix.umd.min.js?v=39.20"></script>
+  <script src="js/supabase-client.js?v=39.20"></script>
+  <script src="js/genres.js?v=39.20"></script>
   <!-- seed.js desactivado — solo para desarrollo local -->
-  <!-- <script src="js/seed.js?v=39.19"></script> -->
+  <!-- <script src="js/seed.js?v=39.20"></script> -->
 
   <!-- Router SPA -->
-  <script src="js/router.js?v=39.19"></script>
+  <script src="js/router.js?v=39.20"></script>
 
   <!-- Lógica de cada vista -->
-  <script src="js/home.js?v=39.19"></script>
-  <script src="js/auth-pages.js?v=39.19"></script>
-  <script src="js/editor-layers.js?v=39.19"></script>
-  <script src="js/editor-pages.js?v=39.19"></script>
-  <script src="js/editor-textdoc.js?v=39.19"></script>
-  <script src="js/omggif.js?v=39.19"></script>
-  <script src="js/UPNG.js?v=39.19"></script>
+  <script src="js/home.js?v=39.20"></script>
+  <script src="js/auth-pages.js?v=39.20"></script>
+  <script src="js/editor-layers.js?v=39.20"></script>
+  <script src="js/editor-pages.js?v=39.20"></script>
+  <script src="js/editor-textdoc.js?v=39.20"></script>
+  <script src="js/omggif.js?v=39.20"></script>
+  <script src="js/UPNG.js?v=39.20"></script>
   <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.min.js"></script>
-  <script src="js/editor.js?v=39.19"></script>
-  <script src="js/logo-data.js?v=39.19"></script>
-  <script src="js/icon-data.js?v=39.19"></script>
-  <script src="js/reader.js?v=39.19"></script>
-  <script src="js/admin.js?v=39.19"></script>
+  <script src="js/editor.js?v=39.20"></script>
+  <script src="js/logo-data.js?v=39.20"></script>
+  <script src="js/icon-data.js?v=39.20"></script>
+  <script src="js/reader.js?v=39.20"></script>
+  <script src="js/admin.js?v=39.20"></script>
 
   <!-- Fullscreen -->
-  <script src="js/fullscreen.js?v=39.19"></script>
+  <script src="js/fullscreen.js?v=39.20"></script>
 
   <!-- My comics view -->
-  <script src="js/my-works.js?v=39.19"></script>
+  <script src="js/my-works.js?v=39.20"></script>
 
   <!-- Registro de vistas -->
-  <script src="js/views.js?v=39.19"></script>
+  <script src="js/views.js?v=39.20"></script>
 
   <!-- Header persistente -->
-  <script src="js/header.js?v=39.19"></script>
+  <script src="js/header.js?v=39.20"></script>
 
   <!-- PWA -->
-  <script src="js/pwa.js?v=39.19"></script>
+  <script src="js/pwa.js?v=39.20"></script>
 
   <!-- Arrancar -->
   <script>
