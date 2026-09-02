@@ -3082,8 +3082,31 @@ function _tdSyncTabButton(){
         anchorX = brect.left; top = brect.top; height = brect.height;
       }
     }
+    const _tdTabCenterY = top + height / 2;
+    // BUG CORREGIDO (reportado por Alberto: el botón se ve flotando por
+    // encima de la cabecera/barra de herramientas del editor de textos).
+    // El botón es position:fixed — a diferencia del propio texto, NO lo
+    // recorta el overflow:auto de #tdPageArea, así que si el punto que
+    // sigue (principio del bloque con el cursor) queda por encima o por
+    // debajo del hueco realmente visible — p.ej. el usuario arrastra la
+    // hoja con el dedo sin mover el cursor de Trix, o cualquiera de los
+    // sitios que llaman a esta función en cada scroll (_tdSetScrollOffset,
+    // el listener de scroll nativo) — el botón se queda "flotando" en un
+    // punto sin relación con nada visible en pantalla, incluso por encima
+    // de la cabecera (mayor z-index, y position:fixed tampoco respeta
+    // ningún límite de #tdPageArea). Se oculta en ese caso en vez de
+    // mostrarlo fuera de sitio — mismo criterio que ya se aplica cuando el
+    // editor pierde el foco, unas líneas más arriba.
+    const _tdTabAreaEl = document.getElementById('tdPageArea');
+    if(_tdTabAreaEl){
+      const _tdTabAreaRect = _tdTabAreaEl.getBoundingClientRect();
+      if(_tdTabCenterY < _tdTabAreaRect.top || _tdTabCenterY > _tdTabAreaRect.bottom){
+        btn.classList.remove('visible');
+        return;
+      }
+    }
     btn.style.left = anchorX + 'px';
-    btn.style.top = (top + height / 2) + 'px';
+    btn.style.top = _tdTabCenterY + 'px';
     btn.classList.add('visible');
   }catch(_e){ btn.classList.remove('visible'); }
 }

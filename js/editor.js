@@ -1693,6 +1693,7 @@ class ImageLayer extends BaseLayer {
     const py = edMarginY() + _iCurY*ph;
     ctx.save();
     ctx.globalAlpha = this._animFadeOpacity != null ? this._animFadeOpacity : (this.opacity ?? 1);
+    if(this._blendMode) ctx.globalCompositeOperation = this._blendMode;
     ctx.translate(px,py);
     ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
     ctx.drawImage(src, -w/2, -h/2, w, h);
@@ -4662,6 +4663,106 @@ function _edCameraReset(){
   edCamera.y = availH/2  - (edMarginY() + ph/2) * z;
 }
 
+// Encuadra la cámara para que el rectángulo [left,top,right,bottom] (coordenadas
+// ABSOLUTAS del área de trabajo, mismo sistema que edMarginX()/edMarginY()) quede
+// completo y centrado en pantalla — mismo cálculo que _edCameraReset (que es el
+// caso particular de encuadrar solo el lienzo), generalizado a cualquier
+// rectángulo. No toca scrollbars/redraw — eso es cosa de quien la llame.
+function _edCameraFitToBox(left, top, right, bottom){
+  if(!edCanvas) return;
+  const boxW = Math.max(1, right - left), boxH = Math.max(1, bottom - top);
+  const z = Math.min(edCanvas.width / boxW, edCanvas.height / boxH);
+  edCamera.z = z;
+  edCamera.x = edCanvas.width/2  - (left + right)/2  * z;
+  edCamera.y = edCanvas.height/2 - (top  + bottom)/2 * z;
+}
+
+// Petición explícita de Alberto: un objeto recién IMPORTADO o PEGADO desde el
+// menú Insertar (Galería/Cámara/Pegar) se coloca en el área de trabajo, fuera
+// del lienzo — pegado a su borde derecho con 10px de separación, centrado
+// verticalmente con él — y la cámara se reencuadra en el mismo momento para
+// mostrar lienzo y objeto juntos. Deliberadamente AJENO a insertar desde la
+// Biblioteca (_bibRenderPanel), que mantiene su posición guardada tal cual —
+// no se toca ese camino. Llamar con el layer YA en su tamaño final (width/
+// height ya limitados), antes de edLayers.push. Compartida entre edAddImage
+// y edAddGif — misma regla para ambos, no duplicar el cálculo.
+function _edPlaceNewObjectOutsideCanvas(layer){
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  layer.x = 1 + 10/pw + layer.width/2; // borde izquierdo del objeto = borde derecho del lienzo + 10px
+  layer.y = 0.5;                       // centrado verticalmente con el lienzo
+  const objCx = mx + layer.x*pw, objCy = my + layer.y*ph;
+  const objW  = layer.width*pw,  objH  = layer.height*ph;
+  _edCameraFitToBox(
+    Math.min(mx, objCx - objW/2),      Math.min(my, objCy - objH/2),
+    Math.max(mx + pw, objCx + objW/2), Math.max(my + ph, objCy + objH/2)
+  );
+  _edScrollbarsUpdate();
+}
+
+// Traduce un blendMode de PSD a su equivalente EXACTO de Canvas 2D
+// (globalCompositeOperation) — usado al importar capas (ver edImportLayers).
+// Solo los modos con equivalente REAL: una aproximación visualmente parecida
+// pero no exacta (p.ej. "vivid light" ≈ "hard-light") puede confundir más
+// que mostrarlo en Normal — se prefiere quedarse corto y avisable a acertar
+// mal con confianza. Lista de nombres de PSD confirmada contra la propia
+// documentación de ag-psd (README_PSD.md).
+function _edMapPsdBlendMode(name){
+  const _map = {
+    'multiply':'multiply', 'screen':'screen', 'overlay':'overlay',
+    'darken':'darken', 'lighten':'lighten',
+    'color dodge':'color-dodge', 'color burn':'color-burn',
+    'hard light':'hard-light', 'soft light':'soft-light',
+    'difference':'difference', 'exclusion':'exclusion',
+    'hue':'hue', 'saturation':'saturation', 'color':'color', 'luminosity':'luminosity'
+  };
+  return _map[name] || 'source-over';
+}
+
+// Petición explícita de Alberto: un objeto MULTICAPA importado (PSD/XCF/TIFF,
+// ver edImportLayers) se coloca en el área de trabajo, a la IZQUIERDA del
+// lienzo (a diferencia de un objeto suelto — Galería/Cámara/Pegar, ver
+// _edPlaceNewObjectOutsideCanvas —, que va a la derecha), con sus capas bien
+// ordenadas: preservando la composición relativa real entre ellas (misma
+// escala para todas, calculada UNA vez sobre la caja conjunta), no cada una
+// centrada por separado como antes (bug reportado por Alberto — la posición
+// y el tamaño de cada capa se descartaban por completo). `entries` es un
+// array de {layer, srcLeft, srcTop, srcRight, srcBottom} — las cuatro
+// últimas en píxeles del documento ORIGEN (no del lienzo de Comxow); se
+// sobrescriben aquí layer.x/y/width/height con sus valores reales. Mismo
+// criterio de tamaño máximo que un objeto suelto (70% del ancho del lienzo,
+// tope 85% del alto), aplicado al conjunto entero para no deformarlo.
+// Verificado con Node (matemática real extraída) antes de aplicar: escala
+// idéntica en todas las capas, posición relativa preservada exactamente,
+// separación de 10px exacta, lienzo+grupo siempre visibles tras encuadrar.
+function _edPlaceImportedGroupLeftOfCanvas(entries){
+  if(!entries.length) return;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const minX = Math.min(...entries.map(e => e.srcLeft));
+  const minY = Math.min(...entries.map(e => e.srcTop));
+  const maxX = Math.max(...entries.map(e => e.srcRight));
+  const maxY = Math.max(...entries.map(e => e.srcBottom));
+  const srcGroupW = Math.max(1, maxX - minX), srcGroupH = Math.max(1, maxY - minY);
+  const scale = Math.min(0.7*pw/srcGroupW, 0.85*ph/srcGroupH);
+  const groupW = srcGroupW*scale, groupH = srcGroupH*scale;
+  const groupRight = mx - 10, groupLeft = groupRight - groupW; // 10px, mismo margen que el objeto suelto — al otro lado
+  const groupTop = my + ph/2 - groupH/2; // centrado verticalmente con el lienzo
+  entries.forEach(e => {
+    const cx = groupLeft + (((e.srcLeft + e.srcRight)/2) - minX) * scale;
+    const cy = groupTop  + (((e.srcTop  + e.srcBottom)/2) - minY) * scale;
+    e.layer.x = (cx - mx) / pw;
+    e.layer.y = (cy - my) / ph;
+    e.layer.width  = ((e.srcRight - e.srcLeft) * scale) / pw;
+    e.layer.height = ((e.srcBottom - e.srcTop) * scale) / ph;
+  });
+  _edCameraFitToBox(
+    Math.min(mx, groupLeft),      Math.min(my, groupTop),
+    Math.max(mx + pw, groupLeft + groupW), Math.max(my + ph, groupTop + groupH)
+  );
+  _edScrollbarsUpdate();
+}
+
 /* ══════════════════════════════════════════
    REDRAW
    ══════════════════════════════════════════ */
@@ -7372,6 +7473,7 @@ function edAddImage(file){
         layer.height = maxH;
         layer.width  = layer.width * scale;
       }
+      _edPlaceNewObjectOutsideCanvas(layer);
       // Insertar imagen antes del primer texto/bocadillo (textos siempre encima)
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if(firstTextIdx >= 0){
@@ -7438,6 +7540,7 @@ function edAddGif(file, onLayerReady) {
           layer.height = 0.85; layer.width = 0.7 * s;
         }
       }
+      _edPlaceNewObjectOutsideCanvas(layer);
       const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
       if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, layer); edSelectedIdx = firstTextIdx; }
       else { edLayers.push(layer); edSelectedIdx = edLayers.length - 1; }
@@ -24996,6 +25099,7 @@ function edSerLayer(l){
     const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
+    if(l._blendMode) _r._blendMode=l._blendMode;
     if(l.locked) _r.locked=true;
     if(l.hidden) _r.hidden=true;
     if(l._keepSize) _r._keepSize=true;
@@ -25502,6 +25606,7 @@ function edDeserLayer(d, pageOrientation){
     if(d._keepSize) l._keepSize=true;
     if(d.height) l.height = d.height;
     if(d.groupId) l.groupId=d.groupId;
+    if(d._blendMode) l._blendMode=d._blendMode;
     if(d._isGcpImage) l._isGcpImage=true;
     if(d._gcpLayersData) l._gcpLayersData=d._gcpLayersData;
     if(d._gcpFramesData) l._gcpFramesData=d._gcpFramesData;
@@ -27708,7 +27813,13 @@ async function edImportLayers(file) {
   const ext = file.name.split('.').pop().toLowerCase();
   const buf = await file.arrayBuffer();
 
-  // Cada capa se representa como {name, canvas, opacity, visible}
+  // Cada capa se representa como {name, canvas, opacity, visible, blendMode,
+  // top,left,right,bottom} — las cuatro últimas en píxeles del documento
+  // ORIGEN (PSD/XCF/TIFF), no del lienzo de Comxow: _edPlaceImportedGroupLeftOfCanvas
+  // las usa más abajo para reconstruir la composición relativa real entre
+  // capas en vez de centrarlas todas por separado (bug reportado por
+  // Alberto: la posición y el tamaño de cada capa se descartaban del todo,
+  // amontonando todo en el centro del lienzo).
   let rawLayers = [];
 
   try {
@@ -27733,7 +27844,16 @@ async function edImportLayers(file) {
       }
       const psd = window.agPsd.readPsd(buf);
 
-      // Helper: forzar alpha=255 en un canvas que no tiene canal alpha (capa Background)
+      // Helper: forzar alpha=255 en un canvas que no tiene canal alpha (capa
+      // Background). BUG CORREGIDO (reportado por Alberto — "fondos
+      // blancos"/capas invisibles): antes solo se llamaba si
+      // transparencyProtected era true — ese flag es el CANDADO de
+      // transparencia de Photoshop (si el usuario lo bloqueó desde el
+      // panel de capas), sin relación con si el canvas decodificado tiene
+      // de verdad datos de alfa. La función ya se autolimita internamente
+      // (solo actúa si TODO el canvas está transparente), así que llamarla
+      // siempre es seguro y además cubre capas Background que no tuvieran
+      // ese candado puesto.
       function _forceOpaque(canvas) {
         const ctx2 = canvas.getContext('2d');
         const id = ctx2.getImageData(0, 0, canvas.width, canvas.height);
@@ -27744,6 +27864,39 @@ async function edImportLayers(file) {
           for(let i = 3; i < d.length; i += 4) d[i] = 255;
           ctx2.putImageData(id, 0, 0);
         }
+        return canvas;
+      }
+
+      // BUG CORREGIDO (reportado por Alberto: las máscaras de capa se
+      // ignoraban por completo, mostrando zonas que en Photoshop quedaban
+      // ocultas). Compone la máscara (escala de grises: blanco=visible,
+      // negro=oculto) contra el canal alfa de la propia capa — layer.mask
+      // puede tener sus propios top/left, absolutos o relativos a la capa
+      // según positionRelativeToLayer (ver README_PSD de ag-psd — confirmado
+      // con un PSD sintético de prueba), y puede no cubrir toda la capa
+      // (defaultColor rellena el resto; 255=visible si no se especifica).
+      function _applyLayerMask(canvas, layerTop, layerLeft, mask) {
+        if(!mask || mask.disabled || !mask.canvas) return canvas;
+        const lw = canvas.width, lh = canvas.height;
+        const mc = mask.canvas;
+        const mLeft = (mask.left || 0) + (mask.positionRelativeToLayer ? layerLeft : 0);
+        const mTop  = (mask.top  || 0) + (mask.positionRelativeToLayer ? layerTop  : 0);
+        const defaultV = mask.defaultColor != null ? mask.defaultColor : 255;
+        const mdata = mc.getContext('2d').getImageData(0, 0, mc.width, mc.height).data;
+        const ctx2 = canvas.getContext('2d');
+        const id = ctx2.getImageData(0, 0, lw, lh);
+        const d = id.data;
+        for(let y = 0; y < lh; y++) {
+          const my = (layerTop + y) - mTop;
+          const myOk = my >= 0 && my < mc.height;
+          for(let x = 0; x < lw; x++) {
+            const mx = (layerLeft + x) - mLeft;
+            const mv = (myOk && mx >= 0 && mx < mc.width) ? mdata[(my * mc.width + mx) * 4] : defaultV;
+            const idx = (y * lw + x) * 4 + 3;
+            d[idx] = Math.round(d[idx] * (mv / 255));
+          }
+        }
+        ctx2.putImageData(id, 0, 0);
         return canvas;
       }
 
@@ -27760,12 +27913,17 @@ async function edImportLayers(file) {
       };
       const flatLayers = _collectLayers(psd.children || []);
       for(const layer of flatLayers) {
-        const lc = layer.transparencyProtected ? _forceOpaque(layer.canvas) : layer.canvas;
+        let lc = _forceOpaque(layer.canvas);
+        lc = _applyLayerMask(lc, layer.top || 0, layer.left || 0, layer.mask);
         rawLayers.push({
           name: layer.name || 'Capa',
           canvas: lc,
           opacity: (layer.opacity !== undefined ? layer.opacity : 1),
-          visible: layer.hidden !== true
+          visible: layer.hidden !== true,
+          blendMode: layer.blendMode || 'normal',
+          top: layer.top || 0, left: layer.left || 0,
+          right: layer.right != null ? layer.right : (layer.left || 0) + lc.width,
+          bottom: layer.bottom != null ? layer.bottom : (layer.top || 0) + lc.height
         });
       }
       // PSD children: orden de arriba a abajo → invertir para que [0] sea la inferior
@@ -27779,7 +27937,20 @@ async function edImportLayers(file) {
         const lc = await layer.toCanvas();
         rawLayers.push({ name: layer.name || 'Capa', canvas: lc,
           opacity: layer.opacity !== undefined ? layer.opacity / 255 : 1,
-          visible: layer.visible !== false });
+          // BUG CORREGIDO: xcfreader expone la visibilidad como layer.isVisible
+          // (getter, ver lib/gimpparser.js) — layer.visible no existe y siempre
+          // era undefined, así que la comprobación anterior (!== false) daba
+          // TRUE siempre: ninguna capa oculta en GIMP se filtraba nunca.
+          visible: layer.isVisible !== false,
+          // xcfreader (versión muy antigua, 0.0.6) da el modo de capa como un
+          // código numérico interno de GIMP sin tabla de traducción fiable a
+          // nombres — se deja en 'normal' en vez de arriesgar una traducción
+          // incorrecta (a diferencia de PSD, cuyos nombres de blendMode son
+          // strings legibles y están documentados — ver más abajo).
+          blendMode: 'normal',
+          top: layer.y || 0, left: layer.x || 0,
+          right: (layer.x || 0) + lc.width, bottom: (layer.y || 0) + lc.height
+        });
       }
       // xcfreader devuelve capas de arriba a abajo → invertir para orden inferior→superior
       rawLayers.reverse();
@@ -27787,6 +27958,14 @@ async function edImportLayers(file) {
     } else if(ext === 'tif' || ext === 'tiff') {
       await _edLoadScript('https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.min.js');
       const ifds = UTIF.decode(buf);
+      // Un TIFF multipágina son imágenes INDEPENDIENTES (páginas escaneadas,
+      // no capas de una misma composición) — no hay ninguna posición relativa
+      // real que reconstruir entre ellas. Se colocan en fila para que
+      // _edPlaceImportedGroupLeftOfCanvas (pensada para preservar
+      // composición) al menos las reparta en vez de amontonarlas todas en el
+      // mismo sitio, como pasaba antes.
+      let _tiffCursorX = 0;
+      const _tiffGap = Math.max(1, ...ifds.map(ifd => ifd.width || 1)) * 0.05;
       for(let i = 0; i < ifds.length; i++) {
         UTIF.decodeImage(buf, ifds[i]);
         const rgba = UTIF.toRGBA8(ifds[i]);
@@ -27794,7 +27973,10 @@ async function edImportLayers(file) {
         lc.width = ifds[i].width; lc.height = ifds[i].height;
         lc.getContext('2d').putImageData(
           new ImageData(new Uint8ClampedArray(rgba), ifds[i].width, ifds[i].height), 0, 0);
-        rawLayers.push({ name: `Página ${i+1}`, canvas: lc, opacity: 1, visible: true });
+        rawLayers.push({ name: `Página ${i+1}`, canvas: lc, opacity: 1, visible: true,
+          blendMode: 'normal',
+          top: 0, left: _tiffCursorX, right: _tiffCursorX + ifds[i].width, bottom: ifds[i].height });
+        _tiffCursorX += ifds[i].width + _tiffGap;
       }
     }
   } catch(err) {
@@ -27830,6 +28012,7 @@ async function edImportLayers(file) {
   // Convertir todos los rawLayers a ImageLayer en orden (inferior → superior)
   // rawLayers ya está ordenado de inferior a superior tras el .reverse()
   const newLayers = [];
+  const _placementEntries = [];
   for(let i = 0; i < visible.length; i++) {
     const rl = visible[i];
     _setProgress(i + 1, visible.length);
@@ -27839,14 +28022,15 @@ async function edImportLayers(file) {
     await new Promise(resolve => {
       const img = new Image();
       img.onload = () => {
-        const layer = new ImageLayer(img, 0.5, 0.5, 0.7);
-        const maxH = 0.85;
-        if(layer.height > maxH){
-          const scale = maxH / layer.height;
-          layer.height = maxH; layer.width = layer.width * scale;
-        }
+        // x/y/width/height reales los decide _edPlaceImportedGroupLeftOfCanvas
+        // más abajo, en conjunto para las N capas — valores de aquí solo
+        // provisionales, se sobrescriben todos antes de dibujar nada.
+        const layer = new ImageLayer(img, 0.5, 0.5, 0.1);
         layer.opacity = Math.max(0, Math.min(1, rl.opacity));
+        const _bm = _edMapPsdBlendMode(rl.blendMode);
+        if(_bm !== 'source-over') layer._blendMode = _bm;
         newLayers.push(layer);
+        _placementEntries.push({ layer, srcLeft: rl.left, srcTop: rl.top, srcRight: rl.right, srcBottom: rl.bottom });
         resolve();
       };
       img.src = dataUrl;
@@ -27854,6 +28038,13 @@ async function edImportLayers(file) {
   }
 
   _hideProgress();
+
+  // Petición explícita de Alberto: el conjunto importado se coloca en el
+  // área de trabajo, a la IZQUIERDA del lienzo (a diferencia de un objeto
+  // suelto — Galería/Cámara/Pegar —, que va a la derecha, ver
+  // _edPlaceNewObjectOutsideCanvas), preservando la composición relativa
+  // real entre sus capas.
+  _edPlaceImportedGroupLeftOfCanvas(_placementEntries);
 
   // Insertar todas las capas de golpe en el orden correcto (inferior primero),
   // justo antes del primer texto/bocadillo si lo hay

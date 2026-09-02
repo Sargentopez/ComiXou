@@ -3292,6 +3292,7 @@ function _render() {
       if (!img) return;
       ctx.save();
       ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
+      if (type === 'image' && layer._blendMode) ctx.globalCompositeOperation = layer._blendMode;
       if (type === 'image' || type === 'stroke') {
         const x = ((type==='stroke'||type==='image') && layer._pathCurX!=null ? layer._pathCurX : (layer.x||0.5)) * pw;
         const y = ((type==='stroke'||type==='image') && layer._pathCurY!=null ? layer._pathCurY : (layer.y||0.5)) * ph;
