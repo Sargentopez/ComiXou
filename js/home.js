@@ -86,6 +86,23 @@ const _HOME_PAGE_TIMEOUT_MS = 15000;
 // dispararse.
 const _HOME_LOAD_TIMEOUT_MS = 10000;
 
+// BUG CORREGIDO (reportado por Alberto: la animación de bienvenida
+// terminaba y aparecía index sin obras, con el aviso de "no se han podido
+// cargar las obras" pese a tener internet perfectamente — bastaba con
+// tocar "Publicados" para que cargaran bien). Causa: _homeStartLoading
+// hacía un ÚNICO intento acotado a _HOME_LOAD_TIMEOUT_MS (10s) y, si no
+// terminaba a tiempo, se daba por vencida sin más — un intento algo lento
+// (Supabase recién despertando, red puntualmente cargada) se confundía con
+// "no hay conexión". Ahora la carga INICIAL (ver _homeStartInitialLoad)
+// reintenta automáticamente, como si se tocara "Publicados" una y otra
+// vez, con espera creciente entre intentos (mismo patrón de backoff
+// exponencial que usan los SDK de AWS/Stripe/Google Cloud para no
+// machacar un servidor que ya está teniendo problemas) — y solo se rinde
+// del todo cuando pasa este presupuesto total de tiempo O se confirma con
+// navigator.onLine que de verdad no hay red (lo que ocurra antes).
+const _HOME_INITIAL_RETRY_BUDGET_MS = 45000;
+const _HOME_RETRY_BACKOFF_MS = [1500, 3000, 6000, 6000, 6000]; // se repite el último tramo si hacen falta más intentos
+
 // Aplica un límite de tiempo a cualquier promesa: si no se resuelve antes,
 // rechaza con un error claro en vez de dejar la espera abierta para
 // siempre.
@@ -151,8 +168,8 @@ function HomeView_init() {
   window.addEventListener('cx:store', _onStoreChange);
 
   setupPageNav();
-  _homeLoadFacets();      // universo de géneros/autores para el menú de Filtros (en paralelo, no bloquea)
-  _homeStartLoading();    // primera página(s) + scroll infinito + virtualización
+  _homeLoadFacets();          // universo de géneros/autores para el menú de Filtros (en paralelo, no bloquea)
+  _homeStartInitialLoad();    // primera página(s) + scroll infinito + virtualización — con reintento automático, ver más abajo
 
   // Actualización periódica cada 5 minutos — solo si la persona sigue
   // prácticamente al principio del listado (una sola página cargada): con
@@ -212,7 +229,14 @@ async function _homeLoadFacets() {
 // infinito (ver _ensureSentinel) siga a la vista — en cuanto deja de estarlo
 // (ya hay de sobra para llenar el hueco visible) o se acaban las obras, se
 // para y se avisa a la ventana de bienvenida de que ya puede ocultarse.
-async function _homeStartLoading() {
+//
+// signalSplash=false (usado solo por _homeStartInitialLoad, ver más abajo):
+// hace exactamente el mismo intento pero SIN avisar a la ventana de
+// bienvenida al final — necesario para poder reintentar varias veces
+// seguidas sin que el primer intento fallido la cierre ya. El resto de
+// llamantes (botón "Publicados", refresco periódico, cambio de pestaña)
+// siguen igual que siempre, con el valor por defecto.
+async function _homeStartLoading(signalSplash = true) {
   if (_homeVisObserver) _homeVisObserver.disconnect();
   if (_homeBottomObserver) _homeBottomObserver.disconnect();
   _homeWorks = [];
@@ -241,6 +265,34 @@ async function _homeStartLoading() {
   // tiempo máximo) — ya se puede ocultar la ventana si la persona ya había
   // aceptado las condiciones antes (ver router.js, que hace lo mismo para
   // el resto de vistas justo tras su init síncrono).
+  if (signalSplash && typeof window._cxSplashReady === 'function') window._cxSplashReady();
+}
+
+// Envoltorio SOLO para la carga inicial (ver HomeView_init) — reintenta
+// _homeStartLoading tal cual como si se tocara el botón "Publicados" una y
+// otra vez, con espera creciente entre intentos, hasta que:
+//   a) haya obras (o se confirme, sin error, que de verdad no hay ninguna
+//      publicada — eso no es un fallo, no hay nada que reintentar), o
+//   b) se agote _HOME_INITIAL_RETRY_BUDGET_MS (tiempo racional total), o
+//   c) navigator.onLine confirme que no hay red — false es una señal
+//      fiable del propio navegador; true NO garantiza conexión real (puede
+//      haber wifi sin internet), por eso no basta por sí sola y se combina
+//      con el tiempo total ya invertido.
+// Solo entonces se avisa a la ventana de bienvenida — mientras tanto sigue
+// tapada (y su animación, en bucle propio, se sigue viendo reproducirse).
+async function _homeStartInitialLoad() {
+  const _startedAt = Date.now();
+  let _attempt = 0;
+  while (true) {
+    await _homeStartLoading(false);
+    if (_homeWorks.length > 0 || !_homeLoadError) break; // éxito, o de verdad no hay obras — no es un fallo que reintentar
+    const _elapsed = Date.now() - _startedAt;
+    const _confirmedOffline = navigator.onLine === false;
+    if (_elapsed >= _HOME_INITIAL_RETRY_BUDGET_MS || _confirmedOffline) break;
+    const _wait = _HOME_RETRY_BACKOFF_MS[Math.min(_attempt, _HOME_RETRY_BACKOFF_MS.length - 1)];
+    await new Promise(r => setTimeout(r, _wait));
+    _attempt++;
+  }
   if (typeof window._cxSplashReady === 'function') window._cxSplashReady();
 }
 
