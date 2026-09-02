@@ -4009,6 +4009,29 @@ function _tdCenterActiveLine(reason){
   // se pueda) mover el scroll.
   if(typeof _tdViewPageStartChars !== 'undefined' && _tdViewPageStartChars && _tdViewPageStartChars.length){
     const _tdCursorCharOffset = _tdDomPosToCharOffset(editorEl, anchorNode, sel.focusOffset);
+    // BUG CORREGIDO (reportado por Alberto: al reeditar un flujo con doble
+    // tap, la vista salta a la hoja correcta un instante y enseguida vuelve
+    // a la primera). Causa: tras editorEl.editor.loadHTML() (edOpenTextDoc)
+    // el cursor real de Trix queda en el carácter 0 hasta que el usuario
+    // toca o escribe algo de verdad — pero el sondeo de altura de teclado
+    // (_tdSyncViewportHeight, con comprobaciones explícitas hasta 650ms tras
+    // el foco — ver 'focusin' más arriba en este mismo archivo) también
+    // dispara esta función, y 650ms > los 400ms de protección de
+    // _tdPendingNavUntil que arma _tdScrollToViewPage al saltar a la hoja de
+    // origen: esa comprobación tardía llega ya sin protección. Un offset de
+    // carácter EXACTAMENTE 0 mientras ya se muestra una hoja distinta de la
+    // primera no puede ser un toque real del usuario en ese punto (para eso
+    // habría tenido que desplazarse a mano hasta el principio del documento
+    // y tocar justo ahí) — es, con total fiabilidad, el cursor sin tocar que
+    // deja loadHTML(). Se ignora esta pasada entera en vez de alargar la
+    // ventana de tiempo: cualquier número fijo se volvería a quedar corto en
+    // un dispositivo con el teclado más lento. Reproducido y confirmado con
+    // Playwright real (Trix real, misma secuencia de tiempos que el foco
+    // dispara de verdad) antes de aplicar este cambio.
+    if(_tdCursorCharOffset === 0 && _tdViewCurPage !== 0){
+      _tdLogScroll('_tdCenterActiveLine ABORTA', _r + ' — charOffset=0 con hoja ya distinta de la primera (' + _tdViewCurPage + '), cursor sin tocar tras loadHTML');
+      return;
+    }
     let _tdCursorPage = 0;
     for(let i = 0; i < _tdViewPageStartChars.length; i++){ if(_tdCursorCharOffset >= _tdViewPageStartChars[i]) _tdCursorPage = i; }
     if(_tdCursorPage !== _tdViewCurPage){

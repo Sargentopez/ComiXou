@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.11</footer>
+    <footer class="app-version">v39.13</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -398,11 +398,15 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — vuelto a mostrar a petición explícita de
-             Alberto (para investigar por qué la biblioteca de una obra no
-             sube a la nube). Si vuelve a sobrar, comentar la línea de abajo
-             de nuevo (mismo criterio que la vez anterior, v37.32). -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto):
+             se mostró temporalmente para investigar por qué la biblioteca
+             de una obra no subía a la nube (causa real encontrada y
+             corregida — ver CARTA_SIGUIENTE_INSTANCIA_v39_11.md, id de fila
+             global en la tabla biblioteca). Mismo criterio que la vez
+             anterior (v37.32): para volver a mostrarlo, descomentar la
+             línea de abajo; toda la instrumentación sigue activa en
+             editor.js aunque el botón esté oculto. -->
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
