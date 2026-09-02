@@ -907,6 +907,14 @@ function _tdInitOnce(){
   _tdArea?.addEventListener('scroll', () => {
     cancelAnimationFrame(_tdScrollSyncRaf);
     _tdScrollSyncRaf = requestAnimationFrame(() => {
+      // Botón Tabulador: a diferencia del indicador "X / Y" de más abajo, no
+      // debe esperar a que termine una animación (ver _tdPendingNavUntil) —
+      // es un elemento position:fixed que representa la posición REAL en
+      // pantalla en cada instante, así que se recalcula en todos y cada uno
+      // de los fotogramas de scroll, incluidos los intermedios de un salto
+      // animado (ver el mismo razonamiento, para los saltos programados, en
+      // _tdSetScrollOffset). Bug corregido, reportado por Alberto.
+      if(typeof _tdSyncTabButton === 'function') _tdSyncTabButton();
       // Mientras dura una navegación animada a una página concreta (◀▶,
       // flechas — ver _tdPendingNavUntil en _tdScrollToViewPage), este mismo
       // scroll suave dispara eventos 'scroll' nativos en cada fotograma de
@@ -3725,6 +3733,22 @@ function _tdSetScrollOffset(px, animate){
   }
   areaEl.scrollTo({top: clamped, behavior: animate ? 'smooth' : 'instant'});
   _tdSyncPageNavFromOffset(clamped);
+  // BUG CORREGIDO (reportado por Alberto: el botón Tabulador táctil se queda
+  // desplazado de su sitio cuando la hoja se reubica — p.ej. al centrarse
+  // para no quedar tapada por el teclado en Android, ver _tdCenterActiveLine/
+  // _tdSyncViewportHeight). El botón es position:fixed con left/top puestos
+  // a mano en cada cambio de SELECCIÓN (ver _tdWireTabButton) — pero su
+  // posición en pantalla depende también del scroll de #tdPageArea, que
+  // puede cambiar sin que la selección cambie para nada (seguimiento
+  // automático del cursor, saltos de página, el propio reajuste de
+  // _tdRecomputeViewPagination). Único sitio por el que pasan TODOS los
+  // desplazamientos PROGRAMADOS (ver también el listener de scroll nativo,
+  // más abajo, para los desplazamientos manuales) — se aprovecha para
+  // recalcular aquí también, en vez de perseguir cada disparador por
+  // separado. Inofensivo si el botón no aplica ahora mismo: _tdSyncTabButton
+  // ya se oculta sola cuando el editor no tiene el foco o el cursor no está
+  // al principio de un bloque.
+  if(typeof _tdSyncTabButton === 'function') _tdSyncTabButton();
 }
 // Actualiza el estado (offset actual, página mostrada en la cabecera) a
 // partir de una posición de scroll — compartido entre _tdSetScrollOffset
