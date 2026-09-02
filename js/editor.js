@@ -2147,26 +2147,40 @@ class TextLayer extends BaseLayer {
     const px=edMarginX()+_tlCurX*pw, py=edMarginY()+_tlCurY*ph;
     ctx.save();
     ctx.translate(px,py); ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
-    // Fondo y borde se dibujan en espacio local (tras la rotación). Para un
-    // flujo de texto paginado CON marco, tanto el relleno como el propio
-    // marco se retranquean del borde del lienzo la distancia indicada en
-    // frameMarginPx (petición explícita de Alberto — el marco de un flujo
-    // de texto ocupa siempre TODA la página, ver el comentario en
-    // contains() más abajo, así que sin este retranqueo quedaba pegado al
-    // borde físico de la hoja). Puramente visual — no toca en absoluto la
-    // maquetación/paginado real del texto, que se sigue calculando sobre el
-    // tamaño íntegro de la página (ver editor-textdoc.js); el propio margen
-    // de escritura (marginXFrac, el control "Márgenes" de este panel) ya
-    // suele dejar de sobra más hueco que el retranqueo por defecto (10px)
-    // para que marco y texto no lleguen a tocarse.
+    // Fondo y marco de un flujo de texto paginado CON marco: SIEMPRE cubren
+    // el lienzo entero, retranqueados frameMarginPx de su borde real — NUNCA
+    // los límites de la propia caja (bug corregido, reportado por Alberto:
+    // si la caja se había redimensionado a mano —_tdBoxManualH— o por
+    // cualquier motivo no llegaba hasta el final de la página, el marco se
+    // "encogía" con ella en vez de seguir cubriendo la hoja). Por eso el
+    // rectángulo se calcula con pw/ph (tamaño REAL de la página, no de la
+    // caja) y el desplazamiento entre el centro de la página y el centro de
+    // ESTA capa (_tlCurX/_tlCurY) — nunca con w/h (tamaño de la propia
+    // caja). Puramente visual — this.width/height/x/y no se tocan aquí, así
+    // que el marco no afecta en absoluto a la caja; tampoco a la
+    // maquetación real del texto, que sigue calculándose sobre la página
+    // completa (ver editor-textdoc.js). Vértices ligeramente curvos,
+    // petición explícita de Alberto.
     const _fm = (this.richLines && this.richLines.length && this.borderWidth>0) ? (this.frameMarginPx||0) : 0;
-    const _fx=-w/2+_fm, _fy=-h/2+_fm, _fw=w-_fm*2, _fh=h-_fm*2;
     const _bgo=this.bgOpacity??1;
     const _ctxAlpha=ctx.globalAlpha;
-    if(_bgo>0){ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(_fx,_fy,_fw,_fh);ctx.globalAlpha=_ctxAlpha;}
-    if(this.borderWidth>0){
+    if(_fm>0){
+      const _offX=pw*(0.5-_tlCurX), _offY=ph*(0.5-_tlCurY);
+      const _fL=_offX-pw/2+_fm, _fR=_offX+pw/2-_fm, _fT=_offY-ph/2+_fm, _fB=_offY+ph/2-_fm;
+      const _rr=Math.min(8,(_fR-_fL)/2,(_fB-_fT)/2);
+      ctx.beginPath();
+      ctx.moveTo(_fL+_rr,_fT);
+      ctx.lineTo(_fR-_rr,_fT); ctx.arcTo(_fR,_fT,_fR,_fT+_rr,_rr);
+      ctx.lineTo(_fR,_fB-_rr); ctx.arcTo(_fR,_fB,_fR-_rr,_fB,_rr);
+      ctx.lineTo(_fL+_rr,_fB); ctx.arcTo(_fL,_fB,_fL,_fB-_rr,_rr);
+      ctx.lineTo(_fL,_fT+_rr); ctx.arcTo(_fL,_fT,_fL+_rr,_fT,_rr);
+      ctx.closePath();
+      if(_bgo>0){ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fill();ctx.globalAlpha=_ctxAlpha;}
       ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
-      ctx.strokeRect(_fx,_fy,_fw,_fh);
+      ctx.stroke();
+    } else if(_bgo>0){
+      // Sin marco: fondo simple de siempre, límites de la propia caja, sin cambios.
+      ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=_ctxAlpha;
     }
     // Hoja de texto paginada (Editor de textos): formato enriquecido ya maquetado
     if(this.richLines && this.richLines.length){

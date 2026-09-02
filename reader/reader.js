@@ -3609,14 +3609,23 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     ctx.closePath();
   } else if (type === 'text') {
     // Caja de texto: rectángulo con esquinas ligeramente redondeadas.
-    // Flujo de texto paginado CON marco: relleno y marco se retranquean del
-    // borde de la página (frameMarginPx, 10px por defecto) — mismo ajuste y
-    // misma razón que en editor.js (TextLayer.draw): el marco de un flujo
-    // ocupa siempre toda la página, así que sin este retranqueo quedaba
-    // pegado al borde físico de la hoja. Escalado igual que bw (=
-    // borderW_*scale) por ser la misma clase de valor.
+    // Flujo de texto paginado CON marco: SIEMPRE cubre la página real,
+    // retranqueado frameMarginPx de su borde — NUNCA los límites de la
+    // propia caja, aunque esta se haya redimensionado a mano y no llegue
+    // hasta el final de la página (mismo criterio y misma razón que
+    // editor.js, TextLayer.draw() — ver ese comentario para el porqué
+    // completo). _tCurX/_tCurY ya son el centro de ESTA capa como fracción
+    // de la página; pw/ph son el tamaño real de la página en esta función
+    // (sin margen de área de trabajo aquí, a diferencia del editor).
+    // Escalado igual que bw (=borderW_*scale) por ser la misma clase de valor.
     const _fm = (richSource && bw > 0) ? (t.frameMarginPx ?? 10) * scale : 0;
-    const _fL = -w/2+_fm, _fR = w/2-_fm, _fT = -h/2+_fm, _fB = h/2-_fm;
+    let _fL, _fR, _fT, _fB;
+    if(_fm > 0){
+      const _offX = pw*(0.5-_tCurX), _offY = ph*(0.5-_tCurY);
+      _fL = _offX-pw/2+_fm; _fR = _offX+pw/2-_fm; _fT = _offY-ph/2+_fm; _fB = _offY+ph/2-_fm;
+    } else {
+      _fL = -w/2; _fR = w/2; _fT = -h/2; _fB = h/2;
+    }
     const rr = Math.min(6 * scale, (_fR-_fL)/2, (_fB-_fT)/2);
     ctx.beginPath();
     ctx.moveTo(_fL+rr, _fT);
