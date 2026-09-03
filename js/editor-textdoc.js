@@ -2336,13 +2336,13 @@ function _tdWireInsertImage(){
     }
     try{
       const items = await navigator.clipboard.read();
-      let imgBlob = null;
+      let imgBlob = null, imgType = null;
       for(const it of items){
-        const imgType = it.types.find(t => t.startsWith('image/'));
-        if(imgType){ imgBlob = await it.getType(imgType); break; }
+        const _t = it.types.find(t => t.startsWith('image/'));
+        if(_t){ imgBlob = await it.getType(_t); imgType = _t; break; }
       }
       if(!imgBlob){ edToast(I18n.t('ed_noImageInClipboard')); return; }
-      _tdInsertImage(imgBlob);
+      if(imgType === 'image/gif') _tdInsertGif(imgBlob); else _tdInsertImage(imgBlob);
     }catch(_err){
       _tdLogImg('EXCEPCIÓN pegando desde portapapeles', (_err && _err.message) || String(_err));
       edToast(I18n.t('ed_clipboardReadFailed'));
@@ -2352,7 +2352,10 @@ function _tdWireInsertImage(){
     const f = e.target.files[0]; e.target.value = '';
     _tdLogImg('input[file] change', f ? (f.name + ' ' + f.type + ' ' + f.size + 'B') : '(sin archivo)');
     if(!f) return;
-    _tdInsertImage(f);
+    // Petición explícita de Alberto: permitir insertar animaciones igual que
+    // imágenes — mismo criterio de detección que edFileGallery en el editor
+    // general (extensión/tipo GIF → camino de animación, resto → imagen).
+    if(f.type === 'image/gif') _tdInsertGif(f); else _tdInsertImage(f);
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
       setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
     }
@@ -2411,6 +2414,59 @@ function _tdInsertImage(file, opts){
   }
   if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); return; }
   _tdProcessNewImageAttachment(att, file, opts);
+}
+
+// Petición explícita de Alberto: permitir insertar ANIMACIONES en el flujo
+// de texto, igual que ya se pueden insertar imágenes, y que se reproduzcan
+// correctamente al insertarse en el canvas. Mismo decodificador y misma IDB
+// (cxGifs) que usa edAddGif para el lienzo general — no se reinventa nada.
+//
+// Cómo funciona: en el EDITOR (tanto el lienzo general como el flujo de
+// texto) las animaciones se muestran SIEMPRE como una imagen fija con el
+// primer frame — la reproducción real ocurre en el lector/visor (ver
+// GifLayer._applyFrame: "En el editor: no animar automáticamente ... La
+// animación se activará en los reproductores"). Así que aquí basta con:
+// 1) decodificar el GIF para sacar su primer frame como PNG estático (con
+//    el tamaño final ya correcto — sin pasar por _edCompressLoadedImage,
+//    que lo cambiaría byte a byte, ver skipCompress en
+//    _tdProcessNewImageAttachment),
+// 2) insertarlo como una imagen normal reutilizando _tdInsertImage (mismo
+//    camino ya probado: separar en su propia línea, seleccionar tras
+//    insertar, etc.),
+// 3) recordar la asociación "este dataUrl exacto = este gifKey" en
+//    window._tdGifKeyBySrc, para que _tdLayoutPages (ver más abajo en este
+//    archivo) la traslade al campo gifKey de la línea richLines
+//    correspondiente cuando se pulse "Aplicar",
+// 4) guardar el GIF completo (todos los frames) en IDB bajo ese gifKey —
+//    el lector lo carga de ahí para animarlo de verdad (ver reader.js).
+function _tdInsertGif(file){
+  _tdLogImg('_tdInsertGif llamada', file ? (file.name + ' ' + file.type + ' ' + file.size + 'B') : '(sin archivo)');
+  if(!window.GifDecoder){ edToast(I18n.t('ed_gifNotSupported')); return; }
+  const gifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+  const reader = new FileReader();
+  reader.onerror = () => { _tdLogImg('_tdInsertGif FileReader onerror', String(reader.error)); edToast(I18n.t('td_errReadText', { msg: 'FileReader' })); };
+  reader.onload = ev => {
+    const gifSrc = ev.target.result;
+    edToast(I18n.t('ed_processingGif'));
+    // GifLayer usado puramente como decodificador — nunca se añade al
+    // lienzo ni se conserva; _oc es su primer frame ya renderizado.
+    const _decoder = new GifLayer(gifKey, 0.5, 0.5, 0.7);
+    _decoder.load(gifSrc, () => {
+      if(!_decoder._oc){ _tdLogImg('_tdInsertGif ABORTA', 'el decodificador no produjo _oc'); edToast(I18n.t('ed_gifNotSupported')); return; }
+      const staticDataUrl = _decoder._oc.toDataURL('image/png');
+      window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+      window._tdGifKeyBySrc[staticDataUrl] = gifKey;
+      if(typeof _gifIdbSave === 'function'){
+        _gifIdbSave(gifKey, gifSrc).catch(e => { _tdLogImg('_tdInsertGif _gifIdbSave EXCEPCIÓN', String(e)); });
+      }
+      fetch(staticDataUrl).then(r => r.blob()).then(blob => {
+        const pngFile = new File([blob], 'anim.png', { type: 'image/png' });
+        _tdInsertImage(pngFile, { skipCompress: true });
+        edToast(I18n.t('ed_gifAdded', { n: _decoder._frames.length }));
+      }).catch(e => { _tdLogImg('_tdInsertGif fetch(dataURL) EXCEPCIÓN', String(e)); edToast(I18n.t('ed_gifNotSupported')); });
+    });
+  };
+  reader.readAsDataURL(file);
 }
 
 // Conjunto de ids de adjuntos ya tratados (URL persistente + tamaño inicial
@@ -2563,9 +2619,15 @@ function _tdProcessNewImageAttachment(att, file, opts){
       // transparente por defecto, así que se conserva PNG cuando la imagen
       // tiene transparencia real — la propia función ya distingue esto igual
       // que en el resto de la app, no es un caso especial nuevo.
-      const compressedDataUrl = (typeof _edCompressLoadedImage === 'function')
-        ? _edCompressLoadedImage(img, dataUrl)
-        : dataUrl;
+      // skipCompress: usado al insertar una ANIMACIÓN (ver _tdInsertGif) — el
+      // frame estático que se ve aquí ya viene generado por el propio
+      // decodificador GIF/APNG con el tamaño final correcto; comprimirlo de
+      // nuevo cambiaría el dataUrl byte a byte y rompería la asociación con
+      // su gifKey (ver window._tdGifKeyBySrc, comprobada por igualdad exacta
+      // de string más abajo en _tdLayoutPages).
+      const compressedDataUrl = (opts && opts.skipCompress)
+        ? dataUrl
+        : (typeof _edCompressLoadedImage === 'function' ? _edCompressLoadedImage(img, dataUrl) : dataUrl);
       _tdLogImg('compresión de imagen para el flujo de texto', 'original=' + dataUrl.length + ' comprimido=' + compressedDataUrl.length + ' formato=' + (compressedDataUrl.slice(11, compressedDataUrl.indexOf(';'))));
       try{
         att.setAttributes({ width: w, height: h, url: compressedDataUrl, href: compressedDataUrl });
@@ -2762,23 +2824,95 @@ function _tdInsertFromBib(entry){
   // tamaño arbitrario) — ahora se le pasa el ancho REAL que tenía el
   // objeto en la página (widthFrac, segundo argumento de
   // _tdRenderLayersToImage), para que un objeto pequeño se inserte pequeño.
-  const _finish = (dataUrl, widthFrac) => {
+  const _finish = (dataUrl, widthFrac, skipCompress) => {
     edOrientation = _savedOrientBib;
     if(!dataUrl){ _tdLogImg('insertar desde biblioteca ABORTA', 'sin dataUrl resultante'); return; }
     try{
       const blob = _dataUrlToBlob(dataUrl);
       const file = new File([blob], 'biblioteca.png', { type: blob.type || 'image/png' });
-      _tdInsertImage(file, widthFrac ? { pageWidthFrac: widthFrac } : undefined);
+      const _opts = {};
+      if(widthFrac) _opts.pageWidthFrac = widthFrac;
+      if(skipCompress) _opts.skipCompress = true;
+      _tdInsertImage(file, Object.keys(_opts).length ? _opts : undefined);
     }catch(err){
       _tdLogImg('EXCEPCIÓN insertando desde biblioteca', (err && err.message) || String(err));
       edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
     }
   };
 
-  // Animaciones (GIF/GCP): el flujo de texto no reproduce animaciones — se
-  // usa su miniatura ya generada como fotograma fijo, mismo criterio que
-  // gcpInsertFromBib aplica a objetos no animables directamente.
-  if(entry.isGifAnim){ _finish(entry.thumb); return; }
+  // Animaciones (GIF/GCP) de biblioteca. Petición explícita de Alberto: deben
+  // reproducirse igual que una animación insertada por el menú Insertar, no
+  // quedarse en su miniatura fija (comportamiento anterior, ver el `if`
+  // simple que había aquí antes). Dos orígenes posibles, mismo patrón para
+  // ambos (decodificar → asociar el dataUrl del primer frame con una clave
+  // vía un mapa de consulta → guardar el original completo en su propia
+  // IDB), solo cambia el decodificador y el almacén:
+  //  - GIF (entry.gifDataUrl): GifDecoder/GifLayer, gifKey en cxGifs.
+  //  - APNG/GCP (entry.apngSrc o entry.pngFrames): ApngDecoder/ImageLayer
+  //    (el mismo loadAnim que ya usa cualquier animación APNG de la app),
+  //    animKey en cxAnims. Se preservan además las opciones GCP (repetición,
+  //    parada, fundido, retardo de inicio) para que _animTickOne — la misma
+  //    función que ya anima cualquier otra capa, ver reader.js — las
+  //    respete tal cual en el lector, en vez de perderlas.
+  if(entry.isGifAnim){
+    if(entry.gifDataUrl && window.GifDecoder){
+      const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+      const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
+      _bibDecoder.load(entry.gifDataUrl, () => {
+        if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
+        const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
+        window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+        window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
+        if(typeof _gifIdbSave === 'function'){
+          _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
+        }
+        _finish(_bibStaticUrl, entry.normW, true);
+      });
+    } else if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
+      const _bibAnimKey = (typeof _edAnimKey === 'function')
+        ? _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8))
+        : ('anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+      const _bibAnimInput = entry.apngSrc || entry.pngFrames;
+      // ImageLayer usado puramente como decodificador (loadAnim), igual que
+      // GifLayer arriba para el caso GIF — nunca se añade al lienzo.
+      const _bibAnimDecoder = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
+      if(entry.gcpFrameDelay != null) _bibAnimDecoder._gcpFrameDelay = entry.gcpFrameDelay;
+      if(entry.gcpFrameHolds && entry.gcpFrameHolds.length) _bibAnimDecoder._gcpFrameHolds = entry.gcpFrameHolds;
+      _bibAnimDecoder.loadAnim(_bibAnimInput, () => {
+        if(!_bibAnimDecoder._oc || !_bibAnimDecoder._animFrames || !_bibAnimDecoder._animFrames.length){
+          _tdLogImg('insertar animación de biblioteca (APNG) ABORTA', 'el decodificador no produjo frames');
+          _finish(entry.thumb);
+          return;
+        }
+        const _bibStaticUrl = _bibAnimDecoder._oc.toDataURL('image/png');
+        window._tdAnimKeyBySrc = window._tdAnimKeyBySrc || {};
+        window._tdAnimKeyBySrc[_bibStaticUrl] = {
+          animKey: _bibAnimKey,
+          gcpFrameDelay:     entry.gcpFrameDelay,
+          gcpFrameHolds:     entry.gcpFrameHolds,
+          gcpRepeatCount:    entry.gcpRepeatCount,
+          gcpStopAtEnd:      entry.gcpStopAtEnd,
+          gcpRestartDelay:   entry.gcpRestartDelay,
+          gcpStartDelay:     entry.gcpStartDelay,
+          gcpInvisBeforeStart: entry.gcpInvisBeforeStart,
+          gcpInvisAtEnd:     entry.gcpInvisAtEnd,
+          gcpInvisGradual:   entry.gcpInvisGradual,
+          gcpCircularEnd:    entry.gcpCircularEnd,
+        };
+        if(window._sbAnimIdbSave){
+          // Se guarda tal cual (string APNG o array de frames sueltos) —
+          // igual que ya hace la app con cualquier animKey; la conversión a
+          // APNG único (si hiciera falta) ya la resuelve la propia subida a
+          // Supabase (ver supabase-client.js), no hay que adelantarla aquí.
+          window._sbAnimIdbSave(_bibAnimKey, _bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
+        }
+        _finish(_bibStaticUrl, entry.normW, true);
+      });
+    } else {
+      _finish(entry.thumb);
+    }
+    return;
+  }
 
   // Grupos multi-capa: componer TODAS las capas en una sola imagen,
   // recortada a la caja UNIÓN de todas ellas.
@@ -5020,7 +5154,29 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         // con el texto, sea cual sea la alineación del texto". A diferencia
         // de las líneas de texto (que sí heredan block.align), la imagen
         // ignora ese valor a propósito.
-        pushLine({height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH});
+        {
+          const _gk = (window._tdGifKeyBySrc && window._tdGifKeyBySrc[w.src]) || undefined;
+          const _ak = (window._tdAnimKeyBySrc && window._tdAnimKeyBySrc[w.src]) || null;
+          const _lineObj = {height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH, gifKey: _gk};
+          if(_ak){
+            // Opciones GCP con guion bajo (_gcpStopAtEnd, no gcpStopAtEnd):
+            // _animTickOne (reader.js) las lee así, igual que en cualquier
+            // otra capa animada — petición explícita de Alberto de
+            // reutilizar esa misma lógica tal cual.
+            _lineObj.animKey = _ak.animKey;
+            if(_ak.gcpFrameDelay != null) _lineObj._gcpFrameDelay = _ak.gcpFrameDelay;
+            if(_ak.gcpFrameHolds && _ak.gcpFrameHolds.length) _lineObj._gcpFrameHolds = _ak.gcpFrameHolds;
+            if(_ak.gcpRepeatCount != null) _lineObj._gcpRepeatCount = _ak.gcpRepeatCount;
+            if(_ak.gcpStopAtEnd) _lineObj._gcpStopAtEnd = true;
+            if(_ak.gcpRestartDelay) _lineObj._gcpRestartDelay = _ak.gcpRestartDelay;
+            if(_ak.gcpStartDelay) _lineObj._gcpStartDelay = _ak.gcpStartDelay;
+            if(_ak.gcpInvisBeforeStart) _lineObj._gcpInvisBeforeStart = true;
+            if(_ak.gcpInvisAtEnd) _lineObj._gcpInvisAtEnd = true;
+            if(_ak.gcpInvisGradual === false) _lineObj._gcpInvisGradual = false;
+            if(_ak.gcpCircularEnd) _lineObj._gcpCircularEnd = true;
+          }
+          pushLine(_lineObj);
+        }
         firstLineOfBlock = false;
         return;
       }
