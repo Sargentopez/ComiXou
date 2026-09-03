@@ -1629,92 +1629,6 @@ async function preloadImages() {
     })));
   }
 
-  // Precargar y decodificar las animaciones insertadas DENTRO de un flujo de
-  // texto (gifUrl en cada línea de richLines — ver _tdInsertGif en
-  // editor-textdoc.js y la subida del binario en supabase-client.js).
-  // Petición explícita de Alberto: deben reproducirse con el mismo
-  // comportamiento que cualquier otra animación (fundido, repeticiones,
-  // parada, reinicio) — por eso se decodifican con la nomenclatura _anim*
-  // (no _gif*), para que _animTickOne (extraída más arriba, misma función
-  // que usan las capas de nivel superior) las anime tal cual, sin ninguna
-  // versión reducida aparte. No se deduplica por URL a propósito (a
-  // diferencia de las imágenes estáticas de arriba): cada inserción anima de
-  // forma independiente, más simple y sin compartir estado entre ellas.
-  const _richAnimLines = [];
-  RS.panels.forEach(panel => {
-    (panel.layers || []).forEach(layer => {
-      if (!Array.isArray(layer.richLines)) return;
-      layer.richLines.forEach(line => {
-        if (line.kind === 'image' && line.gifUrl) _richAnimLines.push(line);
-      });
-    });
-  });
-  if (_richAnimLines.length && window.GifDecoder) {
-    await Promise.all(_richAnimLines.map(line => fetch(line.gifUrl, { cache: 'no-store' })
-      .then(r => r.blob())
-      .then(blob => new Promise(res => {
-        const fr = new FileReader();
-        fr.onload = e => res(e.target.result);
-        fr.readAsDataURL(blob);
-      }))
-      .then(dataUrl => window.GifDecoder.decode(dataUrl))
-      .then(decoded => {
-        if (!decoded || !decoded.frames.length) return;
-        const oc = document.createElement('canvas');
-        oc.width = decoded.width; oc.height = decoded.height;
-        oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
-        line._animFrames   = decoded.frames;
-        line._animIdx      = 0;
-        line._animOc       = oc;
-        line._animReady    = true;
-        line._animLastTick = Date.now(); // empieza a reproducirse de inmediato, sin retardo de inicio
-      })
-      .catch(() => {}) // fallo aislado: esa animación se queda sin decodificar, se dibuja su src estático si lo hay
-    ));
-  }
-
-  // Mismo mecanismo, para animaciones APNG/GCP insertadas en un flujo de
-  // texto (animUrl en vez de gifUrl — ver _tdInsertFromBib en
-  // editor-textdoc.js). Único decodificador distinto (ApngDecoder, con el
-  // retardo explícito: a diferencia de un GIF real, un APNG/frames sueltos
-  // de GCP no traen el delay embebido de la misma forma) — el resto
-  // (_animFrames/_animOc/_animReady/_animTickOne) es exactamente el mismo
-  // camino, así que las opciones GCP (repetición, parada, fundido, ya
-  // presentes en la propia línea como _gcpStopAtEnd etc., ver
-  // editor-textdoc.js) se respetan sin ningún código adicional.
-  const _richApngLines = [];
-  RS.panels.forEach(panel => {
-    (panel.layers || []).forEach(layer => {
-      if (!Array.isArray(layer.richLines)) return;
-      layer.richLines.forEach(line => {
-        if (line.kind === 'image' && line.animUrl) _richApngLines.push(line);
-      });
-    });
-  });
-  if (_richApngLines.length && window.ApngDecoder) {
-    await Promise.all(_richApngLines.map(line => fetch(line.animUrl, { cache: 'no-store' })
-      .then(r => r.blob())
-      .then(blob => new Promise(res => {
-        const fr = new FileReader();
-        fr.onload = e => res(e.target.result);
-        fr.readAsDataURL(blob);
-      }))
-      .then(dataUrl => window.ApngDecoder.decode(dataUrl, line._gcpFrameDelay || 100))
-      .then(decoded => {
-        if (!decoded || !decoded.frames.length) return;
-        const oc = document.createElement('canvas');
-        oc.width = decoded.width; oc.height = decoded.height;
-        oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
-        line._animFrames   = decoded.frames;
-        line._animIdx      = 0;
-        line._animOc       = oc;
-        line._animReady    = true;
-        line._animLastTick = Date.now();
-      })
-      .catch(() => {}) // fallo aislado: esa animación se queda sin decodificar, se dibuja su src estático si lo hay
-    ));
-  }
-
   setLoadingProgress(100, '');
 
   // Fallback: si algún panel no tiene capas, precargar data_url como antes
@@ -1823,157 +1737,6 @@ function _layerPathRotDeg(la) {
   return (la && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
 }
 
-// Avanza el fotograma de UNA animación tipo APNG (fundido, repeticiones,
-// parada al final, reinicio) — extraído tal cual de dentro de
-// _readerGifTick para poder reutilizarlo, verbatim, tanto con capas de
-// nivel superior como con animaciones insertadas DENTRO de un flujo de
-// texto (richLines — ver _tdInsertGif en editor-textdoc.js). Petición
-// explícita de Alberto: "el resto de opciones sí deben funcionar, tendrás
-// que reutilizar código" — de ahí que sea una copia literal del bloque que
-// ya existía (mismo nombre de variable panelChanged, ahora local a esta
-// función, para no tener que reescribir ni una línea de la máquina de
-// estados de dentro). La trayectoria (_motionPath) nunca se activa para una
-// línea de richLines porque sencillamente no la tiene — _animMpSync sale
-// false por sí solo, sin ningún caso especial que excluirla a propósito.
-function _animTickOne(layer, now){
-  let panelChanged = false;
-  if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
-    const _animMpSync = layer._motionPath && layer._motionCycles != null;
-    // Actualizar fade activo (fade-in / fade-out)
-    if (layer._animFadeStart != null) {
-      const _fp = Math.min((now - layer._animFadeStart) / (layer._animFadeDur || 300), 1);
-      const _nat = layer.opacity !== undefined ? layer.opacity : 1;
-      layer._animFadeOpacity = layer._animFadeDir === 'in' ? _fp * _nat : (1 - _fp) * _nat;
-      if (_fp >= 1) {
-        layer._animFadeStart = null;
-        if (layer._animFadeDir === 'in') layer._animFadeOpacity = null; // restaurar opacidad natural
-      }
-      panelChanged = true;
-    }
-    // BUG CORREGIDO (v38.12 — Alberto: animación con trayectoria sincronizada
-    // por ciclos que nunca llega a verse en el lector externo, aunque se
-    // guarda y se ve bien en el visor interno): este bloque resuelve el
-    // temporizador "_gcpStartDelay + _gcpInvisBeforeStart" (retardo de
-    // inicio con la capa invisible mientras tanto, _animFadeOpacity=0
-    // puesto por _resetPanelAnims). Antes, ese bloque vivía SOLO dentro de
-    // la rama "else if (!layer._animLastTick)", que el `if (_animMpSync)`
-    // de arriba saltaba por completo para cualquier capa en modo
-    // sincronizado (trayectoria + _motionCycles) — así que una capa con
-    // retardo+invisible-antes-de-empezar Y trayectoria sincronizada nunca
-    // llegaba a restaurar su opacidad: se quedaba en _animFadeOpacity=0
-    // para siempre, con independencia de la forma/posición de la
-    // trayectoria (de ahí que cambiarla no cambiara nada). El visor interno
-    // (editor.js) no tiene este fallo porque resuelve el retardo con un
-    // setTimeout real (_startDelayTimer), independiente de si hay
-    // trayectoria sincronizada o no. Arreglo: comprobar primero si la capa
-    // sigue esperando su temporizador de inicio (!layer._animLastTick),
-    // ANTES de mirar si está en modo sincronizado — así el temporizador se
-    // resuelve siempre, y el modo sincronizado solo decide, después, si
-    // hace falta avanzar fotogramas por su cuenta (no le corresponde,
-    // los controla el motor de trayectoria más abajo).
-    if (!layer._animLastTick) {
-      // Esperar hasta que expire el temporizador de inicio
-      if (layer._animStartAt && now >= layer._animStartAt) {
-        layer._animLastTick = now;
-        layer._animStartAt  = null;
-        // Fade in si gcpInvisBeforeStart (inmediato si _gcpInvisGradual===false)
-        if (layer._gcpInvisBeforeStart && layer._animFadeOpacity === 0) {
-          if (layer._gcpInvisGradual === false) {
-            layer._animFadeOpacity = null;
-          } else {
-            layer._animFadeStart = now;
-            layer._animFadeDur   = 300;
-            layer._animFadeDir   = 'in';
-          }
-        }
-        panelChanged = true;
-      }
-    }
-    else if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
-    else {
-    // Reinicio automático: si la animación está detenida y el plazo ha pasado, reiniciar
-    if (layer._animStopped) {
-      if (layer._gcpRestartDelay > 0 && layer._animRestartAt && now >= layer._animRestartAt) {
-        layer._animStopped   = false;
-        layer._animRestartAt = null;
-        layer._animIdx       = 0;
-        layer._animPlayCount = 0;
-        if (layer._animOc && layer._animFrames && layer._animFrames.length) {
-          layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
-        }
-        // Invisibilidad en inicio del nuevo ciclo (mismo comportamiento que _rStartPageAnims)
-        if (layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0) {
-          layer._animFadeOpacity = 0;
-          layer._animFadeStart   = null;
-          layer._animLastTick    = null; // suspender tick hasta que arranque
-          layer._animStartAt     = now + layer._gcpStartDelay * 1000;
-        } else {
-          layer._animFadeOpacity = null; // restaurar opacidad natural
-          layer._animLastTick    = now;
-        }
-        // Reiniciar la trayectoria sincronizada con la animación
-        if (layer._motionPath && layer._motionPath.length >= 2) {
-          const _hasStartDelay = layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0;
-          layer._pathStartTime = _hasStartDelay ? null : now;
-          delete layer._pathStopped;
-          layer._pathCurX = layer.x || 0.5;
-          layer._pathCurY = layer.y || 0.5;
-          delete layer._pathCurRotDeg;
-        }
-        panelChanged = true;
-      }
-      // Si está detenida (con o sin restart) no avanzar frames
-    } else {
-    const _af = layer._animFrames[layer._animIdx];
-    const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
-    if (now - layer._animLastTick >= _ad) {
-      const _stopAtEnd   = layer._gcpStopAtEnd   || false;
-      const _repeatCount = layer._gcpRepeatCount || 0;
-      let _nextIdx = layer._animIdx + 1;
-      if (_nextIdx >= layer._animFrames.length) {
-        layer._animPlayCount = (layer._animPlayCount || 0) + 1;
-        if (_stopAtEnd || (_repeatCount > 0 && layer._animPlayCount >= _repeatCount)) {
-          // Con interpolación circular y repeticiones finitas: volver al frame 0.
-          // Con stopAtEnd: detener en el último frame (comportamiento explícito).
-          const _circEnd = !_stopAtEnd && _repeatCount > 0 && (layer._gcpCircularEnd || false);
-          _nextIdx = _circEnd ? 0 : layer._animFrames.length - 1;
-          // Programar reinicio si hay delay configurado
-          const _rd = layer._gcpRestartDelay || 0;
-          if (_rd > 0) {
-            layer._animStopped   = true;
-            layer._animRestartAt = now + _rd * 1000;
-          }
-          // Fade out si gcpInvisAtEnd y reproducción finita (inmediato si _gcpInvisGradual===false)
-          if (layer._gcpInvisAtEnd && _repeatCount > 0) {
-            if (layer._gcpInvisGradual === false) {
-              layer._animFadeOpacity = 0;
-            } else {
-              layer._animFadeStart = now;
-              layer._animFadeDur   = 150;
-              layer._animFadeDir   = 'out';
-            }
-            panelChanged = true;
-          }
-        } else {
-          _nextIdx = 0; // loop infinito o más repeticiones
-        }
-      }
-      layer._animIdx = _nextIdx;
-      layer._animOc.getContext('2d').putImageData(layer._animFrames[_nextIdx].imageData, 0, 0);
-      // AUTOCORRECCIÓN (v38.21) — mismo criterio que el bloque GIF de
-      // arriba: sumar el delay ideal en vez de resetear a 'now', salvo
-      // que el retraso ya sea grande. No aplica al reinicio tras parada
-      // (líneas ~1652-1669 más arriba), que ancla a 'now' correctamente
-      // porque ahí sí empieza una secuencia nueva tras un hueco real.
-      layer._animLastTick = (now - layer._animLastTick > _ad * 2) ? now : layer._animLastTick + _ad;
-      panelChanged = true;
-    }
-    } // end else (!_animStopped)
-    } // end else (!_animMpSync)
-  }
-  return panelChanged;
-}
-
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
 function _readerGifTick() {
   const now = Date.now();
@@ -2002,22 +1765,140 @@ function _readerGifTick() {
           }
         }
       }
-      // APNG: tick con delay real (fundido, repeticiones, parada, reinicio) —
-      // extraído a _animTickOne (ver más abajo) para poder reutilizarlo tal
-      // cual con animaciones insertadas DENTRO de un flujo de texto (ver el
-      // bucle sobre layer.richLines unas líneas más abajo) — petición
-      // explícita de Alberto: "el resto de opciones sí deben funcionar,
-      // tendrás que reutilizar código". La trayectoria (_motionPath) nunca
-      // se activa aquí porque las líneas de richLines simplemente no la
-      // tienen — _animMpSync sale false por sí solo dentro de _animTickOne,
-      // sin necesitar ningún caso especial para excluirla.
-      if (_animTickOne(layer, now)) panelChanged = true;
-      // Animaciones insertadas DENTRO de un flujo de texto (ver _tdInsertGif
-      // en editor-textdoc.js) — misma función _animTickOne, una vez por
-      // cada línea de richLines que tenga su propia animación decodificada
-      // (ver la precarga, más arriba en este archivo).
-      if (layer.type === 'text' && Array.isArray(layer.richLines)) {
-        layer.richLines.forEach(rl => { if (_animTickOne(rl, now)) panelChanged = true; });
+      // APNG: tick con delay real (suspendido si motion path con ciclos controla el frame)
+      if (layer._animReady && layer._animFrames && layer._animFrames.length > 1) {
+        const _animMpSync = layer._motionPath && layer._motionCycles != null;
+        // Actualizar fade activo (fade-in / fade-out)
+        if (layer._animFadeStart != null) {
+          const _fp = Math.min((now - layer._animFadeStart) / (layer._animFadeDur || 300), 1);
+          const _nat = layer.opacity !== undefined ? layer.opacity : 1;
+          layer._animFadeOpacity = layer._animFadeDir === 'in' ? _fp * _nat : (1 - _fp) * _nat;
+          if (_fp >= 1) {
+            layer._animFadeStart = null;
+            if (layer._animFadeDir === 'in') layer._animFadeOpacity = null; // restaurar opacidad natural
+          }
+          panelChanged = true;
+        }
+        // BUG CORREGIDO (v38.12 — Alberto: animación con trayectoria sincronizada
+        // por ciclos que nunca llega a verse en el lector externo, aunque se
+        // guarda y se ve bien en el visor interno): este bloque resuelve el
+        // temporizador "_gcpStartDelay + _gcpInvisBeforeStart" (retardo de
+        // inicio con la capa invisible mientras tanto, _animFadeOpacity=0
+        // puesto por _resetPanelAnims). Antes, ese bloque vivía SOLO dentro de
+        // la rama "else if (!layer._animLastTick)", que el `if (_animMpSync)`
+        // de arriba saltaba por completo para cualquier capa en modo
+        // sincronizado (trayectoria + _motionCycles) — así que una capa con
+        // retardo+invisible-antes-de-empezar Y trayectoria sincronizada nunca
+        // llegaba a restaurar su opacidad: se quedaba en _animFadeOpacity=0
+        // para siempre, con independencia de la forma/posición de la
+        // trayectoria (de ahí que cambiarla no cambiara nada). El visor interno
+        // (editor.js) no tiene este fallo porque resuelve el retardo con un
+        // setTimeout real (_startDelayTimer), independiente de si hay
+        // trayectoria sincronizada o no. Arreglo: comprobar primero si la capa
+        // sigue esperando su temporizador de inicio (!layer._animLastTick),
+        // ANTES de mirar si está en modo sincronizado — así el temporizador se
+        // resuelve siempre, y el modo sincronizado solo decide, después, si
+        // hace falta avanzar fotogramas por su cuenta (no le corresponde,
+        // los controla el motor de trayectoria más abajo).
+        if (!layer._animLastTick) {
+          // Esperar hasta que expire el temporizador de inicio
+          if (layer._animStartAt && now >= layer._animStartAt) {
+            layer._animLastTick = now;
+            layer._animStartAt  = null;
+            // Fade in si gcpInvisBeforeStart (inmediato si _gcpInvisGradual===false)
+            if (layer._gcpInvisBeforeStart && layer._animFadeOpacity === 0) {
+              if (layer._gcpInvisGradual === false) {
+                layer._animFadeOpacity = null;
+              } else {
+                layer._animFadeStart = now;
+                layer._animFadeDur   = 300;
+                layer._animFadeDir   = 'in';
+              }
+            }
+            panelChanged = true;
+          }
+        }
+        else if (_animMpSync) { /* frame controlado por motor de path — ver más abajo */ }
+        else {
+        // Reinicio automático: si la animación está detenida y el plazo ha pasado, reiniciar
+        if (layer._animStopped) {
+          if (layer._gcpRestartDelay > 0 && layer._animRestartAt && now >= layer._animRestartAt) {
+            layer._animStopped   = false;
+            layer._animRestartAt = null;
+            layer._animIdx       = 0;
+            layer._animPlayCount = 0;
+            if (layer._animOc && layer._animFrames && layer._animFrames.length) {
+              layer._animOc.getContext('2d').putImageData(layer._animFrames[0].imageData, 0, 0);
+            }
+            // Invisibilidad en inicio del nuevo ciclo (mismo comportamiento que _rStartPageAnims)
+            if (layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0) {
+              layer._animFadeOpacity = 0;
+              layer._animFadeStart   = null;
+              layer._animLastTick    = null; // suspender tick hasta que arranque
+              layer._animStartAt     = now + layer._gcpStartDelay * 1000;
+            } else {
+              layer._animFadeOpacity = null; // restaurar opacidad natural
+              layer._animLastTick    = now;
+            }
+            // Reiniciar la trayectoria sincronizada con la animación
+            if (layer._motionPath && layer._motionPath.length >= 2) {
+              const _hasStartDelay = layer._gcpInvisBeforeStart && (layer._gcpStartDelay || 0) > 0;
+              layer._pathStartTime = _hasStartDelay ? null : now;
+              delete layer._pathStopped;
+              layer._pathCurX = layer.x || 0.5;
+              layer._pathCurY = layer.y || 0.5;
+              delete layer._pathCurRotDeg;
+            }
+            panelChanged = true;
+          }
+          // Si está detenida (con o sin restart) no avanzar frames
+        } else {
+        const _af = layer._animFrames[layer._animIdx];
+        const _ad = (_af && _af.delay) || layer._gcpFrameDelay || 100;
+        if (now - layer._animLastTick >= _ad) {
+          const _stopAtEnd   = layer._gcpStopAtEnd   || false;
+          const _repeatCount = layer._gcpRepeatCount || 0;
+          let _nextIdx = layer._animIdx + 1;
+          if (_nextIdx >= layer._animFrames.length) {
+            layer._animPlayCount = (layer._animPlayCount || 0) + 1;
+            if (_stopAtEnd || (_repeatCount > 0 && layer._animPlayCount >= _repeatCount)) {
+              // Con interpolación circular y repeticiones finitas: volver al frame 0.
+              // Con stopAtEnd: detener en el último frame (comportamiento explícito).
+              const _circEnd = !_stopAtEnd && _repeatCount > 0 && (layer._gcpCircularEnd || false);
+              _nextIdx = _circEnd ? 0 : layer._animFrames.length - 1;
+              // Programar reinicio si hay delay configurado
+              const _rd = layer._gcpRestartDelay || 0;
+              if (_rd > 0) {
+                layer._animStopped   = true;
+                layer._animRestartAt = now + _rd * 1000;
+              }
+              // Fade out si gcpInvisAtEnd y reproducción finita (inmediato si _gcpInvisGradual===false)
+              if (layer._gcpInvisAtEnd && _repeatCount > 0) {
+                if (layer._gcpInvisGradual === false) {
+                  layer._animFadeOpacity = 0;
+                } else {
+                  layer._animFadeStart = now;
+                  layer._animFadeDur   = 150;
+                  layer._animFadeDir   = 'out';
+                }
+                panelChanged = true;
+              }
+            } else {
+              _nextIdx = 0; // loop infinito o más repeticiones
+            }
+          }
+          layer._animIdx = _nextIdx;
+          layer._animOc.getContext('2d').putImageData(layer._animFrames[_nextIdx].imageData, 0, 0);
+          // AUTOCORRECCIÓN (v38.21) — mismo criterio que el bloque GIF de
+          // arriba: sumar el delay ideal en vez de resetear a 'now', salvo
+          // que el retraso ya sea grande. No aplica al reinicio tras parada
+          // (líneas ~1652-1669 más arriba), que ancla a 'now' correctamente
+          // porque ahí sí empieza una secuencia nueva tras un hueco real.
+          layer._animLastTick = (now - layer._animLastTick > _ad * 2) ? now : layer._animLastTick + _ad;
+          panelChanged = true;
+        }
+        } // end else (!_animStopped)
+        } // end else (!_animMpSync)
       }
       // Frame sincronizado al path respetando el comportamiento de la animación
 // ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
@@ -3834,17 +3715,13 @@ function _drawRichTextLines(ctx, t, w, h, textColor_) {
     // aquí no hace falta redibujar al cargar porque ya está lista antes de
     // la primera pasada de render.
     if (line.kind === 'image' && line.src) {
-      const ix = line.imgX !== undefined ? line.imgX : line.indent;
-      if (line._animReady && line._animOc) {
-        ctx.drawImage(line._animOc, ix, line.y, line.imgW, line.imgH);
-        return;
-      }
       const img = _tdImgCache[line.src];
       if (img && img.complete && img.naturalWidth > 0) {
         // line.imgX ya viene calculada por _tdLayoutPages (editor-textdoc.js),
         // igual que con la x de cada run de texto — mismo criterio que
         // TextLayer._drawRichLines() en editor.js (bug ya corregido ahí de
         // alineación a la izquierda).
+        const ix = line.imgX !== undefined ? line.imgX : line.indent;
         ctx.drawImage(img, ix, line.y, line.imgW, line.imgH);
       }
       return;

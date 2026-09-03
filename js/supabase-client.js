@@ -611,55 +611,6 @@ const SupabaseClient = (() => {
           } catch(e) { console.warn('APNG upload error:', e.message); }
         }
 
-        // Animaciones insertadas DENTRO de un flujo de texto (ver
-        // _tdInsertGif/_tdInsertFromBib en editor-textdoc.js) — viven en la
-        // IDB local (cxGifs para GIF, cxAnims para APNG/GCP) bajo su propia
-        // clave, igual que una capa suelta de ese mismo tipo, pero anidadas
-        // dentro de richLines en vez de ser una capa de nivel superior. Sin
-        // subir también su binario aquí, la clave queda colgando en cuanto
-        // se abre la obra en OTRO dispositivo (su IDB local no tiene esa
-        // clave) y la animación se pierde en silencio — exactamente el
-        // mismo problema que ya se resuelve arriba para el caso normal
-        // (capas 'gif'/'image' de nivel superior), aplicado ahora a cada
-        // línea que lo necesite. No se muta l.richLines (el array en
-        // memoria que sigue usando el editor) — solo la copia que se
-        // serializa a Supabase.
-        if (l.type === 'text' && Array.isArray(l.richLines) && l.richLines.some(rl => rl && (rl.gifKey || rl.animKey))) {
-          const _newRichLines = [];
-          for (const rl of l.richLines) {
-            if (rl && rl.gifKey) {
-              try {
-                const _rlGifData = await _sbGifIdbLoad(rl.gifKey);
-                if (_rlGifData) {
-                  const _rlGifUrl = await _gifUpload(rl.gifKey, _rlGifData);
-                  _newRichLines.push({ ...rl, gifUrl: _rlGifUrl });
-                  continue;
-                }
-              } catch(e) { console.warn('GIF (flujo de texto) upload error:', e.message); }
-            } else if (rl && rl.animKey) {
-              try {
-                const _rlAnimData = await _sbAnimIdbLoad(rl.animKey);
-                if (_rlAnimData) {
-                  // Igual que la subida de una capa 'image' APNG de nivel
-                  // superior (ver arriba): si lo guardado es un array de
-                  // frames sueltos (animación GCP aún no empaquetada como
-                  // APNG real), construir primero el APNG único.
-                  const _rlApngDataUrl = (typeof _rlAnimData === 'string')
-                    ? _rlAnimData
-                    : await _buildApngFromFrames(_rlAnimData, rl._gcpFrameDelay || 100, rl._gcpFrameHolds);
-                  if (_rlApngDataUrl) {
-                    const _rlAnimUrl = await _animUpload(rl.animKey, _rlApngDataUrl);
-                    _newRichLines.push({ ...rl, animUrl: _rlAnimUrl });
-                    continue;
-                  }
-                }
-              } catch(e) { console.warn('APNG (flujo de texto) upload error:', e.message); }
-            }
-            _newRichLines.push(rl);
-          }
-          _lClean.richLines = _newRichLines;
-        }
-
         // Solo comprimir layers APNG animados (tienen gcpLayersData grandes)
         // El resto: JSON directo como v16.42 — sin riesgo de fallo de descompresión
         // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
@@ -1071,37 +1022,6 @@ const SupabaseClient = (() => {
             }
           }
         } catch(e) { console.warn('GIF cloud download:', e); }
-      }
-      // Animaciones insertadas DENTRO de un flujo de texto (ver
-      // _tdInsertGif/_tdInsertFromBib en editor-textdoc.js) — mismo
-      // re-materializado que el caso de arriba (capas 'gif'/'image' de
-      // nivel superior), pero recorriendo cada línea de richLines que se
-      // subió con gifUrl o animUrl (ver la subida, unas líneas más arriba
-      // en este archivo). Se reutiliza la MISMA clave (no una nueva) —
-      // igual que el caso de arriba, ya es un id único por sí mismo
-      // (timestamp+random del dispositivo de origen).
-      if (layerObj.type === 'text' && Array.isArray(layerObj.richLines)) {
-        for (const rl of layerObj.richLines) {
-          if (rl && rl.gifUrl && rl.gifKey) {
-            try {
-              const _rlResp = await fetch(rl.gifUrl, { cache: 'no-store' });
-              if (_rlResp.ok) {
-                const _rlBlob = await _rlResp.blob();
-                const _rlReader = new FileReader();
-                const _rlDataUrl = await new Promise(res => {
-                  _rlReader.onload = e => res(e.target.result);
-                  _rlReader.readAsDataURL(_rlBlob);
-                });
-                if (window._gifIdbSave) await window._gifIdbSave(rl.gifKey, _rlDataUrl).catch(() => {});
-              }
-            } catch(e) { console.warn('GIF (flujo de texto) cloud download:', e); }
-          } else if (rl && rl.animUrl && rl.animKey) {
-            try {
-              const _rlApngDl = await _animDownload(rl.animUrl);
-              if (_rlApngDl && window._sbAnimIdbSave) await window._sbAnimIdbSave(rl.animKey, _rlApngDl).catch(() => {});
-            } catch(e) { console.warn('APNG (flujo de texto) cloud download:', e); }
-          }
-        }
       }
       return layerObj;
     });

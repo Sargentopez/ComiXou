@@ -2042,43 +2042,6 @@ function _tdGetCachedImage(src){
   return entry;
 }
 
-// Petición explícita de Alberto: las animaciones insertadas en un flujo de
-// texto deben reproducirse en el visor interno (editorViewer) — antes solo
-// se dibujaba su fotograma estático ahí también, igual que en la edición
-// normal (la propia caché de arriba, _tdGetCachedImage, no distingue nada).
-// Caché de instancias GifLayer/ImageLayer usadas PURAMENTE como motor de
-// animación (nunca se añaden a edLayers ni se seleccionan) — reutiliza sus
-// propios load()/loadAnim()/_applyFrame()/stopAnim() tal cual, exactamente
-// igual que cualquier otra capa animada de la app, en vez de un mecanismo
-// aparte. Una entrada por gifKey/animKey (compartida si el mismo objeto de
-// biblioteca se insertó varias veces).
-window._tdRichAnimCache = window._tdRichAnimCache || {};
-function _tdGetRichAnimLayer(line){
-  const key = line.gifKey || line.animKey;
-  if(!key) return null;
-  let entry = window._tdRichAnimCache[key];
-  if(entry) return entry;
-  if(line.gifKey){
-    entry = new GifLayer(line.gifKey, 0.5, 0.5, 0.7);
-    if(typeof _gifIdbLoad === 'function'){
-      _gifIdbLoad(line.gifKey).then(dataUrl => {
-        if(dataUrl) entry.load(dataUrl, () => { if(typeof edUpdateViewer === 'function') edUpdateViewer(); });
-      }).catch(() => {});
-    }
-  } else {
-    entry = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
-    if(line._gcpFrameDelay != null) entry._gcpFrameDelay = line._gcpFrameDelay;
-    if(line._gcpFrameHolds && line._gcpFrameHolds.length) entry._gcpFrameHolds = line._gcpFrameHolds;
-    if(window._sbAnimIdbLoad){
-      window._sbAnimIdbLoad(line.animKey).then(data => {
-        if(data) entry.loadAnim(data, () => { if(typeof edUpdateViewer === 'function') edUpdateViewer(); });
-      }).catch(() => {});
-    }
-  }
-  window._tdRichAnimCache[key] = entry;
-  return entry;
-}
-
 class TextLayer extends BaseLayer {
   constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
@@ -2129,12 +2092,6 @@ class TextLayer extends BaseLayer {
       // aún no ha cargado, esta pasada no dibuja nada y el propio onload pide
       // un redibujado en cuanto esté lista.
       if(line.kind==='image' && line.src){
-        const ix = line.imgX !== undefined ? line.imgX : line.indent;
-        if(_edViewerMode && (line.gifKey || line.animKey)){
-          const _animLa = _tdGetRichAnimLayer(line);
-          if(_animLa && !_animLa._playing){ _animLa._playing = true; _animLa._fIdx = _animLa._fIdx||0; _animLa._applyFrame(_animLa._fIdx); }
-          if(_animLa && _animLa._oc){ ctx.drawImage(_animLa._oc, ix, line.y, line.imgW, line.imgH); return; }
-        }
         const _entry = _tdGetCachedImage(line.src);
         if(_entry.loaded && _entry.img.naturalWidth>0){
           // BUG CORREGIDO (reportado por Alberto: "en el canvas se inserta
@@ -2144,6 +2101,7 @@ class TextLayer extends BaseLayer {
           // line.availW, pero esa propiedad ya se había borrado para
           // cuando se llega a dibujar, así que el resultado eran siempre
           // 0 píxeles de margen (pegada a la izquierda).
+          const ix = line.imgX !== undefined ? line.imgX : line.indent;
           ctx.drawImage(_entry.img, ix, line.y, line.imgW, line.imgH);
         }
         return;
@@ -26483,14 +26441,6 @@ function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 /* Activar/desactivar animación GIF en todas las páginas */
 function _edGifSetPlaying(playing) {
-  if(!playing && window._tdRichAnimCache){
-    // Animaciones insertadas en flujos de texto: solo hace falta pararlas
-    // al SALIR del visor — el arranque se resuelve solo, de forma perezosa,
-    // la primera vez que _drawRichLines las dibuja con el visor abierto (ver
-    // _tdGetRichAnimLayer). Sin este paso, seguirían haciendo tick en
-    // segundo plano para siempre tras cerrar el visor.
-    Object.values(window._tdRichAnimCache).forEach(l => { try { l.stopAnim(); } catch(e) {} });
-  }
   edPages.forEach(page => {
     page.layers.forEach(l => {
       // GIF importado
