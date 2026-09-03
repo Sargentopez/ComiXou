@@ -2593,8 +2593,17 @@ function _tdProcessNewImageAttachment(att, file, opts){
         // tamaño arbitrario), sin importar lo pequeño o grande que fuera
         // el objeto real en la página.
         w = Math.max(20, Math.round(colW * opts.pageWidthFrac));
-        h = Math.round(w * (natH / natW));
-        _tdLogImg('tamaño desde biblioteca (pageWidthFrac)', 'pageWidthFrac=' + opts.pageWidthFrac + ' → w=' + w + ' h=' + h);
+        // BUG CORREGIDO (reportado por Alberto: una animación GCP se
+        // insertaba deformada desde biblioteca): para una animación, el
+        // frame decodificado puede no tener la misma proporción que el
+        // tamaño de visualización previsto (mismo motivo por el que la
+        // inserción en el lienzo general ya prefiere normW/normH sobre las
+        // dimensiones naturales de la imagen — ver _convAnimSize, más al
+        // detalle en editor.js). opts.aspectRatio (normH/normW, ver
+        // _tdInsertFromBib) manda cuando está disponible; si no, se cae de
+        // vuelta a la proporción natural de la imagen, como hasta ahora.
+        h = Math.round(w * (opts.aspectRatio || (natH / natW)));
+        _tdLogImg('tamaño desde biblioteca (pageWidthFrac)', 'pageWidthFrac=' + opts.pageWidthFrac + ' aspectRatio=' + (opts.aspectRatio || '(natural)') + ' → w=' + w + ' h=' + h);
       } else {
         // Ancho por defecto: 70% de la columna de escritura visible (mismo
         // criterio que edAddImage usa para el canvas: 0.7 del ancho de
@@ -2824,7 +2833,7 @@ function _tdInsertFromBib(entry){
   // tamaño arbitrario) — ahora se le pasa el ancho REAL que tenía el
   // objeto en la página (widthFrac, segundo argumento de
   // _tdRenderLayersToImage), para que un objeto pequeño se inserte pequeño.
-  const _finish = (dataUrl, widthFrac, skipCompress) => {
+  const _finish = (dataUrl, widthFrac, skipCompress, aspectRatio) => {
     edOrientation = _savedOrientBib;
     if(!dataUrl){ _tdLogImg('insertar desde biblioteca ABORTA', 'sin dataUrl resultante'); return; }
     try{
@@ -2833,6 +2842,7 @@ function _tdInsertFromBib(entry){
       const _opts = {};
       if(widthFrac) _opts.pageWidthFrac = widthFrac;
       if(skipCompress) _opts.skipCompress = true;
+      if(aspectRatio) _opts.aspectRatio = aspectRatio;
       _tdInsertImage(file, Object.keys(_opts).length ? _opts : undefined);
     }catch(err){
       _tdLogImg('EXCEPCIÓN insertando desde biblioteca', (err && err.message) || String(err));
@@ -2866,7 +2876,7 @@ function _tdInsertFromBib(entry){
         if(typeof _gifIdbSave === 'function'){
           _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
         }
-        _finish(_bibStaticUrl, entry.normW, true);
+        _finish(_bibStaticUrl, entry.normW, true, (entry.normW && entry.normH) ? (entry.normH/entry.normW) : undefined);
       });
     } else if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
       const _bibAnimKey = (typeof _edAnimKey === 'function')
@@ -2906,7 +2916,7 @@ function _tdInsertFromBib(entry){
           // Supabase (ver supabase-client.js), no hay que adelantarla aquí.
           window._sbAnimIdbSave(_bibAnimKey, _bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
         }
-        _finish(_bibStaticUrl, entry.normW, true);
+        _finish(_bibStaticUrl, entry.normW, true, (entry.normW && entry.normH) ? (entry.normH/entry.normW) : undefined);
       });
     } else {
       _finish(entry.thumb);
