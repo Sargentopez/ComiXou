@@ -1562,7 +1562,10 @@ async function _tdRunDiag(){
         (block.runs || []).forEach(run => {
           if(!run.isImage) return;
           _imgCountDiag++;
+          const _diagGk = (window._tdGifKeyBySrc && window._tdGifKeyBySrc[run.src]) || null;
+          const _diagAk = (window._tdAnimKeyBySrc && window._tdAnimKeyBySrc[run.src]) || null;
           L(`  imagen ${_imgCountDiag} (bloque ${bi}): heightEm=${run.heightEm} aspect=${run.aspect} widthFrac=${run.widthFrac} (ya no se usa para el tamaño, solo referencia)`);
+          L(`    ¿tiene animación asociada? ${_diagGk ? ('SÍ, gifKey=' + _diagGk) : _diagAk ? ('SÍ, animKey=' + _diagAk.animKey) : 'NO (se insertará/verá como imagen fija)'}`);
           frameSizesDiag && (Array.isArray(frameSizesDiag) ? frameSizesDiag : [frameSizesDiag]).forEach((f, fi) => {
             const mxF = f.pw * marginFracXDiag;
             const textWF = f.pw - mxF * 2;
@@ -2390,6 +2393,17 @@ function _tdWireInsertImage(){
 // basta con leer editor.getDocument().getAttachments() justo después de
 // llamar a insertFile: el adjunto recién creado ya está ahí, identificable
 // por su propio File (siempre una instancia nueva en cada selección).
+// BUG CORREGIDO: editor.insertFile() dispara 'trix-change' de forma SÍNCRONA
+// (antes de que esta misma función termine de ejecutarse) — así que el
+// detector genérico _tdWatchForPastedImages, pensado para pegar/soltar
+// verdaderamente externo, corre PRIMERO y marca el adjunto como procesado
+// SIN los opts que se le pasan aquí abajo; la guarda contra duplicados de
+// _tdProcessNewImageAttachment descarta entonces, en silencio, la llamada
+// correcta de más abajo. Se guardan los opts pendientes por ARCHIVO (no por
+// id de adjunto, que todavía no existe en este punto) para que, gane quien
+// gane la carrera, se use el mismo dato correcto.
+window._tdPendingImageOpts = window._tdPendingImageOpts || new WeakMap();
+
 function _tdInsertImage(file, opts){
   _tdLogImg('_tdInsertImage llamada', file ? (file.name + ' ' + file.type) : '(sin archivo)');
   if(!file || !file.type || !file.type.startsWith('image/')){ _tdLogImg('_tdInsertImage ABORTA', 'archivo no es imagen'); return; }
@@ -2398,6 +2412,7 @@ function _tdInsertImage(file, opts){
   _tdLogImg('estado editor', 'editorEl=' + !!editorEl + ' editorEl.editor=' + !!editor + ' typeof insertFile=' + (editor && typeof editor.insertFile));
   if(!editor){ _tdLogImg('_tdInsertImage ABORTA', 'editorEl.editor no existe todavía'); return; }
   editorEl.focus();
+  if(opts) window._tdPendingImageOpts.set(file, opts);
 
   let att;
   try{
@@ -2410,10 +2425,15 @@ function _tdInsertImage(file, opts){
   }catch(err){
     _tdLogImg('EXCEPCIÓN en editor.insertFile/getAttachments', (err && err.message) || String(err));
     edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
+    window._tdPendingImageOpts.delete(file);
     return;
   }
-  if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); return; }
+  if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); window._tdPendingImageOpts.delete(file); return; }
+  // Si _tdWatchForPastedImages ya ganó la carrera (ver arriba), esta llamada
+  // es un no-op — la guarda de _tdProcessNewImageAttachment la descarta, y
+  // eso es correcto: ya se procesó con los mismos opts, leídos de ahí.
   _tdProcessNewImageAttachment(att, file, opts);
+  window._tdPendingImageOpts.delete(file);
 }
 
 // Petición explícita de Alberto: permitir insertar ANIMACIONES en el flujo
@@ -2678,8 +2698,9 @@ function _tdWatchForPastedImages(){
     try{ atts = editor.getDocument().getAttachments(); }catch(_e){ return; }
     atts.forEach(att => {
       if(att.file && !window._tdProcessedAttIds.has(att.id)){
-        _tdLogImg('imagen detectada por vía nativa (pegar/soltar)', 'att.id=' + att.id + ' file=' + (att.file.name || '?'));
-        _tdProcessNewImageAttachment(att, att.file);
+        const _pendingOpts = window._tdPendingImageOpts && window._tdPendingImageOpts.get(att.file);
+        _tdLogImg('imagen detectada por vía nativa (pegar/soltar)', 'att.id=' + att.id + ' file=' + (att.file.name || '?') + (_pendingOpts ? ' (opts pendientes de _tdInsertImage encontrados)' : ' (sin opts pendientes — inserción externa genuina)'));
+        _tdProcessNewImageAttachment(att, att.file, _pendingOpts);
       }
     });
   });
@@ -2809,6 +2830,26 @@ function _tdRenderLayersToImage(items, cb){
   });
 }
 
+// BUG CORREGIDO (reportado por Alberto: animación insertada desde una
+// biblioteca guardada en orientación horizontal, en un flujo de texto de
+// una hoja vertical, se veía estirada verticalmente): normW/normH son
+// fracciones del ancho/alto de LA PÁGINA ORIGINAL (entry.orientation), no
+// del ancho/alto entre sí — normH/normW como proporción física directa
+// SOLO es correcto si el ancho y el alto de página son iguales (o si
+// origen y destino comparten exactamente la misma orientación). Al pasar
+// de horizontal a vertical (o viceversa) esa relación se invierte, así que
+// hay que multiplicar cada fracción por la dimensión real de la página
+// ORIGINAL (edPageW/edPageH, con edOrientation ya puesto a
+// entry.orientation por _tdInsertFromBib más abajo) antes de dividir.
+// Verificado con los números reales del caso reportado: la fórmula
+// anterior (normH/normW) daba 3.98; esta da 1.84 — la proporción física
+// real — con una diferencia de exactamente ED_PAGE_H/ED_PAGE_W (2.167),
+// el factor de la propia inversión de orientación.
+function _tdBibAnimAspectRatio(entry){
+  if(!entry.normW || !entry.normH) return undefined;
+  return (entry.normH * edPageH()) / (entry.normW * edPageW());
+}
+
 // Inserta un elemento de la biblioteca en el flujo de texto como imagen
 // estática, con la caja de recorte calculada igual que edExportSelectionPNG
 // (ver _tdRenderLayersToImage arriba), respetando el tamaño real que el
@@ -2865,26 +2906,24 @@ function _tdInsertFromBib(entry){
   //    función que ya anima cualquier otra capa, ver reader.js — las
   //    respete tal cual en el lector, en vez de perderlas.
   if(entry.isGifAnim){
-    if(entry.gifDataUrl && window.GifDecoder){
-      const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-      const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
-      _bibDecoder.load(entry.gifDataUrl, () => {
-        if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
-        const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
-        window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
-        window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
-        if(typeof _gifIdbSave === 'function'){
-          _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
-        }
-        _finish(_bibStaticUrl, entry.normW, true, (entry.normW && entry.normH) ? (entry.normH/entry.normW) : undefined);
-      });
-    } else if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
+    if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
       const _bibAnimKey = (typeof _edAnimKey === 'function')
         ? _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8))
         : ('anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
       const _bibAnimInput = entry.apngSrc || entry.pngFrames;
+      // Diagnóstico temporal (mismo _tdLogImg de siempre): si la imagen sigue
+      // viéndose mal tras el arreglo del decodificador (frames de tamaño
+      // distinto entre sí, ya corregido en ApngDecoder.decodeFrameArray),
+      // esto registra el tamaño real de cada frame de origen para saber si
+      // el problema viene de ahí o de otro sitio.
+      if(Array.isArray(entry.pngFrames)){
+        const _dims = entry.pngFrames.map(f => (typeof f === 'string' ? f.length : 0));
+        _tdLogImg('insertar animación de biblioteca (APNG): frames de origen', 'count=' + entry.pngFrames.length + ' bytesPorFrame=' + JSON.stringify(_dims) + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      } else {
+        _tdLogImg('insertar animación de biblioteca (APNG): origen', 'apngSrc, bytes=' + (entry.apngSrc||'').length + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      }
       // ImageLayer usado puramente como decodificador (loadAnim), igual que
-      // GifLayer arriba para el caso GIF — nunca se añade al lienzo.
+      // GifLayer abajo para el caso GIF — nunca se añade al lienzo.
       const _bibAnimDecoder = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
       if(entry.gcpFrameDelay != null) _bibAnimDecoder._gcpFrameDelay = entry.gcpFrameDelay;
       if(entry.gcpFrameHolds && entry.gcpFrameHolds.length) _bibAnimDecoder._gcpFrameHolds = entry.gcpFrameHolds;
@@ -2894,6 +2933,7 @@ function _tdInsertFromBib(entry){
           _finish(entry.thumb);
           return;
         }
+        _tdLogImg('insertar animación de biblioteca (APNG): decodificado', '_oc=' + _bibAnimDecoder._oc.width + 'x' + _bibAnimDecoder._oc.height + ' frames=' + _bibAnimDecoder._animFrames.length);
         const _bibStaticUrl = _bibAnimDecoder._oc.toDataURL('image/png');
         window._tdAnimKeyBySrc = window._tdAnimKeyBySrc || {};
         window._tdAnimKeyBySrc[_bibStaticUrl] = {
@@ -2916,7 +2956,29 @@ function _tdInsertFromBib(entry){
           // Supabase (ver supabase-client.js), no hay que adelantarla aquí.
           window._sbAnimIdbSave(_bibAnimKey, _bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
         }
-        _finish(_bibStaticUrl, entry.normW, true, (entry.normW && entry.normH) ? (entry.normH/entry.normW) : undefined);
+        _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
+      });
+    } else if(entry.gifDataUrl && window.GifDecoder){
+      // Último recurso: entry.gifDataUrl se rellena SIEMPRE al guardar en
+      // biblioteca (con el primer frame como repuesto, incluso para APNG —
+      // ver el comentario junto a esa asignación en editor.js), así que su
+      // sola presencia NO significa que esto sea un GIF real. Solo se llega
+      // aquí cuando NINGUNA de las dos señales inequívocas de arriba
+      // (apngSrc/pngFrames) existe — bug corregido, confirmado con el
+      // registro de diagnóstico real: una animación APNG entraba por error
+      // en esta rama, se le pasaba su frame estático (no un GIF de verdad)
+      // a GifDecoder, y fallaba con "el decodificador no produjo _oc".
+      const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+      const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
+      _bibDecoder.load(entry.gifDataUrl, () => {
+        if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
+        const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
+        window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+        window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
+        if(typeof _gifIdbSave === 'function'){
+          _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
+        }
+        _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
       });
     } else {
       _finish(entry.thumb);
@@ -5167,6 +5229,19 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         {
           const _gk = (window._tdGifKeyBySrc && window._tdGifKeyBySrc[w.src]) || undefined;
           const _ak = (window._tdAnimKeyBySrc && window._tdAnimKeyBySrc[w.src]) || null;
+          // Diagnóstico temporal: confirmar si esta consulta encuentra
+          // coincidencia o no — punto nunca antes verificado directamente
+          // (el tamaño se confirma en la inserción, la reproducción en
+          // aislado con datos sintéticos; esto es lo único que faltaba).
+          if(window._tdGifKeyBySrc || window._tdAnimKeyBySrc){
+            const _gkKeys = window._tdGifKeyBySrc ? Object.keys(window._tdGifKeyBySrc) : [];
+            const _akKeys = window._tdAnimKeyBySrc ? Object.keys(window._tdAnimKeyBySrc) : [];
+            if(_gk || _ak){
+              _tdLogImg('consulta gifKey/animKey por src', 'COINCIDE — ' + (_gk ? ('gifKey=' + _gk) : ('animKey=' + _ak.animKey)) + ' (w.src.length=' + w.src.length + ')');
+            } else if(_gkKeys.length || _akKeys.length){
+              _tdLogImg('consulta gifKey/animKey por src', 'NO COINCIDE — w.src.length=' + w.src.length + ' candidatos registrados: ' + [..._gkKeys, ..._akKeys].map(k => k.length).join(','));
+            }
+          }
           const _lineObj = {height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH, gifKey: _gk};
           if(_ak){
             // Opciones GCP con guion bajo (_gcpStopAtEnd, no gcpStopAtEnd):

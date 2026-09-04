@@ -771,7 +771,14 @@ window.ApngDecoder = (function(){
           if (!W) { W = img.naturalWidth; H = img.naturalHeight; }
           var oc = document.createElement('canvas'); oc.width = W; oc.height = H;
           var ox = oc.getContext('2d');
-          ox.drawImage(img, 0, 0);
+          // BUG CORREGIDO (sospecha de Alberto: animación GCP "rateada"/con
+          // bandas al insertarla): si un frame de la matriz tiene un tamaño
+          // natural distinto al del primero (W/H, fijados una sola vez arriba),
+          // dibujarlo SIN ancho/alto explícitos lo pinta a su propio tamaño —
+          // dejando sin pintar el resto del lienzo compartido (basura o el
+          // frame anterior) si es más pequeño, o recortándolo si es mayor.
+          // Encajarlo siempre en W×H, sea cual sea su tamaño real.
+          ox.drawImage(img, 0, 0, W, H);
           results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: _delayFor(i) };
           res();
         };
@@ -2058,11 +2065,27 @@ function _tdGetRichAnimLayer(line){
   if(!key) return null;
   let entry = window._tdRichAnimCache[key];
   if(entry) return entry;
+  // BUG CORREGIDO (reportado por Alberto: la animación se veía fija en el
+  // visor interno — solo el primer fotograma, nunca avanzaba): arrancar la
+  // reproducción aquí, DENTRO del callback de carga — antes se hacía desde
+  // _drawRichLines justo al crear la instancia, con la carga (asíncrona)
+  // todavía pendiente; en ese momento _animReady aún era falso, así que
+  // _applyFrame() no hacía nada (su propia guarda interna lo descarta) y el
+  // temporizador de auto-avance que ARRANCA _applyFrame nunca llegaba a
+  // ponerse en marcha. Aquí, cuando el callback se ejecuta, _animReady ya
+  // es cierto — _applyFrame(0) sí hace efecto y encadena su propio
+  // setTimeout, igual que con cualquier otra capa animada de la app.
+  const _startPlaying = () => {
+    entry._playing = true;
+    entry._fIdx = entry._fIdx || 0;
+    entry._applyFrame(entry._fIdx);
+    if(typeof edUpdateViewer === 'function') edUpdateViewer();
+  };
   if(line.gifKey){
     entry = new GifLayer(line.gifKey, 0.5, 0.5, 0.7);
     if(typeof _gifIdbLoad === 'function'){
       _gifIdbLoad(line.gifKey).then(dataUrl => {
-        if(dataUrl) entry.load(dataUrl, () => { if(typeof edUpdateViewer === 'function') edUpdateViewer(); });
+        if(dataUrl) entry.load(dataUrl, _startPlaying);
       }).catch(() => {});
     }
   } else {
@@ -2071,7 +2094,7 @@ function _tdGetRichAnimLayer(line){
     if(line._gcpFrameHolds && line._gcpFrameHolds.length) entry._gcpFrameHolds = line._gcpFrameHolds;
     if(window._sbAnimIdbLoad){
       window._sbAnimIdbLoad(line.animKey).then(data => {
-        if(data) entry.loadAnim(data, () => { if(typeof edUpdateViewer === 'function') edUpdateViewer(); });
+        if(data) entry.loadAnim(data, _startPlaying);
       }).catch(() => {});
     }
   }
@@ -2132,7 +2155,6 @@ class TextLayer extends BaseLayer {
         const ix = line.imgX !== undefined ? line.imgX : line.indent;
         if(_edViewerMode && (line.gifKey || line.animKey)){
           const _animLa = _tdGetRichAnimLayer(line);
-          if(_animLa && !_animLa._playing){ _animLa._playing = true; _animLa._fIdx = _animLa._fIdx||0; _animLa._applyFrame(_animLa._fIdx); }
           if(_animLa && _animLa._oc){ ctx.drawImage(_animLa._oc, ix, line.y, line.imgW, line.imgH); return; }
         }
         const _entry = _tdGetCachedImage(line.src);
