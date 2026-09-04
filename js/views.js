@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.22</footer>
+    <footer class="app-version">v39.36</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1196,7 +1196,7 @@ Router.register('editor', {
              mostrarlo, descomentar la línea siguiente; toda la
              instrumentación (window._tdBreakLog, window._tdImgLog) sigue
              activa en editor-textdoc.js aunque el botón esté oculto. -->
-        <!-- <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button> -->
+        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button>
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">

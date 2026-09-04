@@ -771,7 +771,14 @@ window.ApngDecoder = (function(){
           if (!W) { W = img.naturalWidth; H = img.naturalHeight; }
           var oc = document.createElement('canvas'); oc.width = W; oc.height = H;
           var ox = oc.getContext('2d');
-          ox.drawImage(img, 0, 0);
+          // BUG CORREGIDO (sospecha de Alberto: animación GCP "rateada"/con
+          // bandas al insertarla): si un frame de la matriz tiene un tamaño
+          // natural distinto al del primero (W/H, fijados una sola vez arriba),
+          // dibujarlo SIN ancho/alto explícitos lo pinta a su propio tamaño —
+          // dejando sin pintar el resto del lienzo compartido (basura o el
+          // frame anterior) si es más pequeño, o recortándolo si es mayor.
+          // Encajarlo siempre en W×H, sea cual sea su tamaño real.
+          ox.drawImage(img, 0, 0, W, H);
           results[i] = { imageData: ox.getImageData(0, 0, W, H), delay: _delayFor(i) };
           res();
         };
@@ -2042,6 +2049,70 @@ function _tdGetCachedImage(src){
   return entry;
 }
 
+// Petición explícita de Alberto: las animaciones insertadas en un flujo de
+// texto deben reproducirse en el visor interno (editorViewer) — antes solo
+// se dibujaba su fotograma estático ahí también, igual que en la edición
+// normal (la propia caché de arriba, _tdGetCachedImage, no distingue nada).
+// Caché de instancias GifLayer/ImageLayer usadas PURAMENTE como motor de
+// animación (nunca se añaden a edLayers ni se seleccionan) — reutiliza sus
+// propios load()/loadAnim()/_applyFrame()/stopAnim() tal cual, exactamente
+// igual que cualquier otra capa animada de la app, en vez de un mecanismo
+// aparte. Una entrada por gifKey/animKey (compartida si el mismo objeto de
+// biblioteca se insertó varias veces).
+window._tdRichAnimCache = window._tdRichAnimCache || {};
+function _tdGetRichAnimLayer(line){
+  const key = line.gifKey || line.animKey;
+  if(!key) return null;
+  let entry = window._tdRichAnimCache[key];
+  if(entry) return entry;
+  // Diagnóstico temporal: único tramo de toda la cadena nunca antes
+  // observado con datos reales — la búsqueda de la clave (window._tdGifKeyBySrc/
+  // _tdAnimKeyBySrc) y el guardado en IDB ya se confirmaron por separado;
+  // esto confirma si la LECTURA, en el momento real de reproducir, encuentra
+  // los datos o no.
+  if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer creando instancia', 'key=' + key + ' tipo=' + (line.gifKey?'gif':'anim') + ' _sbAnimIdbLoad existe=' + !!window._sbAnimIdbLoad + ' _gifIdbLoad existe=' + (typeof _gifIdbLoad==='function'));
+  // BUG CORREGIDO (reportado por Alberto: la animación se veía fija en el
+  // visor interno — solo el primer fotograma, nunca avanzaba): arrancar la
+  // reproducción aquí, DENTRO del callback de carga — antes se hacía desde
+  // _drawRichLines justo al crear la instancia, con la carga (asíncrona)
+  // todavía pendiente; en ese momento _animReady aún era falso, así que
+  // _applyFrame() no hacía nada (su propia guarda interna lo descarta) y el
+  // temporizador de auto-avance que ARRANCA _applyFrame nunca llegaba a
+  // ponerse en marcha. Aquí, cuando el callback se ejecuta, _animReady ya
+  // es cierto — _applyFrame(0) sí hace efecto y encadena su propio
+  // setTimeout, igual que con cualquier otra capa animada de la app.
+  const _startPlaying = () => {
+    if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _startPlaying', 'key=' + key + ' _animReady=' + entry._animReady + ' _animFrames.length=' + (entry._animFrames && entry._animFrames.length) + ' _oc=' + !!entry._oc);
+    entry._playing = true;
+    entry._fIdx = entry._fIdx || 0;
+    entry._applyFrame(entry._fIdx);
+    if(typeof edUpdateViewer === 'function') edUpdateViewer();
+  };
+  if(line.gifKey){
+    entry = new GifLayer(line.gifKey, 0.5, 0.5, 0.7);
+    if(typeof _gifIdbLoad === 'function'){
+      _gifIdbLoad(line.gifKey).then(dataUrl => {
+        if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _gifIdbLoad resuelto', 'key=' + key + ' dataUrl=' + (dataUrl ? ('presente, length=' + dataUrl.length) : 'NULO/VACÍO'));
+        if(dataUrl) entry.load(dataUrl, _startPlaying);
+      }).catch(e => { if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _gifIdbLoad EXCEPCIÓN', 'key=' + key + ' ' + String(e)); });
+    }
+  } else {
+    entry = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
+    if(line._gcpFrameDelay != null) entry._gcpFrameDelay = line._gcpFrameDelay;
+    if(line._gcpFrameHolds && line._gcpFrameHolds.length) entry._gcpFrameHolds = line._gcpFrameHolds;
+    if(window._sbAnimIdbLoad){
+      window._sbAnimIdbLoad(line.animKey).then(data => {
+        if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _sbAnimIdbLoad resuelto', 'key=' + key + ' data=' + (data ? ('presente, tipo=' + (typeof data) + (typeof data==='string' ? (', length=' + data.length) : (', frames=' + (Array.isArray(data)?data.length:'?')))) : 'NULO/VACÍO'));
+        if(data) entry.loadAnim(data, _startPlaying);
+      }).catch(e => { if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _sbAnimIdbLoad EXCEPCIÓN', 'key=' + key + ' ' + String(e)); });
+    } else {
+      if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer ABORTA', 'window._sbAnimIdbLoad no existe en este momento');
+    }
+  }
+  window._tdRichAnimCache[key] = entry;
+  return entry;
+}
+
 class TextLayer extends BaseLayer {
   constructor(text=I18n.t('ed_writeHerePlaceholder'),x=0.5,y=0.5){
     super('text',x,y,0.2,0.1);
@@ -2092,6 +2163,11 @@ class TextLayer extends BaseLayer {
       // aún no ha cargado, esta pasada no dibuja nada y el propio onload pide
       // un redibujado en cuanto esté lista.
       if(line.kind==='image' && line.src){
+        const ix = line.imgX !== undefined ? line.imgX : line.indent;
+        if(_edViewerMode && (line.gifKey || line.animKey)){
+          const _animLa = _tdGetRichAnimLayer(line);
+          if(_animLa && _animLa._oc){ ctx.drawImage(_animLa._oc, ix, line.y, line.imgW, line.imgH); return; }
+        }
         const _entry = _tdGetCachedImage(line.src);
         if(_entry.loaded && _entry.img.naturalWidth>0){
           // BUG CORREGIDO (reportado por Alberto: "en el canvas se inserta
@@ -2101,7 +2177,6 @@ class TextLayer extends BaseLayer {
           // line.availW, pero esa propiedad ya se había borrado para
           // cuando se llega a dibujar, así que el resultado eran siempre
           // 0 píxeles de margen (pegada a la izquierda).
-          const ix = line.imgX !== undefined ? line.imgX : line.indent;
           ctx.drawImage(_entry.img, ix, line.y, line.imgW, line.imgH);
         }
         return;
@@ -26441,6 +26516,14 @@ function edUpdateCanvasFullscreen(){ edFitCanvas(); }
 
 /* Activar/desactivar animación GIF en todas las páginas */
 function _edGifSetPlaying(playing) {
+  if(!playing && window._tdRichAnimCache){
+    // Animaciones insertadas en flujos de texto: solo hace falta pararlas
+    // al SALIR del visor — el arranque se resuelve solo, de forma perezosa,
+    // la primera vez que _drawRichLines las dibuja con el visor abierto (ver
+    // _tdGetRichAnimLayer). Sin este paso, seguirían haciendo tick en
+    // segundo plano para siempre tras cerrar el visor.
+    Object.values(window._tdRichAnimCache).forEach(l => { try { l.stopAnim(); } catch(e) {} });
+  }
   edPages.forEach(page => {
     page.layers.forEach(l => {
       // GIF importado
@@ -27564,6 +27647,16 @@ function edUpdateViewer(){
 function _edViewerDrawTextsOnCtx(page, ctx, can){
   const textLayers = page.layers.filter(l=>(l.type==='text'||l.type==='bubble') && !l.hidden);
   const isSeq = page.textMode === 'sequential';
+  // Diagnóstico temporal: único punto de todo el visor aún no comprobado —
+  // si el modo secuencial (revelado de texto paso a paso) está impidiendo
+  // que draw() se llegue a llamar siquiera para alguna capa de texto con
+  // animación, antes de entrar en _drawRichLines/_tdGetRichAnimLayer.
+  if(typeof _tdLogImg==='function'){
+    const _anyAnim = textLayers.some(l => Array.isArray(l.richLines) && l.richLines.some(rl => rl && (rl.gifKey || rl.animKey)));
+    if(_anyAnim){
+      _tdLogImg('_edViewerDrawTextsOnCtx', 'isSeq=' + isSeq + ' edViewerTextStep=' + (typeof edViewerTextStep!=='undefined'?edViewerTextStep:'?') + ' textLayers.length=' + textLayers.length + (isSeq ? (' (con secuencial, se dibujan las primeras ' + edViewerTextStep + ')') : ' (sin secuencial, se dibujan todas)'));
+    }
+  }
   if(!isSeq){ textLayers.forEach(l=>l.draw(ctx, can)); return; }
 
   // Modo secuencial:

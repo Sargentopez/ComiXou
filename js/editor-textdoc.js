@@ -1562,7 +1562,10 @@ async function _tdRunDiag(){
         (block.runs || []).forEach(run => {
           if(!run.isImage) return;
           _imgCountDiag++;
+          const _diagGk = (window._tdGifKeyBySrc && window._tdGifKeyBySrc[run.src]) || null;
+          const _diagAk = (window._tdAnimKeyBySrc && window._tdAnimKeyBySrc[run.src]) || null;
           L(`  imagen ${_imgCountDiag} (bloque ${bi}): heightEm=${run.heightEm} aspect=${run.aspect} widthFrac=${run.widthFrac} (ya no se usa para el tamaño, solo referencia)`);
+          L(`    ¿tiene animación asociada? ${_diagGk ? ('SÍ, gifKey=' + _diagGk) : _diagAk ? ('SÍ, animKey=' + _diagAk.animKey) : 'NO (se insertará/verá como imagen fija)'}`);
           frameSizesDiag && (Array.isArray(frameSizesDiag) ? frameSizesDiag : [frameSizesDiag]).forEach((f, fi) => {
             const mxF = f.pw * marginFracXDiag;
             const textWF = f.pw - mxF * 2;
@@ -2336,13 +2339,13 @@ function _tdWireInsertImage(){
     }
     try{
       const items = await navigator.clipboard.read();
-      let imgBlob = null;
+      let imgBlob = null, imgType = null;
       for(const it of items){
-        const imgType = it.types.find(t => t.startsWith('image/'));
-        if(imgType){ imgBlob = await it.getType(imgType); break; }
+        const _t = it.types.find(t => t.startsWith('image/'));
+        if(_t){ imgBlob = await it.getType(_t); imgType = _t; break; }
       }
       if(!imgBlob){ edToast(I18n.t('ed_noImageInClipboard')); return; }
-      _tdInsertImage(imgBlob);
+      if(imgType === 'image/gif') _tdInsertGif(imgBlob); else _tdInsertImage(imgBlob);
     }catch(_err){
       _tdLogImg('EXCEPCIÓN pegando desde portapapeles', (_err && _err.message) || String(_err));
       edToast(I18n.t('ed_clipboardReadFailed'));
@@ -2352,7 +2355,10 @@ function _tdWireInsertImage(){
     const f = e.target.files[0]; e.target.value = '';
     _tdLogImg('input[file] change', f ? (f.name + ' ' + f.type + ' ' + f.size + 'B') : '(sin archivo)');
     if(!f) return;
-    _tdInsertImage(f);
+    // Petición explícita de Alberto: permitir insertar animaciones igual que
+    // imágenes — mismo criterio de detección que edFileGallery en el editor
+    // general (extensión/tipo GIF → camino de animación, resto → imagen).
+    if(f.type === 'image/gif') _tdInsertGif(f); else _tdInsertImage(f);
     if(window._edWasFullscreen && !(document.fullscreenElement || document.webkitFullscreenElement)){
       setTimeout(()=>{ if(typeof Fullscreen!=='undefined') Fullscreen.enter(); }, 300);
     }
@@ -2387,6 +2393,17 @@ function _tdWireInsertImage(){
 // basta con leer editor.getDocument().getAttachments() justo después de
 // llamar a insertFile: el adjunto recién creado ya está ahí, identificable
 // por su propio File (siempre una instancia nueva en cada selección).
+// BUG CORREGIDO: editor.insertFile() dispara 'trix-change' de forma SÍNCRONA
+// (antes de que esta misma función termine de ejecutarse) — así que el
+// detector genérico _tdWatchForPastedImages, pensado para pegar/soltar
+// verdaderamente externo, corre PRIMERO y marca el adjunto como procesado
+// SIN los opts que se le pasan aquí abajo; la guarda contra duplicados de
+// _tdProcessNewImageAttachment descarta entonces, en silencio, la llamada
+// correcta de más abajo. Se guardan los opts pendientes por ARCHIVO (no por
+// id de adjunto, que todavía no existe en este punto) para que, gane quien
+// gane la carrera, se use el mismo dato correcto.
+window._tdPendingImageOpts = window._tdPendingImageOpts || new WeakMap();
+
 function _tdInsertImage(file, opts){
   _tdLogImg('_tdInsertImage llamada', file ? (file.name + ' ' + file.type) : '(sin archivo)');
   if(!file || !file.type || !file.type.startsWith('image/')){ _tdLogImg('_tdInsertImage ABORTA', 'archivo no es imagen'); return; }
@@ -2395,6 +2412,7 @@ function _tdInsertImage(file, opts){
   _tdLogImg('estado editor', 'editorEl=' + !!editorEl + ' editorEl.editor=' + !!editor + ' typeof insertFile=' + (editor && typeof editor.insertFile));
   if(!editor){ _tdLogImg('_tdInsertImage ABORTA', 'editorEl.editor no existe todavía'); return; }
   editorEl.focus();
+  if(opts) window._tdPendingImageOpts.set(file, opts);
 
   let att;
   try{
@@ -2407,10 +2425,68 @@ function _tdInsertImage(file, opts){
   }catch(err){
     _tdLogImg('EXCEPCIÓN en editor.insertFile/getAttachments', (err && err.message) || String(err));
     edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
+    window._tdPendingImageOpts.delete(file);
     return;
   }
-  if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); return; }
+  if(!att){ _tdLogImg('_tdInsertImage ABORTA', 'no se localizó el adjunto — nada más que hacer'); window._tdPendingImageOpts.delete(file); return; }
+  // Si _tdWatchForPastedImages ya ganó la carrera (ver arriba), esta llamada
+  // es un no-op — la guarda de _tdProcessNewImageAttachment la descarta, y
+  // eso es correcto: ya se procesó con los mismos opts, leídos de ahí.
   _tdProcessNewImageAttachment(att, file, opts);
+  window._tdPendingImageOpts.delete(file);
+}
+
+// Petición explícita de Alberto: permitir insertar ANIMACIONES en el flujo
+// de texto, igual que ya se pueden insertar imágenes, y que se reproduzcan
+// correctamente al insertarse en el canvas. Mismo decodificador y misma IDB
+// (cxGifs) que usa edAddGif para el lienzo general — no se reinventa nada.
+//
+// Cómo funciona: en el EDITOR (tanto el lienzo general como el flujo de
+// texto) las animaciones se muestran SIEMPRE como una imagen fija con el
+// primer frame — la reproducción real ocurre en el lector/visor (ver
+// GifLayer._applyFrame: "En el editor: no animar automáticamente ... La
+// animación se activará en los reproductores"). Así que aquí basta con:
+// 1) decodificar el GIF para sacar su primer frame como PNG estático (con
+//    el tamaño final ya correcto — sin pasar por _edCompressLoadedImage,
+//    que lo cambiaría byte a byte, ver skipCompress en
+//    _tdProcessNewImageAttachment),
+// 2) insertarlo como una imagen normal reutilizando _tdInsertImage (mismo
+//    camino ya probado: separar en su propia línea, seleccionar tras
+//    insertar, etc.),
+// 3) recordar la asociación "este dataUrl exacto = este gifKey" en
+//    window._tdGifKeyBySrc, para que _tdLayoutPages (ver más abajo en este
+//    archivo) la traslade al campo gifKey de la línea richLines
+//    correspondiente cuando se pulse "Aplicar",
+// 4) guardar el GIF completo (todos los frames) en IDB bajo ese gifKey —
+//    el lector lo carga de ahí para animarlo de verdad (ver reader.js).
+function _tdInsertGif(file){
+  _tdLogImg('_tdInsertGif llamada', file ? (file.name + ' ' + file.type + ' ' + file.size + 'B') : '(sin archivo)');
+  if(!window.GifDecoder){ edToast(I18n.t('ed_gifNotSupported')); return; }
+  const gifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+  const reader = new FileReader();
+  reader.onerror = () => { _tdLogImg('_tdInsertGif FileReader onerror', String(reader.error)); edToast(I18n.t('td_errReadText', { msg: 'FileReader' })); };
+  reader.onload = ev => {
+    const gifSrc = ev.target.result;
+    edToast(I18n.t('ed_processingGif'));
+    // GifLayer usado puramente como decodificador — nunca se añade al
+    // lienzo ni se conserva; _oc es su primer frame ya renderizado.
+    const _decoder = new GifLayer(gifKey, 0.5, 0.5, 0.7);
+    _decoder.load(gifSrc, () => {
+      if(!_decoder._oc){ _tdLogImg('_tdInsertGif ABORTA', 'el decodificador no produjo _oc'); edToast(I18n.t('ed_gifNotSupported')); return; }
+      const staticDataUrl = _decoder._oc.toDataURL('image/png');
+      window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+      window._tdGifKeyBySrc[staticDataUrl] = gifKey;
+      if(typeof _gifIdbSave === 'function'){
+        _gifIdbSave(gifKey, gifSrc).catch(e => { _tdLogImg('_tdInsertGif _gifIdbSave EXCEPCIÓN', String(e)); });
+      }
+      fetch(staticDataUrl).then(r => r.blob()).then(blob => {
+        const pngFile = new File([blob], 'anim.png', { type: 'image/png' });
+        _tdInsertImage(pngFile, { skipCompress: true });
+        edToast(I18n.t('ed_gifAdded', { n: _decoder._frames.length }));
+      }).catch(e => { _tdLogImg('_tdInsertGif fetch(dataURL) EXCEPCIÓN', String(e)); edToast(I18n.t('ed_gifNotSupported')); });
+    });
+  };
+  reader.readAsDataURL(file);
 }
 
 // Conjunto de ids de adjuntos ya tratados (URL persistente + tamaño inicial
@@ -2537,8 +2613,17 @@ function _tdProcessNewImageAttachment(att, file, opts){
         // tamaño arbitrario), sin importar lo pequeño o grande que fuera
         // el objeto real en la página.
         w = Math.max(20, Math.round(colW * opts.pageWidthFrac));
-        h = Math.round(w * (natH / natW));
-        _tdLogImg('tamaño desde biblioteca (pageWidthFrac)', 'pageWidthFrac=' + opts.pageWidthFrac + ' → w=' + w + ' h=' + h);
+        // BUG CORREGIDO (reportado por Alberto: una animación GCP se
+        // insertaba deformada desde biblioteca): para una animación, el
+        // frame decodificado puede no tener la misma proporción que el
+        // tamaño de visualización previsto (mismo motivo por el que la
+        // inserción en el lienzo general ya prefiere normW/normH sobre las
+        // dimensiones naturales de la imagen — ver _convAnimSize, más al
+        // detalle en editor.js). opts.aspectRatio (normH/normW, ver
+        // _tdInsertFromBib) manda cuando está disponible; si no, se cae de
+        // vuelta a la proporción natural de la imagen, como hasta ahora.
+        h = Math.round(w * (opts.aspectRatio || (natH / natW)));
+        _tdLogImg('tamaño desde biblioteca (pageWidthFrac)', 'pageWidthFrac=' + opts.pageWidthFrac + ' aspectRatio=' + (opts.aspectRatio || '(natural)') + ' → w=' + w + ' h=' + h);
       } else {
         // Ancho por defecto: 70% de la columna de escritura visible (mismo
         // criterio que edAddImage usa para el canvas: 0.7 del ancho de
@@ -2563,9 +2648,15 @@ function _tdProcessNewImageAttachment(att, file, opts){
       // transparente por defecto, así que se conserva PNG cuando la imagen
       // tiene transparencia real — la propia función ya distingue esto igual
       // que en el resto de la app, no es un caso especial nuevo.
-      const compressedDataUrl = (typeof _edCompressLoadedImage === 'function')
-        ? _edCompressLoadedImage(img, dataUrl)
-        : dataUrl;
+      // skipCompress: usado al insertar una ANIMACIÓN (ver _tdInsertGif) — el
+      // frame estático que se ve aquí ya viene generado por el propio
+      // decodificador GIF/APNG con el tamaño final correcto; comprimirlo de
+      // nuevo cambiaría el dataUrl byte a byte y rompería la asociación con
+      // su gifKey (ver window._tdGifKeyBySrc, comprobada por igualdad exacta
+      // de string más abajo en _tdLayoutPages).
+      const compressedDataUrl = (opts && opts.skipCompress)
+        ? dataUrl
+        : (typeof _edCompressLoadedImage === 'function' ? _edCompressLoadedImage(img, dataUrl) : dataUrl);
       _tdLogImg('compresión de imagen para el flujo de texto', 'original=' + dataUrl.length + ' comprimido=' + compressedDataUrl.length + ' formato=' + (compressedDataUrl.slice(11, compressedDataUrl.indexOf(';'))));
       try{
         att.setAttributes({ width: w, height: h, url: compressedDataUrl, href: compressedDataUrl });
@@ -2607,8 +2698,9 @@ function _tdWatchForPastedImages(){
     try{ atts = editor.getDocument().getAttachments(); }catch(_e){ return; }
     atts.forEach(att => {
       if(att.file && !window._tdProcessedAttIds.has(att.id)){
-        _tdLogImg('imagen detectada por vía nativa (pegar/soltar)', 'att.id=' + att.id + ' file=' + (att.file.name || '?'));
-        _tdProcessNewImageAttachment(att, att.file);
+        const _pendingOpts = window._tdPendingImageOpts && window._tdPendingImageOpts.get(att.file);
+        _tdLogImg('imagen detectada por vía nativa (pegar/soltar)', 'att.id=' + att.id + ' file=' + (att.file.name || '?') + (_pendingOpts ? ' (opts pendientes de _tdInsertImage encontrados)' : ' (sin opts pendientes — inserción externa genuina)'));
+        _tdProcessNewImageAttachment(att, att.file, _pendingOpts);
       }
     });
   });
@@ -2738,6 +2830,26 @@ function _tdRenderLayersToImage(items, cb){
   });
 }
 
+// BUG CORREGIDO (reportado por Alberto: animación insertada desde una
+// biblioteca guardada en orientación horizontal, en un flujo de texto de
+// una hoja vertical, se veía estirada verticalmente): normW/normH son
+// fracciones del ancho/alto de LA PÁGINA ORIGINAL (entry.orientation), no
+// del ancho/alto entre sí — normH/normW como proporción física directa
+// SOLO es correcto si el ancho y el alto de página son iguales (o si
+// origen y destino comparten exactamente la misma orientación). Al pasar
+// de horizontal a vertical (o viceversa) esa relación se invierte, así que
+// hay que multiplicar cada fracción por la dimensión real de la página
+// ORIGINAL (edPageW/edPageH, con edOrientation ya puesto a
+// entry.orientation por _tdInsertFromBib más abajo) antes de dividir.
+// Verificado con los números reales del caso reportado: la fórmula
+// anterior (normH/normW) daba 3.98; esta da 1.84 — la proporción física
+// real — con una diferencia de exactamente ED_PAGE_H/ED_PAGE_W (2.167),
+// el factor de la propia inversión de orientación.
+function _tdBibAnimAspectRatio(entry){
+  if(!entry.normW || !entry.normH) return undefined;
+  return (entry.normH * edPageH()) / (entry.normW * edPageW());
+}
+
 // Inserta un elemento de la biblioteca en el flujo de texto como imagen
 // estática, con la caja de recorte calculada igual que edExportSelectionPNG
 // (ver _tdRenderLayersToImage arriba), respetando el tamaño real que el
@@ -2762,23 +2874,117 @@ function _tdInsertFromBib(entry){
   // tamaño arbitrario) — ahora se le pasa el ancho REAL que tenía el
   // objeto en la página (widthFrac, segundo argumento de
   // _tdRenderLayersToImage), para que un objeto pequeño se inserte pequeño.
-  const _finish = (dataUrl, widthFrac) => {
+  const _finish = (dataUrl, widthFrac, skipCompress, aspectRatio) => {
     edOrientation = _savedOrientBib;
     if(!dataUrl){ _tdLogImg('insertar desde biblioteca ABORTA', 'sin dataUrl resultante'); return; }
     try{
       const blob = _dataUrlToBlob(dataUrl);
       const file = new File([blob], 'biblioteca.png', { type: blob.type || 'image/png' });
-      _tdInsertImage(file, widthFrac ? { pageWidthFrac: widthFrac } : undefined);
+      const _opts = {};
+      if(widthFrac) _opts.pageWidthFrac = widthFrac;
+      if(skipCompress) _opts.skipCompress = true;
+      if(aspectRatio) _opts.aspectRatio = aspectRatio;
+      _tdInsertImage(file, Object.keys(_opts).length ? _opts : undefined);
     }catch(err){
       _tdLogImg('EXCEPCIÓN insertando desde biblioteca', (err && err.message) || String(err));
       edToast(I18n.t('td_errApplyText', { msg: (err && err.message) || err }));
     }
   };
 
-  // Animaciones (GIF/GCP): el flujo de texto no reproduce animaciones — se
-  // usa su miniatura ya generada como fotograma fijo, mismo criterio que
-  // gcpInsertFromBib aplica a objetos no animables directamente.
-  if(entry.isGifAnim){ _finish(entry.thumb); return; }
+  // Animaciones (GIF/GCP) de biblioteca. Petición explícita de Alberto: deben
+  // reproducirse igual que una animación insertada por el menú Insertar, no
+  // quedarse en su miniatura fija (comportamiento anterior, ver el `if`
+  // simple que había aquí antes). Dos orígenes posibles, mismo patrón para
+  // ambos (decodificar → asociar el dataUrl del primer frame con una clave
+  // vía un mapa de consulta → guardar el original completo en su propia
+  // IDB), solo cambia el decodificador y el almacén:
+  //  - GIF (entry.gifDataUrl): GifDecoder/GifLayer, gifKey en cxGifs.
+  //  - APNG/GCP (entry.apngSrc o entry.pngFrames): ApngDecoder/ImageLayer
+  //    (el mismo loadAnim que ya usa cualquier animación APNG de la app),
+  //    animKey en cxAnims. Se preservan además las opciones GCP (repetición,
+  //    parada, fundido, retardo de inicio) para que _animTickOne — la misma
+  //    función que ya anima cualquier otra capa, ver reader.js — las
+  //    respete tal cual en el lector, en vez de perderlas.
+  if(entry.isGifAnim){
+    if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
+      const _bibAnimKey = (typeof _edAnimKey === 'function')
+        ? _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8))
+        : ('anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+      const _bibAnimInput = entry.apngSrc || entry.pngFrames;
+      // Diagnóstico temporal (mismo _tdLogImg de siempre): si la imagen sigue
+      // viéndose mal tras el arreglo del decodificador (frames de tamaño
+      // distinto entre sí, ya corregido en ApngDecoder.decodeFrameArray),
+      // esto registra el tamaño real de cada frame de origen para saber si
+      // el problema viene de ahí o de otro sitio.
+      if(Array.isArray(entry.pngFrames)){
+        const _dims = entry.pngFrames.map(f => (typeof f === 'string' ? f.length : 0));
+        _tdLogImg('insertar animación de biblioteca (APNG): frames de origen', 'count=' + entry.pngFrames.length + ' bytesPorFrame=' + JSON.stringify(_dims) + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      } else {
+        _tdLogImg('insertar animación de biblioteca (APNG): origen', 'apngSrc, bytes=' + (entry.apngSrc||'').length + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      }
+      // ImageLayer usado puramente como decodificador (loadAnim), igual que
+      // GifLayer abajo para el caso GIF — nunca se añade al lienzo.
+      const _bibAnimDecoder = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
+      if(entry.gcpFrameDelay != null) _bibAnimDecoder._gcpFrameDelay = entry.gcpFrameDelay;
+      if(entry.gcpFrameHolds && entry.gcpFrameHolds.length) _bibAnimDecoder._gcpFrameHolds = entry.gcpFrameHolds;
+      _bibAnimDecoder.loadAnim(_bibAnimInput, () => {
+        if(!_bibAnimDecoder._oc || !_bibAnimDecoder._animFrames || !_bibAnimDecoder._animFrames.length){
+          _tdLogImg('insertar animación de biblioteca (APNG) ABORTA', 'el decodificador no produjo frames');
+          _finish(entry.thumb);
+          return;
+        }
+        _tdLogImg('insertar animación de biblioteca (APNG): decodificado', '_oc=' + _bibAnimDecoder._oc.width + 'x' + _bibAnimDecoder._oc.height + ' frames=' + _bibAnimDecoder._animFrames.length);
+        const _bibStaticUrl = _bibAnimDecoder._oc.toDataURL('image/png');
+        window._tdAnimKeyBySrc = window._tdAnimKeyBySrc || {};
+        window._tdAnimKeyBySrc[_bibStaticUrl] = {
+          animKey: _bibAnimKey,
+          gcpFrameDelay:     entry.gcpFrameDelay,
+          gcpFrameHolds:     entry.gcpFrameHolds,
+          gcpRepeatCount:    entry.gcpRepeatCount,
+          gcpStopAtEnd:      entry.gcpStopAtEnd,
+          gcpRestartDelay:   entry.gcpRestartDelay,
+          gcpStartDelay:     entry.gcpStartDelay,
+          gcpInvisBeforeStart: entry.gcpInvisBeforeStart,
+          gcpInvisAtEnd:     entry.gcpInvisAtEnd,
+          gcpInvisGradual:   entry.gcpInvisGradual,
+          gcpCircularEnd:    entry.gcpCircularEnd,
+        };
+        if(window._sbAnimIdbSave){
+          // Se guarda tal cual (string APNG o array de frames sueltos) —
+          // igual que ya hace la app con cualquier animKey; la conversión a
+          // APNG único (si hiciera falta) ya la resuelve la propia subida a
+          // Supabase (ver supabase-client.js), no hay que adelantarla aquí.
+          window._sbAnimIdbSave(_bibAnimKey, _bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
+        }
+        _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
+      });
+    } else if(entry.gifDataUrl && window.GifDecoder){
+      // Último recurso: entry.gifDataUrl se rellena SIEMPRE al guardar en
+      // biblioteca (con el primer frame como repuesto, incluso para APNG —
+      // ver el comentario junto a esa asignación en editor.js), así que su
+      // sola presencia NO significa que esto sea un GIF real. Solo se llega
+      // aquí cuando NINGUNA de las dos señales inequívocas de arriba
+      // (apngSrc/pngFrames) existe — bug corregido, confirmado con el
+      // registro de diagnóstico real: una animación APNG entraba por error
+      // en esta rama, se le pasaba su frame estático (no un GIF de verdad)
+      // a GifDecoder, y fallaba con "el decodificador no produjo _oc".
+      const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+      const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
+      _bibDecoder.load(entry.gifDataUrl, () => {
+        if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
+        const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
+        window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+        window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
+        if(typeof _gifIdbSave === 'function'){
+          _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
+        }
+        _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
+      });
+    } else {
+      _finish(entry.thumb);
+    }
+    return;
+  }
 
   // Grupos multi-capa: componer TODAS las capas en una sola imagen,
   // recortada a la caja UNIÓN de todas ellas.
@@ -5020,7 +5226,42 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
         // con el texto, sea cual sea la alineación del texto". A diferencia
         // de las líneas de texto (que sí heredan block.align), la imagen
         // ignora ese valor a propósito.
-        pushLine({height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH});
+        {
+          const _gk = (window._tdGifKeyBySrc && window._tdGifKeyBySrc[w.src]) || undefined;
+          const _ak = (window._tdAnimKeyBySrc && window._tdAnimKeyBySrc[w.src]) || null;
+          // Diagnóstico temporal: confirmar si esta consulta encuentra
+          // coincidencia o no — punto nunca antes verificado directamente
+          // (el tamaño se confirma en la inserción, la reproducción en
+          // aislado con datos sintéticos; esto es lo único que faltaba).
+          if(window._tdGifKeyBySrc || window._tdAnimKeyBySrc){
+            const _gkKeys = window._tdGifKeyBySrc ? Object.keys(window._tdGifKeyBySrc) : [];
+            const _akKeys = window._tdAnimKeyBySrc ? Object.keys(window._tdAnimKeyBySrc) : [];
+            if(_gk || _ak){
+              _tdLogImg('consulta gifKey/animKey por src', 'COINCIDE — ' + (_gk ? ('gifKey=' + _gk) : ('animKey=' + _ak.animKey)) + ' (w.src.length=' + w.src.length + ')');
+            } else if(_gkKeys.length || _akKeys.length){
+              _tdLogImg('consulta gifKey/animKey por src', 'NO COINCIDE — w.src.length=' + w.src.length + ' candidatos registrados: ' + [..._gkKeys, ..._akKeys].map(k => k.length).join(','));
+            }
+          }
+          const _lineObj = {height: imgH, indent: indentPx, kind:'image', fontSize: imgH, marker:null, runs:[], align: 'center', src: w.src, imgW, imgH, gifKey: _gk};
+          if(_ak){
+            // Opciones GCP con guion bajo (_gcpStopAtEnd, no gcpStopAtEnd):
+            // _animTickOne (reader.js) las lee así, igual que en cualquier
+            // otra capa animada — petición explícita de Alberto de
+            // reutilizar esa misma lógica tal cual.
+            _lineObj.animKey = _ak.animKey;
+            if(_ak.gcpFrameDelay != null) _lineObj._gcpFrameDelay = _ak.gcpFrameDelay;
+            if(_ak.gcpFrameHolds && _ak.gcpFrameHolds.length) _lineObj._gcpFrameHolds = _ak.gcpFrameHolds;
+            if(_ak.gcpRepeatCount != null) _lineObj._gcpRepeatCount = _ak.gcpRepeatCount;
+            if(_ak.gcpStopAtEnd) _lineObj._gcpStopAtEnd = true;
+            if(_ak.gcpRestartDelay) _lineObj._gcpRestartDelay = _ak.gcpRestartDelay;
+            if(_ak.gcpStartDelay) _lineObj._gcpStartDelay = _ak.gcpStartDelay;
+            if(_ak.gcpInvisBeforeStart) _lineObj._gcpInvisBeforeStart = true;
+            if(_ak.gcpInvisAtEnd) _lineObj._gcpInvisAtEnd = true;
+            if(_ak.gcpInvisGradual === false) _lineObj._gcpInvisGradual = false;
+            if(_ak.gcpCircularEnd) _lineObj._gcpCircularEnd = true;
+          }
+          pushLine(_lineObj);
+        }
         firstLineOfBlock = false;
         return;
       }
