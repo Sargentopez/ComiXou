@@ -25872,6 +25872,49 @@ function edDeserLayer(d, pageOrientation){
       });
       } // fin else (_edDeserPageIdx === 0)
     }
+    // BUG CORREGIDO (Alberto: animaciones insertadas desde biblioteca se
+    // quedaban fijas en su primer fotograma tras guardar y reabrir la obra).
+    // Una capa con SOLO animKey — sin _pngFrames/_apngSrc embebidos y sin
+    // _pngFramesKey/_apngIdbKey — es el estado normal de cualquier animación
+    // tras subir la obra a la nube (layer_data sube siempre sin _pngFrames,
+    // ver supabase-client.js) mientras la descarga no haya repoblado
+    // _apngSrc todavía. Ninguna de las tres ramas de arriba cubre este caso:
+    // exigen datos ya incrustados, o _pngFramesKey, o _apngIdbKey sin
+    // animKey. Sin esta rama, animKey nunca llegaba a consultarse en
+    // IndexedDB y el layer se quedaba sin fotogramas para siempre — mismo
+    // patrón que la rama _pngFramesKey de arriba, con animKey como clave.
+    if(d.animKey && !d._pngFramesKey && !d._apngIdbKey && !d._pngFrames && !d._apngSrc) {
+      const _onBibAnimLoaded = (data) => {
+        const input = (typeof data === 'string') ? data
+                    : (Array.isArray(data) && data.length) ? data : null;
+        if(!input) return false;
+        if(typeof data === 'string') { l._apngSrc = data; } else { l._pngFrames = data; }
+        l.loadAnim(input, () => {
+          if($('editorViewer')?.classList.contains('open')) {
+            const _visPage = edPages[edViewerIdx];
+            if(_visPage && _visPage.layers.includes(l)) {
+              l._playing = true;
+              l._applyFrame(0);
+              if(typeof edUpdateViewer==='function') edUpdateViewer();
+            }
+          } else {
+            if(typeof edRedraw==='function') edRedraw();
+          }
+        });
+        return true;
+      };
+      if (window._edDeserPageIdx > 0) {
+        // No lanzar la promesa IDB — _edLoadPageAnims ya usa animKey como
+        // fallback (l._pngFramesKey || l.animKey) al navegar a esta hoja.
+        l._animDeferred = true;
+      } else if (window._sbAnimIdbLoad) {
+        l._animLoadPromise = window._sbAnimIdbLoad(d.animKey).then(data => {
+          _onBibAnimLoaded(data);
+          // Si no hay datos, el layer queda sin animación hasta que se
+          // descargue de la nube (mismo criterio que la rama _pngFramesKey).
+        }).catch(()=>{});
+      }
+    }
     if(d.src){
       const img=new Image();
       img.onload=()=>{
@@ -25969,6 +26012,27 @@ function _edCloneLayerAnimData(layer) {
   if (layer._gcpLayersData) layer._gcpLayersData = JSON.parse(JSON.stringify(layer._gcpLayersData));
   if (layer._gcpLayerNames) layer._gcpLayerNames = JSON.parse(JSON.stringify(layer._gcpLayerNames));
   if (layer._gcpFrameHolds) layer._gcpFrameHolds = layer._gcpFrameHolds.slice();
+}
+
+// Convierte el resultado de GifDecoder.decode/ApngDecoder.decode
+// ({frames:[{imageData,...}], width, height} — misma firma en los dos, ver
+// comentario junto a la definición de ApngDecoder) en un array de PNG
+// dataUrls sueltos: el mismo formato que _pngFrames en cualquier animación
+// nueva del GCP. Se usa al insertar desde biblioteca un GIF real (varios
+// fotogramas) para no envolver el archivo completo dentro de _pngFrames
+// como si fuera "1 solo fotograma" — mismo bug ya corregido para apngSrc
+// (ver comentario junto a "entry.apngSrc" en el manejador de clic de la
+// biblioteca): ese envoltorio es indetectable para _buildApngFromFrames/
+// ApngDecoder.decode en la siguiente subida a la nube, que lo reduce a 1
+// solo fotograma.
+function _edFramesResultToPngArray(result) {
+  const _fc = document.createElement('canvas');
+  _fc.width = result.width; _fc.height = result.height;
+  const _fctx = _fc.getContext('2d');
+  return result.frames.map(fr => {
+    _fctx.putImageData(fr.imageData, 0, 0);
+    return _fc.toDataURL('image/png');
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -32450,7 +32514,25 @@ function _bibRenderPanel(panel) {
                 // contenedor si esta animación se mueve en el editor general antes de
                 // reeditarla (ver invariante junto a _gcpApplyContainerDelta en gcpOpen).
                 la2._gcpRefX=0.5; la2._gcpRefY=0.5; la2._gcpRefW=fW; la2._gcpRefH=fH;
-                if(entry.apngSrc){la2._apngSrc=entry.apngSrc; la2._pngFrames=[entry.apngSrc];}
+                // BUG CORREGIDO (Alberto: animaciones insertadas desde biblioteca
+                // se quedaban fijas en su primer fotograma tras guardar y reabrir
+                // la obra). Antes: la2._pngFrames=[entry.apngSrc] envolvía el APNG
+                // YA COMPLETO como si fuera un array de "1 fotograma suelto".
+                // edSaveProject reexternaliza _pngFrames a IndexedDB en cada
+                // guardado bajo una clave NUEVA (sustituyendo a animKey en las
+                // búsquedas posteriores), y la subida a la nube reconstruye el
+                // APNG a partir de ese array con _buildApngFromFrames
+                // (supabase-client.js) — pensada para combinar fotogramas
+                // sueltos de verdad, no para "desenvolver" un archivo ya
+                // terminado. Al tratar ese único elemento como un fotograma
+                // aislado, el APNG que se vuelve a subir queda reducido a 1 solo
+                // fotograma: estática. _apngSrc como cadena suelta (sin tocar
+                // _pngFrames) es la representación correcta — mismo patrón que
+                // ya usaban _tdInsertFromBib (editor-textdoc.js) y la reedición
+                // GCP (existingLayer._apngSrc en _gcpSaveToLib). Una animación
+                // insertada desde biblioteca debe quedar indistinguible de una
+                // nueva en su forma de almacenarse.
+                if(entry.apngSrc) la2._apngSrc=entry.apngSrc;
                 else la2._pngFrames=_frames2;
                 la2._fIdx=0;
                 if(entry.gcpLayersData) la2._gcpLayersData=entry.gcpLayersData;
@@ -32489,8 +32571,32 @@ function _bibRenderPanel(panel) {
                      : (entry.pngFrames && entry.pngFrames.length ? entry.pngFrames
                      : (entry.gifDataUrl ? [entry.gifDataUrl] : []));
         const _srcForImg = entry.apngSrc || (frames && frames[0]) || entry.gifDataUrl;
+        // BUG CORREGIDO (mismo bug de fondo que apngSrc, ver comentario extenso
+        // más abajo): si la ÚNICA señal disponible es entry.gifDataUrl (sin
+        // apngSrc ni pngFrames sueltos), puede ser un GIF real de varios
+        // fotogramas O, en el caso degradado de una entrada APNG que perdió
+        // sus datos reales, solo el primer fotograma como repuesto genérico
+        // (ver comentario junto a "entry.gifDataUrl = ..." al guardar en
+        // biblioteca, más arriba en este archivo). Intentar decodificarlo
+        // como GIF de verdad antes de decidir nada — mismo patrón "intentar,
+        // si falla usar el repuesto" que ya usa ApngDecoder.decode()
+        // internamente (decodeApng().catch(() => decodeFrameArray([input]))):
+        // si GifDecoder lo decodifica con éxito, usar SUS fotogramas reales
+        // (nunca envolver el archivo completo dentro de _pngFrames); si
+        // falla (no es un GIF real — un PNG suelto no tiene cabecera GIF),
+        // seguir con el repuesto de 1 solo fotograma de siempre, que en ESE
+        // caso sí es correcto porque solo hay 1 fotograma disponible.
+        const _onlyGifSignal = !entry.apngSrc && !(entry.pngFrames && entry.pngFrames.length) && entry.gifDataUrl;
+        const _realGifFramesPromise = (_onlyGifSignal && window.GifDecoder)
+          ? window.GifDecoder.decode(entry.gifDataUrl).then(_edFramesResultToPngArray).catch(() => null)
+          : Promise.resolve(null);
         const img = new Image();
         img.onload = () => {
+          _realGifFramesPromise.then((_realGifFrames) => {
+          // frames sueltos de verdad, ya sea el array original (apngSrc/
+          // pngFrames) o los recién decodificados de un GIF real — nunca el
+          // archivo completo envuelto como "1 fotograma".
+          const finalFrames = _realGifFrames || frames;
           const pw = edPageW(), ph = edPageH();
           let finalW = entry.normW || 0.7;
           let finalH = entry.normH || finalW*(img.naturalHeight/Math.max(img.naturalWidth,1))*(pw/ph);
@@ -32507,12 +32613,31 @@ function _bibRenderPanel(panel) {
           la._isGcpImage = true;
           // Ref de línea base — misma razón que en la rama async de arriba.
           la._gcpRefX = 0.5; la._gcpRefY = 0.5; la._gcpRefW = finalW; la._gcpRefH = finalH;
-          // Si apngSrc: usar directamente para decodeApng (preserva todos los frames)
+          // BUG CORREGIDO (Alberto: animaciones insertadas desde biblioteca se
+          // quedaban fijas en su primer fotograma tras guardar y reabrir la
+          // obra). Antes, la rama de apngSrc hacía ADEMÁS
+          // la._pngFrames=[entry.apngSrc] — envolvía el APNG YA COMPLETO
+          // dentro de _pngFrames como si fuera un array de "1 fotograma
+          // suelto" (comentario anterior: "length>1 no aplica pero necesario
+          // para IDB"). edSaveProject reexternaliza _pngFrames a IndexedDB en
+          // cada guardado bajo una clave NUEVA (que sustituye a animKey en
+          // las búsquedas posteriores), y la subida a la nube reconstruye el
+          // APNG a partir de ese array con _buildApngFromFrames
+          // (supabase-client.js) — pensada para combinar fotogramas sueltos
+          // de verdad, no para "desenvolver" un archivo ya terminado. Al
+          // tratar ese único elemento como un fotograma aislado, el APNG que
+          // se vuelve a subir queda reducido a 1 solo fotograma: estática.
+          // _apngSrc como cadena suelta (sin tocar _pngFrames) es la
+          // representación correcta — mismo patrón que ya usaban
+          // _tdInsertFromBib (editor-textdoc.js) y la reedición GCP
+          // (existingLayer._apngSrc en _gcpSaveToLib). Una animación
+          // insertada desde biblioteca debe quedar indistinguible de una
+          // nueva en su forma de almacenarse — _pngFrames solo debe llevar
+          // fotogramas sueltos de verdad (finalFrames, calculado arriba).
           if (entry.apngSrc) {
             la._apngSrc = entry.apngSrc;
-            la._pngFrames = [entry.apngSrc]; // length>1 no aplica pero necesario para IDB
           } else {
-            la._pngFrames = frames;
+            la._pngFrames = finalFrames;
           }
           la._fIdx = 0;
           if (entry.gcpLayersData) la._gcpLayersData = entry.gcpLayersData;
@@ -32534,7 +32659,7 @@ function _bibRenderPanel(panel) {
           la.animKey = _bibAnimKey;
           if (window._sbAnimIdbSave) {
             // Guardar en IDB: si apngSrc usar string, sino array de frames
-            const _idbData = entry.apngSrc || frames;
+            const _idbData = entry.apngSrc || finalFrames;
             window._sbAnimIdbSave(_bibAnimKey, _idbData).catch(function(e){ console.warn('bib IDB:', e); });
           }
           const firstTextIdx = edLayers.findIndex(l => l.type==='text'||l.type==='bubble');
@@ -32545,12 +32670,13 @@ function _bibRenderPanel(panel) {
           // Garantiza visibilidad aunque loadAnim sea lento o falle
           requestAnimationFrame(edRedraw);
           // Cargar con ApngDecoder — si apngSrc usar string (decodeApng), sino array (decodeFrameArray)
-          const _animInput = entry.apngSrc || frames;
+          const _animInput = entry.apngSrc || finalFrames;
           la.loadAnim(_animInput, () => {
             la._playing = false; // no reproducir en el canvas — solo en el visor/reproductor
             la._applyFrame(0);
             edRedraw();
           });
+          }); // fin _realGifFramesPromise.then
         };
         img.src = _srcForImg;
         edToast(I18n.t('ed_animationInserted'));
