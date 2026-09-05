@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.37</footer>
+    <footer class="app-version">v39.42</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -406,7 +406,7 @@ Router.register('editor', {
              anterior (v37.32): para volver a mostrarlo, descomentar la
              línea de abajo; toda la instrumentación sigue activa en
              editor.js aunque el botón esté oculto. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 

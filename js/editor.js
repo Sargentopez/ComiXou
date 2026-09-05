@@ -2063,6 +2063,19 @@ window._tdRichAnimCache = window._tdRichAnimCache || {};
 function _tdGetRichAnimLayer(line){
   const key = line.gifKey || line.animKey;
   if(!key) return null;
+  // Diagnóstico (Alberto: nunca se ha visto esta función en el registro
+  // pese a confirmar pruebas en el visor interno). Log de ENTRADA, antes de
+  // mirar la caché — así confirma si la función se llega a llamar siquiera,
+  // no solo si crea una instancia nueva. Limitado a 1 vez cada 2s por clave
+  // (se llama en cada redibujado del visor mientras la línea es visible).
+  if(typeof _tdLogImg==='function'){
+    window._tdGetRichAnimLayerLastLog = window._tdGetRichAnimLayerLastLog || {};
+    const _nowGRAL = Date.now();
+    if(!window._tdGetRichAnimLayerLastLog[key] || (_nowGRAL - window._tdGetRichAnimLayerLastLog[key]) > 2000){
+      window._tdGetRichAnimLayerLastLog[key] = _nowGRAL;
+      _tdLogImg('_tdGetRichAnimLayer LLAMADA', 'key=' + key + ' yaEnCache=' + !!window._tdRichAnimCache[key]);
+    }
+  }
   let entry = window._tdRichAnimCache[key];
   if(entry) return entry;
   // Diagnóstico temporal: único tramo de toda la cadena nunca antes
@@ -27711,7 +27724,21 @@ function edUpdateViewer(){
 function _edViewerDrawTextsOnCtx(page, ctx, can){
   const textLayers = page.layers.filter(l=>(l.type==='text'||l.type==='bubble') && !l.hidden);
   const isSeq = page.textMode === 'sequential';
-  // Diagnóstico temporal: único punto de todo el visor aún no comprobado —
+  // Diagnóstico (Alberto: el diagnóstico del editor de textos nunca
+  // registraba esta función ni _tdGetRichAnimLayer a pesar de confirmar
+  // que probó en el visor interno). Log INCONDICIONAL (no depende de
+  // detectar animación primero) para confirmar como mínimo si esta función
+  // llega a ejecutarse — limitado a 1 vez cada 2s (esta función se llama en
+  // cada redibujado del visor, varias veces por segundo mientras hay algo
+  // animándose; sin límite, inundaría el buffer de 100 entradas compartido
+  // con el resto del diagnóstico de imágenes en segundos).
+  if(typeof _tdLogImg==='function'){
+    const _nowVDT = Date.now();
+    if(!_edViewerDrawTextsOnCtx._lastLog || (_nowVDT - _edViewerDrawTextsOnCtx._lastLog) > 2000){
+      _edViewerDrawTextsOnCtx._lastLog = _nowVDT;
+      _tdLogImg('_edViewerDrawTextsOnCtx EJECUTADA', 'textLayers.length=' + textLayers.length + ' isSeq=' + isSeq);
+    }
+  }
   // si el modo secuencial (revelado de texto paso a paso) está impidiendo
   // que draw() se llegue a llamar siquiera para alguna capa de texto con
   // animación, antes de entrar en _drawRichLines/_tdGetRichAnimLayer.
@@ -32481,11 +32508,21 @@ function _bibRenderPanel(panel) {
         const _phS = _o === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
         return { w: w * _pwS / edPageW(), h: h * _phS / edPageH() };
       }
-      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || (entry.pngFrames && entry.pngFrames.length))) {
+      if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || entry.animKey || (entry.pngFrames && entry.pngFrames.length))) {
         // Si el APNG/frames están solo en IDB (dispositivo B — entry.pngFrames vacío)
         // NOTA: si entry.pngFrames ya tiene datos, saltar este branch directamente al path normal
-        if (entry._apngIdbKey && !entry.apngSrc && !(entry.pngFrames && entry.pngFrames.length) && window._sbAnimIdbLoad) {
-          window._sbAnimIdbLoad(entry._apngIdbKey)
+        // BUG CORREGIDO (Alberto: animación de biblioteca que no se reproducía
+        // — diagnóstico real en flujo de texto: "el decodificador no produjo
+        // _oc"). Además de entry._apngIdbKey (biblioteca en dispositivo B),
+        // entry.animKey solo (sin apngSrc/pngFrames) es el MISMO caso: puede
+        // pasar si se guardó en biblioteca desde una capa que en ese momento
+        // solo tenía animKey en memoria, sin fotogramas cargados (mismo
+        // estado ya corregido en edDeserLayer más abajo en este archivo).
+        // _apngIdbKey||animKey como clave de IDB — el resto de este bloque ya
+        // funciona igual sea cual sea el origen de la clave.
+        const _bibFetchKey = entry._apngIdbKey || entry.animKey;
+        if (_bibFetchKey && !entry.apngSrc && !(entry.pngFrames && entry.pngFrames.length) && window._sbAnimIdbLoad) {
+          window._sbAnimIdbLoad(_bibFetchKey)
             .then(function(_data) {
               // _data puede ser string (APNG completo) o array (frames PNG individuales)
               if (_data) {
@@ -41115,6 +41152,71 @@ async function _edRunDiag() {
       }
     }
   } catch (e) { L('  Error en diagnóstico de flujos de texto: ' + e.message + '\n' + e.stack); }
+
+  // ── ANIMACIONES EN FLUJOS DE TEXTO — petición explícita de Alberto: el
+  // diagnóstico del editor de textos (#tdDiagBtn) solo ve el estado interno
+  // de Trix (bloques, mapas de inserción) — nunca ha registrado ni una sola
+  // vez _tdGetRichAnimLayer/_edViewerDrawTextsOnCtx a pesar de que Alberto
+  // confirma haber probado en el visor interno, así que ese diagnóstico no
+  // está capturando lo que hace falta. Esta sección mira las richLines TAL
+  // Y COMO ESTÁN AHORA MISMO en edPages (el objeto real que lee el visor,
+  // no una recomputación de Trix) y el estado del motor de reproducción
+  // (window._tdRichAnimCache) si ya se llegó a crear — y reproduce aquí el
+  // mismo _tdImgLog compartido (editor-textdoc.js) para no depender de
+  // volver a abrir el editor de textos tras usar el visor.
+  L('');
+  L('── ANIMACIONES EN FLUJOS DE TEXTO (estado real de edPages ahora mismo) ──');
+  try {
+    const _tdAnimRows = [];
+    edPages.forEach((p, pi) => {
+      (p.layers || []).forEach(l => {
+        if (!l || l.type !== 'text' || !Array.isArray(l.richLines)) return;
+        l.richLines.forEach((rl, ri) => {
+          if (!rl || rl.kind !== 'image') return;
+          _tdAnimRows.push({ pageIdx: pi, flowId: l._tdFlowId, lineIdx: ri, rl });
+        });
+      });
+    });
+    const _tdAnimated = _tdAnimRows.filter(r => r.rl.gifKey || r.rl.animKey);
+    L('  ' + _tdAnimRows.length + ' línea(s) de imagen en total, ' + _tdAnimated.length + ' con gifKey/animKey asociado.');
+    if (!_tdAnimated.length && _tdAnimRows.length) {
+      L('  ⚠️ Hay imágenes en flujos de texto pero NINGUNA tiene gifKey/animKey — se guardaron/quedaron como estáticas.');
+    }
+    _tdAnimated.forEach(({ pageIdx, flowId, lineIdx, rl }) => {
+      const key = rl.gifKey || rl.animKey;
+      const tipo = rl.gifKey ? 'GIF' : 'APNG/GCP';
+      L(`  hoja ${pageIdx} (flujo ${flowId}) línea ${lineIdx}: tipo=${tipo} clave=${key} src.length=${(rl.src||'').length}`);
+      if (rl.animKey) {
+        L(`    opciones GCP: frameDelay=${rl._gcpFrameDelay} frameHolds=${JSON.stringify(rl._gcpFrameHolds)} repeatCount=${rl._gcpRepeatCount} stopAtEnd=${rl._gcpStopAtEnd} startDelay=${rl._gcpStartDelay} invisBeforeStart=${rl._gcpInvisBeforeStart} invisAtEnd=${rl._gcpInvisAtEnd}`);
+      }
+      // Solo existe una vez que _drawRichLines lo pide de verdad en modo
+      // visor (ver _tdGetRichAnimLayer más arriba en este archivo) — su
+      // AUSENCIA aquí, tras haber abierto el visor, es en sí misma la pista:
+      // significa que _drawRichLines nunca llegó a pedir esta clave.
+      const _engine = window._tdRichAnimCache && window._tdRichAnimCache[key];
+      if (!_engine) {
+        L(`    Motor de reproducción (_tdRichAnimCache["${key}"]): NO EXISTE todavía — _tdGetRichAnimLayer nunca se ha llamado con esta clave.`);
+      } else {
+        L(`    Motor de reproducción: _animReady=${!!_engine._animReady} _playing=${!!_engine._playing} _oc=${!!_engine._oc} _animFrames.length=${_engine._animFrames ? _engine._animFrames.length : 0} _fIdx=${_engine._fIdx}`);
+      }
+    });
+    L('');
+    L('  _edViewerMode ahora mismo: ' + _edViewerMode
+      + ' | visor abierto (DOM): ' + !!(document.getElementById('editorViewer')?.classList.contains('open'))
+      + ' | edViewerIdx=' + edViewerIdx + ' | edPages.length=' + edPages.length);
+    L('  window._tdRichAnimCache — claves totales: ' + (window._tdRichAnimCache ? Object.keys(window._tdRichAnimCache).length : 0)
+      + (window._tdRichAnimCache && Object.keys(window._tdRichAnimCache).length ? (' [' + Object.keys(window._tdRichAnimCache).join(', ') + ']') : ''));
+    L('  window._tdGifKeyBySrc — entradas: ' + (window._tdGifKeyBySrc ? Object.keys(window._tdGifKeyBySrc).length : 0)
+      + ' | window._tdAnimKeyBySrc — entradas: ' + (window._tdAnimKeyBySrc ? Object.keys(window._tdAnimKeyBySrc).length : 0));
+  } catch (e) { L('  Error en diagnóstico de animaciones de flujo de texto: ' + e.message + '\n' + e.stack); }
+
+  L('');
+  L('── REGISTRO _tdImgLog (inserción de imágenes/animaciones — mismo registro compartido que ve el diagnóstico del editor de textos, ' + (window._tdImgLog ? window._tdImgLog.length : 0) + ' entradas) ──');
+  if (window._tdImgLog && window._tdImgLog.length) {
+    window._tdImgLog.forEach(entry => L('  ' + entry));
+  } else {
+    L('  (vacío — no se ha registrado ninguna inserción de imagen/animación en un flujo de texto en esta carga de página)');
+  }
 
   // ── COMPARACIÓN COMPLETA: contenido REAL (richLines ya aplicadas) vs.
   // PREDICHO (recalculando _tdLayoutPages sobre el mismo sourceHTML guardado,

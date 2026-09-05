@@ -190,6 +190,12 @@ function edOpenTextDoc(editLayer){
     // para que "Aplicar" sustituya estas hojas en vez de añadir otras nuevas.
     // Capas de v32.70 (sin _tdFlowId): adoptar uno ahora, como flujo de una sola hoja.
     _tdEditingFlowId = _tdEnsureFlowId(editLayer);
+    // Ver comentario junto a _tdRepopulateAnimMapsFromRichLines: sin esto,
+    // la primera "Aplicar" de esta sesión de edición perdería en silencio
+    // gifKey/animKey de cualquier imagen ya animada insertada en sesiones
+    // anteriores (bug reportado por Alberto — animaciones en flujos de
+    // texto que dejan de reproducirse en el visor interno tras reabrir).
+    _tdRepopulateAnimMapsFromRichLines(_tdEditingFlowId);
     // Recordar DESDE QUÉ HOJA del flujo se abrió (doble tap) — no asume que
     // el flujo empieza en la hoja 0 del editor general ni que sus hojas son
     // consecutivas (puede haber huecos "Exceptuados" en medio, ver
@@ -321,6 +327,59 @@ function _tdFindFlowLayer(flowId){
     if(l) return l;
   }
   return null;
+}
+// BUG CORREGIDO (Alberto: animaciones insertadas en flujos de texto no se
+// reproducían en el visor interno tras reabrir la obra/el editor de texto,
+// aunque la MISMA animación insertada como capa suelta en el lienzo sí lo
+// hacía). Causa: window._tdGifKeyBySrc/_tdAnimKeyBySrc (ver _tdInsertGif/
+// _tdInsertFromBib, más abajo en este archivo) solo se rellenan en el
+// INSTANTE de insertar — nunca se reconstruyen a partir de richLines ya
+// guardadas. _tdLayoutPages es la única fuente de verdad tanto para la
+// vista previa como para "Aplicar al lienzo" (ver su cabecera) y SIEMPRE
+// reconstruye cada línea de imagen consultando esos mapas por w.src — si
+// están vacíos (tras recargar la página, o simplemente al reabrir el
+// editor de texto en una sesión nueva sin haber vuelto a insertar nada) la
+// siguiente vez que se pulse "Aplicar" la imagen ya animada de antes pierde
+// gifKey/animKey en silencio, aunque su richLine YA GUARDADA sí los
+// tuviera — dejándola fija para siempre a partir de ese guardado. Repoblar
+// aquí, al abrir el editor para reeditar un flujo existente (ver
+// edOpenTextDoc), ANTES de la primera pasada de _tdLayoutPages — recorriendo
+// TODAS las hojas del flujo (puede tener varias, cada una con sus propias
+// richLines), no solo la hoja desde la que se abrió.
+function _tdRepopulateAnimMapsFromRichLines(flowId){
+  if(!flowId) return;
+  window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+  window._tdAnimKeyBySrc = window._tdAnimKeyBySrc || {};
+  const { flowIdxs } = _tdFlowIdxs(flowId);
+  flowIdxs.forEach(pi => {
+    (edPages[pi].layers || []).forEach(l => {
+      if(!l || l._tdFlowId !== flowId || !Array.isArray(l.richLines)) return;
+      l.richLines.forEach(rl => {
+        if(!rl || rl.kind !== 'image' || !rl.src) return;
+        if(rl.gifKey){
+          window._tdGifKeyBySrc[rl.src] = rl.gifKey;
+        } else if(rl.animKey){
+          // Mismo shape que _tdInsertFromBib guarda al insertar (ver más
+          // abajo en este archivo) — con guion bajo en el lado de la
+          // richLine (rl._gcpFrameDelay) y sin él en el valor del mapa
+          // (gcpFrameDelay), que es como _tdLayoutPages lo vuelve a leer.
+          window._tdAnimKeyBySrc[rl.src] = {
+            animKey:             rl.animKey,
+            gcpFrameDelay:       rl._gcpFrameDelay,
+            gcpFrameHolds:       rl._gcpFrameHolds,
+            gcpRepeatCount:      rl._gcpRepeatCount,
+            gcpStopAtEnd:        rl._gcpStopAtEnd,
+            gcpRestartDelay:     rl._gcpRestartDelay,
+            gcpStartDelay:       rl._gcpStartDelay,
+            gcpInvisBeforeStart: rl._gcpInvisBeforeStart,
+            gcpInvisAtEnd:       rl._gcpInvisAtEnd,
+            gcpInvisGradual:     rl._gcpInvisGradual,
+            gcpCircularEnd:      rl._gcpCircularEnd,
+          };
+        }
+      });
+    });
+  });
 }
 // OPTIMIZACIÓN DE MEMORIA/TRÁFICO: un flujo de N hojas guardaba el HTML de
 // origen COMPLETO (sourceHTML) N veces — una copia idéntica por cada hoja,
@@ -2906,28 +2965,17 @@ function _tdInsertFromBib(entry){
   //    función que ya anima cualquier otra capa, ver reader.js — las
   //    respete tal cual en el lector, en vez de perderlas.
   if(entry.isGifAnim){
-    if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
-      const _bibAnimKey = (typeof _edAnimKey === 'function')
-        ? _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8))
-        : ('anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
-      const _bibAnimInput = entry.apngSrc || entry.pngFrames;
-      // Diagnóstico temporal (mismo _tdLogImg de siempre): si la imagen sigue
-      // viéndose mal tras el arreglo del decodificador (frames de tamaño
-      // distinto entre sí, ya corregido en ApngDecoder.decodeFrameArray),
-      // esto registra el tamaño real de cada frame de origen para saber si
-      // el problema viene de ahí o de otro sitio.
-      if(Array.isArray(entry.pngFrames)){
-        const _dims = entry.pngFrames.map(f => (typeof f === 'string' ? f.length : 0));
-        _tdLogImg('insertar animación de biblioteca (APNG): frames de origen', 'count=' + entry.pngFrames.length + ' bytesPorFrame=' + JSON.stringify(_dims) + ' normW=' + entry.normW + ' normH=' + entry.normH);
-      } else {
-        _tdLogImg('insertar animación de biblioteca (APNG): origen', 'apngSrc, bytes=' + (entry.apngSrc||'').length + ' normW=' + entry.normW + ' normH=' + entry.normH);
-      }
+    // Extraído a función para reutilizar exactamente el mismo decodificador/
+    // guardado en el fallback de animKey de más abajo, sin cambiar en nada
+    // lo que ya hacía para el caso normal (entry.apngSrc/entry.pngFrames
+    // directos en el entry).
+    const _bibDecodeApngAndFinish = (bibAnimInput, bibAnimKey) => {
       // ImageLayer usado puramente como decodificador (loadAnim), igual que
       // GifLayer abajo para el caso GIF — nunca se añade al lienzo.
       const _bibAnimDecoder = new ImageLayer(new Image(), 0.5, 0.5, 0.7);
       if(entry.gcpFrameDelay != null) _bibAnimDecoder._gcpFrameDelay = entry.gcpFrameDelay;
       if(entry.gcpFrameHolds && entry.gcpFrameHolds.length) _bibAnimDecoder._gcpFrameHolds = entry.gcpFrameHolds;
-      _bibAnimDecoder.loadAnim(_bibAnimInput, () => {
+      _bibAnimDecoder.loadAnim(bibAnimInput, () => {
         if(!_bibAnimDecoder._oc || !_bibAnimDecoder._animFrames || !_bibAnimDecoder._animFrames.length){
           _tdLogImg('insertar animación de biblioteca (APNG) ABORTA', 'el decodificador no produjo frames');
           _finish(entry.thumb);
@@ -2937,7 +2985,7 @@ function _tdInsertFromBib(entry){
         const _bibStaticUrl = _bibAnimDecoder._oc.toDataURL('image/png');
         window._tdAnimKeyBySrc = window._tdAnimKeyBySrc || {};
         window._tdAnimKeyBySrc[_bibStaticUrl] = {
-          animKey: _bibAnimKey,
+          animKey: bibAnimKey,
           gcpFrameDelay:     entry.gcpFrameDelay,
           gcpFrameHolds:     entry.gcpFrameHolds,
           gcpRepeatCount:    entry.gcpRepeatCount,
@@ -2954,34 +3002,90 @@ function _tdInsertFromBib(entry){
           // igual que ya hace la app con cualquier animKey; la conversión a
           // APNG único (si hiciera falta) ya la resuelve la propia subida a
           // Supabase (ver supabase-client.js), no hay que adelantarla aquí.
-          window._sbAnimIdbSave(_bibAnimKey, _bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
+          window._sbAnimIdbSave(bibAnimKey, bibAnimInput).catch(e => _tdLogImg('insertar animación de biblioteca: _sbAnimIdbSave EXCEPCIÓN', String(e)));
         }
         _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
       });
-    } else if(entry.gifDataUrl && window.GifDecoder){
-      // Último recurso: entry.gifDataUrl se rellena SIEMPRE al guardar en
-      // biblioteca (con el primer frame como repuesto, incluso para APNG —
-      // ver el comentario junto a esa asignación en editor.js), así que su
-      // sola presencia NO significa que esto sea un GIF real. Solo se llega
-      // aquí cuando NINGUNA de las dos señales inequívocas de arriba
-      // (apngSrc/pngFrames) existe — bug corregido, confirmado con el
-      // registro de diagnóstico real: una animación APNG entraba por error
-      // en esta rama, se le pasaba su frame estático (no un GIF de verdad)
-      // a GifDecoder, y fallaba con "el decodificador no produjo _oc".
-      const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-      const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
-      _bibDecoder.load(entry.gifDataUrl, () => {
-        if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
-        const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
-        window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
-        window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
-        if(typeof _gifIdbSave === 'function'){
-          _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
+    };
+    // Extraído igualmente: el repuesto de "no hay apngSrc/pngFrames
+    // utilizables" — antes solo se llegaba aquí por el árbol if/else
+    // normal; ahora también lo usa el fallback de animKey de más abajo
+    // cuando IndexedDB no devuelve nada.
+    const _bibGifOrThumbFallback = () => {
+      if(entry.gifDataUrl && window.GifDecoder){
+        // Último recurso: entry.gifDataUrl se rellena SIEMPRE al guardar en
+        // biblioteca (con el primer frame como repuesto, incluso para APNG —
+        // ver el comentario junto a esa asignación en editor.js), así que su
+        // sola presencia NO significa que esto sea un GIF real. Solo se llega
+        // aquí cuando NINGUNA de las señales de arriba (apngSrc/pngFrames/
+        // animKey con datos reales en IndexedDB) existe — bug corregido,
+        // confirmado con el registro de diagnóstico real: una animación APNG
+        // entraba por error en esta rama, se le pasaba su frame estático (no
+        // un GIF de verdad) a GifDecoder, y fallaba con "el decodificador no
+        // produjo _oc".
+        const _bibGifKey = 'gif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+        const _bibDecoder = new GifLayer(_bibGifKey, 0.5, 0.5, 0.7);
+        _bibDecoder.load(entry.gifDataUrl, () => {
+          if(!_bibDecoder._oc){ _tdLogImg('insertar animación de biblioteca ABORTA', 'el decodificador no produjo _oc'); _finish(entry.thumb); return; }
+          const _bibStaticUrl = _bibDecoder._oc.toDataURL('image/png');
+          window._tdGifKeyBySrc = window._tdGifKeyBySrc || {};
+          window._tdGifKeyBySrc[_bibStaticUrl] = _bibGifKey;
+          if(typeof _gifIdbSave === 'function'){
+            _gifIdbSave(_bibGifKey, entry.gifDataUrl).catch(e => _tdLogImg('insertar animación de biblioteca: _gifIdbSave EXCEPCIÓN', String(e)));
+          }
+          _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
+        });
+      } else {
+        _finish(entry.thumb);
+      }
+    };
+    if((entry.apngSrc || (entry.pngFrames && entry.pngFrames.length)) && window.ApngDecoder){
+      const _bibAnimKey = (typeof _edAnimKey === 'function')
+        ? _edAnimKey('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8))
+        : ('anim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+      const _bibAnimInput = entry.apngSrc || entry.pngFrames;
+      // Diagnóstico temporal (mismo _tdLogImg de siempre): si la imagen sigue
+      // viéndose mal tras el arreglo del decodificador (frames de tamaño
+      // distinto entre sí, ya corregido en ApngDecoder.decodeFrameArray),
+      // esto registra el tamaño real de cada frame de origen para saber si
+      // el problema viene de ahí o de otro sitio.
+      if(Array.isArray(entry.pngFrames)){
+        const _dims = entry.pngFrames.map(f => (typeof f === 'string' ? f.length : 0));
+        _tdLogImg('insertar animación de biblioteca (APNG): frames de origen', 'count=' + entry.pngFrames.length + ' bytesPorFrame=' + JSON.stringify(_dims) + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      } else {
+        _tdLogImg('insertar animación de biblioteca (APNG): origen', 'apngSrc, bytes=' + (entry.apngSrc||'').length + ' normW=' + entry.normW + ' normH=' + entry.normH);
+      }
+      _bibDecodeApngAndFinish(_bibAnimInput, _bibAnimKey);
+    } else if(entry.animKey && window.ApngDecoder && window._sbAnimIdbLoad){
+      // BUG CORREGIDO (Alberto: animación de biblioteca que no se reproducía
+      // en el flujo de texto — diagnóstico real: "insertar animación de
+      // biblioteca ABORTA — el decodificador no produjo _oc", cayendo por
+      // error en la rama GIF de abajo). Causa: el entry tenía animKey pero
+      // ni apngSrc ni pngFrames — puede pasar si se guardó en biblioteca
+      // desde una capa que en ese momento solo tenía animKey en memoria,
+      // sin fotogramas cargados (mismo estado ya corregido en edDeserLayer,
+      // editor.js, para la carga de obra). Los datos reales pueden seguir
+      // estando en IndexedDB bajo esa misma clave — intentar recuperarlos
+      // ahí ANTES de rendirse al repuesto de gifDataUrl (que en este caso es
+      // solo 1 fotograma estático, no la animación real, y además no es un
+      // GIF válido para GifDecoder — de ahí el "no produjo _oc").
+      _tdLogImg('insertar animación de biblioteca: solo animKey, sin apngSrc/pngFrames', 'animKey=' + entry.animKey + ' — intentando IndexedDB antes del repuesto');
+      window._sbAnimIdbLoad(entry.animKey).then(data => {
+        const _input = (typeof data === 'string') ? data
+                     : (Array.isArray(data) && data.length ? data : null);
+        if(!_input){
+          _tdLogImg('insertar animación de biblioteca: animKey sin datos en IndexedDB', 'animKey=' + entry.animKey + ' — cae al repuesto de gifDataUrl/thumb');
+          _bibGifOrThumbFallback();
+          return;
         }
-        _finish(_bibStaticUrl, entry.normW, true, _tdBibAnimAspectRatio(entry));
+        _tdLogImg('insertar animación de biblioteca: animKey recuperado de IndexedDB', 'animKey=' + entry.animKey + ' tipo=' + (typeof _input) + (Array.isArray(_input) ? (', frames=' + _input.length) : (', bytes=' + _input.length)));
+        _bibDecodeApngAndFinish(_input, entry.animKey);
+      }).catch(e => {
+        _tdLogImg('insertar animación de biblioteca: _sbAnimIdbLoad(animKey) EXCEPCIÓN', String(e));
+        _bibGifOrThumbFallback();
       });
     } else {
-      _finish(entry.thumb);
+      _bibGifOrThumbFallback();
     }
     return;
   }
@@ -4999,7 +5103,37 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     // Imagen insertada en el flujo (ver _tdParseBlocks/_tdInsertImage): a
     // diferencia del texto, "y" aquí es la esquina SUPERIOR (drawImage la
     // necesita así), no la línea base — de ahí el offset 0 más arriba.
-    if(entry.kind === 'image'){ lineObj.src = entry.src; lineObj.imgW = entry.imgW; lineObj.imgH = entry.imgH; }
+    if(entry.kind === 'image'){
+      lineObj.src = entry.src; lineObj.imgW = entry.imgW; lineObj.imgH = entry.imgH;
+      // BUG CORREGIDO (Alberto: animaciones insertadas en flujos de texto se
+      // veían fijas en el visor interno SIEMPRE, incluso recién insertadas y
+      // aplicadas en la misma sesión — nunca llegaban a reproducirse ni una
+      // sola vez). Causa raíz confirmada con ejecución real (registro
+      // _tdImgLog): pushLine reconstruye lineObj desde cero con una lista
+      // fija de campos — src/imgW/imgH ya se copiaban aquí explícitamente
+      // porque existían ANTES de que las animaciones en flujos de texto
+      // fueran posibles. gifKey/animKey (y las opciones GCP que los
+      // acompañan) se añadieron después, en el bloque de más arriba que
+      // consulta window._tdGifKeyBySrc/_tdAnimKeyBySrc — pero esta
+      // reconstrucción nunca se actualizó para llevarlos también. El
+      // registro lo confirma en el mismo instante: "consulta gifKey/animKey
+      // por src COINCIDE" inmediatamente seguido de la línea ya aplicada
+      // con 0 claves.
+      if(entry.gifKey) lineObj.gifKey = entry.gifKey;
+      if(entry.animKey){
+        lineObj.animKey = entry.animKey;
+        if(entry._gcpFrameDelay != null) lineObj._gcpFrameDelay = entry._gcpFrameDelay;
+        if(entry._gcpFrameHolds && entry._gcpFrameHolds.length) lineObj._gcpFrameHolds = entry._gcpFrameHolds;
+        if(entry._gcpRepeatCount != null) lineObj._gcpRepeatCount = entry._gcpRepeatCount;
+        if(entry._gcpStopAtEnd) lineObj._gcpStopAtEnd = true;
+        if(entry._gcpRestartDelay) lineObj._gcpRestartDelay = entry._gcpRestartDelay;
+        if(entry._gcpStartDelay) lineObj._gcpStartDelay = entry._gcpStartDelay;
+        if(entry._gcpInvisBeforeStart) lineObj._gcpInvisBeforeStart = true;
+        if(entry._gcpInvisAtEnd) lineObj._gcpInvisAtEnd = true;
+        if(entry._gcpInvisGradual === false) lineObj._gcpInvisGradual = false;
+        if(entry._gcpCircularEnd) lineObj._gcpCircularEnd = true;
+      }
+    }
     curLines.push(lineObj);
     curY += entry.height;
     lineStartChars.push(endChars);
@@ -5501,6 +5635,13 @@ function _tdMakeTextLayer(pageLines, html, flowId, lineHeightMult, marginXFrac, 
   tl.borderWidth = 0;
   tl.richFontFamily = TD_FONT_FAMILY;
   tl.richLines = pageLines;
+  if(typeof _tdLogImg==='function'){
+    const _animLines = (pageLines||[]).filter(l => l && l.kind==='image' && (l.gifKey || l.animKey));
+    const _imgLines = (pageLines||[]).filter(l => l && l.kind==='image');
+    if(_imgLines.length){
+      _tdLogImg('Aplicar: richLines NUEVA hoja asignada (_tdMakeTextLayer)', 'imágenes=' + _imgLines.length + ' conKey=' + _animLines.length + (_animLines.length ? (' [' + _animLines.map(l=>l.gifKey||l.animKey).join(', ') + ']') : ''));
+    }
+  }
   tl.sourceHTML = html;
   tl._tdFlowId = flowId;
   tl.lineHeightMult = lineHeightMult || TD_LINE_MULT;
@@ -5953,6 +6094,13 @@ function _tdReflowFlowInPlace(la, panelWasOpen, deriveBoxFromContent){
       layer.y = oldTopEdge + newHeightFrac / 2;
     }
     layer.richLines = pages[i];
+    if(typeof _tdLogImg==='function'){
+      const _animLines = pages[i].filter(l => l && l.kind==='image' && (l.gifKey || l.animKey));
+      const _imgLines = pages[i].filter(l => l && l.kind==='image');
+      if(_imgLines.length){
+        _tdLogImg('Aplicar: richLines reutilizada asignada', 'hoja=' + flowIdxs[i] + ' imágenes=' + _imgLines.length + ' conKey=' + _animLines.length + (_animLines.length ? (' [' + _animLines.map(l=>l.gifKey||l.animKey).join(', ') + ']') : ''));
+      }
+    }
     // Solo la primera hoja del flujo (en esta reconstrucción) guarda
     // sourceHTML íntegro — ahorra guardarlo/subirlo/descargarlo N veces (ver
     // _tdFindFlowSourceHTML). Se borra explícitamente en las demás por si
