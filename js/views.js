@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.48</footer>
+    <footer class="app-version">v39.49</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -320,6 +320,7 @@ Router.register('editor', {
         <div class="ed-dropdown" id="edContextMenu">
           <button class="ed-dropdown-item" id="ctx-copy" data-i18n="ed_copy">📋 Copiar</button>
           <button class="ed-dropdown-item" id="ctx-edit" data-i18n="ed_ctxEditBtn">✏️ Editar</button>
+          <button class="ed-dropdown-item" id="ctx-props" data-i18n="ed_ctxPropsBtn">⚙️ Panel de propiedades</button>
           <button class="ed-dropdown-item" id="ctx-paste" data-i18n="ed_paste">Pegar</button>
         </div>
 

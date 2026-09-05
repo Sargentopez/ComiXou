@@ -8409,8 +8409,8 @@ function _edPositionContextMenu(menu, cx, cy){
 function _edShowContextMenu(e){
   edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
   const menu = $('edContextMenu'); if(!menu) return;
-  const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnPaste = $('ctx-paste');
-  if(!btnCopy || !btnEdit || !btnPaste) return;
+  const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnProps = $('ctx-props'), btnPaste = $('ctx-paste');
+  if(!btnCopy || !btnEdit || !btnProps || !btnPaste) return;
 
   const c = edCoords(e);
 
@@ -8458,8 +8458,15 @@ function _edShowContextMenu(e){
     const _singleUngrouped = edSelectedIdx>=0 && !edLayers[edSelectedIdx]?.groupId;
     btnCopy.style.display  = '';
     btnEdit.style.display  = _singleUngrouped ? '' : 'none';
+    btnProps.style.display = '';
     btnPaste.style.display = 'none';
     window._edCtxTargetIdx = _singleUngrouped ? edSelectedIdx : -1;
+    // Panel propiedades: SIEMPRE el objeto realmente pulsado (hitIdx), sea
+    // suelto o miembro de un grupo — _edHandleDoubleTap (mismo mecanismo
+    // que el doble toque) fija edSelectedIdx a ese objeto y decide por su
+    // cuenta si mostrar el panel individual o el de grupo según su
+    // groupId, exactamente igual que ya hace un doble toque manual.
+    window._edCtxPropsTargetIdx = hitIdx;
   } else {
     // Vacío: solo Pegar, y solo si hay (probablemente) algo en el
     // portapapeles propio — comprobación rápida y síncrona con la misma
@@ -8471,6 +8478,7 @@ function _edShowContextMenu(e){
     if(!window._edClipboardInternal) return; // nada que ofrecer: no mostrar un menú vacío
     btnCopy.style.display = 'none';
     btnEdit.style.display = 'none';
+    btnProps.style.display = 'none';
     btnPaste.style.display = '';
     window._edCtxPastePos = { x: c.nx, y: c.ny };
   }
@@ -8518,6 +8526,16 @@ function edInitContextMenu(){
     const idx = window._edCtxTargetIdx;
     if(idx==null || idx<0) return;
     _edCtxTriggerEdit(idx);
+  });
+  $('ctx-props')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    const idx = window._edCtxPropsTargetIdx;
+    if(idx==null || idx<0 || !edLayers[idx]) return;
+    // Mismo mecanismo que un doble toque manual sobre el objeto — decide
+    // por su cuenta panel individual o de grupo, y el modo 'props'/
+    // 'text-props' según el tipo. No usa el parámetro "e" (evento), por
+    // eso se puede invocar aquí sin uno real.
+    _edHandleDoubleTap(idx);
   });
   $('ctx-paste')?.addEventListener('click', async ()=>{
     edCloseMenus();
@@ -10677,15 +10695,21 @@ function edOnStart(e){
   // 'contextmenu' y _edShowContextMenu más abajo): un puntero nuevo FUERA
   // del menú lo cierra, igual que cualquier menú contextual estándar
   // (Windows/macOS/Figma...). Si el pointerdown es sobre uno de sus propios
-  // botones, no se toca nada aquí — edCloseMenus() mueve el menú de vuelta
-  // a su padre original y le quita el posicionado fijo, lo que desplaza el
-  // botón de su sitio en pantalla a mitad del gesto pointerdown→click y
-  // rompía ese click nativo (bug reportado por Alberto: Copiar/Editar no
-  // hacían nada al pulsarlos). El propio botón ya tiene su handler de
-  // 'click', que llama a edCloseMenus() por su cuenta tras actuar.
+  // botones, se ignora aquí POR COMPLETO (return inmediato, sin más
+  // comprobaciones de esta función) — dejando pasar solo su 'click' nativo
+  // posterior. Dos bugs reales encontrados aquí, ambos reportados por
+  // Alberto: (1) llamar a edCloseMenus() en este pointerdown movía el botón
+  // de su sitio en pantalla a mitad del gesto pointerdown→click, rompiendo
+  // ese click; (2) simplemente "no hacer nada" y seguir dejando caer la
+  // ejecución en esta función bastaba para que el resto de edOnStart
+  // procesara este mismo pointerdown como una interacción normal del
+  // lienzo en esas coordenadas — a veces coincidía sin más por casualidad,
+  // pero con un grupo alteraba la selección que este menú acababa de fijar
+  // (Editar aparecía visible cuando no debía). El propio botón ya tiene su
+  // handler de 'click', que llama a edCloseMenus() por su cuenta tras actuar.
   const _ctxMenuEl = $('edContextMenu');
-  if(_ctxMenuEl && _ctxMenuEl.classList.contains('open') &&
-     !(e.target && e.target.closest && e.target.closest('#edContextMenu'))){
+  if(_ctxMenuEl && _ctxMenuEl.classList.contains('open')){
+    if(e.target && e.target.closest && e.target.closest('#edContextMenu')) return;
     edCloseMenus();
     return;
   }
