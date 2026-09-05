@@ -8346,6 +8346,34 @@ async function edPasteFromClipboardButton(){
    - Texto/bocadillo simple (sin richLines): el panel 'props' YA muestra un
      <textarea id="pp-text"> con el contenido — "editar" es enfocarlo. */
 
+// ¿Cae (nx,ny) dentro de este objeto? Un trazo/dibujo a mano (stroke/draw)
+// suele tener capas fill/pencil/watercolor vinculadas cuya área de relleno
+// no coincide exactamente con la de la propia tinta (StrokeLayer.contains
+// solo mira su propio canvas de tinta, con 10px de margen; FillLayer.
+// contains exige acierto exacto de un solo píxel de alpha) — bug reportado
+// por Alberto: los toques sobre la zona de relleno de un dibujo a mano no
+// contaban como acierto sobre el objeto, aunque visualmente formen parte
+// del mismo. Por eso, si el test propio del objeto (preciso, con su alpha
+// si aplica) no acierta, se comprueban también sus sub-capas vinculadas,
+// con la caja simple de BaseLayer (más tolerante que exigir un píxel
+// exacto de relleno). "preciso=false" además salta directamente a la caja
+// simple del propio objeto sin exigir su test por alpha — usado solo para
+// el objeto YA seleccionado (ver _edShowContextMenu), donde conviene ser
+// más permisivo que al descubrir un objeto nuevo bajo el puntero.
+function _edCtxLayerHit(l, nx, ny, preciso){
+  if(!l) return false;
+  if(preciso){ if(l.contains && l.contains(nx, ny)) return true; }
+  else if(BaseLayer.prototype.contains.call(l, nx, ny)) return true;
+  const _uid = l._uid || l._fillLayerId;
+  if(_uid){
+    for(const t of ['fill','pencil','watercolor']){
+      const sub = edLayers.find(x => x.type===t && x._drawLayerId===_uid);
+      if(sub && BaseLayer.prototype.contains.call(sub, nx, ny)) return true;
+    }
+  }
+  return false;
+}
+
 // Encuentra el índice de capa (no fill/pencil/watercolor) bajo un punto en
 // coordenadas de página (0-1) — mismo criterio de exclusión de tipos y
 // mismo recorrido en orden z inverso (de arriba hacia abajo) que ya usa la
@@ -8353,9 +8381,9 @@ async function edPasteFromClipboardButton(){
 function _edCtxHitTest(nx, ny){
   return edLayers.map((_,i)=>i).reverse().find(i => {
     const l = edLayers[i];
-    return l && l.contains && !l.hidden && !l.locked &&
+    return l && !l.hidden && !l.locked &&
       l.type!=='fill' && l.type!=='pencil' && l.type!=='watercolor' &&
-      l.contains(nx, ny);
+      _edCtxLayerHit(l, nx, ny, true);
   });
 }
 
@@ -8385,7 +8413,28 @@ function _edShowContextMenu(e){
   if(!btnCopy || !btnEdit || !btnPaste) return;
 
   const c = edCoords(e);
-  const hitIdx = _edCtxHitTest(c.nx, c.ny);
+
+  // 1) ¿El clic derecho cae dentro de la selección YA activa (objeto único
+  //    o multiselección)? Se comprueba con la caja simple de BaseLayer
+  //    (BaseLayer.prototype.contains, ignorando cualquier test por
+  //    píxel/alpha que algunos tipos sobrescriben — ShapeLayer sin relleno,
+  //    StrokeLayer/DrawLayer de un trazo a mano...). Bug reportado por
+  //    Alberto: el menú no aparecía sobre un dibujo a mano ya seleccionado
+  //    porque ese test por alpha exige acertar justo sobre tinta, y un
+  //    trazo fino frecuentemente no cubre toda su caja — aunque el objeto
+  //    siga perfectamente seleccionado. Si el clic cae dentro de esa caja
+  //    simple, se conserva la selección tal cual, sea cual sea su tipo.
+  const _selHasHit = idx => _edCtxLayerHit(edLayers[idx], c.nx, c.ny, false);
+  let hitIdx, _preserveExisting = false;
+  if(edSelectedIdx >= 0 && _selHasHit(edSelectedIdx)){
+    hitIdx = edSelectedIdx; _preserveExisting = true;
+  } else if(edActiveTool==='multiselect' && edMultiSel.some(_selHasHit)){
+    hitIdx = edMultiSel.find(_selHasHit); _preserveExisting = true;
+  } else {
+    // 2) Si no hay selección activa bajo el clic, hit-test normal (orden z,
+    //    tipo real de cada objeto) para ver si hay otro objeto distinto.
+    hitIdx = _edCtxHitTest(c.nx, c.ny);
+  }
 
   if(hitIdx !== undefined){
     const la = edLayers[hitIdx];
@@ -8393,8 +8442,7 @@ function _edShowContextMenu(e){
     // si el objeto ya formaba parte de la selección actual (única o
     // múltiple) esa selección se conserva tal cual, para poder copiar TODA
     // la selección con el menú y no solo el objeto bajo el puntero.
-    const _yaSeleccionado = (edActiveTool==='multiselect' && edMultiSel.includes(hitIdx)) || edSelectedIdx===hitIdx;
-    if(!_yaSeleccionado){
+    if(!_preserveExisting){
       _msClear();
       if(la.groupId){
         edMultiSel = _edGroupMemberIdxs(la.groupId);
@@ -10626,13 +10674,18 @@ function _edGuidesPassThroughActive(){
 
 function edOnStart(e){
   // Menú contextual propio (botón secundario, solo PC — ver listener
-  // 'contextmenu' y _edShowContextMenu más abajo): cualquier puntero nuevo
-  // mientras está abierto solo lo cierra, igual que cualquier menú
-  // contextual estándar (Windows/macOS/Figma...) — los propios botones del
-  // menú ya tienen su handler de 'click', que sigue disparándose con
-  // normalidad tras este pointerdown.
+  // 'contextmenu' y _edShowContextMenu más abajo): un puntero nuevo FUERA
+  // del menú lo cierra, igual que cualquier menú contextual estándar
+  // (Windows/macOS/Figma...). Si el pointerdown es sobre uno de sus propios
+  // botones, no se toca nada aquí — edCloseMenus() mueve el menú de vuelta
+  // a su padre original y le quita el posicionado fijo, lo que desplaza el
+  // botón de su sitio en pantalla a mitad del gesto pointerdown→click y
+  // rompía ese click nativo (bug reportado por Alberto: Copiar/Editar no
+  // hacían nada al pulsarlos). El propio botón ya tiene su handler de
+  // 'click', que llama a edCloseMenus() por su cuenta tras actuar.
   const _ctxMenuEl = $('edContextMenu');
-  if(_ctxMenuEl && _ctxMenuEl.classList.contains('open')){
+  if(_ctxMenuEl && _ctxMenuEl.classList.contains('open') &&
+     !(e.target && e.target.closest && e.target.closest('#edContextMenu'))){
     edCloseMenus();
     return;
   }
@@ -13786,6 +13839,17 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  // Simétrico a la guarda de edOnStart: el botón secundario del ratón lo
+  // gestiona en exclusiva el menú contextual propio. edOnStart ya ignora su
+  // pointerdown por completo (nunca llega a fijar edIsDragging, captura de
+  // puntero, etc.) — si este pointerup/pointercancel SÍ se procesara aquí,
+  // se aplicaría lógica de "fin de gesto" sobre un gesto que edOnStart
+  // nunca llegó a inicializar, con estado a medio construir. Bug reportado
+  // por Alberto: tras abrir el menú, los botones Copiar/Editar no hacían
+  // nada — este pointerup sin ignorar corría inmediatamente después de
+  // mostrarse el menú y alteraba el estado antes de que hubiera tiempo de
+  // pulsar ningún botón.
+  if(e && e.pointerType === 'mouse' && e.button === 2) return;
   // ── Anti-fantasma tableta gráfica (mouse+pen simultáneos) — ver edOnStart ──
   // DEBE ir antes que cualquier reseteo: un "up" fantasma no debe cancelar
   // un arrastre/pending real que sigue en curso (p.ej. _edPenNodeDragPending).
