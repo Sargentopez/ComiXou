@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.43</footer>
+    <footer class="app-version">v39.46</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -398,15 +398,18 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto):
-             se mostró temporalmente para investigar por qué la biblioteca
-             de una obra no subía a la nube (causa real encontrada y
-             corregida — ver CARTA_SIGUIENTE_INSTANCIA_v39_11.md, id de fila
-             global en la tabla biblioteca). Mismo criterio que la vez
-             anterior (v37.32): para volver a mostrarlo, descomentar la
-             línea de abajo; toda la instrumentación sigue activa en
-             editor.js aunque el botón esté oculto. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- Botón de diagnóstico — oculto de nuevo (mismo criterio de
+             siempre: se muestra temporalmente para cada investigación y se
+             vuelve a ocultar al cerrarse). Usado esta vez v39.40→v39.44 para
+             la saga de animaciones en flujos de texto que nunca se
+             reproducían en el visor interno (ver CARTA_SIGUIENTE_INSTANCIA_
+             v39_43.md) — problema ya cerrado y confirmado por Alberto. Antes,
+             para la biblioteca que no subía a la nube — ver
+             CARTA_SIGUIENTE_INSTANCIA_v39_11.md. Para volver a mostrarlo,
+             descomentar la línea de abajo; toda la instrumentación (incluida
+             la sección "ANIMACIONES EN FLUJOS DE TEXTO" añadida esta sesión)
+             sigue activa en editor.js aunque el botón esté oculto. -->
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -475,6 +478,8 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-select">
               <button class="ed-dropdown-item" id="_sel-all" data-i18n="ed_selectAll">Seleccionar todo</button>
               <button class="ed-dropdown-item" id="_sel-none" data-i18n="ed_selectNone">Deseleccionar todo</button>
+              <div class="ed-dropdown-sep"></div>
+              <button class="ed-dropdown-item" id="_sel-copy" data-i18n="ed_copy">📋 Copiar</button>
               <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn" data-i18n="ed_downloadSelection">⬇ Descargar selección ▸</button>
@@ -922,6 +927,8 @@ Router.register('editor', {
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_moveObj1px">Mover objeto 1 px</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_moveObj10px">Mover objeto 10 px</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_duplicateObj">Duplicar objeto seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>D</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="sc_copyObj">Copiar objeto/grupo seleccionado</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>C</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="ed_paste">Pegar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd>V</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_deleteObj">Eliminar objeto seleccionado</span><span class="sc-keys"><kbd data-i18n="sc_del">Supr</kbd><kbd>/</kbd><kbd data-i18n="sc_backspace">Retroceso</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_cancelSelClose">Cancelar selección / cerrar panel</span><span class="sc-keys"><kbd>Esc</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_confirmClose">Confirmar / cerrar panel (OK)</span><span class="sc-keys"><kbd>Enter</kbd></span></div>
@@ -1186,17 +1193,18 @@ Router.register('editor', {
           <button class="ed-top-pagebn" id="tdPageNext" data-i18n-title="td_nextPage" title="Página siguiente">&#9654;</button>
         </div>
         <button class="ed-top-action" id="tdApplyBtn" data-i18n-title="td_applyToCanvas" title="Aplicar al lienzo">💾</button>
-        <!-- Botón de diagnóstico — oculto de nuevo (petición de Alberto,
-             v37.32): usado durante la investigación del bug "salto de
-             página del editor de textos no coincide con el editor
-             general" (resuelto en v37.30-v37.32 — ver
-             CARTA_SIGUIENTE_INSTANCIA_v37_32.md para el detalle completo,
-             incluida la sección nueva "Comparación: hoja(s) YA APLICADAS"
-             y "Verificación cruzada" de este mismo panel). Para volver a
-             mostrarlo, descomentar la línea siguiente; toda la
-             instrumentación (window._tdBreakLog, window._tdImgLog) sigue
-             activa en editor-textdoc.js aunque el botón esté oculto. -->
-        <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button>
+        <!-- Botón de diagnóstico — oculto de nuevo. Usado esta vez
+             (heredado ya visible desde v39.36) hasta cerrar la saga de
+             animaciones en flujos de texto que nunca se reproducían en el
+             visor interno — ver CARTA_SIGUIENTE_INSTANCIA_v39_43.md para el
+             detalle completo (causa raíz: pushLine en _tdLayoutPages no
+             copiaba gifKey/animKey al reconstruir la línea). Antes, para el
+             bug "salto de página del editor de textos no coincide con el
+             editor general" (v37.32 — ver CARTA_SIGUIENTE_INSTANCIA_v37_32.
+             md). Para volver a mostrarlo, descomentar la línea siguiente;
+             toda la instrumentación (window._tdBreakLog, window._tdImgLog)
+             sigue activa en editor-textdoc.js aunque el botón esté oculto. -->
+        <!-- <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button> -->
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">

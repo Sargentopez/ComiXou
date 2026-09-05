@@ -5109,12 +5109,16 @@ function _edUpdateSelectMenu(){
   const _canDesel  = (edActiveTool==='multiselect' && edMultiSel.length > 0) || edSelectedIdx >= 0;
   const _btnAll  = $('_sel-all');
   const _btnNone = $('_sel-none');
+  const _btnCopy = $('_sel-copy');
   const _btnGroup = $('_sel-group');
   const _btnAlign = $('dd-alignbtn');
   const _btnMerge = $('_sel-merge');
   const _btnDel   = $('_sel-delete');
   if(_btnAll)  _btnAll .setAttribute('style', _canSelAll ? '' : _dis);
   if(_btnNone) _btnNone.setAttribute('style', _canDesel  ? '' : _dis);
+  // Copiar necesita exactamente lo mismo que Deseleccionar: que haya algo
+  // seleccionado (objeto único o multiselección) — mismo criterio _canDesel.
+  if(_btnCopy) _btnCopy.setAttribute('style', _canDesel  ? '' : _dis);
   const _btnDl = $('dd-exportselbtn');
   if(_btnDl)  _btnDl .setAttribute('style', _canDesel  ? '' : _dis);
   if(_btnGroup) _btnGroup.setAttribute('style', _hasSel ? '' : _dis);
@@ -7660,6 +7664,29 @@ function edAddImage(file){
   };
   reader.readAsDataURL(file);
 }
+// ── Copiar con Ctrl+C (evento nativo 'copy') — alimenta el portapapeles de
+// objetos (ver _edBuildClipboardPayload más arriba). Síncrono y sin permiso,
+// a diferencia del botón "📋 Copiar" del menú Selección, que sí necesita la
+// Async Clipboard API por no disparar ningún evento nativo. Se ignora igual
+// que el resto de atajos si el foco está en un campo de texto de la propia
+// app o en el editor de textos (Trix) — para no romper el copiado de texto
+// normal ahí —, si el editor de textos está abierto sin foco en el propio
+// Trix, o si el editor de animaciones (GCP) está activo (tiene su propio
+// portapapeles/duplicar, no participa de este).
+document.addEventListener('copy', e => {
+  if(!edCanvas || window._gcpActive) return;
+  const _tgt = document.activeElement;
+  if(_tgt && (_tgt.tagName === 'INPUT' || _tgt.tagName === 'TEXTAREA' || _tgt.isContentEditable)) return;
+  const _tdShellEl = document.getElementById('tdShell');
+  if(_tdShellEl && _tdShellEl.style.display !== 'none' && _tdShellEl.style.display !== ''){
+    if(!(_tgt && (_tgt.isContentEditable || _tgt === document.getElementById('tdEditor')))) return;
+  }
+  const payload = _edBuildClipboardPayload();
+  if(!payload) return; // nada seleccionado en el lienzo: dejar el copy nativo intacto (p.ej. texto de la página)
+  e.clipboardData.setData('text/plain', payload.json);
+  e.preventDefault();
+  _edFinishClipboardCopy(payload);
+});
 // ── Pegar con Ctrl+V (evento nativo 'paste') — complemento del botón del
 // menú Insertar→Pegar. Se ignora si el foco está en un campo de texto de la
 // propia app (renombrar capa, editar texto/bocadillo, etc.) para no romper
@@ -7668,6 +7695,24 @@ document.addEventListener('paste', e => {
   if(!edCanvas) return;
   const _tgt = e.target;
   if(_tgt && (_tgt.tagName === 'INPUT' || _tgt.tagName === 'TEXTAREA' || _tgt.isContentEditable)) return;
+  // Priorizar el portapapeles propio de Comxow (objetos/grupos copiados con
+  // Ctrl+C o el botón "📋 Copiar" del menú Selección) sobre el pegado de
+  // imagen externa de más abajo — ver _edApplyClipboardEnvelope. Mismo guard
+  // de "editor de textos abierto sin foco en Trix" que ya usa el manejador
+  // de teclado general para Ctrl+D/Supr, y mismo guard de GCP activo.
+  if(!window._gcpActive){
+    const _tdShellEl = document.getElementById('tdShell');
+    const _tdBlocked = _tdShellEl && _tdShellEl.style.display !== 'none' && _tdShellEl.style.display !== ''
+      && !(_tgt && (_tgt.isContentEditable || _tgt === document.getElementById('tdEditor')));
+    if(!_tdBlocked){
+      const _plainText = e.clipboardData?.getData('text/plain');
+      if(_plainText){
+        let _envelope = null;
+        try { _envelope = JSON.parse(_plainText); } catch(_e){}
+        if(_envelope && _edApplyClipboardEnvelope(_envelope)){ e.preventDefault(); return; }
+      }
+    }
+  }
   const _items = e.clipboardData?.items; if(!_items) return;
   for(const _it of _items){
     if(_it.type && _it.type.startsWith('image/')){
@@ -7992,6 +8037,270 @@ function edDuplicateSelected(){
   edPushHistory(); edRedraw();
   edToast(I18n.t('ed_objectDuplicated'));
 }
+
+/* ── Portapapeles de objetos: Copiar (Ctrl+C / botón "📋 Copiar" del menú
+   Selección ▾) y Pegar (Ctrl+V / botón "Pegar" del menú Insertar ▾) ──
+   Petición de Alberto: debe funcionar sobre CUALQUIER selección — objeto
+   individual, grupo completo, o multiselección de varios objetos/grupos
+   sueltos a la vez (este último caso Ctrl+D nunca lo ha cubierto — ver el
+   comentario en el manejador de teclado, rama Ctrl+D: "Multiselección sin
+   groupId común: sin cambios, fuera del alcance de ese bug"). El resultado
+   de pegar debe ser SIEMPRE un objeto/grupo COMPLETAMENTE NUEVO e
+   independiente del original — mismo criterio de independencia que ya usa
+   "duplicar" arriba (edSerLayer/edDeserLayer + _edCloneLayerAnimData/
+   _edCloneLayerAnimStorage: nuevo _uid/groupId siempre, nunca comparte
+   referencias ni claves de almacenamiento de animación con el original).
+
+   El portapapeles usa DOS vías, mismo patrón ya establecido en esta app para
+   "pegar imagen externa" (ver más abajo, listener nativo 'paste' vs botón
+   dd-paste): el evento nativo 'copy'/'paste' es SÍNCRONO y no exige permiso
+   — se deja pasar el atajo de teclado por defecto del navegador para que lo
+   dispare, y aquí solo se intercepta para escribir/leer el texto plano. El
+   botón de menú no dispara ningún evento nativo por sí solo, así que usa la
+   Async Clipboard API (con el mismo fallback ya existente de "sin
+   soporte/permiso"). Además, SIEMPRE se guarda una copia en
+   window._edClipboardInternal (variable de página, sin límite de tamaño ni
+   permisos) para que pegar funcione igual aunque el navegador deniegue el
+   acceso al portapapeles del sistema.
+
+   Formato del payload (JSON en texto plano): { sig: firma propia, items:
+   [...capas serializadas con edSerLayer, en el mismo orden fill→watercolor→
+   pencil→stroke por objeto y en el orden z original entre objetos] } — la
+   firma permite distinguirlo de cualquier otro texto/imagen que el usuario
+   tenga copiado desde fuera de la app. */
+const _ED_CLIPBOARD_SIGNATURE = 'comxow_clip_v1';
+let _edClipboardPasteCount = 0; // cascada de desplazamiento en pegados repetidos del mismo copiado
+
+// Reúne y serializa la selección actual (objeto único, grupo completo o
+// multiselección de varios sueltos/grupos) en el formato de payload de
+// arriba. Devuelve null si no hay nada seleccionado. NO escribe en ningún
+// portapapeles — cada vía de escritura (evento 'copy' nativo o botón) decide
+// cómo hacerlo.
+function _edBuildClipboardPayload(){
+  let idxs;
+  if(edActiveTool === 'multiselect' && edMultiSel.length){
+    idxs = edMultiSel.slice();
+  } else if(edSelectedIdx >= 0){
+    const la = edLayers[edSelectedIdx];
+    idxs = (la && la.groupId) ? _edGroupMemberIdxs(la.groupId) : [edSelectedIdx];
+  } else {
+    return null;
+  }
+  // Igual que _sel-all/_edGroupMemberIdxs: nunca fill/pencil/watercolor
+  // sueltos (viajan con su stroke) — y siempre en orden z ascendente, aunque
+  // edMultiSel ya debería estarlo, por si acaso.
+  idxs = idxs.filter(i => {
+    const l = edLayers[i];
+    return l && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor';
+  }).sort((a,b)=>a-b);
+  if(!idxs.length) return null;
+
+  // Mismo criterio que la rama Ctrl+D para distinguir "es un grupo completo"
+  // de "son varios objetos sueltos" (_msAllSameGroup) — decide el texto del
+  // toast de confirmación, no afecta a los datos copiados.
+  const _gid0 = edLayers[idxs[0]]?.groupId;
+  const isGroup = idxs.length > 1 && !!_gid0 && idxs.every(i => edLayers[i]?.groupId === _gid0);
+
+  const items = [];
+  idxs.forEach(i => {
+    const la = edLayers[i]; if(!la) return;
+    // Sub-capas vinculadas (fill/watercolor/pencil) ANTES que su stroke —
+    // mismo orden de inserción que exige el invariante de capas
+    // (fill → watercolor → pencil → stroke), igual que hace _edDuplicateGroup.
+    const _uid = la._uid || la._fillLayerId;
+    if(_uid){
+      ['fill','watercolor','pencil'].forEach(t => {
+        const sub = edLayers.find(l => l.type===t && l._drawLayerId===_uid);
+        if(sub){ const s = edSerLayer(sub); if(s) items.push(s); }
+      });
+    }
+    const ser = edSerLayer(la); if(ser) items.push(ser);
+  });
+  if(!items.length) return null;
+
+  return { json: JSON.stringify({ sig:_ED_CLIPBOARD_SIGNATURE, items }), count: idxs.length, isGroup };
+}
+
+// Guarda el fallback interno y muestra el toast de confirmación — llamado
+// tras escribir con éxito (o intentarlo) en el portapapeles del sistema,
+// desde CUALQUIERA de las dos vías (evento nativo 'copy' o botón).
+function _edFinishClipboardCopy(payload){
+  window._edClipboardInternal = payload.json;
+  _edClipboardPasteCount = 0; // nueva copia: reinicia la cascada de pegados
+  edToast(I18n.t(payload.isGroup ? 'ed_groupCopied'
+    : (payload.count === 1 ? 'ed_objectCopied' : 'ed_objectsCopied'), {n: payload.count}));
+}
+
+// Envuelve una llamada a la Clipboard API con un límite de tiempo — hallazgo
+// real de pruebas con Playwright: navigator.clipboard.readText()/writeText()
+// puede quedarse esperando indefinidamente un permiso que nunca llega a
+// resolverse (ni concederse ni denegarse) en vez de fallar rápido, lo que
+// dejaría el botón "Copiar"/"Pegar" bloqueado sin ningún aviso. En el caso
+// normal (permiso ya concedido) la llamada real resuelve en milisegundos,
+// así que este límite nunca llega a activarse — es solo una red de
+// seguridad para ese caso extremo.
+function _edClipboardWithTimeout(promise, ms){
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('clipboard timeout')), ms || 1500))
+  ]);
+}
+
+// Copiar desde el botón "📋 Copiar" del menú Selección ▾ — usa la Async
+// Clipboard API porque un clic no dispara ningún evento nativo 'copy'.
+async function edCopySelectionToClipboard(){
+  const payload = _edBuildClipboardPayload();
+  if(!payload){ edToast(I18n.t('ed_nothingToCopy')); return false; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    try{ await _edClipboardWithTimeout(navigator.clipboard.writeText(payload.json)); }
+    catch(_e){ /* sin permiso o tardó demasiado: sigue disponible el fallback interno de abajo */ }
+  }
+  _edFinishClipboardCopy(payload);
+  return true;
+}
+
+// Reconstruye en el lienzo un payload de portapapeles propio de Comxow —
+// SIEMPRE como objeto(s)/grupo COMPLETAMENTE NUEVOS e independientes del
+// original (mismo mecanismo que edDuplicateSelected/_edDuplicateGroup:
+// edDeserLayer + _edCloneLayerAnimData/_edCloneLayerAnimStorage, con
+// _uid/groupId regenerados). Devuelve false si el texto no era un payload
+// reconocible de esta app (portapapeles ajeno) o si el editor de animaciones
+// (GCP) está activo — tiene su propio "duplicar", no participa de este
+// portapapeles — para que quien llama siga con su propio fallback (p.ej.
+// buscar una imagen en el portapapeles).
+function _edApplyClipboardEnvelope(envelope){
+  if(!envelope || envelope.sig !== _ED_CLIPBOARD_SIGNATURE || !Array.isArray(envelope.items) || !envelope.items.length) return false;
+  if(window._gcpActive) return false;
+
+  // Mismo criterio defensivo que _edDuplicateGroup: un primer push ANTES de
+  // mutar nada, para no arrastrar ningún cambio pendiente sin registrar al
+  // estado "antes de pegar" (edPushHistory ya evita duplicados si no hay
+  // nada nuevo que registrar — ver su propia implementación).
+  edPushHistory();
+
+  // Remapeo de identificadores — SIEMPRE nuevos en CADA pegado, nunca
+  // reutilizados entre pegados sucesivos del mismo copiado.
+  const uidMap = new Map();
+  const newUidFor = old => { if(!uidMap.has(old)) uidMap.set(old, _edGenUid()); return uidMap.get(old); };
+  const groupIdMap = new Map();
+  const newGroupIdFor = old => { if(!groupIdMap.has(old)) groupIdMap.set(old, _edNewGroupId()); return groupIdMap.get(old); };
+
+  _edClipboardPasteCount++;
+  const OFF = 0.02 * _edClipboardPasteCount; // cascada: cada pegado repetido se desplaza un poco más
+
+  const newLayers = [];
+  const topLevel = []; // sin fill/pencil/watercolor — para seleccionar al final
+
+  envelope.items.forEach(raw => {
+    const copy = edDeserLayer(raw, edOrientation);
+    if(!copy) return;
+    _edCloneLayerAnimData(copy);
+    _edCloneLayerAnimStorage(copy);
+    delete copy._fusionId;
+
+    copy.x = (copy.x||0) + OFF;
+    copy.y = (copy.y||0) + OFF;
+    if(copy._gcpRefX != null) copy._gcpRefX += OFF;
+    if(copy._gcpRefY != null) copy._gcpRefY += OFF;
+
+    if(copy.groupId) copy.groupId = newGroupIdFor(copy.groupId);
+
+    if(copy.type === 'fill' || copy.type === 'pencil' || copy.type === 'watercolor'){
+      if(copy._drawLayerId){
+        const nu = newUidFor(copy._drawLayerId);
+        copy._drawLayerId = nu;
+        const _prefix = copy.type === 'fill' ? 'fl_' : (copy.type === 'pencil' ? 'pencil_' : 'wc_');
+        copy._uid = _prefix + nu;
+      }
+    } else {
+      const oldUid = copy._uid || copy._fillLayerId;
+      if(oldUid){
+        const nu = newUidFor(oldUid);
+        if(copy._uid)               copy._uid               = nu;
+        if(copy._fillLayerId)       copy._fillLayerId        = nu;
+        if(copy._pencilLayerId)     copy._pencilLayerId      = nu;
+        if(copy._watercolorLayerId) copy._watercolorLayerId  = nu;
+      }
+      topLevel.push(copy);
+    }
+    newLayers.push(copy);
+  });
+  if(!newLayers.length) return false;
+
+  // Insertar al final — mismo criterio que cualquier inserción nueva del
+  // menú Insertar (edAddBubble/edAddText/edAddImage hacen edLayers.push).
+  edLayers.push(...newLayers);
+
+  if(topLevel.length === 1){
+    edSelectedIdx = edLayers.indexOf(topLevel[0]);
+    _msClear();
+    edActiveTool = 'select'; edCanvas.className = '';
+  } else {
+    edMultiSel = topLevel.map(l => edLayers.indexOf(l)).filter(i => i>=0);
+    edSelectedIdx = -1;
+    edMultiGroupRot = 0;
+    edActiveTool = 'multiselect'; edCanvas.className = 'tool-multiselect';
+    _msRecalcBbox();
+  }
+  const _isGroup = topLevel.length > 1 && !!topLevel[0].groupId && topLevel.every(l => l.groupId === topLevel[0].groupId);
+
+  edCloseOptionsPanel();
+  edPushHistory(); edRedraw();
+  edToast(I18n.t(_isGroup ? 'ed_groupPasted'
+    : (topLevel.length === 1 ? 'ed_objectPasted' : 'ed_objectsPasted'), {n: topLevel.length}));
+  return true;
+}
+
+// Obtiene el ÚLTIMO payload de portapapeles propio de Comxow, con el mismo
+// criterio que cualquier portapapeles estándar: lo último copiado manda,
+// sea lo que sea. Petición explícita de Alberto tras detectar el bug: si el
+// portapapeles del SISTEMA se pudo leer con éxito (aunque el resultado no
+// sea nuestro — un texto suelto, una imagen sin texto, o directamente
+// nada), eso es la fuente de verdad y hay que OLVIDAR cualquier copia
+// anterior — de lo contrario un objeto copiado hace rato "resucitaba" al
+// pegar aunque el usuario ya hubiera copiado otra cosa completamente
+// distinta después (una imagen de una web, texto…), tanto en el editor
+// general como en el editor de textos. El fallback interno
+// (window._edClipboardInternal) solo tiene sentido cuando NO se pudo
+// comprobar el portapapeles del sistema EN ABSOLUTO (API no disponible o
+// permiso de lectura denegado) — ahí sí es la mejor aproximación posible,
+// ya que no hay forma de saber si el usuario copió algo fuera de la app.
+// Devuelve el envelope ya parseado y validado, o null.
+async function _edReadOwnClipboardEnvelope(){
+  let _readSucceeded = false, _txt = null;
+  try{
+    if(navigator.clipboard && navigator.clipboard.readText){
+      _txt = await _edClipboardWithTimeout(navigator.clipboard.readText());
+      _readSucceeded = true;
+    }
+  } catch(_e){ /* API no disponible, sin permiso, o tardó demasiado (ver _edClipboardWithTimeout): no sabemos qué hay realmente — sigue abajo */ }
+
+  if(_readSucceeded){
+    window._edClipboardInternal = null; // lo último copiado manda: olvidar cualquier copia previa
+    if(_txt){
+      let _envelope=null; try{ _envelope=JSON.parse(_txt); }catch(_e){}
+      if(_envelope && _envelope.sig === _ED_CLIPBOARD_SIGNATURE) return _envelope;
+    }
+    return null;
+  }
+  if(window._edClipboardInternal){
+    let _envelope2=null; try{ _envelope2=JSON.parse(window._edClipboardInternal); }catch(_e){}
+    if(_envelope2 && _envelope2.sig === _ED_CLIPBOARD_SIGNATURE) return _envelope2;
+  }
+  return null;
+}
+
+// Pegar desde el botón "Pegar" del menú Insertar ▾ (dd-paste) — usa la Async
+// Clipboard API (lectura de texto) porque un clic no da acceso a ningún
+// evento nativo 'paste'. Devuelve false si no hay ningún payload propio
+// reconocible — dd-paste sigue entonces con su propio flujo existente
+// (buscar una imagen en el portapapeles).
+async function edPasteFromClipboardButton(){
+  if(window._gcpActive) return false;
+  const envelope = await _edReadOwnClipboardEnvelope();
+  return envelope ? _edApplyClipboardEnvelope(envelope) : false;
+}
+
 /* ── T14: Simetría horizontal (flip respecto al eje vertical del objeto) ── */
 function edMirrorSelected(){
   // En modo draw sin selección: reflejar el DrawLayer activo de la hoja
@@ -21149,6 +21458,10 @@ function edInitSelectMenu(){
       edRedraw();
     }
   });
+  $('_sel-copy')?.addEventListener('click', ()=>{
+    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCopySelectionToClipboard();
+  });
   $('_sel-group')?.addEventListener('click', ()=>{
     document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
     edGroupSelected();
@@ -29242,12 +29555,15 @@ function EditorView_init(){
   // Blob, no solo File — el Blob del portapapeles encaja sin adaptarlo.
   $('dd-paste')?.addEventListener('click', async ()=>{
     edCloseMenus();
+    // Priorizar el portapapeles propio de Comxow (objetos/grupos) — ver
+    // comentario junto al listener nativo 'paste' más arriba.
+    if(await edPasteFromClipboardButton()) return;
     if(!navigator.clipboard || !navigator.clipboard.read){
       edToast(I18n.t('ed_clipboardNotSupported'));
       return;
     }
     try{
-      const _items = await navigator.clipboard.read();
+      const _items = await _edClipboardWithTimeout(navigator.clipboard.read());
       let _imgBlob = null;
       for(const _it of _items){
         const _imgType = _it.types.find(t => t.startsWith('image/'));

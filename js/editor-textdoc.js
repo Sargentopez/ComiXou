@@ -2392,12 +2392,24 @@ function _tdWireInsertImage(){
   document.getElementById('tdPasteBtn')?.addEventListener('click', async () => {
     _tdLogImg('clic en Pegar', '');
     if(typeof edCloseMenus === 'function') edCloseMenus();
+    // Priorizar el portapapeles propio de Comxow (imagen/GIF simple copiado
+    // del lienzo con Ctrl+C o "📋 Copiar") — ver
+    // _tdTryInsertClipboardImageObject. El resto de contenido copiado
+    // (texto, bocadillo, forma, multiselección, grupo, animación GCP/APNG)
+    // no encaja en el flujo de texto y cae al comportamiento existente de
+    // abajo (buscar una imagen suelta en el portapapeles del sistema).
+    // _edReadOwnClipboardEnvelope (editor.js) ya aplica el criterio de
+    // portapapeles estándar: si el portapapeles del sistema se pudo leer y
+    // ya no es nuestro (se copió otra cosa después, dentro o fuera de la
+    // app), olvida cualquier copia anterior en vez de "resucitarla".
+    const _envelope = await _edReadOwnClipboardEnvelope();
+    if(_envelope && _tdTryInsertClipboardImageObject(_envelope)) return;
     if(!navigator.clipboard || !navigator.clipboard.read){
       edToast(I18n.t('ed_clipboardNotSupported'));
       return;
     }
     try{
-      const items = await navigator.clipboard.read();
+      const items = await _edClipboardWithTimeout(navigator.clipboard.read());
       let imgBlob = null, imgType = null;
       for(const it of items){
         const _t = it.types.find(t => t.startsWith('image/'));
@@ -2410,6 +2422,20 @@ function _tdWireInsertImage(){
       edToast(I18n.t('ed_clipboardReadFailed'));
     }
   });
+  // Ctrl+V / gesto nativo DENTRO del propio Trix: interceptar en fase de
+  // CAPTURA (antes de que Trix procese el pegado) para reconocer el
+  // portapapeles propio de Comxow — si no, Trix insertaría el JSON del
+  // payload como texto plano literal. Si no es un payload reconocible (o es
+  // un objeto que no encaja aquí, ver _tdTryInsertClipboardImageObject), se
+  // deja el evento intacto para que Trix siga con su pegado nativo normal
+  // (texto, HTML, o imagen externa vía _tdWatchForPastedImages).
+  editorEl.addEventListener('paste', e => {
+    const _plainText = e.clipboardData?.getData('text/plain');
+    if(!_plainText) return;
+    let _envelope = null;
+    try{ _envelope = JSON.parse(_plainText); }catch(_e){ return; }
+    if(_envelope && _tdTryInsertClipboardImageObject(_envelope)) e.preventDefault();
+  }, true);
   fileInput.addEventListener('change', e => {
     const f = e.target.files[0]; e.target.value = '';
     _tdLogImg('input[file] change', f ? (f.name + ' ' + f.type + ' ' + f.size + 'B') : '(sin archivo)');
@@ -2546,6 +2572,47 @@ function _tdInsertGif(file){
     });
   };
   reader.readAsDataURL(file);
+}
+
+// ── Pegar un objeto copiado del lienzo (Ctrl+C / "📋 Copiar" del menú
+// Selección) dentro del flujo de texto ── Apunte explícito de Alberto: el
+// botón/atajo Pegar del editor de textos también debe reconocer el
+// portapapeles propio de la app (ver _ED_CLIPBOARD_SIGNATURE en editor.js).
+// Solo tiene sentido convertir a un adjunto de Trix cuando el payload es UN
+// ÚNICO objeto de tipo imagen estática o GIF simple — cualquier otra cosa
+// (texto, bocadillo, forma, multiselección, grupo, o una animación
+// compuesta en el editor de animaciones vía GCP/APNG) no tiene una
+// representación razonable dentro de un flujo de texto lineal, así que se
+// deja pasar sin tocar nada (el llamador sigue con su comportamiento
+// existente: buscar una imagen suelta en el portapapeles). Reutiliza
+// _tdInsertImage/_tdInsertGif tal cual — mismo camino ya probado que usan
+// Galería/Cámara/Pegar externo, sin reinventar la inserción.
+// Async (fetch+blob de un dataURL siempre lo es) pero devuelve SÍNCRONAMENTE
+// si va a manejar el payload o no, para que el llamador decida su fallback
+// sin esperar.
+function _tdTryInsertClipboardImageObject(envelope){
+  if(!envelope || envelope.sig !== _ED_CLIPBOARD_SIGNATURE || !Array.isArray(envelope.items) || envelope.items.length !== 1) return false;
+  const it = envelope.items[0];
+  if(!it) return false;
+  if(it.type === 'gif' && it.gifKey && typeof _gifIdbLoad === 'function'){
+    _gifIdbLoad(it.gifKey).then(src => {
+      if(!src) return;
+      fetch(src).then(r => r.blob()).then(blob => {
+        _tdInsertGif(new File([blob], 'anim.gif', { type: 'image/gif' }));
+      }).catch(()=>{});
+    }).catch(()=>{});
+    return true;
+  }
+  if(it.type === 'image' && it.src &&
+     !it._pngFrames && !it._apngSrc && !it.animKey && !it._pngFramesKey && !it._apngIdbKey &&
+     !it._gcpLayersData && !it._isGcpImage){
+    fetch(it.src).then(r => r.blob()).then(blob => {
+      const _mime = blob.type || 'image/png';
+      _tdInsertImage(new File([blob], 'image.' + (_mime.split('/')[1] || 'png'), { type: _mime }));
+    }).catch(()=>{});
+    return true;
+  }
+  return false; // animación GCP/APNG u otro tipo de objeto: fuera de alcance aquí
 }
 
 // Conjunto de ids de adjuntos ya tratados (URL persistente + tamaño inicial
