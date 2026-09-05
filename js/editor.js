@@ -2077,7 +2077,29 @@ function _tdGetRichAnimLayer(line){
     }
   }
   let entry = window._tdRichAnimCache[key];
-  if(entry) return entry;
+  if(entry){
+    // BUG CORREGIDO (Alberto: la animación de un flujo de texto funcionaba
+    // tras insertarla, pero volvía a verse fija en el visor interno tras
+    // reeditar el flujo de texto y volver a guardar, SIN tocar la
+    // animación en sí). Causa: esta rama (instancia ya en window.
+    // _tdRichAnimCache) devolvía el motor tal cual, sin comprobar si seguía
+    // reproduciéndose — si _playing había quedado en false entre medias
+    // (visor cerrado y reabierto, nueva vuelta por el editor de texto...),
+    // aquí nunca se reactivaba: _drawRichLines recibía el mismo motor
+    // parado para siempre, con sus fotogramas intactos pero sin avanzar.
+    // Mismo arranque que usa una instancia recién creada (_startPlaying,
+    // más abajo) — comprobado con datos reales (_animReady/_animFrames ya
+    // presentes en caché, confirmado por el diagnóstico del editor
+    // general): basta con volver a llamar _applyFrame con _playing=true
+    // para reencadenar su propio temporizador.
+    if(!entry._playing && entry._animReady && entry._animFrames && entry._animFrames.length){
+      if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer reanuda instancia en caché (estaba parada)', 'key=' + key + ' _fIdx=' + entry._fIdx);
+      entry._playing = true;
+      entry._fIdx = entry._fIdx || 0;
+      entry._applyFrame(entry._fIdx);
+    }
+    return entry;
+  }
   // Diagnóstico temporal: único tramo de toda la cadena nunca antes
   // observado con datos reales — la búsqueda de la clave (window._tdGifKeyBySrc/
   // _tdAnimKeyBySrc) y el guardado en IDB ya se confirmaron por separado;
