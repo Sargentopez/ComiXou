@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.46</footer>
+    <footer class="app-version">v39.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -313,6 +313,15 @@ Router.register('editor', {
 
         <div id="edToast"></div>
         <div id="edCofHint" style="display:none;position:fixed;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.78);color:#fff;padding:8px 18px;border-radius:14px;font-size:0.78rem;font-weight:700;line-height:1.6;text-align:center;pointer-events:none;z-index:61;white-space:nowrap;box-shadow:0 2px 12px rgba(0,0,0,.4)"></div>
+
+        <!-- Menú contextual del botón secundario del ratón (solo PC) —
+             Copiar/Editar sobre un objeto, Pegar en vacío. Ver
+             _edShowContextMenu en editor.js. -->
+        <div class="ed-dropdown" id="edContextMenu">
+          <button class="ed-dropdown-item" id="ctx-copy" data-i18n="ed_copy">📋 Copiar</button>
+          <button class="ed-dropdown-item" id="ctx-edit" data-i18n="ed_ctxEditBtn">✏️ Editar</button>
+          <button class="ed-dropdown-item" id="ctx-paste" data-i18n="ed_paste">Pegar</button>
+        </div>
 
       <!-- Modal de interpolación de frames GCP -->
       <div id="gcpInterpModal" class="ed-confirm-overlay">

@@ -8168,7 +8168,7 @@ async function edCopySelectionToClipboard(){
 // (GCP) está activo — tiene su propio "duplicar", no participa de este
 // portapapeles — para que quien llama siga con su propio fallback (p.ej.
 // buscar una imagen en el portapapeles).
-function _edApplyClipboardEnvelope(envelope){
+function _edApplyClipboardEnvelope(envelope, targetPos){
   if(!envelope || envelope.sig !== _ED_CLIPBOARD_SIGNATURE || !Array.isArray(envelope.items) || !envelope.items.length) return false;
   if(window._gcpActive) return false;
 
@@ -8185,8 +8185,28 @@ function _edApplyClipboardEnvelope(envelope){
   const groupIdMap = new Map();
   const newGroupIdFor = old => { if(!groupIdMap.has(old)) groupIdMap.set(old, _edNewGroupId()); return groupIdMap.get(old); };
 
-  _edClipboardPasteCount++;
-  const OFF = 0.02 * _edClipboardPasteCount; // cascada: cada pegado repetido se desplaza un poco más
+  // Dos modos de posicionado:
+  // - targetPos (menú contextual → "Pegar" en vacío, clic derecho): centra
+  //   el conjunto pegado exactamente en ese punto — mismo estándar que
+  //   Figma/Illustrator al pegar con el menú contextual, en vez del pequeño
+  //   desplazamiento en cascada. Se calcula un ÚNICO desplazamiento (shift)
+  //   a partir del centro ORIGINAL de los objetos de nivel superior, y se
+  //   aplica igual a todos — así el conjunto llega entero, sin deformarse.
+  // - sin targetPos (botón "Pegar"/Ctrl+V): mismo criterio de siempre, cada
+  //   pegado repetido del mismo copiado se desplaza un poco más (cascada).
+  let shiftX = 0, shiftY = 0;
+  if(targetPos){
+    const _topRaw = envelope.items.filter(it => it && it.type!=='fill' && it.type!=='pencil' && it.type!=='watercolor');
+    if(_topRaw.length){
+      const _avgX = _topRaw.reduce((s,it)=>s+(it.x||0),0) / _topRaw.length;
+      const _avgY = _topRaw.reduce((s,it)=>s+(it.y||0),0) / _topRaw.length;
+      shiftX = targetPos.x - _avgX;
+      shiftY = targetPos.y - _avgY;
+    }
+  } else {
+    _edClipboardPasteCount++;
+    shiftX = shiftY = 0.02 * _edClipboardPasteCount;
+  }
 
   const newLayers = [];
   const topLevel = []; // sin fill/pencil/watercolor — para seleccionar al final
@@ -8198,10 +8218,10 @@ function _edApplyClipboardEnvelope(envelope){
     _edCloneLayerAnimStorage(copy);
     delete copy._fusionId;
 
-    copy.x = (copy.x||0) + OFF;
-    copy.y = (copy.y||0) + OFF;
-    if(copy._gcpRefX != null) copy._gcpRefX += OFF;
-    if(copy._gcpRefY != null) copy._gcpRefY += OFF;
+    copy.x = (copy.x||0) + shiftX;
+    copy.y = (copy.y||0) + shiftY;
+    if(copy._gcpRefX != null) copy._gcpRefX += shiftX;
+    if(copy._gcpRefY != null) copy._gcpRefY += shiftY;
 
     if(copy.groupId) copy.groupId = newGroupIdFor(copy.groupId);
 
@@ -8299,6 +8319,164 @@ async function edPasteFromClipboardButton(){
   if(window._gcpActive) return false;
   const envelope = await _edReadOwnClipboardEnvelope();
   return envelope ? _edApplyClipboardEnvelope(envelope) : false;
+}
+
+/* ── Menú contextual del botón secundario del ratón (solo PC) ──────────────
+   Petición de Alberto: clic derecho sobre un objeto seleccionado → Copiar
+   o Editar (este último pasa DIRECTAMENTE a la edición del objeto, como si
+   se hubiera pulsado el botón "editar" de su panel de propiedades — sin
+   necesidad de abrir antes ese panel a mano). Clic derecho en vacío → Pegar,
+   solo si hay algo en el portapapeles propio de Comxow, y esta vez el
+   pegado se centra exactamente en el punto del clic (estándar de Figma/
+   Illustrator/etc. al pegar desde el menú contextual), no en el pequeño
+   desplazamiento en cascada que usan el botón del menú Insertar y Ctrl+V.
+
+   "Editar" no tiene una única acción universal — cada tipo de objeto usa un
+   botón distinto en su panel de propiedades (ver edRenderOptionsPanel,
+   rama 'props'): pp-edit-stroke/pp-edit-draw (modo dibujo), pp-edit-anim
+   (abre GCP), pp-edit-shape/pp-edit-line (edición vectorial), pp-crop
+   (única acción de edición disponible para una imagen plana). Para
+   replicar fielmente "como si se hubiera seleccionado editar en el panel",
+   _edCtxTriggerEdit renderiza ese panel y simula un clic en el botón
+   correspondiente, en vez de reimplementar cada acción por separado — así
+   sigue sincronizado automáticamente si esos botones cambian en el futuro.
+   Los únicos dos casos sin un botón "pp-edit-*" propiamente dicho:
+   - Texto/bocadillo con richLines (hoja de texto paginada): editar texto
+     abre directamente el Editor de textos (Trix), igual que pp-td-edit.
+   - Texto/bocadillo simple (sin richLines): el panel 'props' YA muestra un
+     <textarea id="pp-text"> con el contenido — "editar" es enfocarlo. */
+
+// Encuentra el índice de capa (no fill/pencil/watercolor) bajo un punto en
+// coordenadas de página (0-1) — mismo criterio de exclusión de tipos y
+// mismo recorrido en orden z inverso (de arriba hacia abajo) que ya usa la
+// selección normal de un clic (ver edOnStart, rama "PC: clic normal").
+function _edCtxHitTest(nx, ny){
+  return edLayers.map((_,i)=>i).reverse().find(i => {
+    const l = edLayers[i];
+    return l && l.contains && !l.hidden && !l.locked &&
+      l.type!=='fill' && l.type!=='pencil' && l.type!=='watercolor' &&
+      l.contains(nx, ny);
+  });
+}
+
+function _edPositionContextMenu(menu, cx, cy){
+  menu.style.position = 'fixed';
+  menu.style.zIndex = '9999';
+  menu.style.left = '-9999px'; menu.style.top = '0px';
+  menu.style.visibility = 'hidden';
+  requestAnimationFrame(() => {
+    const w = menu.offsetWidth || 180, h = menu.offsetHeight || 0;
+    const vw = window.innerWidth, vh = window.innerHeight, PAD = 6;
+    let left = cx, top = cy;
+    if(left + w + PAD > vw) left = vw - w - PAD;
+    if(left < PAD) left = PAD;
+    if(top + h + PAD > vh) top = vh - h - PAD;
+    if(top < PAD) top = PAD;
+    menu.style.left = left + 'px';
+    menu.style.top  = top  + 'px';
+    menu.style.visibility = '';
+  });
+}
+
+function _edShowContextMenu(e){
+  edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
+  const menu = $('edContextMenu'); if(!menu) return;
+  const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnPaste = $('ctx-paste');
+  if(!btnCopy || !btnEdit || !btnPaste) return;
+
+  const c = edCoords(e);
+  const hitIdx = _edCtxHitTest(c.nx, c.ny);
+
+  if(hitIdx !== undefined){
+    const la = edLayers[hitIdx];
+    // Actualizar selección — mismo criterio que un clic normal, salvo que
+    // si el objeto ya formaba parte de la selección actual (única o
+    // múltiple) esa selección se conserva tal cual, para poder copiar TODA
+    // la selección con el menú y no solo el objeto bajo el puntero.
+    const _yaSeleccionado = (edActiveTool==='multiselect' && edMultiSel.includes(hitIdx)) || edSelectedIdx===hitIdx;
+    if(!_yaSeleccionado){
+      _msClear();
+      if(la.groupId){
+        edMultiSel = _edGroupMemberIdxs(la.groupId);
+        edSelectedIdx = -1;
+        edActiveTool = 'multiselect'; edCanvas.className = 'tool-multiselect';
+        _msRecalcBbox();
+      } else {
+        edSelectedIdx = hitIdx; edMultiSelAnchor = hitIdx;
+        edActiveTool = 'select'; edCanvas.className = '';
+      }
+      edRedraw();
+    }
+    const _singleUngrouped = edSelectedIdx>=0 && !edLayers[edSelectedIdx]?.groupId;
+    btnCopy.style.display  = '';
+    btnEdit.style.display  = _singleUngrouped ? '' : 'none';
+    btnPaste.style.display = 'none';
+    window._edCtxTargetIdx = _singleUngrouped ? edSelectedIdx : -1;
+  } else {
+    // Vacío: solo Pegar, y solo si hay (probablemente) algo en el
+    // portapapeles propio — comprobación rápida y síncrona con la misma
+    // variable de reserva que ya usa el resto del sistema de portapapeles;
+    // al pulsar Pegar, _edReadOwnClipboardEnvelope vuelve a comprobar de
+    // verdad contra el portapapeles del sistema (criterio de "lo último
+    // copiado manda"), así que un falso positivo aquí como mucho no hace
+    // nada al pulsar, nunca pega algo obsoleto.
+    if(!window._edClipboardInternal) return; // nada que ofrecer: no mostrar un menú vacío
+    btnCopy.style.display = 'none';
+    btnEdit.style.display = 'none';
+    btnPaste.style.display = '';
+    window._edCtxPastePos = { x: c.nx, y: c.ny };
+  }
+
+  menu.classList.add('open');
+  menu._origParent = menu._origParent || menu.parentNode;
+  document.body.appendChild(menu);
+  _edPositionContextMenu(menu, e.clientX, e.clientY);
+}
+
+// "Editar" del menú contextual — ver comentario de cabecera de esta sección.
+function _edCtxTriggerEdit(idx){
+  const la = edLayers[idx]; if(!la) return;
+  if((la.type==='text'||la.type==='bubble') && la.richLines && la.richLines.length){
+    if(typeof edOpenTextDoc==='function') edOpenTextDoc(la);
+    return;
+  }
+  edSelectedIdx = idx; _msClear();
+  edActiveTool = 'select'; edCanvas.className = '';
+  _edDrawLockUI(); _edPropsOverlayShow();
+  edRenderOptionsPanel('props');
+  if(la.type==='text' || la.type==='bubble'){
+    // Texto/bocadillo simple: el propio panel 'props' ya muestra el
+    // <textarea id="pp-text"> con el contenido — enfocarlo ES la edición.
+    const _ta = $('pp-text'); if(_ta){ _ta.focus(); _ta.select(); }
+    return;
+  }
+  const _btnId =
+    la.type==='stroke' ? 'pp-edit-stroke' :
+    la.type==='draw'   ? 'pp-edit-draw'   :
+    (la.type==='gif' || (la.type==='image' && (la._isGcpImage || la._gcpLayersData || la._pngFrames))) ? 'pp-edit-anim' :
+    la.type==='shape'  ? 'pp-edit-shape'  :
+    la.type==='line'   ? 'pp-edit-line'   :
+    la.type==='image'  ? 'pp-crop'        : null;
+  if(_btnId) $(_btnId)?.click();
+}
+
+function edInitContextMenu(){
+  $('ctx-copy')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    edCopySelectionToClipboard();
+  });
+  $('ctx-edit')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    const idx = window._edCtxTargetIdx;
+    if(idx==null || idx<0) return;
+    _edCtxTriggerEdit(idx);
+  });
+  $('ctx-paste')?.addEventListener('click', async ()=>{
+    edCloseMenus();
+    const pos = window._edCtxPastePos;
+    const envelope = await _edReadOwnClipboardEnvelope();
+    if(envelope) _edApplyClipboardEnvelope(envelope, pos);
+  });
 }
 
 /* ── T14: Simetría horizontal (flip respecto al eje vertical del objeto) ── */
@@ -10447,6 +10625,22 @@ function _edGuidesPassThroughActive(){
 }
 
 function edOnStart(e){
+  // Menú contextual propio (botón secundario, solo PC — ver listener
+  // 'contextmenu' y _edShowContextMenu más abajo): cualquier puntero nuevo
+  // mientras está abierto solo lo cierra, igual que cualquier menú
+  // contextual estándar (Windows/macOS/Figma...) — los propios botones del
+  // menú ya tienen su handler de 'click', que sigue disparándose con
+  // normalidad tras este pointerdown.
+  const _ctxMenuEl = $('edContextMenu');
+  if(_ctxMenuEl && _ctxMenuEl.classList.contains('open')){
+    edCloseMenus();
+    return;
+  }
+  // Botón secundario del ratón (clic derecho): lo gestiona en exclusiva el
+  // menú contextual propio — nunca debe iniciar selección/arrastre normal
+  // aquí, para no decidir qué queda seleccionado antes de que ese menú
+  // decida lo mismo por su cuenta.
+  if(e.pointerType === 'mouse' && e.button === 2) return;
   // Interceptar zoom rect antes de cualquier otra lógica
   if (_edZoomRectActive) {
     _edZoomRectStart = { sx: e.clientX, sy: e.clientY };
@@ -29273,9 +29467,20 @@ function EditorView_init(){
     // Solo en editorShell — no en html/body para no romper fullscreen
     _shell.style.overscrollBehavior = 'none';
   }
-  // Bloquear menú contextual dentro del editor — impide "Guardar imagen como..."
-  // que disparan los botones laterales del lápiz/stylus en PC (estándar en Krita, Figma, etc.)
-  if(_shell) _shell.addEventListener('contextmenu', e => { e.preventDefault(); }, { passive: false });
+  // Bloquear menú contextual nativo dentro del editor — impide "Guardar
+  // imagen como..." que disparan los botones laterales del lápiz/stylus en
+  // PC (estándar en Krita, Figma, etc.) — y, sobre el propio lienzo en PC,
+  // mostrar en su lugar el menú contextual propio (Copiar/Editar sobre un
+  // objeto, Pegar en vacío). Petición explícita de Alberto: "ahora solo
+  // para PC" — en táctil (_edIsTouch) el contextmenu nativo del navegador
+  // por long-press queda igual que antes, solo suprimido, sin sustituirlo
+  // por nada.
+  if(_shell) _shell.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if(window._edIsTouch || window._gcpActive) return;
+    if(e.target !== edCanvas) return;
+    _edShowContextMenu(e);
+  }, { passive: false });
   window._edListeners = [
     [document, 'pointerdown',  edOnStart, {passive:false}],
     [document, 'pointermove',  edOnMove,  {passive:false}],
@@ -30223,6 +30428,7 @@ function EditorView_init(){
   edInitDrawBar();
   edInitShapeBar();
   edInitSelectMenu();
+  edInitContextMenu();
   edInitRules();
   edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
