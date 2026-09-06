@@ -1225,7 +1225,7 @@ body.ed-scale-tablet {
   font-weight: 900;
 }
 
-#edProjectModal, #edSaveChoiceModal {
+#edProjectModal, #edSaveChoiceModal, #edAnimRangeModal {
   position: fixed; inset: 0;
   z-index: 500;
   background: rgba(0,0,0,.6);
@@ -1236,7 +1236,7 @@ body.ed-scale-tablet {
   justify-content: center;
   opacity: 0; pointer-events: none; transition: opacity .22s;
 }
-#edProjectModal.open, #edSaveChoiceModal.open {
+#edProjectModal.open, #edSaveChoiceModal.open, #edAnimRangeModal.open {
   opacity: 1; pointer-events: all;
   touch-action: pan-y; /* permitir scroll nativo dentro del modal */
 }
@@ -1250,12 +1250,12 @@ body.ed-scale-tablet {
   animation: none;
   box-shadow: 0 -4px 32px rgba(0,0,0,.25);
 }
-#edProjectModal.open .ed-modal-sheet, #edSaveChoiceModal.open .ed-modal-sheet {
+#edProjectModal.open .ed-modal-sheet, #edSaveChoiceModal.open .ed-modal-sheet, #edAnimRangeModal.open .ed-modal-sheet {
   animation: edOverlayUp .24s cubic-bezier(.4,0,.2,1) both;
 }
 @media (pointer: fine) {
   /* PC/ratón: centrar en vez de bottom-sheet, igual que el resto de ventanas */
-  #edProjectModal, #edSaveChoiceModal { align-items: center; }
+  #edProjectModal, #edSaveChoiceModal, #edAnimRangeModal { align-items: center; }
   .ed-modal-sheet {
     border-bottom: 2.5px solid var(--black) !important;
     border-radius: 18px !important;
@@ -1263,7 +1263,7 @@ body.ed-scale-tablet {
   }
 }
 @media (min-height: 600px) {
-  #edProjectModal, #edSaveChoiceModal { align-items: center; }
+  #edProjectModal, #edSaveChoiceModal, #edAnimRangeModal { align-items: center; }
   .ed-modal-sheet {
     border-radius: 18px;
     border-bottom: 2.5px solid var(--black);
@@ -1276,7 +1276,7 @@ body.ed-scale-tablet {
    suele coincidir con una tablet pero no lo garantiza, p.ej. en modo
    multi-ventana estrecho) — esta regla lo hace explícito y ya no depende de
    una coincidencia. */
-body.ed-scale-tablet #edProjectModal, body.ed-scale-tablet #edSaveChoiceModal { align-items: center; }
+body.ed-scale-tablet #edProjectModal, body.ed-scale-tablet #edSaveChoiceModal, body.ed-scale-tablet #edAnimRangeModal { align-items: center; }
 body.ed-scale-tablet .ed-modal-sheet {
   border-bottom: 2.5px solid var(--black) !important;
   border-radius: 18px !important;

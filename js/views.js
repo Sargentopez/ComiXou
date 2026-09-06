@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.49</footer>
+    <footer class="app-version">v39.54</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -481,7 +481,14 @@ Router.register('editor', {
             </div>
           </div>
           <div class="ed-menu-sep"></div>
-          <button class="ed-menu-btn" id="edAnimacionesBtn" data-i18n="ed_animateBtn">Animar</button>
+          <!-- ANIMAR -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" id="edAnimacionesBtn" data-menu="animar" data-i18n="ed_animateBtn">Animar ▾</button>
+            <div class="ed-dropdown" id="dd-animar">
+              <button class="ed-dropdown-item" id="dd-convertPages" data-i18n="ed_convertPagesToAnim">Convertir hojas en animación...</button>
+              <button class="ed-dropdown-item" id="dd-animEditor" data-i18n="ed_animEditorBtn">Editor de Animaciones</button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
           <div class="ed-menu-item" style="position:relative">
             <button class="ed-menu-btn" id="edMultiSelBtn" data-menu="select" data-i18n="ed_menuSelection">Selección ▾</button>
@@ -890,6 +897,25 @@ Router.register('editor', {
           <button class="ed-modal-btn cancel" id="edMCancel" data-i18n="cancel">Cancelar</button>
           <button class="ed-modal-btn ok" id="edMSave" data-i18n="gcp_saveBehavior">Guardar ✓</button>
         </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL CONVERTIR HOJAS EN ANIMACIÓN -->
+    <div id="edAnimRangeModal">
+      <div class="ed-modal-sheet">
+        <div class="ed-modal-handle"></div>
+        <div class="ed-modal-header">
+          <h3 class="ed-modal-title" data-i18n="ed_animRangeTitle">Convertir hojas en animación</h3>
+        </div>
+        <div class="ed-modal-body">
+          <p style="font-size:.78rem;color:var(--gray-500);margin:0 0 14px;line-height:1.4" data-i18n="ed_animRangeHint">Cada hoja del rango se convertirá en un fotograma, con los objetos que tiene ahora mismo en el lienzo.</p>
+          <div class="ed-modal-field"><label data-i18n="ed_animRangeFrom">Hoja inicial</label><input type="number" id="edArFrom" inputmode="numeric" enterkeyhint="next" min="1" autocomplete="off"></div>
+          <div class="ed-modal-field"><label data-i18n="ed_animRangeTo">Hoja final</label><input type="number" id="edArTo" inputmode="numeric" enterkeyhint="done" min="1" autocomplete="off"></div>
+          <div class="ed-modal-actions">
+            <button class="ed-modal-btn cancel" id="edArCancel" data-i18n="cancel">Cancelar</button>
+            <button class="ed-modal-btn ok" id="edArOk" data-i18n="ed_animRangeConfirm">Crear animación ✓</button>
+          </div>
         </div>
       </div>
     </div>

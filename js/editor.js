@@ -1360,6 +1360,16 @@ let _edCropLastTapSeg = -1;     // índice de segmento del último tap (doble ta
 let _edCropLastTapTime = 0;     // timestamp del último tap sobre segmento
 let _edCropHistory = [];        // historial de snapshots del polígono (para ↩)
 let _edCropHistIdx = -1;        // índice actual en el historial
+// Recorte rectangular/elíptico — petición de Alberto: además del recorte
+// libre (polígono de nodos, sin cambios arriba), un tipo que solo permite
+// cambiar tamaño y proporciones mediante tiradores de ancla fija (igual
+// matemática que el redimensionado normal de cualquier objeto, ver
+// getControlPoints()/bloque "Resize profesional" en edOnMove), nunca
+// vértices sueltos — así el rectángulo conserva siempre ángulos rectos y la
+// elipse nunca pierde su forma ovalada.
+let _edCropShapeType = 'free';  // 'free' (libre, sin cambios) | 'rect' | 'ellipse'
+let _edCropShape     = null;    // {x,y,width,height} en fracción de página — solo rect/ellipse
+let _edCropShapeDrag = null;    // {corner,initX,initY,initW,initH,grabDX,grabDY} durante el arrastre
 // edZoom eliminado — reemplazado por edCamera.z
 // ── Cámara del editor (patrón Figma/tldraw) ──
 // x,y = traslación del canvas (donde aparece el origen del workspace en pantalla)
@@ -1554,7 +1564,7 @@ function _edInitWindowTitlePillObserver(){
     window._edWinTitlePillRaf = requestAnimationFrame(_edFitAllWindowTitlePills);
   };
   const _obs = new MutationObserver(_cb);
-  ['edProjectModal','edShortcutsModal','edHelpRefModal','edMpBehaviourModal','edSaveChoiceModal'].forEach(id => {
+  ['edProjectModal','edShortcutsModal','edHelpRefModal','edMpBehaviourModal','edSaveChoiceModal','edAnimRangeModal'].forEach(id => {
     const el = document.getElementById(id);
     if (el) _obs.observe(el, { attributes: true, attributeFilter: ['class'] });
   });
@@ -6304,6 +6314,9 @@ function _edStartCrop(la) {
   _edCropLastTapTime = 0;
   _edCropHistory     = [];
   _edCropHistIdx     = -1;
+  _edCropShapeType   = 'free';
+  _edCropShape       = null;
+  _edCropShapeDrag   = null;
   // draw ya tiene su propia UI bloqueada; para imagen/stroke hay que bloquearlo
   if (la.type !== 'draw') _edDrawLockUI();
   _edCropPushHistory(); // estado inicial vacío para poder deshacer hasta el principio
@@ -6341,14 +6354,170 @@ function _edCropRedoHistory() {
   edRedraw();
 }
 
+// ── Recorte rectangular/elíptico ────────────────────────────────────────
+// Cambia el tipo de recorte activo. Al entrar en 'rect'/'ellipse' se
+// inicializa el rectángulo cubriendo el objeto entero tal cual está ahora
+// (aplicar sin tocar nada sería un recorte nulo) — el usuario reduce desde
+// ahí con los tiradores. Cambiar de tipo siempre parte de cero en el tipo
+// nuevo (igual criterio que cualquier herramienta de recorte estándar:
+// cambiar de forma recalcula la selección, no intenta adaptar la anterior).
+function _edCropSetShapeType(type){
+  if (!_edCropMode || !_edCropLayer) return;
+  _edCropShapeType = type;
+  _edCropShapeDrag = null;
+  if (type === 'rect' || type === 'ellipse') {
+    const la = _edCropLayer;
+    _edCropShape = { x: la.x, y: la.y, width: la.width, height: la.height };
+  } else {
+    _edCropShape = null;
+  }
+  _edCropRenderPanel();
+  edRedraw();
+}
+
+// 8 tiradores (4 esquinas + 4 lados) sobre la caja del rectángulo/elipse —
+// misma geometría que BaseLayer.getControlPoints() pero sin rotación (el
+// recorte rect/ellipse no gira, como el resto de este sistema, ver el
+// polígono libre: tampoco compensa la rotación del objeto al dibujarse).
+function _edCropShapeHandles(){
+  const s = _edCropShape; if (!s) return [];
+  const hw = s.width/2, hh = s.height/2;
+  return [
+    {x:s.x-hw, y:s.y-hh, corner:'tl'}, {x:s.x+hw, y:s.y-hh, corner:'tr'},
+    {x:s.x-hw, y:s.y+hh, corner:'bl'}, {x:s.x+hw, y:s.y+hh, corner:'br'},
+    {x:s.x-hw, y:s.y,    corner:'ml'}, {x:s.x+hw, y:s.y,    corner:'mr'},
+    {x:s.x,    y:s.y-hh, corner:'mt'}, {x:s.x,    y:s.y+hh, corner:'mb'},
+  ];
+}
+
+// Hit-test: tiradores primero (radio en px de pantalla, igual criterio que
+// _edCropHitTest/getControlPoints en el resto de la app), luego "dentro de
+// la caja" para poder arrastrar el rectángulo/elipse entero.
+function _edCropShapeHitTest(nx, ny){
+  const s = _edCropShape; if (!s) return null;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const HIT = 22; // px de pantalla, igual que _edCropHitTest (nodos del modo libre)
+  for (const h of _edCropShapeHandles()){
+    if (Math.hypot((nx-h.x)*pw, (ny-h.y)*ph) * z < HIT) return { type:'handle', corner:h.corner };
+  }
+  if (Math.abs(nx-s.x) <= s.width/2 && Math.abs(ny-s.y) <= s.height/2) return { type:'move' };
+  return null;
+}
+
+// Llamado desde edOnStart (vía _edCropAnyStart) cuando el tipo activo es rect/ellipse.
+function _edCropShapeHandleStart(nx, ny){
+  const s = _edCropShape; if (!s) return false;
+  const hit = _edCropShapeHitTest(nx, ny);
+  if (!hit) return false;
+  if (hit.type === 'handle') {
+    _edCropShapeDrag = { corner: hit.corner, initX:s.x, initY:s.y, initW:s.width, initH:s.height };
+  } else {
+    _edCropShapeDrag = { corner:'move', initX:s.x, initY:s.y, initW:s.width, initH:s.height,
+                          grabDX: nx - s.x, grabDY: ny - s.y };
+  }
+  return true;
+}
+
+// Llamado desde edOnMove. Resize por ancla fija (el punto/lado opuesto al
+// tirador arrastrado nunca se mueve) — misma idea que el resize general de
+// cualquier objeto (ver "Resize profesional" en edOnMove), simplificada sin
+// rotación. Sin bloqueo de proporción: Alberto pidió poder cambiar tamaño Y
+// proporciones libremente, siempre manteniendo ángulos rectos/forma oval.
+function _edCropShapeHandleMove(nx, ny){
+  const d = _edCropShapeDrag, s = _edCropShape;
+  if (!d || !s) return false;
+  const MIN = 0.02; // fracción de página — mismo orden de magnitud que el resize general
+  if (d.corner === 'move') {
+    s.x = nx - d.grabDX;
+    s.y = ny - d.grabDY;
+    edRedraw();
+    return true;
+  }
+  const anchorX = d.corner.includes('l') ? d.initX + d.initW/2 : d.corner.includes('r') ? d.initX - d.initW/2 : d.initX;
+  const anchorY = d.corner.includes('t') ? d.initY + d.initH/2 : d.corner.includes('b') ? d.initY - d.initH/2 : d.initY;
+  if (d.corner === 'ml' || d.corner === 'mr') {
+    s.width  = Math.max(MIN, Math.abs(nx - anchorX));
+    s.x = (anchorX + nx) / 2;
+  } else if (d.corner === 'mt' || d.corner === 'mb') {
+    s.height = Math.max(MIN, Math.abs(ny - anchorY));
+    s.y = (anchorY + ny) / 2;
+  } else {
+    s.width  = Math.max(MIN, Math.abs(nx - anchorX));
+    s.height = Math.max(MIN, Math.abs(ny - anchorY));
+    s.x = (anchorX + nx) / 2;
+    s.y = (anchorY + ny) / 2;
+  }
+  edRedraw();
+  return true;
+}
+
+// Llamado desde edOnEnd. Sin historial propio (a diferencia del modo libre):
+// solo hay una forma activa a la vez, deshacer un ajuste es simplemente
+// volver a arrastrar — mantiene el panel simple, sin ↩/↪ para este tipo.
+function _edCropShapeHandleEnd(){
+  if (!_edCropShapeDrag) return false;
+  _edCropShapeDrag = null;
+  return true;
+}
+
+// Convierte el rectángulo/elipse actual en un polígono de puntos (fracción
+// de página) — mismo formato que _edCropPts del modo libre — para poder
+// reutilizar _edApplyCrop/_edApplyCropImage/_edApplyCropStroke/
+// _edApplyCropDraw TAL CUAL, sin ninguna modificación: esas funciones ya
+// recortan con un polígono genérico (ctx.moveTo/lineTo/clip), así que un
+// rectángulo de 4 puntos o una elipse aproximada con suficientes puntos
+// funcionan exactamente igual que cualquier forma libre.
+function _edCropShapeToPts(){
+  const s = _edCropShape; if (!s) return [];
+  const hw = s.width/2, hh = s.height/2;
+  if (_edCropShapeType === 'rect') {
+    return [
+      {x:s.x-hw, y:s.y-hh}, {x:s.x+hw, y:s.y-hh},
+      {x:s.x+hw, y:s.y+hh}, {x:s.x-hw, y:s.y+hh},
+    ];
+  }
+  if (_edCropShapeType === 'ellipse') {
+    const N = 64; // suficientes puntos para que se vea perfectamente curva
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      pts.push({ x: s.x + Math.cos(a)*hw, y: s.y + Math.sin(a)*hh });
+    }
+    return pts;
+  }
+  return [];
+}
+
+// Dispatcher único llamado desde edOnStart — sustituye a la pareja
+// _edCropHandleCanvasStart+_edCropHandleCanvasTap cuando el tipo activo NO
+// es 'free' (para 'free' el comportamiento es exactamente el de siempre).
+function _edCropAnyStart(nx, ny){
+  if (_edCropShapeType !== 'free') return _edCropShapeHandleStart(nx, ny);
+  const _nodeHit = _edCropHandleCanvasStart(nx, ny);
+  if (_nodeHit) return true;
+  return _edCropHandleCanvasTap(nx, ny);
+}
+
 function _edCropRenderPanel() {
   const panel = $('edOptionsPanel');
   if (!panel) return;
   const n = _edCropPts.length;
   const canUndo = _edCropHistIdx > 0;
   const canRedo = _edCropHistIdx < _edCropHistory.length - 1;
-  panel.innerHTML = `
-<div style="display:flex;flex-direction:column;width:100%;gap:0">
+  const _type = _edCropShapeType;
+  const _typeBtn = (type, label) => {
+    const on = _type === type;
+    return `<button class="crop-type-btn" data-crop-type="${type}" style="flex:1;border:1px solid ${on?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:4px 6px;font-weight:700;font-size:.76rem;background:${on?'var(--black)':'var(--gray-100)'};color:${on?'var(--white)':'var(--gray-700)'};cursor:pointer">${label}</button>`;
+  };
+  const _typeSelectorHtml = `
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
+    ${_typeBtn('free', I18n.t('ed_cropTypeFree'))}
+    ${_typeBtn('rect', I18n.t('ed_cropTypeRect'))}
+    ${_typeBtn('ellipse', I18n.t('ed_cropTypeEllipse'))}
+  </div>
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>`;
+  // Modo libre: EXACTAMENTE el mismo panel de siempre (nodos de polígono).
+  const _freeBodyHtml = `
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 0;min-height:32px">
     <span style="font-size:.8rem;font-weight:700;color:var(--gray-600);flex:1">
       ✂ ${n < 3 ? I18n.t('ed_tapAddVerticesMin3') : I18n.t('ed_verticesDragCloseInfo', { n })}
@@ -6360,16 +6529,41 @@ function _edCropRenderPanel() {
     <button id="crop-redo" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer" ${!canRedo?'disabled':''}>${ICON_REDO_SVG}</button>
     <button id="crop-cancel" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer;color:#c00">✕</button>
     <button id="crop-apply" style="flex:2;background:${n>=3?'var(--black)':'var(--gray-400)'};color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer" ${n<3?'disabled':''}>✓ Aplicar</button>
+  </div>`;
+  // Modo rectángulo/elipse: sin nodos que contar ni historial propio — solo
+  // arrastrar tiradores, por eso el panel es más simple (sin ↩/↪).
+  const _shapeBodyHtml = `
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:6px 0;min-height:32px">
+    <span style="font-size:.8rem;font-weight:700;color:var(--gray-600);flex:1">
+      ✂ ${I18n.t('ed_cropShapeHint')}
+    </span>
   </div>
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0">
+    <button id="crop-cancel" style="flex:1;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;background:var(--gray-100);cursor:pointer;color:#c00">✕</button>
+    <button id="crop-apply" style="flex:2;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer">✓ Aplicar</button>
+  </div>`;
+  panel.innerHTML = `
+<div style="display:flex;flex-direction:column;width:100%;gap:0">
+  ${_typeSelectorHtml}
+  ${_type === 'free' ? _freeBodyHtml : _shapeBodyHtml}
 </div>`;
   panel.classList.add('open');
   panel.dataset.mode = 'crop';
   edFitCanvas(); // actualizar _edCanvasTop
+  panel.querySelectorAll('.crop-type-btn').forEach(btn => {
+    btn.addEventListener('click', () => _edCropSetShapeType(btn.dataset.cropType));
+  });
   $('crop-undo')?.addEventListener('click', _edCropUndoHistory);
   $('crop-redo')?.addEventListener('click', _edCropRedoHistory);
   $('crop-cancel')?.addEventListener('click', _edCancelCrop);
   $('crop-apply')?.addEventListener('click', () => {
-    if (_edCropPts.length >= 3) _edApplyCrop();
+    if (_edCropShapeType !== 'free') {
+      _edCropPts = _edCropShapeToPts();
+      if (_edCropPts.length >= 3) _edApplyCrop();
+    } else if (_edCropPts.length >= 3) {
+      _edApplyCrop();
+    }
   });
 }
 
@@ -6385,6 +6579,9 @@ function _edCancelCrop() {
   _edCropLastTapTime  = 0;
   _edCropHistory      = [];
   _edCropHistIdx      = -1;
+  _edCropShapeType    = 'free';
+  _edCropShape        = null;
+  _edCropShapeDrag    = null;
   // Limpiar punteros fantasma
   if (window._edActivePointers) window._edActivePointers.clear();
   edPinching = false; edPinchScale0 = null;
@@ -6407,6 +6604,7 @@ function _edCancelCrop() {
 }
 
 function _edCropDrawOverlay() {
+  if (_edCropShapeType !== 'free') { _edCropDrawShapeOverlay(); return; }
   // Overlay de recorte: la imagen es completamente visible.
   // Solo se dibuja el polígono con relleno semitransparente azul (preview del área a conservar)
   // y el contorno amarillo con nodos.
@@ -6462,6 +6660,60 @@ function _edCropDrawOverlay() {
     ctx.fill();
     ctx.strokeStyle = '#fff'; ctx.lineWidth = (isActive ? 2.5 : 1.5) / z; ctx.stroke();
   });
+
+  ctx.restore();
+}
+
+// Overlay del recorte rectangular/elíptico: mismo estilo visual que el modo
+// libre (relleno azul semitransparente, contorno naranja + blanco interior)
+// pero con tiradores CUADRADOS en vez de nodos redondos — para dejar claro
+// a simple vista que aquí se arrastra un tirador de tamaño, no un vértice
+// suelto. Los 4 tiradores de esquina/lado siguen la misma caja tanto para
+// el rectángulo como para la elipse (la elipse se dibuja inscrita en esa
+// misma caja, igual que cualquier herramienta de elipse estándar).
+function _edCropDrawShapeOverlay() {
+  const s = _edCropShape; if (!s) return;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const ctx = edCtx;
+  const cx = edMarginX() + s.x*pw, cy = edMarginY() + s.y*ph;
+  const hw = s.width/2*pw, hh = s.height/2*ph;
+
+  ctx.save();
+  const _tracePath = () => {
+    ctx.beginPath();
+    if (_edCropShapeType === 'ellipse') {
+      ctx.ellipse(cx, cy, hw, hh, 0, 0, Math.PI*2);
+    } else {
+      ctx.rect(cx-hw, cy-hh, hw*2, hh*2);
+    }
+  };
+
+  _tracePath();
+  ctx.fillStyle = 'rgba(59,130,246,0.25)';
+  ctx.fill();
+
+  _tracePath();
+  ctx.strokeStyle = '#f97316';
+  ctx.lineWidth = 2.5 / z;
+  ctx.stroke();
+  _tracePath();
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1.2 / z;
+  ctx.stroke();
+
+  // Tiradores cuadrados en las 8 posiciones estándar (esquinas + lados)
+  const hs = 8 / z; // semilado del cuadrado, en px de pantalla
+  const _draggedCorner = _edCropShapeDrag ? _edCropShapeDrag.corner : null;
+  for (const h of _edCropShapeHandles()) {
+    const hx = edMarginX() + h.x*pw, hy = edMarginY() + h.y*ph;
+    const isActive = h.corner === _draggedCorner;
+    const r = isActive ? hs*1.3 : hs;
+    ctx.fillStyle = isActive ? '#f97316' : '#3b82f6';
+    ctx.fillRect(hx-r, hy-r, r*2, r*2);
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = (isActive ? 2.5 : 1.5) / z;
+    ctx.strokeRect(hx-r, hy-r, r*2, r*2);
+  }
 
   ctx.restore();
 }
@@ -8406,12 +8658,56 @@ function _edPositionContextMenu(menu, cx, cy){
   });
 }
 
-function _edShowContextMenu(e){
-  edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
+// Aplica visibilidad de botones + variables de destino para un objeto YA
+// determinado (hitIdx) y posiciona el menú en (clientX, clientY). Compartida
+// entre el clic derecho en PC (que calcula hitIdx con su propio hit-test,
+// ver _edShowContextMenu) y el segundo toque táctil sobre un objeto/grupo YA
+// seleccionado (que ya conoce el índice de antemano — ver
+// _edShowContextMenuTouch). Asume que edSelectedIdx/edMultiSel YA reflejan
+// la selección correcta antes de llamarla — no los toca.
+function _edOpenObjectContextMenu(hitIdx, clientX, clientY){
   const menu = $('edContextMenu'); if(!menu) return;
   const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnProps = $('ctx-props'), btnPaste = $('ctx-paste');
   if(!btnCopy || !btnEdit || !btnProps || !btnPaste) return;
+  const _singleUngrouped = edSelectedIdx>=0 && !edLayers[edSelectedIdx]?.groupId;
+  btnCopy.style.display  = '';
+  btnEdit.style.display  = _singleUngrouped ? '' : 'none';
+  btnProps.style.display = '';
+  btnPaste.style.display = 'none';
+  window._edCtxTargetIdx = _singleUngrouped ? edSelectedIdx : -1;
+  // Panel propiedades: SIEMPRE el objeto realmente pulsado (hitIdx), sea
+  // suelto o miembro de un grupo — _edHandleDoubleTap (mismo mecanismo que
+  // el doble toque) fija edSelectedIdx a ese objeto y decide por su cuenta
+  // si mostrar el panel individual o el de grupo según su groupId.
+  window._edCtxPropsTargetIdx = hitIdx;
+  menu.classList.add('open');
+  menu._origParent = menu._origParent || menu.parentNode;
+  document.body.appendChild(menu);
+  _edPositionContextMenu(menu, clientX, clientY);
+}
 
+// Igual que arriba, pero para el caso "vacío" (solo Pegar) — solo si hay
+// (probablemente) algo en el portapapeles propio. _edReadOwnClipboardEnvelope
+// vuelve a comprobar de verdad al pulsar Pegar (criterio de "lo último
+// copiado manda"), así que un falso positivo aquí como mucho no hace nada.
+function _edOpenEmptyContextMenu(nx, ny, clientX, clientY){
+  if(!window._edClipboardInternal) return;
+  const menu = $('edContextMenu'); if(!menu) return;
+  const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnProps = $('ctx-props'), btnPaste = $('ctx-paste');
+  if(!btnCopy || !btnEdit || !btnProps || !btnPaste) return;
+  btnCopy.style.display = 'none';
+  btnEdit.style.display = 'none';
+  btnProps.style.display = 'none';
+  btnPaste.style.display = '';
+  window._edCtxPastePos = { x: nx, y: ny };
+  menu.classList.add('open');
+  menu._origParent = menu._origParent || menu.parentNode;
+  document.body.appendChild(menu);
+  _edPositionContextMenu(menu, clientX, clientY);
+}
+
+function _edShowContextMenu(e){
+  edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
   const c = edCoords(e);
 
   // 1) ¿El clic derecho cae dentro de la selección YA activa (objeto único
@@ -8455,38 +8751,27 @@ function _edShowContextMenu(e){
       }
       edRedraw();
     }
-    const _singleUngrouped = edSelectedIdx>=0 && !edLayers[edSelectedIdx]?.groupId;
-    btnCopy.style.display  = '';
-    btnEdit.style.display  = _singleUngrouped ? '' : 'none';
-    btnProps.style.display = '';
-    btnPaste.style.display = 'none';
-    window._edCtxTargetIdx = _singleUngrouped ? edSelectedIdx : -1;
-    // Panel propiedades: SIEMPRE el objeto realmente pulsado (hitIdx), sea
-    // suelto o miembro de un grupo — _edHandleDoubleTap (mismo mecanismo
-    // que el doble toque) fija edSelectedIdx a ese objeto y decide por su
-    // cuenta si mostrar el panel individual o el de grupo según su
-    // groupId, exactamente igual que ya hace un doble toque manual.
-    window._edCtxPropsTargetIdx = hitIdx;
+    _edOpenObjectContextMenu(hitIdx, e.clientX, e.clientY);
   } else {
-    // Vacío: solo Pegar, y solo si hay (probablemente) algo en el
-    // portapapeles propio — comprobación rápida y síncrona con la misma
-    // variable de reserva que ya usa el resto del sistema de portapapeles;
-    // al pulsar Pegar, _edReadOwnClipboardEnvelope vuelve a comprobar de
-    // verdad contra el portapapeles del sistema (criterio de "lo último
-    // copiado manda"), así que un falso positivo aquí como mucho no hace
-    // nada al pulsar, nunca pega algo obsoleto.
-    if(!window._edClipboardInternal) return; // nada que ofrecer: no mostrar un menú vacío
-    btnCopy.style.display = 'none';
-    btnEdit.style.display = 'none';
-    btnProps.style.display = 'none';
-    btnPaste.style.display = '';
-    window._edCtxPastePos = { x: c.nx, y: c.ny };
+    _edOpenEmptyContextMenu(c.nx, c.ny, e.clientX, e.clientY);
   }
+}
 
-  menu.classList.add('open');
-  menu._origParent = menu._origParent || menu.parentNode;
-  document.body.appendChild(menu);
-  _edPositionContextMenu(menu, e.clientX, e.clientY);
+// Segundo toque táctil (fuera de la ventana de doble tap) sobre un objeto o
+// grupo YA seleccionado — ver el candidato marcado en edOnStart y resuelto
+// en edOnEnd tras comprobar que no hubo arrastre real. La selección actual
+// (edSelectedIdx/edMultiSel) ya es la correcta — es justo lo que se acaba
+// de re-tocar — así que no hace falta tocarla, a diferencia del clic
+// derecho en PC.
+function _edShowContextMenuTouch(hitIdx, e){
+  edCloseMenus();
+  _edOpenObjectContextMenu(hitIdx, e.clientX, e.clientY);
+}
+
+// Doble tap táctil sobre vacío — ver edOnStart, rama de zona vacía.
+function _edShowContextMenuTouchEmpty(nx, ny, e){
+  edCloseMenus();
+  _edOpenEmptyContextMenu(nx, ny, e.clientX, e.clientY);
 }
 
 // "Editar" del menú contextual — ver comentario de cabecera de esta sección.
@@ -8730,7 +9015,7 @@ function edDeleteSelected(){
   if(edSelectedIdx<0){edToast(I18n.t('ed_selectAnObject'));return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
   // Si el modo recorte está activo, cancelarlo antes de eliminar
-  if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edDrawUnlockUI(); _edPropsOverlayHide(); }
+  if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edCropShapeType='free'; _edCropShape=null; _edCropShapeDrag=null; _edDrawUnlockUI(); _edPropsOverlayHide(); }
   const _delLay=edLayers[edSelectedIdx];
   const _delType=_delLay?.type;
   // Eliminar capas del grupo vinculadas (fill, pencil, watercolor)
@@ -10718,6 +11003,12 @@ function edOnStart(e){
   // aquí, para no decidir qué queda seleccionado antes de que ese menú
   // decida lo mismo por su cuenta.
   if(e.pointerType === 'mouse' && e.button === 2) return;
+  // Candidato a menú contextual táctil (segundo toque sobre algo ya
+  // seleccionado, fuera de la ventana de doble tap) — se resuelve en
+  // edOnEnd solo si este gesto termina sin arrastre real. Se resetea aquí,
+  // al principio de CUALQUIER gesto nuevo, para no arrastrar un candidato
+  // obsoleto de un gesto anterior distinto.
+  window._edCtxMenuTapCandidate = null;
   // Interceptar zoom rect antes de cualquier otra lógica
   if (_edZoomRectActive) {
     _edZoomRectStart = { sx: e.clientX, sy: e.clientY };
@@ -11113,18 +11404,15 @@ function edOnStart(e){
           if (window._edActivePointers && window._edActivePointers.size > 1) return;
           if (window._edCropTouchMoved) return;
           const _cc = edCoords(_eSavedCrop);
-          const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-          if (_nodeHit) return;
-          _edCropHandleCanvasTap(_cc.nx, _cc.ny);
+          _edCropAnyStart(_cc.nx, _cc.ny);
         }, 120);
         return; // primer dedo espera — ya está registrado en _edActivePointers
       }
     } else {
       // PC/ratón: inmediato
       const _cc = edCoords(e);
-      const _nodeHit = _edCropHandleCanvasStart(_cc.nx, _cc.ny);
-      if (_nodeHit) return;
-      if (_edCropHandleCanvasTap(_cc.nx, _cc.ny)) return;
+      _edCropAnyStart(_cc.nx, _cc.ny);
+      return;
     }
   }
 
@@ -11387,6 +11675,8 @@ function edOnStart(e){
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar drag de nodo de recorte si estaba activo
     if(_edCropMode && _edCropDragIdx >= 0){ _edCropDragIdx = -1; _edCropDragging = false; }
+    // Cancelar drag de tirador rect/elipse si estaba activo (mismo criterio)
+    if(_edCropMode && _edCropShapeDrag){ _edCropShapeDrag = null; }
     // Sistema de pan para LineLayer (en construcción o seleccionada) — SOLO
     // aplica en modo selector puro. En edición vectorial (cualquier otra
     // herramienta, o nodos V⟺C) el pinch debe ser 100% cámara — nunca mover
@@ -11528,6 +11818,18 @@ function edOnStart(e){
               edRenderOptionsPanel('props');
               edRedraw();
               return;
+            }
+            // No fue doble tap: candidato a menú contextual — segundo toque
+            // (táctil) sobre el grupo YA seleccionado, fuera de la ventana
+            // de doble tap (petición de Alberto). Solo se ANOTA aquí — el
+            // resto de este bloque sigue su curso normal de arrastre sin
+            // ningún cambio; se resuelve en edOnEnd comprobando que el
+            // gesto termina sin arrastre real (window._edMoved).
+            // OJO: _isTouch (const) aún no está declarada en este punto de
+            // la función — usar e.pointerType directamente aquí.
+            if(e.pointerType === 'touch'){
+              window._edCtxMenuTapCandidate =
+                edMultiSel.find(i => edLayers[i]?.type!=='fill' && edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
             }
           }
           // LOCK: solo iniciar si hay miembros desbloqueados
@@ -12556,6 +12858,28 @@ function edOnStart(e){
   }
   if(found>=0){
     const _fla = edLayers[found];
+    // ── TÁCTIL: candidato a menú contextual — segundo toque sobre un
+    //    objeto o grupo YA seleccionado, fuera de la ventana de doble tap ──
+    // Solo se ANOTA aquí (edSelectedIdx/edMultiSel no se tocan, y el resto
+    // de esta función sigue su curso normal de selección/arrastre sin
+    // ningún cambio) — se resuelve de verdad en edOnEnd, comprobando que
+    // el gesto termina SIN arrastre real (window._edMoved). Así un toque
+    // para EMPEZAR A ARRASTRAR el objeto/grupo ya seleccionado nunca se ve
+    // interrumpido por esto — solo un toque simple que se suelta sin
+    // mover abre el menú. El doble tap rápido (existente, abre el panel de
+    // propiedades) queda intacto y tiene prioridad: si lo es, aquí no se
+    // marca ningún candidato.
+    if(_isTouch){
+      const _yaSelCtx = (edSelectedIdx === found) ||
+        (edActiveTool === 'multiselect' && edMultiSel.includes(found));
+      if(_yaSelCtx){
+        const _nowCtx = Date.now();
+        const _esDobleTapCtx = (found === _edLastTapIdx ||
+            (edActiveTool==='multiselect' && edMultiSel.includes(_edLastTapIdx))) &&
+            _nowCtx - _edLastTapTime < _edDoubleTapMs;
+        if(!_esDobleTapCtx) window._edCtxMenuTapCandidate = found;
+      }
+    }
     // Cancelar deselección diferida — el usuario está tocando un objeto
     if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
     window._edPendingDeselC = null;
@@ -12838,6 +13162,24 @@ function edOnStart(e){
       }
     }
   } else {
+    // ── TÁCTIL: doble tap sobre vacío → menú contextual de Pegar ──
+    // Petición de Alberto. Comprobación INMEDIATA en este mismo pointerdown
+    // (mismo patrón que el doble tap sobre un objeto ya existente, NO el de
+    // "candidato diferido" de más arriba) — al exigir DOS toques distintos
+    // y rápidos, nunca puede confundirse con un solo gesto de tocar-y-
+    // arrastrar para crear una selección rectangular en vacío (rubber
+    // band), que solo genera UN pointerdown.
+    if(_isTouch && !window._gcpActive){
+      const _nowEmpty = Date.now();
+      const _esDobleTapVacio = _edLastTapIdx === -1 && _nowEmpty - _edLastTapTime < _edDoubleTapMs;
+      if(_esDobleTapVacio && window._edClipboardInternal){
+        _edLastTapTime = 0; _edLastTapIdx = -1;
+        _edShowContextMenuTouchEmpty(c.nx, c.ny, e);
+        edRedraw();
+        return;
+      }
+      _edLastTapTime = _nowEmpty; _edLastTapIdx = -1;
+    }
     const _wasType = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]?.type : null;
     const _wasLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     const _panel = $('edOptionsPanel');
@@ -13019,6 +13361,17 @@ function edOnMove(e){
       e.preventDefault();
       const _cmc = edCoords(e);
       _edCropHandleCanvasMove(_cmc.nx, _cmc.ny);
+      return;
+    }
+  }
+  // ── DRAG DE TIRADOR DE RECORTE RECT/ELIPSE ──────────────────
+  if (_edCropMode && _edCropShapeDrag) {
+    if (e.pointerType === 'touch' && window._edActivePointers && window._edActivePointers.size >= 2) {
+      _edCropShapeDrag = null;
+    } else {
+      e.preventDefault();
+      const _cmc2 = edCoords(e);
+      _edCropShapeHandleMove(_cmc2.nx, _cmc2.ny);
       return;
     }
   }
@@ -14045,6 +14398,19 @@ function edOnEnd(e){
     window._edSelTouchTimer = null;
     const _pseIdx = window._edPendingSelFound;
     window._edPendingSelFound = null; window._edPendingSelC = null;
+    // Segundo toque (fuera de doble tap) sobre un objeto o GRUPO YA
+    // seleccionado, resuelto por este camino de selección diferida (un
+    // miembro de grupo llega aquí porque edSelectedIdx nunca apunta a un
+    // miembro — el grupo vive en edMultiSel, así que found!==edSelectedIdx
+    // siempre es cierto para él) → menú contextual, en vez de colapsar la
+    // selección a este único miembro (petición de Alberto).
+    const _ctxCandidateSel = window._edCtxMenuTapCandidate;
+    window._edCtxMenuTapCandidate = null;
+    if(_ctxCandidateSel != null && _ctxCandidateSel === _pseIdx && e?.pointerType === 'touch'){
+      _edShowContextMenuTouch(_ctxCandidateSel, e);
+      edRedraw();
+      return;
+    }
     if (_pseIdx >= 0 && edLayers[_pseIdx]) {
       edSelectedIdx = _pseIdx;
       edIsDragging  = false;
@@ -14082,6 +14448,12 @@ function edOnEnd(e){
   // ── FIN DE DRAG DE NODO DE RECORTE ────────────────────────
   if (_edCropMode && _edCropDragIdx >= 0) {
     _edCropHandleCanvasEnd();
+    return;
+  }
+  // ── FIN DE DRAG DE TIRADOR DE RECORTE RECT/ELIPSE ──────────
+  if (_edCropMode && _edCropShapeDrag) {
+    _edCropShapeHandleEnd();
+    edRedraw();
     return;
   }
   if(_edRuleDrag) {
@@ -14265,10 +14637,24 @@ function edOnEnd(e){
     }
     // Táctil: tap sin movimiento dentro del bbox → desactivar multiselect.
     const _wasTapInsideBbox = edMultiDragging && !window._edMoved && e?.pointerType === 'touch';
+    const _ctxCandidateGrp = window._edCtxMenuTapCandidate;
+    window._edCtxMenuTapCandidate = null;
     edMultiDragging=false; edMultiResizing=false; edMultiRotating=false;
     edMultiDragOffs=[];
     const _wasMoved = window._edMoved;
     window._edMoved=false;
+    // Segundo toque (fuera de doble tap) sobre el grupo YA seleccionado,
+    // sin arrastre real → menú contextual, en vez de desactivar la
+    // multiselección (petición de Alberto). Sin exigir
+    // window._edGroupSilentTool===undefined aquí: ese flag permanece activo
+    // durante TODA la vida del grupo mientras se muestra con tiradores
+    // propios (rotar/escalar) — no solo justo al entrar — así que exigirlo
+    // impedía que este candidato (marcado más arriba, en edOnStart, con ese
+    // mismo criterio) se resolviera nunca.
+    if(_wasTapInsideBbox && _ctxCandidateGrp != null && edMultiSel.includes(_ctxCandidateGrp)){
+      _edShowContextMenuTouch(_ctxCandidateGrp, e);
+      edRedraw(); clearTimeout(window._edLongPress); window._edLongPressReady=false; return;
+    }
     if(_wasTapInsideBbox && window._edGroupSilentTool === undefined){
       _msClear(); edActiveTool='select'; edCanvas.className='';
       edRedraw(); clearTimeout(window._edLongPress); window._edLongPressReady=false; return;
@@ -14435,7 +14821,19 @@ function edOnEnd(e){
     if(_preExport.length) Promise.all(_preExport).then(_doPush);
     else _doPush();
   }
-  if(wasDragging && !window._edMoved && !edIsTailDragging){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length); }
+  if(wasDragging && !window._edMoved && !edIsTailDragging){
+    window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length);
+    // Segundo toque (fuera de doble tap) sobre un objeto YA seleccionado,
+    // sin arrastre real → menú contextual (petición de Alberto). Sin
+    // "return": el resto de esta función sigue con su limpieza normal de
+    // banderas de arrastre exactamente igual que si esto no existiera.
+    if(e?.pointerType === 'touch' && window._edCtxMenuTapCandidate != null &&
+       window._edCtxMenuTapCandidate === edSelectedIdx){
+      _edShowContextMenuTouch(edSelectedIdx, e);
+      edRedraw();
+    }
+  }
+  window._edCtxMenuTapCandidate = null;
   window._edMoved = false;
   edIsDragging=false;edIsResizing=false;edIsTailDragging=false;edIsRotating=false;
   // vcof: tras soltar el nodo, reposicionar cursor en la nueva posición del nodo
@@ -19270,7 +19668,7 @@ function edCloseOptionsPanel(){
     if(_mode==='crop'){
       const _wdl = _edCropLayer && _edCropLayer.type === 'draw';
       const _cropSelIdx = edSelectedIdx;
-      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
+      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edCropShapeType='free'; _edCropShape=null; _edCropShapeDrag=null;
       if(window._edActivePointers) window._edActivePointers.clear();
       edPinching=false; edPinchScale0=null;
       clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
@@ -19535,7 +19933,7 @@ function edRenderOptionsPanel(mode){
     if(panel.dataset.mode==='crop'){
       const _wdl2 = _edCropLayer && _edCropLayer.type === 'draw';
       const _cropSelIdx2 = edSelectedIdx;
-      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1;
+      _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edCropShapeType='free'; _edCropShape=null; _edCropShapeDrag=null;
       if(window._edActivePointers) window._edActivePointers.clear();
       edPinching=false; edPinchScale0=null;
       clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer=null;
@@ -24087,8 +24485,11 @@ const _edHelpContent = {
       <div style="margin-bottom:14px">
         <b>1.</b> ${I18n.t('ed_helpEditorP1')}
       </div>
-      <div>
+      <div style="margin-bottom:14px">
         <b>2.</b> ${I18n.t('ed_helpEditorP2')}
+      </div>
+      <div>
+        <b>3.</b> ${I18n.t('ed_helpEditorP3')}
       </div>
     `
   },
@@ -29829,7 +30230,10 @@ function EditorView_init(){
     $('edFileGallery').click();
     edCloseMenus();
   });
-  $('edAnimacionesBtn')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
+  $('dd-convertPages')?.addEventListener('click', () => { edCloseMenus(); edOpenAnimRangeModal(); });
+  $('dd-animEditor')?.addEventListener('click', () => { edCloseMenus(); gcpOpen(); });
+  $('edArCancel')?.addEventListener('click', edCloseAnimRangeModal);
+  $('edArOk')?.addEventListener('click', edConfirmAnimRangeModal);
   $('edFileGif')?.addEventListener('change', async e => {
     const _f = e.target.files[0]; e.target.value = '';
     if (!_f) return;
@@ -29915,7 +30319,7 @@ function EditorView_init(){
   // listeners globales del editor — en concreto edOnMove (registrado sobre
   // document), que paneaba la cámara del canvas al hacer scroll dentro del
   // cuerpo del modal en vez de scrollear el propio modal.
-  ['edShortcutsModal', 'edHelpRefModal', 'edProjectModal', 'edSaveChoiceModal'].forEach(_mid => {
+  ['edShortcutsModal', 'edHelpRefModal', 'edProjectModal', 'edSaveChoiceModal', 'edAnimRangeModal'].forEach(_mid => {
     const _mEl = document.getElementById(_mid);
     if (!_mEl) return;
     ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
@@ -39063,6 +39467,246 @@ function gcpInsertFromBib(entry) {
     }
     delete la._fillLayerId; delete la._uid;
     insertLayer(la);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   CONVERTIR HOJAS EN ANIMACIÓN (prefijo _gcpCp) — v39.52
+   Petición de Alberto: en el menú "Animar ▾", junto a "Editor de
+   Animaciones" (gcpOpen() de siempre, sin cambios), la opción "Convertir
+   hojas en animación..." pide un rango de hojas y reconstruye una animación
+   donde cada hoja del rango es UN fotograma: los objetos que esa hoja tiene
+   en ese momento (clonados, nunca los originales) se ven SOLO en su
+   fotograma, ocultos en el resto. Encaja de fábrica en el modelo _frames[]
+   del GCP (null = el objeto no existe en ese fotograma) — no hace falta
+   ningún concepto nuevo ahí, solo construirlo de golpe en vez de a mano.
+   Reutiliza al máximo lo ya existente y probado para "insertar desde
+   biblioteca en el GCP" (gcpInsertFromBib, más arriba en este archivo):
+   edSerLayer/edDeserLayer para clonar sin compartir datos con el original,
+   _gcpVectorToImage para aplanar texto/bocadillo/forma/línea (no son
+   animables directamente — regla ya existente, no inventada aquí),
+   _gcpMergeLayersToImage para fusionar un dibujo/trazo vectorial con sus
+   capas de relleno/acuarela/lápiz vinculadas, y _edCloneLayerAnimData/
+   _edCloneLayerAnimStorage para que reeditar la animación clonada no
+   corrompa la de la hoja original (mismo mecanismo que ya usa "Duplicar
+   hoja" en editor-pages.js).
+   ══════════════════════════════════════════════════════════════════ */
+
+// Abre el modal pidiendo el rango de hojas. Por defecto, solo la hoja
+// actual (rango mínimo y más rápido de procesar) — Alberto amplía si quiere
+// más hojas. Los números que ve son 1-based (mismo criterio que el panel
+// "Hojas").
+function edOpenAnimRangeModal(){
+  const cur = edCurrentPage + 1;
+  const fromEl = $('edArFrom'), toEl = $('edArTo');
+  if(fromEl) fromEl.value = cur;
+  if(toEl)   toEl.value   = cur;
+  $('edAnimRangeModal')?.classList.add('open');
+}
+function edCloseAnimRangeModal(){
+  $('edAnimRangeModal')?.classList.remove('open');
+}
+
+// Valida el rango (lo recorta a [1, nº de hojas] y ordena inicio/fin si se
+// escribieron al revés) y lanza la construcción de la animación.
+function edConfirmAnimRangeModal(){
+  const total = edPages.length;
+  let from = parseInt($('edArFrom')?.value, 10);
+  let to   = parseInt($('edArTo')?.value, 10);
+  if(!Number.isFinite(from)) from = edCurrentPage + 1;
+  if(!Number.isFinite(to))   to   = from;
+  from = Math.min(Math.max(1, from), total);
+  to   = Math.min(Math.max(1, to),   total);
+  const fromIdx = Math.min(from, to) - 1; // 0-based, ambos incluidos
+  const toIdx   = Math.max(from, to) - 1;
+  edCloseAnimRangeModal();
+  _gcpCpBuildFromRange(fromIdx, toIdx);
+}
+
+// Adapta x/y/width/height (y points/subPaths si es una línea) de una capa YA
+// CLONADA, desde la orientación de su hoja de origen a la orientación
+// destino de la nueva animación. Cálculo idéntico al de _adaptGcp() (closure
+// interna de gcpInsertFromBib, más abajo) — se reimplementa aquí en vez de
+// reutilizar esa función porque está ligada a variables locales de esa otra
+// función y tocarla saldría del alcance quirúrgico de esta func. nueva.
+function _gcpCpAdaptOrientation(la, srcOrientation, destOrientation){
+  if(!la || srcOrientation === destOrientation) return;
+  if(la.type === 'draw') return; // cubre todo el workspace fijo, sin x/y/width/height significativos
+  const pwO = srcOrientation  === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const phO = srcOrientation  === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const pwD = destOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const phD = destOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mxO = (ED_CANVAS_W - pwO) / 2, myO = (ED_CANVAS_H - phO) / 2;
+  const mxD = (ED_CANVAS_W - pwD) / 2, myD = (ED_CANVAS_H - phD) / 2;
+  if(la.width  != null) la.width  = la.width  * pwO / pwD;
+  if(la.height != null) la.height = la.height * phO / phD;
+  const cx = (mxO + (la.x||0.5) * pwO - mxD) / pwD;
+  const cy = (myO + (la.y||0.5) * phO - myD) / phD;
+  la.x = cx; la.y = cy;
+  if(la.type === 'line' && Array.isArray(la.points)){
+    const _cv = p => {
+      if(!p) return p;
+      const np = {...p, x: p.x * pwO / pwD, y: p.y * phO / phD};
+      if(p.cp1) np.cp1 = {x: p.cp1.x * pwO / pwD, y: p.cp1.y * phO / phD};
+      if(p.cp2) np.cp2 = {x: p.cp2.x * pwO / pwD, y: p.cp2.y * phO / phD};
+      return np;
+    };
+    la.points = la.points.map(_cv);
+    if(Array.isArray(la.subPaths)) la.subPaths = la.subPaths.map(sp => sp.map(_cv));
+    if(typeof la._updateBbox === 'function') la._updateBbox();
+  }
+}
+
+// Reúne, para una hoja, la lista de unidades independientes a convertir en
+// objetos de animación: cada capa de nivel superior es una unidad, salvo
+// fill/pencil/watercolor (van fusionadas con su dibujo/trazo propietario,
+// nunca solas — mismo criterio que "Guardar en biblioteca", ver más abajo el
+// bloque que construye fillLayerData/watercolorLayerData/pencilLayerData) y
+// 'group' (tipo obsoleto, se ignora en todo el proyecto). Las capas ocultas
+// por el usuario (l.hidden) tampoco se incluyen: no están "en el lienzo".
+function _gcpCpCollectPageUnits(page){
+  const layers = (page && page.layers) || [];
+  const consumed = new Set();
+  const units = [];
+  layers.forEach((la, i) => {
+    if(!la || consumed.has(i) || la.hidden) return;
+    if(la.type === 'fill' || la.type === 'pencil' || la.type === 'watercolor') return;
+    if(la.type === 'group') return; // obsoleto
+    if(la.type === 'draw' || la.type === 'stroke'){
+      const uid = la._uid || la._fillLayerId;
+      let fl = null, wc = null, pc = null;
+      if(uid){
+        layers.forEach((l2, j) => {
+          if(!l2 || j === i || consumed.has(j)) return;
+          if(l2.type === 'fill'       && l2._drawLayerId === uid){ fl = l2; consumed.add(j); }
+          if(l2.type === 'watercolor' && l2._drawLayerId === uid){ wc = l2; consumed.add(j); }
+          if(l2.type === 'pencil'     && l2._drawLayerId === uid){ pc = l2; consumed.add(j); }
+        });
+      }
+      units.push({ kind:'mergegroup', la, fl, wc, pc });
+      return;
+    }
+    units.push({ kind:'single', la });
+  });
+  return units;
+}
+
+// Espera a que una capa clonada (imagen o gif) tenga contenido visual real
+// antes de darla por lista para insertar. edDeserLayer ya dispara su
+// propio redraw cuando termina de cargar, pero aquí hace falta el propio
+// valor para construir los fotogramas, así que se espera explícitamente.
+// Timeout defensivo: un gifKey huérfano o una red lenta no debe colgar toda
+// la conversión — mejor un objeto sin contenido que un proceso que no
+// termina nunca.
+function _gcpCpWaitLayerReady(la, timeoutMs){
+  const limit = timeoutMs || 8000;
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    (function poll(){
+      if(!la) return resolve(la);
+      if(la.type === 'gif'){
+        if(la._ready || (Date.now() - t0) > limit) return resolve(la);
+      } else if(la.type === 'image'){
+        if((la.img && la.img.complete && la.img.naturalWidth > 0) || (Date.now() - t0) > limit) return resolve(la);
+      } else {
+        return resolve(la);
+      }
+      setTimeout(poll, 30);
+    })();
+  });
+}
+
+// Convierte una "unidad" (ver _gcpCpCollectPageUnits) en una capa lista para
+// insertar en el GCP, ya en la orientación destino. Sigue el mismo criterio
+// ya establecido por gcpInsertFromBib: texto/bocadillo/forma/línea no son
+// animables directamente y se aplanan a una imagen; dibujo/trazo vectorial
+// con sus capas de relleno/acuarela/lápiz vinculadas se fusionan en una sola
+// imagen; imagen/gif se clonan tal cual (con independencia de datos de
+// animación, igual que "Duplicar hoja").
+function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
+  if(unit.kind === 'single'){
+    const ld   = edSerLayer(unit.la);
+    const copy = edDeserLayer(ld, destOrientation);
+    if(!copy) return Promise.resolve(null);
+    if(copy.type === 'shape' || copy.type === 'line' || copy.type === 'text' || copy.type === 'bubble'){
+      _gcpCpAdaptOrientation(copy, srcOrientation, destOrientation);
+      return new Promise(resolve => _gcpVectorToImage(copy, imgLayer => resolve(imgLayer)));
+    }
+    if(copy.type === 'image'){
+      _edCloneLayerAnimData(copy);
+      _edCloneLayerAnimStorage(copy);
+    }
+    return _gcpCpWaitLayerReady(copy).then(ready => {
+      _gcpCpAdaptOrientation(ready, srcOrientation, destOrientation);
+      return ready;
+    });
+  }
+  // mergegroup: dibujo/trazo + relleno/acuarela/lápiz vinculados → una sola
+  // imagen fusionada. Orden fill → watercolor → pencil → dibujo/trazo
+  // (mismo invariante de apilado que el resto del proyecto).
+  const items = [];
+  const _push = (l) => {
+    if(!l) return;
+    const ld   = edSerLayer(l);
+    const copy = edDeserLayer(ld, destOrientation);
+    if(!copy) return;
+    _gcpCpAdaptOrientation(copy, srcOrientation, destOrientation);
+    items.push({ ld, la: copy });
+  };
+  _push(unit.fl); _push(unit.wc); _push(unit.pc); _push(unit.la);
+  if(!items.length) return Promise.resolve(null);
+  return new Promise(resolve => _gcpMergeLayersToImage(items, imgLayer => resolve(imgLayer)));
+}
+
+// Construye la animación a partir del rango de hojas [fromIdx, toIdx]
+// (0-based, ambos incluidos) y abre el editor de animaciones ya con ella
+// dentro. Procesa las hojas EN SECUENCIA (no todas en paralelo) para no
+// disparar demasiadas operaciones de canvas a la vez en un móvil Android
+// (plataforma principal de la app) — dentro de cada hoja, sus objetos sí se
+// procesan en paralelo.
+async function _gcpCpBuildFromRange(fromIdx, toIdx){
+  try {
+    const destOrientation = edOrientation; // fija durante toda la construcción — no se navega ninguna hoja
+    const total = (toIdx - fromIdx) + 1;
+    edToast(I18n.t('gcp_processing'));
+    const perFrameLayers = []; // perFrameLayers[fi] = [capa, capa, ...]
+    for(let fi = 0; fi < total; fi++){
+      const pageIdx = fromIdx + fi;
+      const page = edPages[pageIdx];
+      if(!page){ perFrameLayers.push([]); continue; }
+      const srcOrientation = page.orientation || destOrientation;
+      // La hoja activa vive en edLayers (puede tener cambios aún no volcados
+      // a edPages[edCurrentPage].layers) — usar la copia en vivo si toca.
+      const liveLayers = (pageIdx === edCurrentPage) ? edLayers : page.layers;
+      const units = _gcpCpCollectPageUnits({ layers: liveLayers });
+      const ready = (await Promise.all(units.map(u => _gcpCpUnitToLayer(u, srcOrientation, destOrientation)))).filter(Boolean);
+      perFrameLayers.push(ready);
+    }
+    const anyObjects = perFrameLayers.some(arr => arr.length);
+    if(!anyObjects){
+      edToast(I18n.t('ed_animRangeNoObjects'));
+      return;
+    }
+    gcpOpen();
+    perFrameLayers.forEach((layersInFrame, fi) => {
+      layersInFrame.forEach(la => {
+        la._frames = new Array(total).fill(null);
+        la._frames[fi] = { x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1 };
+        la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
+        _gcpPushLayer(la);
+      });
+    });
+    window._gcpGlobalFrameIdx = 0;
+    _gcpApplyFrame(0);
+    _gcpUpdateFrameNav();
+    const _fb = document.getElementById('gcpFramesBar');
+    if(_fb && _fb.style.display === 'flex') _gcpUpdateFramesBar();
+    _gcpRedraw();
+    _gcpPushHistory();
+    window._gcpDirty = true; // hay contenido real que se perdería si se cierra sin guardar
+  } catch(e) {
+    console.warn('_gcpCpBuildFromRange:', e);
+    edToast(I18n.t('ed_animRangeNoObjects'));
   }
 }
 
