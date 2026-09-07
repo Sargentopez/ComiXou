@@ -463,7 +463,7 @@ body.ed-scale-tablet {
   align-items: stretch;
   gap: 0;
   padding: calc(2px * var(--edb-scale, 1));
-  background: rgba(20,20,20,.40);
+  background: rgba(80,80,80,.92);
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
@@ -525,7 +525,7 @@ body.ed-scale-tablet {
   align-items: stretch;
   gap: 0;
   padding: calc(2px * var(--edb-scale, 1));
-  background: rgba(20,20,20,.40);
+  background: rgba(80,80,80,.92);
   border: 1px solid rgba(255,255,255,.12);
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0,0,0,.25);
@@ -797,6 +797,19 @@ body.ed-scale-tablet {
   color: var(--black);
   line-height: 1;
   font-weight: 900;
+}
+/* Paneles de dibujo a mano (draw) y vectorial (shape/line): el botón ▲ crece
+   para ocupar el espacio horizontal libre de su fila — el resto de botones
+   de esa fila son flex-shrink:0 (tamaño fijo) y el texto de info junto a él
+   pasa a tamaño natural (ver op-draw-info/op-shape-info/op-line-status), así
+   que este crecimiento nunca los desplaza ni los encoge. No se toca el
+   panel de propiedades (data-mode="props"): ese botón tiene su propio
+   estilo en línea, ajeno a esta petición. */
+#edOptionsPanel[data-mode="draw"]  #op-panel-collapse,
+#edOptionsPanel[data-mode="shape"] #op-panel-collapse,
+#edOptionsPanel[data-mode="line"]  #op-panel-collapse {
+  flex-grow: 1;
+  text-align: center;
 }
 
 /* Filas de opciones */
@@ -1481,9 +1494,18 @@ body.ed-scale-tablet .ed-modal-sheet {
    a la vez puede confundir sobre a cuál de los dos afecta cada uno (petición
    de Alberto). No se usa la clase general "draw-active" porque esa también
    se activa para paneles de propiedades sin deshacer propio (texto, imagen…),
-   donde el deshacer global SÍ debe seguir visible. */
+   donde el deshacer global SÍ debe seguir visible.
+   Mismo criterio, mismo motivo — petición de Alberto: con el panel COMPLETO
+   (sin colapsar a barra flotante) abierto en modo dibujo a mano/formas/
+   líneas también hay deshacer/rehacer propio (op-draw-undo/redo,
+   op-shape-undo/redo, op-line-undo/redo), así que se oculta igual. Se
+   acota por data-mode, no por .open a secas, para no afectar al panel de
+   propiedades (data-mode="props"), que no tiene deshacer propio. */
 #editorShell:has(> #edDrawBar.visible) #edQuickTools,
-#editorShell:has(> #edShapeBar.visible) #edQuickTools {
+#editorShell:has(> #edShapeBar.visible) #edQuickTools,
+#editorShell:has(> #edOptionsPanel.open[data-mode="draw"])  #edQuickTools,
+#editorShell:has(> #edOptionsPanel.open[data-mode="shape"]) #edQuickTools,
+#editorShell:has(> #edOptionsPanel.open[data-mode="line"])  #edQuickTools {
   display: none;
 }
 

@@ -18404,7 +18404,7 @@ function _edActivateShapeTool(isNew, isCreating) {
     <button id="op-shape-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_REDO_SVG}</button>
     <button id="op-shape-help" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
 
-    <span id="op-shape-info" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':I18n.t('op_noObject')}</span>
+    <span id="op-shape-info" style="flex-shrink:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${_sel?_edShapeType+' · '+lw+'px · '+opacity+'%':I18n.t('op_noObject')}</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
@@ -18775,7 +18775,7 @@ function _edActivateLineTool(isNew, isCreating) {
     <button id="op-line-redo" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer" disabled>${ICON_REDO_SVG}</button>
     <button id="op-line-help" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
 
-    <span id="op-line-status" style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
+    <span id="op-line-status" style="flex-shrink:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${lw}px · ${opacity}%</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
@@ -20080,7 +20080,7 @@ function edRenderOptionsPanel(mode){
     <button id="op-draw-help"
       style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.72rem,2.2vw,.82rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)" title="${I18n.t('ed_helpTitle')}">?</button>
     <span id="op-draw-info"
-      style="flex:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
+      style="flex-shrink:1;text-align:right;font-size:clamp(.65rem,1.8vw,.75rem);font-weight:700;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px">${isFill?'Color '+edDrawColor:(isEr?edEraserSize:edDrawSize)+'px · '+edDrawOpacity+'%'}</span>
     <button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}">▲</button>
   </div>
 </div>`;
@@ -22569,8 +22569,6 @@ function edInitDrawBar() {
     _sy = e.clientY - shellRect.top;
     _sl = parseInt(bar.style.left) || _edbX;
     _st = parseInt(bar.style.top)  || _edbY;
-    // Feedback visual: fondo más claro indica modo arrastre
-    bar.style.background = 'rgba(80,80,80,0.92)';
     bar.style.willChange = 'transform';
     const cur = $('edBrushCursor'); if (cur) cur.style.display = 'none';
     if (_edbPid !== null) { try { bar.setPointerCapture(_edbPid); } catch(_){} }
@@ -22664,7 +22662,6 @@ function edInitDrawBar() {
   function _edbEndDrag() {
     if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
     _drag = false;
-    bar.style.background = '';
     bar.style.willChange = '';
     // Pequeño delay para que el click bloqueado no se propague tras soltar
     setTimeout(() => { _edbDragLocked = false; }, 50);
