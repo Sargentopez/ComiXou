@@ -39039,7 +39039,14 @@ function _gcpRenderLayersDropdown(dd) {
 // Las capas con dataUrl (stroke, fill, pencil, watercolor, draw) se cargan en paralelo
 // para resolver el problema de carga asíncrona de fromDataUrl.
 // Las capas vectoriales (shape, line, text, bubble, sin dataUrl) se dibujan con la.draw().
-function _gcpMergeLayersToImage(items, cb) {
+// _gcpMergeLayersToImage — gcpInsertFromBib usa el tope de tamaño (recorta a
+// máx. 90% de la página) porque ahí un grupo de la Biblioteca aterriza en una
+// composición nueva y conviene que quepa con margen. `opts.preserveSize`
+// (usado por _gcpCpUnitToLayer, la conversión "Hojas → animación") desactiva
+// ese tope: ahí el objetivo es reproducir el tamaño EXACTO que ya tenía en su
+// hoja de origen, nunca reducirlo — cambiar esta función en vez de escribir
+// una copia sería reinventar la rueda, así que se parametriza en su lugar.
+function _gcpMergeLayersToImage(items, cb, opts) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const extra = Math.round(Math.max(pw, ph) * 0.5);
@@ -39130,7 +39137,7 @@ function _gcpMergeLayersToImage(items, cb) {
     const _nx = (_wsCx - mx) / pw;
     const _ny = (_wsCy - my) / ph;
     const normW = cw / pw, normH = ch / ph;
-    const scale = Math.max(normW / 0.9, normH / 0.9, 1);
+    const scale = opts?.preserveSize ? 1 : Math.max(normW / 0.9, normH / 0.9, 1);
 
     const finalImg = new Image();
     finalImg.onload = () => {
@@ -39620,6 +39627,34 @@ function _gcpCpWaitLayerReady(la, timeoutMs){
 // con sus capas de relleno/acuarela/lápiz vinculadas se fusionan en una sola
 // imagen; imagen/gif se clonan tal cual (con independencia de datos de
 // animación, igual que "Duplicar hoja").
+// Comprueba si una capa (ya adaptada a destOrientation) cabe entera dentro
+// del lienzo temporal que usan _gcpVectorToImage/_gcpMergeLayersToImage para
+// "fotografiar" un objeto (mismas fórmulas de tamaño que esas dos funciones,
+// duplicadas aquí a propósito en vez de tocarlas — ver cabecera de
+// _gcpMergeLayersToImage). Un objeto que no cabe se recortaría en silencio
+// al capturarlo, perdiendo parte de su contenido — petición explícita de
+// Alberto: mejor excluirlo de la conversión que dejar que eso pase sin avisar.
+// 'draw' se ignora siempre: cubre exactamente mx,my,pw,ph, nunca desborda.
+function _gcpCpFitsWorkspace(boxes, destOrientation){
+  const pw = destOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const ph = destOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mx = (ED_CANVAS_W - pw) / 2, my = (ED_CANVAS_H - ph) / 2;
+  const extra = Math.round(Math.max(pw, ph) * 0.5);
+  const wsW = pw + mx*2 + extra*2, wsH = ph + my*2 + extra*2;
+  const offX = extra, offY = extra;
+  return boxes.every(b => {
+    if(!b || b.type === 'draw') return true;
+    const w = (b.width  ?? 1) * pw;
+    const h = (b.height ?? 1) * ph;
+    const rot = (b.rotation || 0) * Math.PI / 180;
+    const halfW = (Math.abs(w * Math.cos(rot)) + Math.abs(h * Math.sin(rot))) / 2;
+    const halfH = (Math.abs(w * Math.sin(rot)) + Math.abs(h * Math.cos(rot))) / 2;
+    const cx = mx + (b.x ?? 0.5) * pw + offX;
+    const cy = my + (b.y ?? 0.5) * ph + offY;
+    return cx - halfW >= 0 && cx + halfW <= wsW && cy - halfH >= 0 && cy + halfH <= wsH;
+  });
+}
+
 function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
   if(unit.kind === 'single'){
     const ld   = edSerLayer(unit.la);
@@ -39627,6 +39662,11 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
     if(!copy) return Promise.resolve(null);
     if(copy.type === 'shape' || copy.type === 'line' || copy.type === 'text' || copy.type === 'bubble'){
       _gcpCpAdaptOrientation(copy, srcOrientation, destOrientation);
+      if(!_gcpCpFitsWorkspace([copy], destOrientation)){
+        console.warn('_gcpCpUnitToLayer: objeto demasiado grande/lejano, excluido de la conversión', copy);
+        window._gcpCpExcludedCount = (window._gcpCpExcludedCount || 0) + 1;
+        return Promise.resolve(null);
+      }
       return new Promise(resolve => _gcpVectorToImage(copy, imgLayer => resolve(imgLayer)));
     }
     if(copy.type === 'image'){
@@ -39652,7 +39692,12 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
   };
   _push(unit.fl); _push(unit.wc); _push(unit.pc); _push(unit.la);
   if(!items.length) return Promise.resolve(null);
-  return new Promise(resolve => _gcpMergeLayersToImage(items, imgLayer => resolve(imgLayer)));
+  if(!_gcpCpFitsWorkspace(items.map(it => it.la), destOrientation)){
+    console.warn('_gcpCpUnitToLayer: grupo dibujo+relleno demasiado grande/lejano, excluido de la conversión', items);
+    window._gcpCpExcludedCount = (window._gcpCpExcludedCount || 0) + 1;
+    return Promise.resolve(null);
+  }
+  return new Promise(resolve => _gcpMergeLayersToImage(items, imgLayer => resolve(imgLayer), { preserveSize: true }));
 }
 
 // Construye la animación a partir del rango de hojas [fromIdx, toIdx]
@@ -39663,6 +39708,7 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
 // procesan en paralelo.
 async function _gcpCpBuildFromRange(fromIdx, toIdx){
   try {
+    window._gcpCpExcludedCount = 0;
     const destOrientation = edOrientation; // fija durante toda la construcción — no se navega ninguna hoja
     const total = (toIdx - fromIdx) + 1;
     edToast(I18n.t('gcp_processing'));
@@ -39681,7 +39727,7 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
     }
     const anyObjects = perFrameLayers.some(arr => arr.length);
     if(!anyObjects){
-      edToast(I18n.t('ed_animRangeNoObjects'));
+      edToast(window._gcpCpExcludedCount > 0 ? I18n.t('ed_animRangeExcluded', { count: window._gcpCpExcludedCount }) : I18n.t('ed_animRangeNoObjects'));
       return;
     }
     gcpOpen();
@@ -39701,6 +39747,13 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
     _gcpRedraw();
     _gcpPushHistory();
     window._gcpDirty = true; // hay contenido real que se perdería si se cierra sin guardar
+    // Aviso no bloqueante: algún objeto no cabía en el lienzo de trabajo usado
+    // para "fotografiarlo" (demasiado grande o demasiado lejos de la hoja) y
+    // se excluyó en vez de dejar que saliera recortado/reducido en silencio
+    // — petición explícita de Alberto (ver _gcpCpFitsWorkspace).
+    if(window._gcpCpExcludedCount > 0){
+      edToast(I18n.t('ed_animRangeExcluded', { count: window._gcpCpExcludedCount }));
+    }
   } catch(e) {
     console.warn('_gcpCpBuildFromRange:', e);
     edToast(I18n.t('ed_animRangeNoObjects'));
