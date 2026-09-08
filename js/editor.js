@@ -8315,13 +8315,29 @@ function edDuplicateSelected(){
    permisos) para que pegar funcione igual aunque el navegador deniegue el
    acceso al portapapeles del sistema.
 
-   Formato del payload (JSON en texto plano): { sig: firma propia, items:
-   [...capas serializadas con edSerLayer, en el mismo orden fill→watercolor→
-   pencil→stroke por objeto y en el orden z original entre objetos] } — la
-   firma permite distinguirlo de cualquier otro texto/imagen que el usuario
-   tenga copiado desde fuera de la app. */
+   Formato del payload (JSON en texto plano): { sig: firma propia,
+   orientation: orientación de la hoja de origen en el momento de copiar,
+   items: [...capas serializadas con edSerLayer, en el mismo orden
+   fill→watercolor→pencil→stroke por objeto y en el orden z original entre
+   objetos] } — la firma permite distinguirlo de cualquier otro texto/imagen
+   que el usuario tenga copiado desde fuera de la app.
+
+   Orientación y posición al pegar (petición de Alberto): si la orientación
+   de la hoja destino difiere de "orientation", cada capa se readapta con
+   _edClipAdaptOrientation ANTES de insertarse — mismo cálculo (centrado
+   respecto al lienzo de trabajo fijo ED_CANVAS_W/H, tamaño físico en px
+   preservado) que ya usa la inserción desde biblioteca
+   (_adaptLayerOrientation) y el portapapeles de conversión a animación
+   (_gcpCpAdaptOrientation) — el objeto pegado nunca se deforma al cambiar
+   de hoja apaisada a vertical o viceversa. Si "orientation" falta
+   (portapapeles de una copia anterior a este cambio) se asume igual a la
+   actual, sin adaptar nada — mismo criterio que la biblioteca
+   (entry.orientation || edOrientation). Resuelta la orientación, la
+   posición: pegado desde el menú contextual → centrado en el punto del
+   clic/toque (como ya hacía); cualquier otra vía (botón, Ctrl+V) → en la
+   posición EXACTA que tenía al copiarse respecto al lienzo, sin
+   desplazamiento ni cascada — ver _edApplyClipboardEnvelope. */
 const _ED_CLIPBOARD_SIGNATURE = 'comxow_clip_v1';
-let _edClipboardPasteCount = 0; // cascada de desplazamiento en pegados repetidos del mismo copiado
 
 // Reúne y serializa la selección actual (objeto único, grupo completo o
 // multiselección de varios sueltos/grupos) en el formato de payload de
@@ -8370,7 +8386,7 @@ function _edBuildClipboardPayload(){
   });
   if(!items.length) return null;
 
-  return { json: JSON.stringify({ sig:_ED_CLIPBOARD_SIGNATURE, items }), count: idxs.length, isGroup };
+  return { json: JSON.stringify({ sig:_ED_CLIPBOARD_SIGNATURE, orientation: edOrientation, items }), count: idxs.length, isGroup };
 }
 
 // Guarda el fallback interno y muestra el toast de confirmación — llamado
@@ -8378,7 +8394,6 @@ function _edBuildClipboardPayload(){
 // desde CUALQUIERA de las dos vías (evento nativo 'copy' o botón).
 function _edFinishClipboardCopy(payload){
   window._edClipboardInternal = payload.json;
-  _edClipboardPasteCount = 0; // nueva copia: reinicia la cascada de pegados
   edToast(I18n.t(payload.isGroup ? 'ed_groupCopied'
     : (payload.count === 1 ? 'ed_objectCopied' : 'ed_objectsCopied'), {n: payload.count}));
 }
@@ -8411,6 +8426,49 @@ async function edCopySelectionToClipboard(){
   return true;
 }
 
+// Adapta x/y/width/height (y points/subPaths si es una línea) de una capa YA
+// deserializada del portapapeles, desde la orientación de su hoja de origen
+// (srcOrientation, guardada al copiar) a la orientación de la hoja destino
+// (destOrientation, la actual al pegar) — sin esto, un objeto copiado en una
+// hoja vertical y pegado en una horizontal (o viceversa) sale deformado,
+// igual que ya le pasaba a la inserción desde biblioteca antes de arreglarse
+// (ver _adaptLayerOrientation, closure de la biblioteca, y
+// _gcpCpAdaptOrientation, portapapeles de conversión a animación). Mismo
+// cálculo exacto que esas dos: centrado respecto al lienzo de trabajo fijo
+// (ED_CANVAS_W/H) para que ambas orientaciones compartan el mismo centro, y
+// tamaño físico en px preservado (nunca se deforma, solo cambia su fracción
+// respecto a la nueva página). Reimplementada aquí en vez de reutilizar
+// alguna de esas dos — una está ligada a variables locales de otra función,
+// la otra vive en el ámbito del editor GCP — mismo criterio ya establecido
+// en este proyecto de no forzar una indirección compartida para un cálculo
+// aislado de pocas líneas (ver comentario de _gcpCpAdaptOrientation).
+function _edClipAdaptOrientation(la, srcOrientation, destOrientation){
+  if(!la || srcOrientation === destOrientation) return;
+  if(la.type === 'draw') return; // cubre todo el workspace fijo, sin x/y/width/height significativos
+  const pwO = srcOrientation  === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const phO = srcOrientation  === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const pwD = destOrientation === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+  const phD = destOrientation === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const mxO = (ED_CANVAS_W - pwO) / 2, myO = (ED_CANVAS_H - phO) / 2;
+  const mxD = (ED_CANVAS_W - pwD) / 2, myD = (ED_CANVAS_H - phD) / 2;
+  if(la.width  != null) la.width  = la.width  * pwO / pwD;
+  if(la.height != null) la.height = la.height * phO / phD;
+  la.x = (mxO + (la.x != null ? la.x : 0.5) * pwO - mxD) / pwD;
+  la.y = (myO + (la.y != null ? la.y : 0.5) * phO - myD) / phD;
+  if(la.type === 'line' && Array.isArray(la.points)){
+    const _cv = p => {
+      if(!p) return p;
+      const np = {...p, x: p.x * pwO / pwD, y: p.y * phO / phD};
+      if(p.cp1) np.cp1 = {x: p.cp1.x * pwO / pwD, y: p.cp1.y * phO / phD};
+      if(p.cp2) np.cp2 = {x: p.cp2.x * pwO / pwD, y: p.cp2.y * phO / phD};
+      return np;
+    };
+    la.points = la.points.map(_cv);
+    if(Array.isArray(la.subPaths)) la.subPaths = la.subPaths.map(sp => sp.map(_cv));
+    if(typeof la._updateBbox === 'function') la._updateBbox();
+  }
+}
+
 // Reconstruye en el lienzo un payload de portapapeles propio de Comxow —
 // SIEMPRE como objeto(s)/grupo COMPLETAMENTE NUEVOS e independientes del
 // original (mismo mecanismo que edDuplicateSelected/_edDuplicateGroup:
@@ -8437,28 +8495,11 @@ function _edApplyClipboardEnvelope(envelope, targetPos){
   const groupIdMap = new Map();
   const newGroupIdFor = old => { if(!groupIdMap.has(old)) groupIdMap.set(old, _edNewGroupId()); return groupIdMap.get(old); };
 
-  // Dos modos de posicionado:
-  // - targetPos (menú contextual → "Pegar" en vacío, clic derecho): centra
-  //   el conjunto pegado exactamente en ese punto — mismo estándar que
-  //   Figma/Illustrator al pegar con el menú contextual, en vez del pequeño
-  //   desplazamiento en cascada. Se calcula un ÚNICO desplazamiento (shift)
-  //   a partir del centro ORIGINAL de los objetos de nivel superior, y se
-  //   aplica igual a todos — así el conjunto llega entero, sin deformarse.
-  // - sin targetPos (botón "Pegar"/Ctrl+V): mismo criterio de siempre, cada
-  //   pegado repetido del mismo copiado se desplaza un poco más (cascada).
-  let shiftX = 0, shiftY = 0;
-  if(targetPos){
-    const _topRaw = envelope.items.filter(it => it && it.type!=='fill' && it.type!=='pencil' && it.type!=='watercolor');
-    if(_topRaw.length){
-      const _avgX = _topRaw.reduce((s,it)=>s+(it.x||0),0) / _topRaw.length;
-      const _avgY = _topRaw.reduce((s,it)=>s+(it.y||0),0) / _topRaw.length;
-      shiftX = targetPos.x - _avgX;
-      shiftY = targetPos.y - _avgY;
-    }
-  } else {
-    _edClipboardPasteCount++;
-    shiftX = shiftY = 0.02 * _edClipboardPasteCount;
-  }
+  // Orientación de la hoja de origen (guardada al copiar) — si falta
+  // (portapapeles de una copia anterior a este cambio) se asume igual a la
+  // actual, sin adaptar nada — mismo criterio que la biblioteca
+  // (entry.orientation || edOrientation).
+  const srcOrientation = envelope.orientation || edOrientation;
 
   const newLayers = [];
   const topLevel = []; // sin fill/pencil/watercolor — para seleccionar al final
@@ -8469,11 +8510,10 @@ function _edApplyClipboardEnvelope(envelope, targetPos){
     _edCloneLayerAnimData(copy);
     _edCloneLayerAnimStorage(copy);
     delete copy._fusionId;
-
-    copy.x = (copy.x||0) + shiftX;
-    copy.y = (copy.y||0) + shiftY;
-    if(copy._gcpRefX != null) copy._gcpRefX += shiftX;
-    if(copy._gcpRefY != null) copy._gcpRefY += shiftY;
+    // Si la hoja destino tiene otra orientación, recalcular x/y/width/height
+    // (y puntos si es línea) ANTES de nada más — mismo mecanismo que ya usa
+    // la inserción desde biblioteca, para que el objeto no se deforme.
+    _edClipAdaptOrientation(copy, srcOrientation, edOrientation);
 
     if(copy.groupId) copy.groupId = newGroupIdFor(copy.groupId);
 
@@ -8498,6 +8538,38 @@ function _edApplyClipboardEnvelope(envelope, targetPos){
     newLayers.push(copy);
   });
   if(!newLayers.length) return false;
+
+  // Posicionado, ya con la orientación resuelta arriba (petición de
+  // Alberto):
+  // - targetPos (menú contextual → "Pegar" en vacío, clic derecho/segundo
+  //   toque): centra el conjunto pegado exactamente en ese punto — mismo
+  //   estándar que Figma/Illustrator al pegar con el menú contextual. Se
+  //   calcula un ÚNICO desplazamiento (shift) a partir del centro YA
+  //   ADAPTADO de los objetos de nivel superior, y se aplica igual a todos
+  //   — así el conjunto llega entero, sin deformarse.
+  // - sin targetPos (botón "Pegar" del menú Insertar, Ctrl+V): pegar
+  //   EXACTAMENTE en la misma posición que tenía al copiarse, respecto al
+  //   lienzo — sin desplazamiento. Si hubo conversión de orientación, esa
+  //   "misma posición" ya es la recalculada arriba por
+  //   _edClipAdaptOrientation, así que tampoco hace falta desplazamiento
+  //   adicional. Ya no hay cascada en pegados repetidos del mismo copiado
+  //   — decisión explícita de Alberto: pegar el mismo objeto en varias
+  //   hojas debe aterrizar siempre en el mismo sitio.
+  let shiftX = 0, shiftY = 0;
+  if(targetPos && topLevel.length){
+    const _avgX = topLevel.reduce((s,l)=>s+(l.x||0),0) / topLevel.length;
+    const _avgY = topLevel.reduce((s,l)=>s+(l.y||0),0) / topLevel.length;
+    shiftX = targetPos.x - _avgX;
+    shiftY = targetPos.y - _avgY;
+  }
+  if(shiftX || shiftY){
+    newLayers.forEach(copy => {
+      copy.x = (copy.x||0) + shiftX;
+      copy.y = (copy.y||0) + shiftY;
+      if(copy._gcpRefX != null) copy._gcpRefX += shiftX;
+      if(copy._gcpRefY != null) copy._gcpRefY += shiftY;
+    });
+  }
 
   // Insertar al final — mismo criterio que cualquier inserción nueva del
   // menú Insertar (edAddBubble/edAddText/edAddImage hacen edLayers.push).
@@ -8580,8 +8652,10 @@ async function edPasteFromClipboardButton(){
    necesidad de abrir antes ese panel a mano). Clic derecho en vacío → Pegar,
    solo si hay algo en el portapapeles propio de Comxow, y esta vez el
    pegado se centra exactamente en el punto del clic (estándar de Figma/
-   Illustrator/etc. al pegar desde el menú contextual), no en el pequeño
-   desplazamiento en cascada que usan el botón del menú Insertar y Ctrl+V.
+   Illustrator/etc. al pegar desde el menú contextual) — a diferencia del
+   resto de vías de pegado (botón del menú Insertar, Ctrl+V), que pegan
+   siempre en la posición EXACTA de origen, sin desplazamiento (ver
+   _edApplyClipboardEnvelope).
 
    "Editar" no tiene una única acción universal — cada tipo de objeto usa un
    botón distinto en su panel de propiedades (ver edRenderOptionsPanel,
