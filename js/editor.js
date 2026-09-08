@@ -5416,8 +5416,13 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Reset transform → limpiar todo el viewport
     ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
-    ctx.fillStyle='#c8d4e8';
+    // Fondo workspace (toda la pantalla) — casi blanco (petición de Alberto).
+    // Mismo tono que antes (#c8d4e8, azul-gris) aclarado ~85% hacia blanco —
+    // conserva la familia de color (coherente con el azul #1a8cff del borde
+    // del lienzo y la cuadrícula) en vez de saltar a un gris neutro genérico.
+    // La hoja (blanco puro, #ffffff) sigue distinguiéndose por su sombra y su
+    // borde azul de 1px (ver más abajo), no por el contraste de color plano.
+    ctx.fillStyle='#f7f9fc';
     ctx.fillRect(0,0,cw,ch);
   } else {
     // Modo 'after': se pinta encima de contenido ya existente — solo restablecer transform.
@@ -27179,11 +27184,39 @@ function _asDb() {
 }
 
 async function _edAutosaveWrite() {
-  // Posponer si hay gesto activo: el JSON.stringify de todas las capas bloquearía el hilo
+  // Posponer si hay gesto activo: el JSON.stringify de todas las capas bloquearía el hilo.
+  //
+  // LÍMITE DE SEGURIDAD (Alberto: "asegúrate de que en TODOS los casos se
+  // esté guardando... remueve cualquier obstáculo"): si por cualquier error
+  // en otro punto del código una bandera de gesto (edPainting/edIsDragging/
+  // etc., ver _edIsGestureActive) se queda encallada en `true` sin que nadie
+  // vuelva a ponerla en `false` — p.ej. una excepción a mitad de un gesto que
+  // salta el pointerup que la limpia — este pospuesto se repetiría cada
+  // 1500ms para siempre, dejando el autoguardado completamente mudo el resto
+  // de la sesión, en silencio. Un gesto real no dura más de unos pocos
+  // segundos: tras 10 pospuestos consecutivos (~15s) se fuerza el intento
+  // igualmente pese al gesto "activo" — mejor un posible parpadeo puntual
+  // que perder la protección por el resto de la sesión. _forceDespiteGesture
+  // silencia TAMBIÉN la segunda comprobación de más abajo (dentro del bucle
+  // de capas) durante ESTE intento — si no, el umbral de aquí se cumple pero
+  // el bucle vuelve a posponer igualmente sin que el umbral se entere, y el
+  // guardado nunca llega a completarse de verdad.
+  let _forceDespiteGesture = false;
   if (_edIsGestureActive()) {
-    clearTimeout(window._edAutosavePushTimer);
-    window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
-    return;
+    window._edAutosaveGestureStall = (window._edAutosaveGestureStall || 0) + 1;
+    if (window._edAutosaveGestureStall < 10) {
+      clearTimeout(window._edAutosavePushTimer);
+      window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
+      return;
+    }
+    // Umbral superado: forzar este intento y reiniciar la cuenta — si el
+    // gesto sigue "activo" después, hará falta otra tanda de 10 pospuestos
+    // (~15s) antes de volver a forzar. Evita forzar en cada llamada sucesiva
+    // si de verdad hay un gesto real e inusualmente largo en curso.
+    _forceDespiteGesture = true;
+    window._edAutosaveGestureStall = 0;
+  } else {
+    window._edAutosaveGestureStall = 0;
   }
   if (!edProjectId || !edPages || !edPages.length) return;
   // No escribir si las páginas están vacías (edLoadProject aún no completó)
@@ -27193,6 +27226,7 @@ async function _edAutosaveWrite() {
   // _edSavedHistoryIdx, que no detectaba cambios hechos en una hoja distinta
   // a la del último guardado).
   if (!_edHasUnsavedLocalChanges()) return;
+  let snapshot = null;
   try {
     // Incluir biblioteca en el snapshot
     let bibData = null;
@@ -27238,7 +27272,7 @@ async function _edAutosaveWrite() {
         // entregue los pointermove pendientes, y la re-comprobación aborta el
         // intento en marcha (mejor reintentar en 1500ms que bloquear el drag).
         await new Promise(r => setTimeout(r, 0));
-        if (_edIsGestureActive()) {
+        if (_edIsGestureActive() && !_forceDespiteGesture) {
           clearTimeout(window._edAutosavePushTimer);
           window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
           return;
@@ -27254,7 +27288,7 @@ async function _edAutosaveWrite() {
       }
       _asPages.push({ orientation: p.orientation, dataUrl: p.dataUrl || null, layers });
     }
-    const snapshot = {
+    snapshot = {
       ts: Date.now(),
       pages: _asPages,
       bib: bibData || null
@@ -27262,11 +27296,49 @@ async function _edAutosaveWrite() {
     // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
     window._edLastAutosaveBytes = _asEstBytes;
     window._edLastAutosaveTs = Date.now();
-    const db    = await _asDb();
-    const tx    = db.transaction(_AS_STORE, 'readwrite');
-    tx.objectStore(_AS_STORE).put(snapshot, _edAutosaveKey(edProjectId));
-    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
-  } catch(_) {}
+  } catch(_) {
+    // Fallo construyendo el snapshot (p.ej. _bibLoad corrupto) — nada que
+    // escribir todavía; el siguiente disparo (30s o el próximo edPushHistory)
+    // lo reintentará desde cero. Los fallos de UNA capa concreta ya se
+    // manejan arriba sin abortar el resto (catch por capa).
+    return;
+  }
+  if (!snapshot) return;
+  // Escritura en IndexedDB — mismo patrón ya establecido en el proyecto para
+  // _bibSave (guardado de biblioteca): reintenta UNA vez (con conexión
+  // fresca, por si la cacheada quedó en mal estado) antes de darla por
+  // fallida, y si sigue fallando, avisa — nunca en silencio. Sin este aviso,
+  // un fallo persistente (cuota llena, IDB bloqueada por otra pestaña, etc.)
+  // dejaba el autoguardado muerto el resto de la sesión sin que nadie se
+  // enterara hasta perder cambios de verdad.
+  const _asKeyFinal = _edAutosaveKey(edProjectId);
+  const _doWrite = async () => {
+    const db = await _asDb();
+    const tx = db.transaction(_AS_STORE, 'readwrite');
+    tx.objectStore(_AS_STORE).put(snapshot, _asKeyFinal);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  };
+  try {
+    await _doWrite();
+    window._edAutosaveFailWarned = false; // se recuperó — permitir avisar de nuevo si vuelve a fallar más adelante
+  } catch(_e1) {
+    _asDbSingleton = null; // descartar conexión cacheada: puede ser la causa del fallo
+    await new Promise(r => setTimeout(r, 600));
+    try {
+      await _doWrite();
+      window._edAutosaveFailWarned = false;
+    } catch(_e2) {
+      // Fallo persistente. No avisar si es modo incógnito conocido (ver
+      // window._mcIdbAvail, my-works.js) — esa limitación ya se comunica
+      // aparte vía _edShowIncognitoWarning y es esperada, no un fallo real.
+      if (!window._edAutosaveFailWarned && window._mcIdbAvail !== false) {
+        window._edAutosaveFailWarned = true;
+        if (typeof _edShowStorageWarning === 'function') {
+          _edShowStorageWarning(I18n.t('ed_autosaveFailWarning') + _cxStorageHelpText());
+        }
+      }
+    }
+  }
 }
 
 async function _edAutosaveRead(id) {

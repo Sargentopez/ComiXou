@@ -1119,11 +1119,28 @@ function _mcRenderList() {
             title:   work.title    || comicToEdit.title,
             genre:   work.genre    || comicToEdit.genre,
             navMode: work.nav_mode || comicToEdit.navMode,
-            // Actualizar localSavedAt al momento de la descarga para que cualquier
-            // autosave anterior quede marcado como obsoleto y no aparezca como
-            // "cambios sin guardar" al abrir el editor. Sin esto, el autosave
-            // creado durante la sesión anterior podría tener ts > localSavedAt heredado.
-            localSavedAt: new Date().toISOString(),
+            // Alinear localSavedAt con el instante REAL de guardado del
+            // contenido recién descargado (work.updated_at) — NO con el
+            // instante de la propia descarga.
+            //
+            // BUG REAL CORREGIDO (reportado por Alberto: la app se bloqueó,
+            // cerró la pestaña confiando en el autoguardado, y al reabrir la
+            // obra se cargó sin preguntar y sin ninguno de los cambios
+            // recientes). Antes se usaba new Date().toISOString() aquí — un
+            // timestamp que no describe el CONTENIDO, solo la ACCIÓN de
+            // descargar. edLoadProject descarta el autoguardado sin
+            // preguntar cuando localSavedAt >= autosave.ts (ver su
+            // comentario) — con el timestamp de descarga, CUALQUIER
+            // autoguardado real (de la sesión que se acaba de perder, con
+            // cambios genuinos nunca subidos a la nube) queda marcado como
+            // "más viejo que el disco" solo porque la descarga en sí
+            // ocurrió después, aunque su contenido sea mucho más reciente
+            // que lo que se acaba de descargar. work.updated_at es el
+            // timestamp real del contenido — con eso, un autoguardado
+            // genuinamente más nuevo SIGUE detectándose y preguntándose,
+            // exactamente como pide Alberto: solo se descarta sin preguntar
+            // cuando de verdad no hay nada más reciente que recuperar.
+            localSavedAt: work.updated_at || new Date().toISOString(),
           });
           // Justo aquí, lo que se va a cargar en el editor ES exactamente lo
           // que hay en la nube ahora mismo (se acaba de descargar y escribir
