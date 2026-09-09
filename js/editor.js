@@ -27171,8 +27171,25 @@ let _asDbSingleton = null;
 function _asDb() {
   if (_asDbSingleton) return Promise.resolve(_asDbSingleton);
   return new Promise((res, rej) => {
-    const req = indexedDB.open(_AS_DB, 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore(_AS_STORE);
+    // CAUSA RAÍZ CONFIRMADA (diagnóstico real de Alberto, PC y Android):
+    // "NotFoundError: ... object store was not found" — la base 'cxAutosave'
+    // YA EXISTÍA en sus dispositivos (de alguna versión anterior) pero sin
+    // el object store 'saves' dentro. onupgradeneeded solo se dispara si la
+    // versión pedida es MAYOR que la que ya tiene la base en el dispositivo
+    // — al pedir siempre versión 1, un dispositivo que ya tuviera
+    // 'cxAutosave' en versión 1 (con o sin el store) nunca volvía a pasar
+    // por ahí, así que el store nunca se llegaba a crear. El autoguardado
+    // llevaba fallando en silencio (nadie se enteraba: el catch original no
+    // avisaba de nada) probablemente desde mucho antes de esta sesión.
+    // Arreglo: subir a versión 2 fuerza onupgradeneeded en CUALQUIER
+    // dispositivo que siga en versión 1 (con o sin el store), y la creación
+    // es idempotente (comprueba si ya existe) para no romper nada en un
+    // navegador que sí lo tuviera bien desde el principio.
+    const req = indexedDB.open(_AS_DB, 2);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(_AS_STORE)) db.createObjectStore(_AS_STORE);
+    };
     req.onsuccess = e => {
       _asDbSingleton = e.target.result;
       _asDbSingleton.onversionchange = () => { _asDbSingleton.close(); _asDbSingleton = null; };
@@ -27180,6 +27197,10 @@ function _asDb() {
       res(_asDbSingleton);
     };
     req.onerror = () => rej(req.error);
+    // Otra pestaña con esta misma app abierta en una versión antigua podría
+    // no soltar su conexión a tiempo — no dejar la promesa colgada para
+    // siempre si eso pasa.
+    req.onblocked = () => rej(new Error('cxAutosave: apertura bloqueada por otra pestaña con la app abierta'));
   });
 }
 
