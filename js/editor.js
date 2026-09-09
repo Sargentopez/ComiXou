@@ -27186,37 +27186,19 @@ function _asDb() {
 async function _edAutosaveWrite() {
   // Posponer si hay gesto activo: el JSON.stringify de todas las capas bloquearía el hilo.
   //
-  // LÍMITE DE SEGURIDAD (Alberto: "asegúrate de que en TODOS los casos se
-  // esté guardando... remueve cualquier obstáculo"): si por cualquier error
-  // en otro punto del código una bandera de gesto (edPainting/edIsDragging/
-  // etc., ver _edIsGestureActive) se queda encallada en `true` sin que nadie
-  // vuelva a ponerla en `false` — p.ej. una excepción a mitad de un gesto que
-  // salta el pointerup que la limpia — este pospuesto se repetiría cada
-  // 1500ms para siempre, dejando el autoguardado completamente mudo el resto
-  // de la sesión, en silencio. Un gesto real no dura más de unos pocos
-  // segundos: tras 10 pospuestos consecutivos (~15s) se fuerza el intento
-  // igualmente pese al gesto "activo" — mejor un posible parpadeo puntual
-  // que perder la protección por el resto de la sesión. _forceDespiteGesture
-  // silencia TAMBIÉN la segunda comprobación de más abajo (dentro del bucle
-  // de capas) durante ESTE intento — si no, el umbral de aquí se cumple pero
-  // el bucle vuelve a posponer igualmente sin que el umbral se entere, y el
-  // guardado nunca llega a completarse de verdad.
-  let _forceDespiteGesture = false;
+  // NUNCA forzar la escritura mientras _edIsGestureActive() sea true, bajo
+  // ningún umbral ni excepción — un intento anterior de "límite de
+  // seguridad" que forzaba tras varios pospuestos se retiró: en Android
+  // real, ejecutar la serialización pesada mientras un dedo seguía sobre el
+  // lienzo (captura de puntero activa) dejó el dibujo y otros controles sin
+  // responder — probablemente por competir con la entrega de eventos táctiles
+  // en un dispositivo real, algo que este entorno de pruebas no reproduce.
+  // Mejor pospuesto indefinidamente (como ya funcionaba antes de esta sesión)
+  // que arriesgar interferir con un gesto táctil en curso.
   if (_edIsGestureActive()) {
-    window._edAutosaveGestureStall = (window._edAutosaveGestureStall || 0) + 1;
-    if (window._edAutosaveGestureStall < 10) {
-      clearTimeout(window._edAutosavePushTimer);
-      window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
-      return;
-    }
-    // Umbral superado: forzar este intento y reiniciar la cuenta — si el
-    // gesto sigue "activo" después, hará falta otra tanda de 10 pospuestos
-    // (~15s) antes de volver a forzar. Evita forzar en cada llamada sucesiva
-    // si de verdad hay un gesto real e inusualmente largo en curso.
-    _forceDespiteGesture = true;
-    window._edAutosaveGestureStall = 0;
-  } else {
-    window._edAutosaveGestureStall = 0;
+    clearTimeout(window._edAutosavePushTimer);
+    window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
+    return;
   }
   if (!edProjectId || !edPages || !edPages.length) return;
   // No escribir si las páginas están vacías (edLoadProject aún no completó)
@@ -27272,7 +27254,7 @@ async function _edAutosaveWrite() {
         // entregue los pointermove pendientes, y la re-comprobación aborta el
         // intento en marcha (mejor reintentar en 1500ms que bloquear el drag).
         await new Promise(r => setTimeout(r, 0));
-        if (_edIsGestureActive() && !_forceDespiteGesture) {
+        if (_edIsGestureActive()) {
           clearTimeout(window._edAutosavePushTimer);
           window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
           return;
