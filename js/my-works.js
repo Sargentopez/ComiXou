@@ -1001,9 +1001,36 @@ function _mcRenderList() {
       const _hasLegacyStrokes = (comicToEdit.editorData?.pages||[]).some(pg =>
         (pg.layers||[]).some(l => l.type === 'stroke' && l.x == null)
       );
-      // Comprobar si la nube tiene una versión más reciente que la local
+      // Antes de comprobar si la nube tiene una versión más reciente: mirar
+      // primero si hay un autoguardado local pendiente sin descartar
+      // explícitamente — petición de Alberto: "primero debe consultarse si
+      // hay versión temporal, antes de descargar de la nube". Motivo real:
+      // la propia secuencia "guardar local y LUEGO subir a la nube" hace
+      // que el reloj de la nube (updated_at, puesto por Supabase al recibir
+      // la subida) quede casi siempre unos instantes por delante del
+      // guardado local que lo originó — aunque sea EL MISMO guardado, no
+      // una versión más nueva de verdad. Sin esta comprobación: guardar en
+      // la nube, seguir editando, cerrar sin volver a guardar, y reabrir
+      // disparaba una descarga "la nube es más reciente" que sobrescribía
+      // localmente el trabajo más nuevo ANTES de que edLoadProject (ya
+      // dentro del editor) llegara siquiera a preguntar por el
+      // autoguardado. Si existe uno genuinamente más nuevo que el último
+      // guardado local confirmado, ni siquiera se consulta la nube — se deja
+      // pasar tal cual a edLoadProject, que es quien de verdad pregunta.
+      let _hasPendingAutosaveNewer = false;
+      try {
+        const _asPending = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(id) : null;
+        if (_asPending && _asPending.pages && _asPending.pages.length && _asPending.ts) {
+          const _localSavedTsCheck = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0).getTime();
+          _hasPendingAutosaveNewer = _asPending.ts > _localSavedTsCheck;
+        }
+      } catch(_e) { /* si falla la comprobación, seguir con el criterio normal de abajo, sin bloquear la apertura */ }
+
+      // Comprobar si la nube tiene una versión más reciente que la local —
+      // se omite por completo (ni se consulta) si ya hay un autoguardado
+      // pendiente más nuevo, ver arriba.
       let _cloudNewer = false;
-      if (comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
+      if (!_hasPendingAutosaveNewer && comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
         try {
           const _cloudMeta = await SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]);
           if (_cloudMeta && _cloudMeta[0]) {
@@ -1038,6 +1065,7 @@ function _mcRenderList() {
         updatedAt: comicToEdit.updatedAt || null,
         hasLegacyStrokes: _hasLegacyStrokes,
         hasLocalSaved: _hasLocalSaved,
+        hasPendingAutosaveNewer: _hasPendingAutosaveNewer,
         cloudNewer: _cloudNewer,
         needsDownload: _needsDownload,
         bib: null, // se completa más abajo, en la rama de biblioteca que corresponda

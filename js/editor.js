@@ -25209,6 +25209,10 @@ function _edSizeMonitorStart() {
     window.removeEventListener('pagehide', window._edPageHideFn);
     window._edPageHideFn = null;
   }
+  if (window._edVisibilityFn) {
+    document.removeEventListener('visibilitychange', window._edVisibilityFn);
+    window._edVisibilityFn = null;
+  }
   _edSizeCheck(); // comprobación inmediata
   _edSizeMonitorTimer = setInterval(_edSizeCheck, 15000); // cada 15 segundos
 }
@@ -27204,19 +27208,25 @@ function _asDb() {
   });
 }
 
-async function _edAutosaveWrite() {
+async function _edAutosaveWrite(immediate) {
   // Posponer si hay gesto activo: el JSON.stringify de todas las capas bloquearía el hilo.
   //
-  // NUNCA forzar la escritura mientras _edIsGestureActive() sea true, bajo
-  // ningún umbral ni excepción — un intento anterior de "límite de
-  // seguridad" que forzaba tras varios pospuestos se retiró: en Android
-  // real, ejecutar la serialización pesada mientras un dedo seguía sobre el
-  // lienzo (captura de puntero activa) dejó el dibujo y otros controles sin
-  // responder — probablemente por competir con la entrega de eventos táctiles
-  // en un dispositivo real, algo que este entorno de pruebas no reproduce.
-  // Mejor pospuesto indefinidamente (como ya funcionaba antes de esta sesión)
-  // que arriesgar interferir con un gesto táctil en curso.
-  if (_edIsGestureActive()) {
+  // NUNCA forzar la escritura mientras _edIsGestureActive() sea true durante
+  // el guardado PERIÓDICO normal, bajo ningún umbral ni excepción — un
+  // intento anterior de "límite de seguridad" que forzaba tras varios
+  // pospuestos se retiró: en Android real, ejecutar la serialización pesada
+  // mientras un dedo seguía sobre el lienzo (captura de puntero activa) dejó
+  // el dibujo y otros controles sin responder.
+  //
+  // EXCEPCIÓN — immediate=true (disparo de emergencia desde visibilitychange
+  // oculto/pagehide, ver más abajo): en ese momento la pestaña se está
+  // ocultando o cerrando — no hay ningún gesto real en curso que proteger,
+  // el usuario ya no puede seguir tocando ESTE lienzo. Posponer aquí (como
+  // hace el guardado periódico normal) puede significar posponer para
+  // siempre, porque puede no haber una próxima vez. Mismo criterio que
+  // Alberto pidió explícitamente: "asegúrate de que en TODOS los casos se
+  // esté guardando".
+  if (_edIsGestureActive() && !immediate) {
     clearTimeout(window._edAutosavePushTimer);
     window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
     return;
@@ -27275,7 +27285,7 @@ async function _edAutosaveWrite() {
         // entregue los pointermove pendientes, y la re-comprobación aborta el
         // intento en marcha (mejor reintentar en 1500ms que bloquear el drag).
         await new Promise(r => setTimeout(r, 0));
-        if (_edIsGestureActive()) {
+        if (_edIsGestureActive() && !immediate) {
           clearTimeout(window._edAutosavePushTimer);
           window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 1500);
           return;
@@ -31094,8 +31104,25 @@ function EditorView_init(){
     }
   };
   window.addEventListener('beforeunload', window._edBeforeUnloadFn);
-  // pagehide: disparar autosave de emergencia al salir sin guardar
-  window._edPageHideFn = () => { _edAutosaveWrite(); };
+  // Disparo de emergencia al abandonar la página — DOS eventos, no uno,
+  // porque ninguno de los dos es fiable por sí solo (petición de Alberto:
+  // "asegúrate de que en TODOS los casos se esté guardando... remueve
+  // cualquier obstáculo"):
+  // - visibilitychange (oculto): se dispara en cuanto la pestaña deja de
+  //   estar en primer plano — cambiar de app en Android, minimizar,
+  //   cambiar de pestaña — ANTES de que nada empiece a destruirse. Es el
+  //   más fiable de los dos, especialmente en móvil (MDN/web.dev lo
+  //   recomiendan sobre pagehide/unload para esto exactamente).
+  // - pagehide: red de seguridad para el caso en que la pestaña se cierre
+  //   sin haber pasado antes por "oculto" (poco común, pero gratis tenerlo).
+  // Los dos llaman con immediate=true: en este momento no hay ningún gesto
+  // real que proteger (el usuario ya está abandonando la página, no puede
+  // seguir tocando el lienzo), así que posponer por _edIsGestureActive()
+  // aquí solo arriesgaría posponer para siempre — puede no haber una
+  // próxima vez si la pestaña se cierra de verdad.
+  window._edVisibilityFn = () => { if (document.visibilityState === 'hidden') _edAutosaveWrite(true); };
+  document.addEventListener('visibilitychange', window._edVisibilityFn);
+  window._edPageHideFn = () => { _edAutosaveWrite(true); };
   window.addEventListener('pagehide', window._edPageHideFn);
 
   // ── VISOR ──
