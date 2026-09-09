@@ -27310,9 +27310,20 @@ async function _edAutosaveWrite() {
       await _doWrite();
       window._edAutosaveFailWarned = false;
     } catch(_e2) {
-      // Fallo persistente. No avisar si es modo incógnito conocido (ver
-      // window._mcIdbAvail, my-works.js) — esa limitación ya se comunica
-      // aparte vía _edShowIncognitoWarning y es esperada, no un fallo real.
+      // Fallo persistente. Registrar el motivo REAL (nombre/mensaje de la
+      // excepción, de ambos intentos) para el diagnóstico 🩺 — a petición de
+      // Alberto: el aviso al usuario tiene que quedarse en un mensaje
+      // genérico y accionable, pero para saber POR QUÉ falla de verdad hace
+      // falta el error tal cual lo da el navegador, no una suposición.
+      window._edLastAutosaveError = {
+        ts: new Date().toISOString(),
+        attempt1: _e1 ? (_e1.name || '?') + ': ' + (_e1.message || String(_e1)) : '?',
+        attempt2: _e2 ? (_e2.name || '?') + ': ' + (_e2.message || String(_e2)) : '?',
+      };
+      _edSaveErrors.push(new Date().toLocaleTimeString() + ' [autosave] ' + window._edLastAutosaveError.attempt2);
+      // No avisar si es modo incógnito conocido (ver window._mcIdbAvail,
+      // my-works.js) — esa limitación ya se comunica aparte vía
+      // _edShowIncognitoWarning y es esperada, no un fallo real.
       if (!window._edAutosaveFailWarned && window._mcIdbAvail !== false) {
         window._edAutosaveFailWarned = true;
         if (typeof _edShowStorageWarning === 'function') {
@@ -42380,6 +42391,89 @@ async function _edRunDiag() {
     if (_framesInMem === 0) L('  ✓ Sin _pngFrames en memoria (correcto para autosave)');
     else L('  ⚠️ ' + _framesInMem + ' capas con frames en RAM (~' + _framesMB.toFixed(1) + ' MB) — excluidos del autosave correctamente');
   } catch(_asE) { L('Error: ' + _asE.message); }
+
+  // Último error REAL capturado de un intento de autoguardado que falló de
+  // verdad (ambos intentos, ver _edAutosaveWrite) — el nombre/mensaje tal
+  // cual los da el navegador, no una suposición.
+  if (window._edLastAutosaveError) {
+    L('Último fallo real registrado (' + window._edLastAutosaveError.ts + '):');
+    L('  intento 1: ' + window._edLastAutosaveError.attempt1);
+    L('  intento 2: ' + window._edLastAutosaveError.attempt2);
+  } else {
+    L('Sin fallos registrados en esta sesión');
+  }
+
+  // ── Prueba EN VIVO, ahora mismo, de las dos vías de guardado local —
+  // petición explícita de Alberto: "¿la carpeta de la app se está creando
+  // en PC y Android?" y "¿por qué falla el autosave?". Dos mecanismos
+  // DISTINTOS: el guardado explícito (Proyecto → Guardar) usa OPFS, una
+  // carpeta de verdad ('comixou/<usuario>/'); el autoguardado temporal usa
+  // IndexedDB ('cxAutosave'), una base de datos, no una carpeta. Se prueban
+  // aquí los dos, en el momento exacto en que se pulsa el botón 🩺, con
+  // escritura + lectura + borrado real (no solo "existe la API").
+  L('');
+  L('── Prueba en vivo AHORA MISMO ──');
+  // 1) OPFS — misma carpeta que usa el guardado real (ver storage.js _opfsRoot)
+  try {
+    if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') {
+      L('OPFS: ✗ no disponible en este navegador (API inexistente)');
+    } else {
+      const _root = await navigator.storage.getDirectory();
+      const _base = await _root.getDirectoryHandle('comixou', { create: true });
+      const _testName = '__diag_test__.txt';
+      const _fh = await _base.getFileHandle(_testName, { create: true });
+      const _ws = await _fh.createWritable();
+      await _ws.write('diag-' + Date.now());
+      await _ws.close();
+      const _file = await _fh.getFile();
+      const _txt = await _file.text();
+      await _base.removeEntry(_testName).catch(() => {});
+      L('OPFS (carpeta "comixou/"): ' + (_txt.startsWith('diag-') ? '✓ escribe y lee correctamente' : '✗ leyó algo distinto de lo escrito'));
+    }
+  } catch(_opfsE) {
+    L('OPFS (carpeta "comixou/"): ✗ FALLA — ' + (_opfsE.name || '?') + ': ' + (_opfsE.message || _opfsE));
+  }
+  // 2) IndexedDB 'cxAutosave' — la base real del autoguardado, con conexión
+  // FRESCA (no la cacheada, por si esa es justo la que está en mal estado)
+  try {
+    _asDbSingleton = null;
+    const _testKey = '__diag_test__';
+    const _testVal = { _t: Date.now() };
+    const _db = await _asDb();
+    await new Promise((res, rej) => {
+      const tx = _db.transaction(_AS_STORE, 'readwrite');
+      tx.objectStore(_AS_STORE).put(_testVal, _testKey);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+    const _back = await new Promise((res, rej) => {
+      const tx = _db.transaction(_AS_STORE, 'readonly');
+      const req = tx.objectStore(_AS_STORE).get(_testKey);
+      req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
+    });
+    await new Promise(res => {
+      const tx = _db.transaction(_AS_STORE, 'readwrite');
+      tx.objectStore(_AS_STORE).delete(_testKey);
+      tx.oncomplete = res; tx.onerror = res;
+    });
+    L('IndexedDB "cxAutosave": ' + (_back && _back._t === _testVal._t ? '✓ escribe y lee correctamente' : '✗ leyó algo distinto de lo escrito'));
+  } catch(_idbE) {
+    L('IndexedDB "cxAutosave": ✗ FALLA — ' + (_idbE.name || '?') + ': ' + (_idbE.message || _idbE));
+  }
+  // 3) Cuota real del navegador para este sitio — si "usage" está cerca de
+  // "quota", cualquier escritura nueva puede fallar por espacio, con el
+  // mismo QuotaExceededError en OPFS e IndexedDB por igual.
+  try {
+    if (navigator.storage && typeof navigator.storage.estimate === 'function') {
+      const _est = await navigator.storage.estimate();
+      const _usedMB = (_est.usage / (1024*1024)).toFixed(1);
+      const _quotaMB = (_est.quota / (1024*1024)).toFixed(1);
+      const _pct = _est.quota ? Math.round(100 * _est.usage / _est.quota) : 0;
+      L('Cuota de almacenamiento del sitio: ' + _usedMB + ' MB usados de ' + _quotaMB + ' MB (' + _pct + '%)');
+      if (_pct >= 90) L('  ⚠️ MUY CERCA DEL LÍMITE — cualquier guardado nuevo puede fallar por espacio');
+    } else {
+      L('Cuota de almacenamiento: API navigator.storage.estimate() no disponible');
+    }
+  } catch(_qE) { L('Cuota de almacenamiento: error al consultar — ' + _qE.message); }
 
   // 4. Layers vivos en memoria
   // Activar log de edPushHistory
