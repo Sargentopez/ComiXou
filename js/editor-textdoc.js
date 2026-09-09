@@ -5732,6 +5732,52 @@ function _tdMakeExceptMarker(flowId){
   return tl;
 }
 
+// Al INSERTAR una hoja nueva y vacía en medio de dos hojas que ya pertenecen
+// al mismo flujo de texto, la hoja nueva debe quedar automáticamente
+// exceptuada de ese flujo (petición explícita de Alberto, edAddPage en
+// editor.js): si no se marca, la próxima vez que el flujo se reajuste
+// (reeditar, redimensionar, aplicar márgenes...) la tomaría como un hueco
+// disponible más y le metería texto sin que nadie lo haya pedido. Reutiliza
+// _tdMakeExceptMarker (la misma marca que ya usa "Exceptuar en esta hoja")
+// y _tdFlowIdxs (el mismo criterio "pertenece a este flujo" que usa todo lo
+// demás) en vez de inventar un mecanismo nuevo.
+//
+// Se llama con el índice que la hoja nueva YA ocupa dentro de edPages
+// (justo después de insertarla con splice, nunca antes). Recoge los flujos
+// presentes en la hoja INMEDIATAMENTE ANTERIOR (con texto real o ya
+// exceptuada de ellos) y, para cada uno, comprueba con _tdFlowIdxs si la
+// hoja INMEDIATAMENTE POSTERIOR (la que antes de insertar estaba justo a
+// continuación) sigue perteneciendo a ese mismo flujo. Si es así, la
+// inserción ha caído DENTRO del tramo del flujo y la hoja nueva se marca
+// exceptuada de él — el texto que estaba en esa hoja posterior se queda
+// exactamente donde estaba (su propia TextLayer.richLines no cambia), solo
+// que ahora vive una posición más allá. Si la hoja anterior pertenece a un
+// flujo pero la posterior ya no (p.ej. se añade justo después de la última
+// hoja de ese flujo), no se marca nada: no se está partiendo ningún flujo,
+// solo añadiendo una hoja después de que termine.
+//
+// Nunca dispara un reflujo (_tdReflowFlowInPlace): no hace falta recalcular
+// ningún contenido, solo desplazar qué hoja ocupa qué posición — y
+// flowIdxs/exceptIdxs ya se recalculan en fresco la próxima vez que algo
+// toque el flujo (ver comentario en _tdFlowIdxs).
+function _tdExceptNewPageIfBetweenFlow(insertIdx) {
+  const before  = edPages[insertIdx - 1];
+  const newPage = edPages[insertIdx];
+  if (!before || !newPage || insertIdx + 1 >= edPages.length) return;
+  const flowIdsBefore = new Set(
+    (before.layers || [])
+      .filter(l => l && (l._tdFlowId || l._tdExceptFlow))
+      .map(l => l._tdFlowId || l._tdExceptFlow)
+  );
+  flowIdsBefore.forEach(flowId => {
+    const { flowIdxs, exceptIdxs } = _tdFlowIdxs(flowId);
+    if (flowIdxs.includes(insertIdx + 1) || exceptIdxs.includes(insertIdx + 1)) {
+      newPage.layers = newPage.layers || [];
+      newPage.layers.push(_tdMakeExceptMarker(flowId));
+    }
+  });
+}
+
 // Botón "Exceptuar en esta hoja" (panel de propiedades): quita el texto de la
 // hoja actual y dispara el reflujo — el contenido que le correspondía pasa a
 // la hoja siguiente del flujo (o crea una nueva si hiciera falta).

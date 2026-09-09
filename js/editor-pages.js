@@ -77,6 +77,19 @@ function edOpenPages() {
   document.body.appendChild(overlay);
   _pgRender();
 
+  // Petición de Alberto: al abrir el panel, la hoja en vigor (edCurrentPage)
+  // debe verse centrada — antes el grid se quedaba siempre desplazado desde
+  // el principio (hoja 1), sin importar cuál estuviera activa. Salto
+  // instantáneo (behavior:'auto'), no 'smooth': es un posicionamiento
+  // silencioso al abrir, no una navegación del usuario — mismo criterio ya
+  // usado en el editor de textos (_tdScrollToViewPage con instant=true) para
+  // que la animación de apertura del propio overlay no lo interrumpa a
+  // mitad de camino. inline:'center' es la opción estándar del propio
+  // scrollIntoView (misma API que ya usa el botón "Añadir" un poco más
+  // abajo) — no hace falta calcular a mano ningún scrollLeft.
+  const _curCard = document.getElementById('edPagesGrid')?.querySelector('.ed-page-card.current');
+  if (_curCard) _curCard.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+
   overlay.querySelector('#edPagesClose').addEventListener('click', edClosePages);
   overlay.querySelector('#edPagesAdd').addEventListener('click', () => {
     // Petición de Alberto: NO cerrar la ventana ni saltar a la nueva hoja —
@@ -87,10 +100,16 @@ function edOpenPages() {
     // reordenar (ver cabecera del archivo) — más necesario aún ahora que la
     // ventana se queda abierta tras añadir.
     if (_pgActionLocked()) return;
+    // La nueva hoja se inserta a continuación de la hoja en vigor (petición
+    // de Alberto, ver edAddPage en editor.js) — se calcula aquí el índice
+    // ANTES de llamar, porque edCurrentPage no cambia con jumpToNewPage=false.
+    const _insertIdx = edCurrentPage + 1;
     edAddPage(false);
     _pgRender();
-    // Desplazar la rejilla para que la tarjeta nueva (siempre la última) sea visible
-    const _newCard = document.getElementById('edPagesGrid')?.lastElementChild;
+    // Desplazar la rejilla para que la tarjeta nueva sea visible. Ya no es
+    // necesariamente la última — se busca por su índice real en vez de
+    // asumir lastElementChild.
+    const _newCard = document.getElementById('edPagesGrid')?.querySelector(`[data-idx="${_insertIdx}"]`);
     if (_newCard) _newCard.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
   });
   overlay.addEventListener('pointerdown', e => {

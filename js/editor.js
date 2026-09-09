@@ -5416,13 +5416,8 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Reset transform → limpiar todo el viewport
     ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — casi blanco (petición de Alberto).
-    // Mismo tono que antes (#c8d4e8, azul-gris) aclarado ~85% hacia blanco —
-    // conserva la familia de color (coherente con el azul #1a8cff del borde
-    // del lienzo y la cuadrícula) en vez de saltar a un gris neutro genérico.
-    // La hoja (blanco puro, #ffffff) sigue distinguiéndose por su sombra y su
-    // borde azul de 1px (ver más abajo), no por el contraste de color plano.
-    ctx.fillStyle='#f7f9fc';
+    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
+    ctx.fillStyle='#c8d4e8';
     ctx.fillRect(0,0,cw,ch);
   } else {
     // Modo 'after': se pinta encima de contenido ya existente — solo restablecer transform.
@@ -6153,7 +6148,18 @@ function edDrawSel(){
    PÁGINAS
    ══════════════════════════════════════════ */
 function edAddPage(jumpToNewPage = true){
-  edPages.push({layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation,_dirtyCountLocal:1,_dirtyCountCloud:1});
+  // Petición de Alberto: la hoja nueva se inserta A CONTINUACIÓN de la hoja
+  // en vigor (edCurrentPage), desplazando una posición hacia atrás a todas
+  // las que hubiera después — ya NO se añade siempre al final. Mismo patrón
+  // que ya usa _pgDuplicate() en editor-pages.js (splice(idx+1, 0, ...)),
+  // aplicado aquí con idx=edCurrentPage.
+  const insertIdx = edCurrentPage + 1;
+  edPages.splice(insertIdx, 0, {layers:[],drawData:null,textLayerOpacity:1,textMode:'sequential',orientation:edOrientation,_dirtyCountLocal:1,_dirtyCountCloud:1});
+  // Si la inserción ha caído en medio de un flujo de texto ya existente (la
+  // hoja en vigor y la que antes iba justo después pertenecen al mismo
+  // flujo), la hoja nueva queda automáticamente exceptuada de ese flujo —
+  // ver _tdExceptNewPageIfBetweenFlow (editor-textdoc.js).
+  if (typeof _tdExceptNewPageIfBetweenFlow === 'function') _tdExceptNewPageIfBetweenFlow(insertIdx);
   _edMarkPagesStructureDirty();
   // jumpToNewPage=false: petición de Alberto — al añadir hoja desde la
   // ventana de hojas (edOpenPages/edPagesAdd), NO saltar directamente a
@@ -6163,8 +6169,10 @@ function edAddPage(jumpToNewPage = true){
   // _pgRotatePage, que rota cualquier página por índice sin necesidad de
   // que sea la activa). El resto de llamadores (p.ej. el desplegable
   // "Hoja ▾" antiguo, dd-addpage) no pasan el argumento y conservan el
-  // comportamiento de siempre (saltar a la nueva hoja).
-  if (jumpToNewPage) edLoadPage(edPages.length-1);
+  // comportamiento de siempre (saltar a la nueva hoja, ahora en su posición
+  // real — insertIdx, justo tras la hoja en vigor — en vez de siempre la
+  // última).
+  if (jumpToNewPage) edLoadPage(insertIdx);
   edToast(I18n.t('ed_pageAdded'));
 }
 
