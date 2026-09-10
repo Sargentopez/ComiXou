@@ -1871,15 +1871,26 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 /* ── GRID DE HOJAS ── */
 .ed-pages-grid {
   overscroll-behavior-x: contain;
-  flex-shrink: 0;
+  overscroll-behavior-y: contain;
+  flex-shrink: 1;
+  min-height: 0;   /* deja que flex-shrink funcione de verdad con overflow-y:auto debajo */
   overflow-x: auto;
-  overflow-y: hidden;
+  /* auto (no hidden): con la proporción real de página, una tarjeta vertical
+     puede medir ~190-200px de alto — en una pantalla baja (móvil en
+     horizontal) eso no cabe entero junto a cabecera+pista+botón "Añadir"
+     dentro de .ed-fulloverlay-box (overflow:hidden). Antes, con
+     flex-shrink:0 aquí, esa altura empujaba el botón "Añadir" fuera de la
+     vista sin poder llegar a él (verificado con Playwright a 360px de alto
+     de viewport). Con flex-shrink:1 + min-height:0 + overflow-y:auto, el
+     grid cede espacio primero y añade su propio scroll vertical si aun así
+     no cabe, en vez de desbordar el resto del panel. */
+  overflow-y: auto;
   padding: 10px 12px 12px;
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
   gap: 10px;
-  align-items: flex-start;
+  align-items: center;
   scrollbar-width: thin;
   scrollbar-color: var(--gray-300) transparent;
 }
@@ -1887,6 +1898,8 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 .ed-pages-grid::-webkit-scrollbar-thumb { background: var(--gray-300); border-radius: 4px; }
 
 .ed-page-card {
+  --pg-card-w: 100px;      /* ancho total de la tarjeta (border-box) */
+  --pg-card-inset: 21px;   /* padding horizontal (8+8) + borde horizontal (2.5+2.5) */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1897,12 +1910,28 @@ body.ed-scale-tablet .ed-fulloverlay-box {
   padding: 6px 8px 6px;
   cursor: default;
   flex-shrink: 0;
-  width: 100px;
+  width: var(--pg-card-w);
   transition: border-color .12s, background .12s, opacity .15s;
   user-select: none;
 }
 @media (min-width: 360px) {
-  .ed-page-card { width: 108px; }
+  .ed-page-card { --pg-card-w: 108px; }
+}
+/* Hoja horizontal: la miniatura interna (_pgBuildCard, editor-pages.js) pasa
+   a tener la proporción REAL de la página (ED_PAGE_H/ED_PAGE_W = 780/360 =
+   13/6) invertida, en vez de 90×127 — la aproximación anterior no coincidía
+   con la proporción real (360×780) y estiraba los objetos dentro de la
+   miniatura. Para que este nuevo canvas se vea así en pantalla, y no se
+   vuelva a aplastar por culpa de .ed-page-thumb{width:100%} dentro de una
+   tarjeta de ancho fijo, la propia tarjeta crece a lo ancho tanto como
+   mediría de alto (sin recortar por max-height) su equivalente vertical —
+   mismo contenedor girado 90°. Se reutiliza --pg-card-w (ya responsive vía
+   el media query de arriba) para que esto se recalcule solo en el
+   breakpoint ancho, sin necesidad de repetir el media query aquí. La
+   proporción 13/6 debe coincidir siempre con ED_PAGE_H/ED_PAGE_W
+   (editor.js) — si esas constantes cambian, actualizar también aquí. */
+.ed-page-card.ed-page-card-h {
+  width: calc((var(--pg-card-w) - var(--pg-card-inset)) * 13 / 6 + var(--pg-card-inset));
 }
 .ed-page-card.current  { border-color: #ff6600; background: #fff8f4; }
 

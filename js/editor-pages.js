@@ -212,12 +212,27 @@ function _pgBuildCard(page, idx) {
   arrows.appendChild(leftBtn);
   arrows.appendChild(rightBtn);
 
-  // Miniatura
+  // Miniatura — el canvas interno usa la proporción REAL de la página
+  // (ED_PAGE_W×ED_PAGE_H, ya vertical), no una aproximación fija: con 90×127
+  // (127/90≈1.41) los objetos salían ensanchados porque el contenido real
+  // (360×780, ratio 360/780≈0.46) se estiraba dentro de una caja con otra
+  // proporción. Con la proporción real, el lado corto se fija en 90 y el
+  // largo sale de ED_PAGE_H/ED_PAGE_W — sin distorsión.
+  // En horizontal, exactamente esos mismos dos números invertidos: el mismo
+  // contenedor girado 90°, no un achatamiento a la fuerza manteniendo el
+  // ancho de 90. La tarjeta recibe la clase ed-page-card-h para que el CSS
+  // le dé el ancho correspondiente a ese contenedor girado (ver
+  // .ed-page-card-h en editor.css, misma proporción ED_PAGE_H/ED_PAGE_W) —
+  // sin eso, el canvas seguiría aplastándose porque .ed-page-thumb ocupa el
+  // 100% del ancho de la tarjeta.
   const thumb = document.createElement('canvas');
   thumb.className = 'ed-page-thumb';
-  thumb.width  = 90;
   const _thumbOrient = page.orientation || edOrientation;
-  thumb.height = _thumbOrient === 'vertical' ? 127 : 64;
+  const _thumbIsV = _thumbOrient === 'vertical';
+  const _thumbLong = Math.round(90 * ED_PAGE_H / ED_PAGE_W);
+  thumb.width  = _thumbIsV ? 90 : _thumbLong;
+  thumb.height = _thumbIsV ? _thumbLong : 90;
+  if (!_thumbIsV) card.classList.add('ed-page-card-h');
   _pgDrawThumb(thumb, page);
 
   // Acciones: ⧉ duplicar + rotar + ✕ eliminar
@@ -334,7 +349,7 @@ function _pgRenderThumbLive(canvas, page) {
   offCtx.fillRect(0, 0, pw, ph);
   offCtx.setTransform(1, 0, 0, 1, -mx, -my);
 
-  const _textLayers = page.layers.filter(l => l.type === 'text' || l.type === 'bubble');
+  const _textLayers = page.layers.filter(l => (l.type === 'text' || l.type === 'bubble') && !l.hidden);
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
   // Helper: dibuja sub-capa (fill/pencil/watercolor) respetando posición, tamaño y opacidad
@@ -356,6 +371,7 @@ function _pgRenderThumbLive(canvas, page) {
 
   page.layers.forEach(l => {
     if (!l || l.type === 'text' || l.type === 'bubble') return;
+    if (l.hidden) return; // capa oculta por el usuario: no aparece en la miniatura
     if (l.type === 'gif')              l.draw(offCtx);
     else if (l.type === 'image')        l.draw(offCtx, off);
     else if (l.type === 'draw') {

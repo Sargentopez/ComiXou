@@ -7467,9 +7467,16 @@ function _edCachePageThumb(pageIdx) {
   if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return;
   try {
     const _orient = page.orientation || edOrientation;
+    const _isV = _orient === 'vertical';
     const off = document.createElement('canvas');
-    off.width  = 90;
-    off.height = _orient === 'vertical' ? 127 : 64;
+    // Mismas dimensiones que el canvas real de _pgBuildCard (editor-pages.js):
+    // proporción REAL de página (ED_PAGE_H/ED_PAGE_W), lado corto=90 — no la
+    // vieja aproximación 90×127/127×90, que estiraba el contenido. Deben
+    // coincidir siempre, o _pgDrawThumb estiraría esta miniatura cacheada al
+    // pintarla sobre un canvas de otro tamaño.
+    const _long = Math.round(90 * ED_PAGE_H / ED_PAGE_W);
+    off.width  = _isV ? 90 : _long;
+    off.height = _isV ? _long : 90;
     _pgRenderThumbLive(off, page);
     page._cachedThumbCanvas = off;
   } catch(_) {} // si falla, _pgDrawThumb simplemente hará el render en vivo como antes
