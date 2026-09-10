@@ -39902,11 +39902,23 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
 // (plataforma principal de la app) — dentro de cada hoja, sus objetos sí se
 // procesan en paralelo.
 async function _gcpCpBuildFromRange(fromIdx, toIdx){
+  // Bloqueo con contador (petición de Alberto): construir la animación puede
+  // tardar — cada objeto de cada hoja se clona/convierte (_gcpCpUnitToLayer),
+  // con esperas de hasta 8s por objeto si una imagen/gif tarda en quedar
+  // lista (_gcpCpWaitLayerReady) — y mientras tanto el editor general seguía
+  // activo, permitiendo cambios que podían chocar con hojas que se estaban
+  // leyendo/clonando en ese preciso momento. Reutiliza tal cual el mismo
+  // mecanismo ya usado al abrir una obra (_cxLoadOverlayShow/Hide, utils.js):
+  // overlay de pantalla completa + contador de segundos propio + su misma
+  // red de seguridad (25s) por si algún camino de código no llegara nunca a
+  // ocultarlo. Sustituye al toast "Procesando…" que había aquí antes (mismo
+  // criterio ya aplicado cuando este overlay se introdujo para abrir obras,
+  // ver comentario en my-works.js "action==='edit'").
+  if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('ed_animRangeCreating'));
   try {
     window._gcpCpExcludedCount = 0;
     const destOrientation = edOrientation; // fija durante toda la construcción — no se navega ninguna hoja
     const total = (toIdx - fromIdx) + 1;
-    edToast(I18n.t('gcp_processing'));
     const perFrameLayers = []; // perFrameLayers[fi] = [capa, capa, ...]
     for(let fi = 0; fi < total; fi++){
       const pageIdx = fromIdx + fi;
@@ -39922,6 +39934,7 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
     }
     const anyObjects = perFrameLayers.some(arr => arr.length);
     if(!anyObjects){
+      if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
       edToast(window._gcpCpExcludedCount > 0 ? I18n.t('ed_animRangeExcluded', { count: window._gcpCpExcludedCount }) : I18n.t('ed_animRangeNoObjects'));
       return;
     }
@@ -39942,6 +39955,11 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
     _gcpRedraw();
     _gcpPushHistory();
     window._gcpDirty = true; // hay contenido real que se perdería si se cierra sin guardar
+    // Liberar el bloqueo AQUÍ: la animación ya está construida y mostrada en
+    // el editor de animaciones (petición de Alberto: "hasta que se muestre").
+    // Se libera ANTES del aviso de objetos excluidos para que ese toast se
+    // vea sobre el editor ya visible, no oculto detrás del overlay.
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
     // Aviso no bloqueante: algún objeto no cabía en el lienzo de trabajo usado
     // para "fotografiarlo" (demasiado grande o demasiado lejos de la hoja) y
     // se excluyó en vez de dejar que saliera recortado/reducido en silencio
@@ -39950,6 +39968,7 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
       edToast(I18n.t('ed_animRangeExcluded', { count: window._gcpCpExcludedCount }));
     }
   } catch(e) {
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
     console.warn('_gcpCpBuildFromRange:', e);
     edToast(I18n.t('ed_animRangeNoObjects'));
   }
