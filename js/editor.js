@@ -31849,7 +31849,7 @@ function EditorView_init(){
       const _insideBar = e.target?.closest?.('#gcpFramesBar, #gcpFramesToggleBtn') || _insideFloating;
       const _insideBib = e.target?.closest?.('#edOptionsPanel, #gcpBibBtn');
       if (_bar && _bar.style.display === 'flex' && !_insideBar) {
-        _gcpToggleFramesBar(); // cierra
+        _gcpCloseFramesBar(); // cierra
       }
       if (_bib && _bib.classList.contains('open') && !_insideBib) {
         // v38.09 — BUG CORREGIDO (reportado por Alberto: al insertar un objeto
@@ -36940,6 +36940,15 @@ function _gcpThumbTapGoToFrame(e, la, fi) {
   }
 }
 
+// Igual que _gcpThumbTapGoToFrame pero para la fila de fotogramas (miniatura
+// COMPUESTA, sin objeto asociado): cierra la matriz y salta al fotograma. Sin
+// doble tap ni selección de capa — no hay un único objeto al que aplicárselo.
+function _gcpFilmThumbTapGoToFrame(e, fi) {
+  e.stopPropagation();
+  _gcpCloseFramesBar();
+  _gcpGoToFrame(fi);
+}
+
 // ── Miniatura de "muestra": UNA por objeto (fila), para identificar de un
 // vistazo qué objeto es cada fila sin depender de ningún frame concreto.
 // Se renderiza con las propiedades ACTUALES del objeto (no depende de ningún fi).
@@ -37042,6 +37051,15 @@ function _gcpLayerSampleThumb(la, S) {
 // página + medio lienzo extra, y además la carga se difiere con
 // IntersectionObserver: solo se calculan las miniaturas que entran en pantalla.
 const _gcpThumbCache = new Map(); // clave: "layerIdx-fi-S"
+// Miniaturas COMPUESTAS (todos los objetos de un fotograma, ver _gcpFrameThumb
+// más abajo) — caché aparte porque su clave no depende de ningún objeto
+// concreto (solo de fi+S), así que no encaja en _gcpThumbCache. Se invalida
+// desde los MISMOS dos puntos que _gcpThumbCache (_gcpInvalidateThumb/
+// _gcpInvalidateAllThumbs, justo abajo) para no tener que tocar cada uno de
+// sus muchos puntos de llamada por el proyecto: cualquier cambio que afecte
+// a la miniatura de UN objeto en un frame también afecta a la compuesta de
+// ese mismo frame.
+const _gcpComposedThumbCache = new Map(); // clave: "fi-S"
 function _gcpThumbCacheKey(la, fi) {
   // Mismo criterio que _gcpLayerSampleThumb: UID estable, no índice de array
   // (que cambia al reordenar capas y contaminaría la caché entre objetos).
@@ -37054,6 +37072,10 @@ function _gcpInvalidateThumb(la, fi) {
     for (const k of _gcpThumbCache.keys()) {
       if (k.startsWith(la._gcpUid + '-')) _gcpThumbCache.delete(k);
     }
+    // Este objeto cambió en TODOS sus frames (p.ej. botón 👁 de fila entera)
+    // — cualquier compuesta podría incluirlo, no hay forma barata de saber
+    // cuáles: se vacía entera, igual de barato que reconstruirla bajo demanda.
+    _gcpComposedThumbCache.clear();
   } else {
     // Borrar por PREFIJO (uid-fi-), no por clave exacta: la clave real en caché
     // siempre lleva el tamaño como sufijo (p.ej. "uid-fi-88", "uid-fi-56" para
@@ -37065,6 +37087,11 @@ function _gcpInvalidateThumb(la, fi) {
     const _prefix = la._gcpUid + '-' + fi + '-';
     for (const k of _gcpThumbCache.keys()) {
       if (k.startsWith(_prefix)) _gcpThumbCache.delete(k);
+    }
+    // La compuesta de ESTE frame concreto incluye a este objeto — obsoleta.
+    const _cPrefix = fi + '-';
+    for (const k of _gcpComposedThumbCache.keys()) {
+      if (k.startsWith(_cPrefix)) _gcpComposedThumbCache.delete(k);
     }
   }
 }
@@ -37078,7 +37105,9 @@ function _gcpInvalidateThumb(la, fi) {
 // y únicamente la primera vez que se confirma la inserción de cada objeto.
 function _gcpInvalidateAllThumbs() {
   _gcpThumbCache.clear();
+  _gcpComposedThumbCache.clear();
 }
+
 
 function _gcpLayerFrameThumb(la, fi, S) {
   S = S || 72;
@@ -37155,6 +37184,19 @@ function _gcpQueueThumbRender(holder, la, fi, S) {
   if (_gcpThumbIO) _gcpThumbIO.observe(holder);
 }
 
+// Igual que _gcpQueueThumbRender pero para la miniatura COMPUESTA de un
+// fotograma (fila de fotogramas) — mismo IntersectionObserver y misma cola
+// serializada (_gcpThumbQueue/_gcpProcessThumbQueue, nunca más de una
+// miniatura por frame de pantalla, ver su cabecera): renderizar una
+// compuesta cuesta más que una de un solo objeto (dibuja TODOS los objetos
+// visibles en ese frame), así que es aún más importante no calcular varias
+// de golpe. holder._gcpLa se deja sin definir a propósito — es lo que usa
+// _gcpRenderQueuedThumb para distinguir qué tipo de miniatura tocaba.
+function _gcpQueueComposedThumbRender(holder, fi, S) {
+  holder._gcpComposed = true; holder._gcpFi = fi; holder._gcpS = S;
+  if (_gcpThumbIO) _gcpThumbIO.observe(holder);
+}
+
 function _gcpProcessThumbQueue() {
   if (!_gcpThumbQueue.length) { _gcpThumbQueueRunning = false; return; }
   const holder = _gcpThumbQueue.shift();
@@ -37163,11 +37205,21 @@ function _gcpProcessThumbQueue() {
 }
 
 function _gcpRenderQueuedThumb(holder) {
+  if (holder._gcpComposed) {
+    const key = holder._gcpFi + '-' + holder._gcpS;
+    let c = _gcpComposedThumbCache.get(key);
+    if (!c) { c = _gcpFrameThumb(holder._gcpFi, holder._gcpS); _gcpComposedThumbCache.set(key, c); }
+    c.style.cssText = 'width:' + holder._gcpS + 'px;height:' + holder._gcpS + 'px;display:block;';
+    c.addEventListener('click', e => _gcpFilmThumbTapGoToFrame(e, holder._gcpFi));
+    if (holder.isConnected) holder.replaceWith(c);
+    return;
+  }
   const c = _gcpLayerFrameThumb(holder._gcpLa, holder._gcpFi, holder._gcpS);
   c.style.cssText = 'width:' + holder._gcpS + 'px;height:' + holder._gcpS + 'px;display:block;';
   c.addEventListener('click', e => _gcpThumbTapGoToFrame(e, holder._gcpLa, holder._gcpFi));
   if (holder.isConnected) holder.replaceWith(c);
 }
+
 
 // Busca el snapshot existente más reciente de esta capa en o antes de fi (excluyendo fi).
 // Se usa para "resucitar" un objeto que vuelve a existir tras un hueco, recuperando
@@ -37180,14 +37232,24 @@ function _gcpFindPrevExistingFrame(la, fi) {
   return null;
 }
 
-// Miniatura compuesta (todos los layers visibles) en frame fi
-function _gcpFrameThumb(fi) {
-  const S=60;
+// Miniatura compuesta (todos los layers visibles) en frame fi. Restaura el
+// estado EXACTO de cada capa al terminar — INCLUIDO _gcpVisible, no solo
+// x/y/width/height/rotation/opacity (_gcpApplyFrame no toca ese campo por su
+// cuenta, así que si no se restaura aquí se queda con la visibilidad del
+// último fi generado). Es crítico porque, a diferencia de dónde se usaba
+// _gcpApplyFrame hasta ahora (siempre para el frame ACTIVO, navegando a él
+// de verdad), esta función se llama repetidamente para fotogramas DISTINTOS
+// al que el lienzo principal está mostrando — fila de fotogramas, cola de
+// renderizado diferido (_gcpQueueComposedThumbRender) — así que cualquier
+// rastro que dejara del frame fi rompería la vista principal del GCP en
+// cuanto terminara de generarse la última miniatura en segundo plano.
+function _gcpFrameThumb(fi, S) {
+  S = S || 60;
   const tc=document.createElement('canvas');tc.width=S;tc.height=S;
   const tctx=tc.getContext('2d');
   tctx.fillStyle='#f0f0f0';tctx.fillRect(0,0,S,S);
   if(!window._gcpLayers.length) return tc;
-  const saved=window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}));
+  const saved=window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,vis:la._gcpVisible}));
   const _savedSel=window._gcpSelIdx; window._gcpSelIdx=-1;
   _gcpApplyFrame(fi);
   _gcpWithEditorContext(()=>{
@@ -37215,7 +37277,7 @@ function _gcpFrameThumb(fi) {
     tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
   window._gcpSelIdx=_savedSel;
-  saved.forEach((s,i)=>{const la=window._gcpLayers[i];if(!la)return;la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity;});
+  saved.forEach((s,i)=>{const la=window._gcpLayers[i];if(!la)return;la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity;la._gcpVisible=s.vis;});
   return tc;
 }
 
@@ -37373,9 +37435,10 @@ function _gcpRefreshActiveThumb() {
   if (bar && bar.style.display === 'flex') _gcpUpdateFramesBar();
 }
 
-// Cierra el panel de la matriz de frames (a diferencia de _gcpToggleFramesBar,
-// esta no comprueba el estado — siempre cierra). Se usa también al tocar
-// directamente una miniatura visible, ver _gcpUpdateFramesBar.
+// Cierra el panel de la matriz de frames — siempre cierra, sin comprobar
+// nada (el que llama ya sabe que está abierta). Se usa al tocar el botón con
+// la barra ya abierta, al hacer click fuera, y al tocar directamente una
+// miniatura visible — ver _gcpUpdateFramesBar.
 function _gcpCloseFramesBar() {
   const bar = document.getElementById('gcpFramesBar');
   const btn = document.getElementById('gcpFramesToggleBtn');
@@ -37386,22 +37449,22 @@ function _gcpCloseFramesBar() {
   if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
-// Toggle visibilidad del panel de frames
-function _gcpToggleFramesBar() {
+// Abre la barra de Matriz en el modo elegido (petición de Alberto: el botón
+// ya no abre directamente — primero se elige "fila de fotogramas" o "matriz
+// de objetos", ver el desplegable gdd-matrixMode y su listener). Sustituye
+// a la antigua _gcpToggleFramesBar(); cerrar sigue siendo _gcpCloseFramesBar()
+// tal cual, sin cambios (ver también el "click fuera cierra" en _edDocDownFn).
+function _gcpOpenFramesBar(mode) {
   const bar = document.getElementById('gcpFramesBar');
   const btn = document.getElementById('gcpFramesToggleBtn');
   if (!bar) return;
-  const isOpen = bar.style.display === 'flex';
-  if (isOpen) {
-    _gcpCloseFramesBar();
-  } else {
-    bar.style.display = 'flex';
-    if (btn) { btn.textContent = I18n.t('gcp_matrixOpenLabel'); btn.classList.add('active'); }
-    _gcpUpdateFramesBar();
-    // Refrescar de inmediato las barras generales de paneo (se ocultan/muestran
-    // según si la Matriz está abierta — ver _edScrollbarsDraw)
-    if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
-  }
+  window._gcpFramesBarMode = mode; // 'filmstrip' | 'objects' — leído por _gcpUpdateFramesBar
+  bar.style.display = 'flex';
+  if (btn) { btn.textContent = I18n.t('gcp_matrixOpenLabel'); btn.classList.add('active'); }
+  _gcpUpdateFramesBar();
+  // Refrescar de inmediato las barras generales de paneo (se ocultan/muestran
+  // según si la Matriz está abierta — ver _edScrollbarsDraw)
+  if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
 }
 
 // Previsualizar la animación en el canvas GIF (botón ▶)
@@ -37674,6 +37737,17 @@ function _gcpUpdateFramesBar() {
   if (bar.style.display !== 'flex') return;
   bar.innerHTML = '';
 
+  // Modo elegido en el desplegable del botón Matriz (ver _gcpOpenFramesBar):
+  // 'objects' — matriz de siempre, una fila por objeto, sin regla ni acciones
+  // de columna (petición de Alberto: esos controles ya no hacen falta aquí,
+  // son generales del fotograma, no de un objeto concreto).
+  // 'filmstrip' — una sola fila con miniaturas COMPUESTAS (todos los objetos
+  // de cada fotograma, ver _gcpFrameThumb), con la regla de tiempo y las
+  // acciones de columna (⧉ duplicar / ✕ eliminar / T pausa / ⟳ interpolación)
+  // que antes vivían en la matriz — mismas funciones, sin cambios, solo se
+  // muestran aquí en vez de allí.
+  const mode = window._gcpFramesBarMode || 'objects';
+
   // Estructura: columna izquierda fija + zona de frames con scroll H+V
   // Wrapper vertical: permite scroll vertical de filas
   const inner = document.createElement('div');
@@ -37681,53 +37755,60 @@ function _gcpUpdateFramesBar() {
   inner.style.cssText = 'display:flex;flex-direction:column;overflow:hidden;flex:1;';
   bar.appendChild(inner);
 
-  // ── Regla de tiempo ──────────────────────────────────────────────────────
-  // Fuera de scrollWrap a propósito: así queda fija verticalmente (no se va
-  // con el scroll de filas) pero se sincroniza en horizontal con framesPane
-  // (ver el listener de 'scroll' más abajo). El espaciador de la izquierda
-  // iguala el ancho de leftPane(52px) + samplePane(64px) para que la regla
-  // arranque justo donde arranca la primera columna de frames.
-  const rulerRow = document.createElement('div');
-  rulerRow.id = 'gcpRulerRow';
-  rulerRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:27px;' +
-    'border:1.5px solid #1d6fe0;background:var(--gray-50);';
-  const rulerSpacer = document.createElement('div');
-  rulerSpacer.style.cssText = 'flex-shrink:0;width:116px;border-right:1px solid var(--gray-200);';
-  rulerRow.appendChild(rulerSpacer);
-  const rulerViewport = document.createElement('div');
-  rulerViewport.id = 'gcpRulerViewport';
-  rulerViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
-  const rulerContent = document.createElement('div');
-  rulerContent.id = 'gcpRulerContent';
-  rulerContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
-  rulerViewport.appendChild(rulerContent);
-  rulerRow.appendChild(rulerViewport);
-  inner.appendChild(rulerRow);
+  // rulerContent/colActionsContent solo se crean en modo 'filmstrip' (ver más
+  // abajo) — declaradas aquí para que _gcpSyncFrameRowsScroll (que las usa
+  // sin importar el modo) y la llamada final a _gcpBuildRuler/ColActions las
+  // tengan a mano; en modo 'objects' quedan en null y sus usos son no-ops.
+  let rulerContent = null, colActionsContent = null;
 
-  // ── Fila de acciones de columna (⧉ duplicar / ✕ eliminar / T pausa) ──────
-  // Mismo patrón que la regla de tiempo justo encima: fuera de scrollWrap (fija
-  // verticalmente, no se va con el scroll de filas) pero sincronizada en
-  // horizontal con framesPane. Antes ⧉ y ✕ vivían duplicados dentro de CADA
-  // celda de CADA fila — no tenía sentido, porque las tres acciones afectan a
-  // la columna entera (todas las capas), no a un objeto individual. Ahora
-  // aparecen una sola vez, en el límite entre columna y columna, igual que el
-  // botón ⟳ de interpolación aparece una vez entre frame y frame de una fila.
-  const colActionsRow = document.createElement('div');
-  colActionsRow.id = 'gcpColActionsRow';
-  colActionsRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:32px;' +
-    'border-bottom:1px solid var(--gray-200);background:var(--white);';
-  const colActionsSpacer = document.createElement('div');
-  colActionsSpacer.style.cssText = 'flex-shrink:0;width:116px;border-right:1px solid var(--gray-200);';
-  colActionsRow.appendChild(colActionsSpacer);
-  const colActionsViewport = document.createElement('div');
-  colActionsViewport.id = 'gcpColActionsViewport';
-  colActionsViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
-  const colActionsContent = document.createElement('div');
-  colActionsContent.id = 'gcpColActionsContent';
-  colActionsContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
-  colActionsViewport.appendChild(colActionsContent);
-  colActionsRow.appendChild(colActionsViewport);
-  inner.appendChild(colActionsRow);
+  if (mode === 'filmstrip') {
+    // ── Regla de tiempo ────────────────────────────────────────────────────
+    // Fuera de scrollWrap a propósito: así queda fija verticalmente (no se va
+    // con el scroll de filas) pero se sincroniza en horizontal con framesPane
+    // (ver el listener de 'scroll' más abajo). El espaciador de la izquierda
+    // ya NO necesita igualar leftPane(52px)+samplePane(64px) — en este modo
+    // esos dos paneles quedan vacíos (0 filas → 0 ancho), así que la regla
+    // arranca directamente donde arranca la única fila de fotogramas.
+    const rulerRow = document.createElement('div');
+    rulerRow.id = 'gcpRulerRow';
+    rulerRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:27px;' +
+      'border:1.5px solid #1d6fe0;background:var(--gray-50);';
+    const rulerSpacer = document.createElement('div');
+    rulerSpacer.style.cssText = 'flex-shrink:0;width:0px;';
+    rulerRow.appendChild(rulerSpacer);
+    const rulerViewport = document.createElement('div');
+    rulerViewport.id = 'gcpRulerViewport';
+    rulerViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
+    rulerContent = document.createElement('div');
+    rulerContent.id = 'gcpRulerContent';
+    rulerContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
+    rulerViewport.appendChild(rulerContent);
+    rulerRow.appendChild(rulerViewport);
+    inner.appendChild(rulerRow);
+
+    // ── Fila de acciones de columna (⧉ duplicar / ✕ eliminar / T pausa) ────
+    // Mismo patrón que la regla de tiempo justo encima: fuera de scrollWrap (fija
+    // verticalmente, no se va con el scroll de filas) pero sincronizada en
+    // horizontal con framesPane. Afectan a la columna entera (todas las capas),
+    // no a un objeto individual — de ahí que vivan aquí, junto a la fila de
+    // fotogramas compuestos, y ya no en la matriz de objetos.
+    const colActionsRow = document.createElement('div');
+    colActionsRow.id = 'gcpColActionsRow';
+    colActionsRow.style.cssText = 'flex-shrink:0;display:flex;flex-direction:row;height:32px;' +
+      'border-bottom:1px solid var(--gray-200);background:var(--white);';
+    const colActionsSpacer = document.createElement('div');
+    colActionsSpacer.style.cssText = 'flex-shrink:0;width:0px;';
+    colActionsRow.appendChild(colActionsSpacer);
+    const colActionsViewport = document.createElement('div');
+    colActionsViewport.id = 'gcpColActionsViewport';
+    colActionsViewport.style.cssText = 'flex:1;min-width:0;overflow:hidden;position:relative;';
+    colActionsContent = document.createElement('div');
+    colActionsContent.id = 'gcpColActionsContent';
+    colActionsContent.style.cssText = 'position:absolute;top:0;left:0;height:100%;';
+    colActionsViewport.appendChild(colActionsContent);
+    colActionsRow.appendChild(colActionsViewport);
+    inner.appendChild(colActionsRow);
+  }
 
   // Zona scrollable: contiene leftPane + framesPane, scroll vertical aquí
   const scrollWrap = document.createElement('div');
@@ -37817,7 +37898,17 @@ function _gcpUpdateFramesBar() {
     const left = sourceEl.scrollLeft;
     window._gcpFramesScrollLeft = left; // fuente persistente — ver declaración junto a window._gcpDirty
     window._gcpFrameRows.forEach(row => { if (row !== sourceEl && row.scrollLeft !== left) row.scrollLeft = left; });
-    rulerContent.style.transform = 'translateX(-' + left + 'px)';
+    // Guarda null en AMBAS — no solo colActionsContent: en modo 'objects' las
+    // dos son null (solo existen en 'filmstrip', ver cabecera de la función).
+    // Bug real de la sesión anterior: rulerContent no tenía esta guarda, así
+    // que en 'objects' esta función lanzaba una excepción justo AQUÍ —
+    // después de sincronizar las filas (por eso el primer arrastre sí se
+    // veía bien) pero antes de llegar a "_gcpSyncingFrameScroll = false" al
+    // final, dejando ese flag atascado en true para siempre y con ello
+    // desactivando la sincronización de todos los arrastres siguientes —
+    // exactamente el síntoma reportado por Alberto ("se draguean las filas
+    // independientemente").
+    if (rulerContent) rulerContent.style.transform = 'translateX(-' + left + 'px)';
     if (colActionsContent) colActionsContent.style.transform = 'translateX(-' + left + 'px)';
     if (_syncHThumb) _syncHThumb();
     _gcpSyncingFrameScroll = false;
@@ -38093,6 +38184,17 @@ function _gcpUpdateFramesBar() {
     _gcpHiddenCols[fi] = window._gcpLayers.some(l => l._frames && l._frames[fi]?._interp);
   }
 
+  // Índices de fotogramas CLAVE visibles (saltando los interpolados que
+  // colapsan bajo ⟳) — compartido por ambos modos: una fila por objeto usa
+  // esta misma lista para sus cards, y la fila de fotogramas compuestos
+  // también, para quedar alineada con la regla/acciones de columna, que se
+  // miden sobre esta misma estructura (ver _gcpMeasureRulerBreakpoints).
+  const _visibleFiList = [];
+  for (let fi = 0; fi < total; fi++) {
+    if (!_gcpHiddenCols[fi]) _visibleFiList.push(fi);
+  }
+
+  if (mode === 'objects') {
   // Iterar en orden inverso: el último índice (más arriba en canvas) aparece primero en la UI
   const _layersCopy = window._gcpLayers.map((la, i) => ({ la, layerIdx: i })).reverse();
   _layersCopy.forEach(({ la, layerIdx }) => {
@@ -38273,14 +38375,10 @@ function _gcpUpdateFramesBar() {
     scroll.addEventListener('scroll', () => _gcpSyncFrameRowsScroll(scroll), { passive: true });
 
     // ── Cards de frames (solo frames clave; los interpolados se ocultan) ─────────
-    // Construir lista de índices visibles: saltar frames interpolados
-    // Los frames interpolados existen en el array pero no se muestran como card.
-    // Entre dos frames clave puede haber N interpolados: se representa con el botón ⟳.
-    let _visibleFiList = [];
-    for (let fi = 0; fi < total; fi++) {
-      if (!_gcpHiddenCols[fi]) _visibleFiList.push(fi);
-    }
-
+    // _visibleFiList ya calculada arriba (compartida con el modo filmstrip) —
+    // los frames interpolados existen en el array pero no se muestran como
+    // card. Entre dos frames clave puede haber N interpolados: se representa
+    // con el botón ⟳.
     for (let _vi = 0; _vi < _visibleFiList.length; _vi++) {
       const fi        = _visibleFiList[_vi];
       // hasFrame ahora significa "el objeto existe en este frame" — un hueco (null)
@@ -38445,6 +38543,71 @@ function _gcpUpdateFramesBar() {
     scroll.appendChild(liveCard);
     framesPane.appendChild(scroll);
   });
+  } else {
+    // ── Modo 'filmstrip': una sola fila con miniaturas COMPUESTAS ──────────
+    // Mismas clases/estructura que una fila normal (.gcp-layer-scroll con
+    // .ed-page-card[data-fi]) para que _gcpMeasureRulerBreakpoints/
+    // _gcpBuildColActions (reutilizadas tal cual, ver el final de esta
+    // función) midan y centren sobre ella exactamente igual que sobre
+    // cualquier fila de objeto. Sin leftCol/sampleCol: no hay controles por
+    // objeto en este modo — leftPane/samplePane quedan sin hijos y colapsan
+    // solos a 0 de ancho.
+    const scroll = document.createElement('div');
+    scroll.className = 'gcp-layer-scroll';
+    scroll.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:24px;' +
+      'overflow-x:auto;overflow-y:hidden;flex-shrink:0;height:190px;box-sizing:border-box;' +
+      'border-bottom:1px solid var(--gray-200);scrollbar-width:none;';
+    window._gcpFrameRows.push(scroll);
+    scroll.addEventListener('scroll', () => _gcpSyncFrameRowsScroll(scroll), { passive: true });
+
+    for (let _vi = 0; _vi < _visibleFiList.length; _vi++) {
+      const fi = _visibleFiList[_vi];
+      const isCurrent = (fi === gfi);
+
+      const card = document.createElement('div');
+      card.className = 'ed-page-card' + (isCurrent ? ' current' : '');
+      card.dataset.fi = fi;
+      card.style.cursor = 'pointer';
+
+      const header = document.createElement('div');
+      header.className = 'ed-page-header';
+      const num = document.createElement('div');
+      num.className = 'ed-page-num';
+      num.textContent = _vi + 1;
+      header.appendChild(num);
+      card.appendChild(header);
+
+      // Miniatura compuesta con carga diferida — mismo IntersectionObserver +
+      // cola serializada que las miniaturas por objeto (nunca más de una
+      // renderizada por frame de pantalla, ver cabecera de _gcpThumbIO).
+      const cacheKey = fi + '-88';
+      if (_gcpComposedThumbCache.has(cacheKey)) {
+        const c = _gcpComposedThumbCache.get(cacheKey);
+        c.style.cssText = 'width:88px;height:88px;display:block;';
+        c.addEventListener('click', e => _gcpFilmThumbTapGoToFrame(e, fi));
+        card.appendChild(c);
+      } else {
+        const holder = document.createElement('div');
+        holder.className = 'ed-page-thumb';
+        holder.style.cssText = 'width:88px;height:88px;background:var(--gray-100);';
+        card.appendChild(holder);
+        _gcpQueueComposedThumbRender(holder, fi, 88);
+      }
+
+      // Tocar el resto de la card (cabecera, marcador aún sin cargar) navega
+      // sin cerrar; tocar la miniatura YA renderizada cierra y navega (ver el
+      // listener 'click' propio que se le añade al crearla, arriba) — ese
+      // listener detiene la propagación antes de llegar aquí, así que este
+      // solo se ejecuta cuando el toque no fue sobre la miniatura cargada.
+      card.addEventListener('click', e => {
+        e.stopPropagation();
+        _gcpGoToFrame(fi);
+      });
+
+      scroll.appendChild(card);
+    }
+    framesPane.appendChild(scroll);
+  }
 
   // Restaurar posición de scroll horizontal y vertical — usa las variables
   // persistentes (window._gcpFramesScrollLeft/Top), no una lectura puntual del
@@ -38463,8 +38626,14 @@ function _gcpUpdateFramesBar() {
     requestAnimationFrame(() => requestAnimationFrame(() => { scrollWrap.scrollTop = _targetTop; }));
   }
 
-  _gcpBuildRuler(framesPane, rulerContent);
-  _gcpBuildColActions(colActionsContent);
+  // Regla + acciones de columna: solo en modo 'filmstrip' (ver cabecera de la
+  // función) — rulerContent/colActionsContent son null en modo 'objects', y
+  // ambas funciones ya comprueban su propia entrada, pero no hace falta ni
+  // llamarlas si no hay nada que construir.
+  if (mode === 'filmstrip') {
+    _gcpBuildRuler(framesPane, rulerContent);
+    _gcpBuildColActions(colActionsContent);
+  }
   _gcpAlignRowArrows(framesPane, leftPane);
   _gcpStretchSidePanes(scrollWrap, leftPane, samplePane, framesPane);
 
@@ -40276,9 +40445,38 @@ function gcpOpen(edLayerIdx) {
     document.getElementById('gcpAddFrameBtn')?.addEventListener('pointerup', e => {
       e.stopPropagation(); _gcpCaptureFrame();
     });
-    // Botón toggle Frames
+    // Botón Matriz — petición de Alberto: si ya está abierta, cerrarla (igual
+    // que antes); si está cerrada, en vez de abrirla directamente, mostrar el
+    // desplegable con las dos opciones (fila de fotogramas / matriz de
+    // objetos) — mismo patrón visual que el resto de desplegables GCP
+    // (gdd-/.ed-dropdown), pero con apertura propia: el bucle genérico
+    // [data-gcpmenu] no distingue "cerrar la barra si ya está abierta" de
+    // "elegir modo si está cerrada", así que este botón no lleva
+    // data-gcpmenu y se gestiona aquí explícitamente.
     document.getElementById('gcpFramesToggleBtn')?.addEventListener('pointerup', e => {
-      e.stopPropagation(); _gcpToggleFramesBar();
+      e.stopPropagation();
+      const _fBar = document.getElementById('gcpFramesBar');
+      if (_fBar && _fBar.style.display === 'flex') { _gcpCloseFramesBar(); return; }
+      const _mmDd = document.getElementById('gdd-matrixMode');
+      if (!_mmDd) return;
+      const _mmOpen = _mmDd.classList.contains('open');
+      _gcpCloseAllDropdowns();
+      if (!_mmOpen) {
+        _mmDd._gcpOrigParent = _mmDd._gcpOrigParent || _mmDd.parentNode;
+        document.body.appendChild(_mmDd);
+        _mmDd.classList.add('open');
+        _edPositionDropdown(_mmDd, e.currentTarget.getBoundingClientRect());
+      }
+    });
+    document.getElementById('gcp-matrixmode-filmstrip')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      _gcpCloseAllDropdowns();
+      _gcpOpenFramesBar('filmstrip');
+    });
+    document.getElementById('gcp-matrixmode-objects')?.addEventListener('pointerup', e => {
+      e.stopPropagation();
+      _gcpCloseAllDropdowns();
+      _gcpOpenFramesBar('objects');
     });
     // Botones del dropdown Guardar
     document.getElementById('gcpSaveAppBtn')?.addEventListener('pointerup', e => {

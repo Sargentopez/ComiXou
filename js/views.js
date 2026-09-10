@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.67</footer>
+    <footer class="app-version">v39.69</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1070,8 +1070,20 @@ Router.register('editor', {
           <button class="ed-undo-redo-btn" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
           -->
           <div class="ed-menu-sep"></div>
-          <!-- Matriz (antes "Frames") -->
-          <button class="ed-menu-btn" id="gcpFramesToggleBtn" data-i18n="gcp_matrixBtn">Matriz ▾</button>
+          <!-- Matriz (antes "Frames") — al tocar, elegir modo primero (petición
+               de Alberto) en vez de abrir directamente. Mismo patrón visual
+               que el resto de desplegables GCP (.ed-dropdown/.ed-dropdown-item,
+               prefijo gdd-), aunque su apertura/cierre es propia (ver el
+               listener de gcpFramesToggleBtn en editor.js) porque, a
+               diferencia del resto, este botón también debe CERRAR la barra
+               directamente cuando ya está abierta, no repetir el desplegable. -->
+          <div class="ed-menu-item" style="position:relative">
+            <button class="ed-menu-btn" id="gcpFramesToggleBtn" data-i18n="gcp_matrixBtn">Matriz ▾</button>
+            <div class="ed-dropdown" id="gdd-matrixMode">
+              <button class="ed-dropdown-item" id="gcp-matrixmode-filmstrip"><span class="dd-icon">🎞️</span><span data-i18n="gcp_filmstripOption">Fila de fotogramas</span></button>
+              <button class="ed-dropdown-item" id="gcp-matrixmode-objects"><span class="dd-icon">▦</span><span data-i18n="gcp_objectMatrixOption">Matriz de objetos</span></button>
+            </div>
+          </div>
           <div class="ed-menu-sep"></div>
           <!-- Comportamiento -->
           <div class="ed-menu-item" style="position:relative">
