@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.74</footer>
+    <footer class="app-version">v39.75</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -432,6 +432,7 @@ Router.register('editor', {
         <div class="ed-menu-sep"></div>
 
         <!-- ZONA DESLIZABLE -->
+        <div class="ed-menu-scroll-wrap">
         <div id="edMenuScroll">
 
 
@@ -644,6 +645,15 @@ Router.register('editor', {
           </div>
 
         </div><!-- /edMenuScroll -->
+
+        <!-- Flechas de scroll — solo visibles (ver .visible en editor.css)
+             cuando queda contenido oculto a ese lado; _edSetupScrollArrows
+             en editor.js las conecta y las mantiene sincronizadas. El
+             arrastre manual de la barra se conserva tal cual, esto es un
+             atajo adicional, no un reemplazo. -->
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-l" id="edMenuArrowL" data-i18n-title="ed_scrollLeftTitle" title="Desplazar a la izquierda">◀</button>
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-r" id="edMenuArrowR" data-i18n-title="ed_scrollRightTitle" title="Desplazar a la derecha">▶</button>
+        </div><!-- /ed-menu-scroll-wrap -->
 
       </div>
 
@@ -1059,6 +1069,7 @@ Router.register('editor', {
       <div id="gcpMenuBar">
         <button class="ed-menu-pin ed-hide-btn" style="display:none"><span style="font-size:1.05rem">▼</span><b style="font-size:.68rem" data-i18n="ed_hideMenu">OCULTAR</b></button>
         <div class="ed-menu-sep"></div>
+        <div class="ed-menu-scroll-wrap">
         <div id="gcpMenuScroll">
           <!-- Biblioteca -->
           <div class="ed-menu-item" style="position:relative">
@@ -1201,7 +1212,11 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="gcp-dd-anim-tutorial" data-i18n="ed_createAnimations">Crear Animación</button>
             </div>
           </div>
-        </div>
+        </div><!-- /gcpMenuScroll -->
+
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-l" id="gcpMenuArrowL" data-i18n-title="ed_scrollLeftTitle" title="Desplazar a la izquierda">◀</button>
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-r" id="gcpMenuArrowR" data-i18n-title="ed_scrollRightTitle" title="Desplazar a la derecha">▶</button>
+        </div><!-- /ed-menu-scroll-wrap -->
       </div>
 
       <!-- ── BARRA VERTICAL DESHACER / REHACER / LUPA — misma solución que
@@ -1274,6 +1289,7 @@ Router.register('editor', {
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">
+        <div class="ed-menu-scroll-wrap">
         <div id="tdMenuScroll">
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn" data-menu="tdInsert" data-i18n="ed_menuInsert">Insertar ▾</button>
@@ -1358,7 +1374,11 @@ Router.register('editor', {
               <button type="button" class="ed-dropdown-item" data-value="number" data-i18n="td_numbered">1. Lista numerada</button>
             </div>
           </div>
-        </div>
+        </div><!-- /tdMenuScroll -->
+
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-l" id="tdMenuArrowL" data-i18n-title="ed_scrollLeftTitle" title="Desplazar a la izquierda">◀</button>
+        <button class="ed-menu-scroll-arrow ed-menu-scroll-arrow-r" id="tdMenuArrowR" data-i18n-title="ed_scrollRightTitle" title="Desplazar a la derecha">▶</button>
+        </div><!-- /ed-menu-scroll-wrap -->
       </div>
       <div id="tdPageArea">
         <div id="tdPage" class="td-page">

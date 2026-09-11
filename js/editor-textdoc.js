@@ -648,6 +648,9 @@ function _tdInitOnce(){
   document.getElementById('tdCloseBtn')?.addEventListener('click', () => edCloseTextDoc());
   document.getElementById('tdApplyBtn')?.addEventListener('click', _tdApplyToCanvas);
   document.getElementById('tdDiagBtn')?.addEventListener('click', _tdRunDiag);
+  if (typeof _edSetupScrollArrows === 'function') {
+    _edSetupScrollArrows('tdMenuScroll', 'tdMenuArrowL', 'tdMenuArrowR');
+  }
   const editorEl = document.getElementById('tdEditor');
 
   // Refuerzo del atributo HTML virtualkeyboardpolicy="manual" (ver views.js)

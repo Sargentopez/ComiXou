@@ -299,6 +299,46 @@ body.editor-page #appView {
 }
 #edMenuScroll::-webkit-scrollbar { display: none; }
 
+/* ── Flechas de scroll de las barras de menú (editor general/GCP/textos) ──
+   Contenedor que ocupa el mismo hueco que antes ocupaba directamente la
+   zona deslizable (#edMenuScroll/#gcpMenuScroll/#tdMenuScroll, que ahora
+   vive un nivel más adentro pero conserva su flex:1/min-width:0 igual que
+   antes) — sirve de referencia de posición para superponer las flechas en
+   sus bordes SIN que se desplacen con el contenido. El arrastre manual de
+   la barra se conserva igual; esto es un atajo adicional (ver
+   _edSetupScrollArrows en editor.js), no un reemplazo. */
+.ed-menu-scroll-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+.ed-menu-scroll-arrow {
+  display: none; /* JS añade/quita .visible según haya contenido oculto a ese lado */
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 26px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  z-index: 5;
+  color: var(--black);
+  font-size: 0.6rem;
+}
+.ed-menu-scroll-arrow.visible { display: flex; }
+.ed-menu-scroll-arrow-l {
+  left: 0;
+  background: linear-gradient(to right, var(--white) 55%, transparent);
+}
+.ed-menu-scroll-arrow-r {
+  right: 0;
+  background: linear-gradient(to left, var(--white) 55%, transparent);
+}
+
 /* Botones del menú */
 .ed-menu-btn {
   position: relative;

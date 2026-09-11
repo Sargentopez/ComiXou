@@ -22395,6 +22395,47 @@ function edInitSelectMenu(){
   });
 }
 
+// ── Flechas de scroll de las barras de menú (editor general/GCP/textos) ──
+// Genérica y reutilizable en los tres editores: muestra la flecha de un
+// lado solo mientras queda contenido oculto en esa dirección, y al tocarla
+// desplaza la barra (scrollBy suave) igual que arrastrarla a mano, que se
+// conserva sin cambios. ResizeObserver cubre tanto el resize de ventana
+// como el caso de una barra que empieza oculta (display:none, ancho 0,
+// ver GCP/textos) y luego se muestra al abrir ese editor. Idempotente
+// (guard scroll._scrollArrowsInit) porque _gcpInitRules-style init puede
+// volver a ejecutarse cada vez que se reabre el GCP; sin el guard se
+// acumularían listeners duplicados y un solo toque desplazaría el doble.
+function _edSetupScrollArrows(scrollId, arrowLId, arrowRId) {
+  const scroll = document.getElementById(scrollId);
+  const arrowL = document.getElementById(arrowLId);
+  const arrowR = document.getElementById(arrowRId);
+  if (!scroll || !arrowL || !arrowR) return;
+  if (scroll._scrollArrowsInit) { _edUpdateScrollArrows(scroll, arrowL, arrowR); return; }
+  scroll._scrollArrowsInit = true;
+
+  const update = () => _edUpdateScrollArrows(scroll, arrowL, arrowR);
+  const scrollByPage = dir => {
+    scroll.scrollBy({ left: dir * Math.round(scroll.clientWidth * 0.8), behavior: 'smooth' });
+  };
+  arrowL.addEventListener('pointerup', e => { e.stopPropagation(); scrollByPage(-1); });
+  arrowR.addEventListener('pointerup', e => { e.stopPropagation(); scrollByPage(1); });
+
+  scroll.addEventListener('scroll', update, { passive: true });
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(update).observe(scroll);
+  } else {
+    window.addEventListener('resize', update);
+  }
+  update();
+}
+
+function _edUpdateScrollArrows(scroll, arrowL, arrowR) {
+  const max = scroll.scrollWidth - scroll.clientWidth;
+  const overflow = max > 1; // margen para redondeo de subpíxel
+  arrowL.classList.toggle('visible', overflow && scroll.scrollLeft > 1);
+  arrowR.classList.toggle('visible', overflow && scroll.scrollLeft < max - 1);
+}
+
 function edInitRules() {
   $('dd-rule-add')?.addEventListener('click', () => {
     _edRuleAdd();
@@ -31253,6 +31294,7 @@ function EditorView_init(){
   edInitSelectMenu();
   edInitContextMenu();
   edInitRules();
+  _edSetupScrollArrows('edMenuScroll', 'edMenuArrowL', 'edMenuArrowR');
   edInitBiblioteca();
   // Avisar al usuario si localStorage se llena al guardar
   window._edQuotaFn = () => edToast(I18n.t('ed_noSpaceWarn'), 5000);
@@ -40907,6 +40949,7 @@ function gcpOpen(edLayerIdx) {
     _gcpInitRules(); // botones Guías GCP
     _gcpInitAlignMenu(); // botones Ordenar (alinear objetos) GCP
     _gcpInitViewEditorToggle(); // checkbox Visualizar contenido del Editor
+    _edSetupScrollArrows('gcpMenuScroll', 'gcpMenuArrowL', 'gcpMenuArrowR');
     document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
       requestAnimationFrame(_gcpSyncComportamiento);
     });
