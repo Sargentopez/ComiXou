@@ -7566,19 +7566,48 @@ function _edOnionRenderPage(page) {
 // page._onionSkinEnabled — el coste normal (checkbox activado pero sin
 // cambios de hoja contigua) son dos comparaciones por referencia, no un
 // re-render.
+//
+// El render en sí (_edOnionRenderPage) se difiere con requestAnimationFrame
+// en vez de ejecutarse aquí mismo — desde que onion skin cubre el área de
+// trabajo completa (1800×2340, no solo la página) es demasiado costoso para
+// hacerlo síncrono en mitad de un cambio de hoja real: edLoadPage() llama a
+// edRedraw()→_edRenderFrame()→_edOnionSkinEnsure() de forma SÍNCRONA, así
+// que sin diferir esto, borrar una hoja (edDeletePage → edPages.splice →
+// edLoadPage, todo en el mismo gesto de tocar "Eliminar") bloqueaba el hilo
+// principal con la creación/composición de hasta 4 canvas de ~4.2 millones
+// de píxeles cada uno (contigua anterior + siguiente, cada una con su propio
+// lienzo interno) antes de que el navegador pudiera repintar o procesar el
+// siguiente toque — en Android, con menos margen de CPU/memoria que un
+// escritorio, esto se percibía como la app completamente bloqueada. La
+// comparación por referencia de más arriba sigue siendo síncrona (barata:
+// dos comparaciones) — solo se aplaza la parte cara.
 function _edOnionSkinEnsure() {
   const prevIdx = edCurrentPage - 1, nextIdx = edCurrentPage + 1;
   const prevPage = edPages[prevIdx] || null;
   const nextPage = edPages[nextIdx] || null;
   if (prevPage !== _edOnionPrevSrc) {
     _edOnionPrevSrc = prevPage;
-    _edOnionPrevCanvas = prevPage ? _edOnionRenderPage(prevPage) : null;
-    if (prevPage) _edOnionReloadThenRefresh(prevIdx, prevPage);
+    _edOnionPrevCanvas = null; // se rellena en el siguiente frame; evita dejar el ghost de la hoja anterior puesto por error
+    if (prevPage) {
+      requestAnimationFrame(() => {
+        if (prevPage !== _edOnionPrevSrc) return; // otra navegación ya reemplazó esta referencia mientras esperaba
+        _edOnionPrevCanvas = _edOnionRenderPage(prevPage);
+        edRedraw();
+      });
+      _edOnionReloadThenRefresh(prevIdx, prevPage);
+    }
   }
   if (nextPage !== _edOnionNextSrc) {
     _edOnionNextSrc = nextPage;
-    _edOnionNextCanvas = nextPage ? _edOnionRenderPage(nextPage) : null;
-    if (nextPage) _edOnionReloadThenRefresh(nextIdx, nextPage);
+    _edOnionNextCanvas = null;
+    if (nextPage) {
+      requestAnimationFrame(() => {
+        if (nextPage !== _edOnionNextSrc) return;
+        _edOnionNextCanvas = _edOnionRenderPage(nextPage);
+        edRedraw();
+      });
+      _edOnionReloadThenRefresh(nextIdx, nextPage);
+    }
   }
 }
 
@@ -25355,7 +25384,20 @@ async function _edCalcProjectBytes(forceRecalc) {
     for (const p of edPages) {
       if (!p || !p.layers) continue;
 
-      if (!window._edPagesStructureDirtyLocal && !_edPageDirtyLocal(p) &&
+      // NOTA (fix Android, tras "eliminar hoja bloquea la app" en v39.82):
+      // a diferencia de edSaveProject (línea con el mismo patrón, más abajo),
+      // aquí SÍ se ignora deliberadamente window._edPagesStructureDirtyLocal.
+      // Este aviso es solo informativo y se autocorrige en la siguiente
+      // comprobación — un dato de esta página ligeramente obsoleto tras un
+      // cambio ESTRUCTURAL en OTRA página no tiene coste real. El guardado de
+      // verdad sí necesita el criterio "ante la duda, marcar sucio" (evitar
+      // pérdida de datos); recalcular por completo TODAS las páginas del
+      // proyecto solo porque se borró/reordenó UNA hoja distinta es
+      // exactamente el bloqueo de varios segundos que describe el comentario
+      // de la CAUSA RAÍZ de arriba — y con edDeletePage forzando este cálculo
+      // 800ms después (vía edPushHistory→edLoadPage), justo al eliminar una
+      // hoja es cuando más se nota.
+      if (!_edPageDirtyLocal(p) &&
           p._cachedSerLocal && p._cachedSizeBytes != null &&
           p._cachedSerLocal.layers.length === p.layers.length) {
         total += p._cachedSizeBytes;
