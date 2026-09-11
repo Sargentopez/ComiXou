@@ -313,6 +313,9 @@ body.editor-page #appView {
   min-width: 0;
   display: flex;
   align-items: stretch;
+  overflow: hidden; /* recorta cualquier hijo (flechas incluidas) que pudiera
+    sobresalir del alto de la barra — no depender solo de que el cálculo de
+    "stretch" salga exacto */
 }
 .ed-menu-scroll-arrow {
   display: none; /* JS añade/quita .visible según haya contenido oculto a ese lado */
@@ -333,6 +336,7 @@ body.editor-page #appView {
      evitar tocar por error el botón de menú contiguo, pero resultó
      demasiado grande y se revirtió a 26px: el cambio de color ya basta. */
   background: var(--gray-700);
+  opacity: 0.6;
 }
 .ed-menu-scroll-arrow.visible { display: flex; }
 .ed-menu-scroll-arrow-l { left: 0; }
