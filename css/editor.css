@@ -318,7 +318,7 @@ body.editor-page #appView {
   display: none; /* JS añade/quita .visible según haya contenido oculto a ese lado */
   position: absolute;
   top: 0; bottom: 0;
-  width: 40px;
+  width: 26px;
   align-items: center;
   justify-content: center;
   border: none;
@@ -327,11 +327,11 @@ body.editor-page #appView {
   cursor: pointer;
   z-index: 5;
   color: var(--white);
-  font-size: 0.7rem;
-  /* Sólido, no degradado — más oscuro y más ancho que antes (petición de
-     Alberto: con el degradado claro y estrecho anterior era fácil tocar
-     por error el botón de menú contiguo). Un límite opaco y bien marcado
-     deja claro dónde empieza y acaba la zona táctil de la flecha. */
+  font-size: 0.6rem;
+  /* Sólido, no degradado, y más oscuro que el blanco/degradado original
+     (petición de Alberto) — el ancho se probó más grande (40px) para
+     evitar tocar por error el botón de menú contiguo, pero resultó
+     demasiado grande y se revirtió a 26px: el cambio de color ya basta. */
   background: var(--gray-700);
 }
 .ed-menu-scroll-arrow.visible { display: flex; }
