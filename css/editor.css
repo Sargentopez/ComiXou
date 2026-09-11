@@ -331,12 +331,10 @@ body.editor-page #appView {
   z-index: 5;
   color: var(--white);
   font-size: 0.6rem;
-  /* Sólido, no degradado, y más oscuro que el blanco/degradado original
-     (petición de Alberto) — el ancho se probó más grande (40px) para
-     evitar tocar por error el botón de menú contiguo, pero resultó
-     demasiado grande y se revirtió a 26px: el cambio de color ya basta. */
-  background: var(--gray-700);
-  opacity: 0.6;
+  /* Fondo al 60% de opacidad (rgba, no la propiedad opacity — esa afectaría
+     también al icono, que debe quedar totalmente opaco para que no se vea
+     el menú de detrás a través de la flecha). #4A4540 = --gray-700. */
+  background: rgba(74, 69, 64, 0.6);
 }
 .ed-menu-scroll-arrow.visible { display: flex; }
 .ed-menu-scroll-arrow-l { left: 0; }
