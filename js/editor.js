@@ -8755,6 +8755,23 @@ function _edApplyClipboardEnvelope(envelope, targetPos){
 // comprobar el portapapeles del sistema EN ABSOLUTO (API no disponible o
 // permiso de lectura denegado) — ahí sí es la mejor aproximación posible,
 // ya que no hay forma de saber si el usuario copió algo fuera de la app.
+//
+// BUG CORREGIDO (reportado por Alberto): copiar y pegar una vez con el menú
+// contextual funcionaba, pero un segundo pegado ya no — porque la rama de
+// arriba borraba window._edClipboardInternal SIEMPRE que la lectura del
+// portapapeles del sistema tenía éxito, incluso cuando lo leído SÍ era
+// nuestro propio objeto (es decir, en el primer pegado con éxito). Eso
+// dejaba el pegado sin ninguna red de seguridad para la próxima vez, y en
+// móvil no es raro que navigator.clipboard.readText() falle de forma
+// transitoria (p.ej. exige que el documento tenga foco, y cerrar un menú
+// contextual puede perderlo un instante) — al fallar esa segunda lectura,
+// ya no quedaba ningún fallback y el pegado dejaba de funcionar para
+// siempre, aunque el objeto siguiera intacto en el portapapeles del
+// sistema. Ahora solo se borra el fallback cuando la lectura SÍ tuvo éxito
+// pero lo leído NO es nuestro (el usuario copió otra cosa desde entonces,
+// el caso que el comentario de arriba describe) — si SÍ es nuestro, se
+// mantiene sincronizado en vez de borrarse, así un fallo transitorio
+// posterior no deja sin pegar un objeto que sigue siendo válido.
 // Devuelve el envelope ya parseado y validado, o null.
 async function _edReadOwnClipboardEnvelope(){
   let _readSucceeded = false, _txt = null;
@@ -8763,14 +8780,17 @@ async function _edReadOwnClipboardEnvelope(){
       _txt = await _edClipboardWithTimeout(navigator.clipboard.readText());
       _readSucceeded = true;
     }
-  } catch(_e){ /* API no disponible, sin permiso, o tardó demasiado (ver _edClipboardWithTimeout): no sabemos qué hay realmente — sigue abajo */ }
+  } catch(_e){ /* API no disponible, sin permiso, o tardó demasiado (ver _edClipboardWithTimeout): no sabemos qué hay realmente — sigue abajo con el fallback interno */ }
 
   if(_readSucceeded){
-    window._edClipboardInternal = null; // lo último copiado manda: olvidar cualquier copia previa
     if(_txt){
       let _envelope=null; try{ _envelope=JSON.parse(_txt); }catch(_e){}
-      if(_envelope && _envelope.sig === _ED_CLIPBOARD_SIGNATURE) return _envelope;
+      if(_envelope && _envelope.sig === _ED_CLIPBOARD_SIGNATURE){
+        window._edClipboardInternal = _txt; // sigue siendo nuestro: mantener el fallback sincronizado, no perderlo
+        return _envelope;
+      }
     }
+    window._edClipboardInternal = null; // esta vez NO es nuestro: el usuario copió otra cosa, olvidar cualquier copia previa
     return null;
   }
   if(window._edClipboardInternal){
