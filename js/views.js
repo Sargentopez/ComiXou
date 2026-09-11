@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.81</footer>
+    <footer class="app-version">v39.82</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -789,10 +789,13 @@ Router.register('editor', {
         <span style="font-size:1rem">🛤️</span>
         <span style="color:rgba(255,255,255,0.3)">│</span>
         <span style="font-size:.78rem;opacity:.8">⏱</span>
-        <!-- Velocidad (px/s) — solo capas no animadas -->
+        <!-- Velocidad (px/s) — solo capas no animadas. mpb-speed-val es editable
+             a mano (petición de Alberto): permite valores fuera del rango del
+             slider (10-1000) — validado/acotado en JS (ver el listener 'change'). -->
         <span id="mpb-speed-wrap" style="display:inline-flex;align-items:center;gap:4px">
           <input type="range" id="mpb-speed" min="10" max="1000" step="10" value="100" style="width:80px;accent-color:#FFE135;cursor:pointer;vertical-align:middle">
-          <span id="mpb-speed-val" style="min-width:64px;font-size:.78rem">100px/s</span>
+          <input type="text" id="mpb-speed-val" value="100" inputmode="numeric" style="width:52px;font-size:.78rem;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:5px;color:#fff;padding:3px 4px;text-align:center">
+          <span style="font-size:.78rem;opacity:.8">px/s</span>
         </span>
         <!-- Ciclos — capas animadas (GIF/APNG): slider con burbuja flotante -->
         <span id="mpb-cycles-wrap" style="display:none;align-items:center;gap:6px;min-width:130px">

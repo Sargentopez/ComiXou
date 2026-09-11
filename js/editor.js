@@ -10648,7 +10648,7 @@ function _edStartMotionPath(idx) {
   const _swrap = $('mpb-speed-wrap'); if (_swrap) _swrap.style.display = _isAnim ? 'none' : 'inline-flex';
   const _cwrap = $('mpb-cycles-wrap'); if (_cwrap) _cwrap.style.display = _isAnim ? 'inline-flex' : 'none';
   const sp = $('mpb-speed'); if (sp) sp.value = _edMotionPathSpeed;
-  const sv = $('mpb-speed-val'); if (sv) sv.textContent = _edMotionPathSpeed + 'px/s';
+  const sv = $('mpb-speed-val'); if (sv) sv.value = _edMotionPathSpeed;
   const cp = $('mpb-cycles'); if (cp) cp.value = _edMotionPathCycles;
   _edInitSliderBubbles($('mpb-cycles-wrap'));  // inicializar burbuja del slider
   const _cDurMs = _edGetCycleDurationMs(la);
@@ -30973,8 +30973,30 @@ function EditorView_init(){
   });
   $('mpb-speed')?.addEventListener('input', (e) => {
     _edMotionPathSpeed = +e.target.value;
-    const _msv = $('mpb-speed-val'); if (_msv) _msv.textContent = _edMotionPathSpeed + 'px/s';
+    const _msv = $('mpb-speed-val'); if (_msv) _msv.value = _edMotionPathSpeed;
     if (_edMotionPathPlaying) { const _pla = edLayers[_edMotionPathTarget]; if (_pla) _pla._pathStartTime = Date.now(); }
+  });
+  // Valor editable a mano (petición de Alberto): admite cualquier cantidad
+  // razonable fuera del rango del slider (10-1000) — se valida/acota aquí
+  // (entero positivo, tope 99999 de cordura) en vez de en cada tecleo, para
+  // no reiniciar la animación en marcha con cada dígito intermedio.
+  $('mpb-speed-val')?.addEventListener('change', (e) => {
+    let v = parseFloat(e.target.value);
+    if (!isFinite(v) || v <= 0) v = 1;
+    v = Math.round(Math.min(v, 99999));
+    e.target.value = v;
+    _edMotionPathSpeed = v;
+    // El propio slider se autolimita visualmente si v cae fuera de 10-1000
+    // (comportamiento nativo de <input type="range"> al asignar .value).
+    const _sp2 = $('mpb-speed'); if (_sp2) _sp2.value = v;
+    if (_edMotionPathPlaying) { const _pla2 = edLayers[_edMotionPathTarget]; if (_pla2) _pla2._pathStartTime = Date.now(); }
+  });
+  $('mpb-speed-val')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
+  $('mpb-speed-val')?.addEventListener('focus', (e) => {
+    // setTimeout(...,0): si se selecciona en el momento del propio focus, el
+    // click que lo disparó reposiciona el cursor justo después y anula la
+    // selección — hay que esperar a que ese comportamiento por defecto termine.
+    const _el = e.target; setTimeout(() => _el.select(), 0);
   });
   $('mpb-cycles')?.addEventListener('input', (e) => {
     _edMotionPathCycles = Math.max(1, Math.round(parseFloat(e.target.value) || 1));
