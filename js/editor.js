@@ -952,6 +952,12 @@ let edPages = [], edCurrentPage = 0, edLayers = [];
 // ── Sistema de Reglas (T29) ──
 let edGridVisible  = false; // cuadrícula visible en el workspace (editor)
 let gcpGridVisible = false; // cuadrícula visible en el canvas GCP
+// ── Transparencia hojas contiguas (onion skin, ayuda para animación) ──
+// Estado POR PÁGINA (page._onionSkinEnabled), no global — activarlo en una
+// hoja no debe afectar a las demás. Ver _edOnionSkinEnsure/_edOnionRenderPage,
+// su uso en _edRenderFrame, y la sincronización del checkbox en edLoadPage.
+let _edOnionPrevSrc = null, _edOnionNextSrc = null;       // page (referencia) ya renderizada en caché
+let _edOnionPrevCanvas = null, _edOnionNextCanvas = null; // canvas cacheado correspondiente
 let edRules = [];          // array de reglas de la hoja actual
 let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
 let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
@@ -5434,6 +5440,36 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
     // shadowBlur en cada frame, una de las operaciones más costosas en Android.
     _edDrawPageBackground(ctx);
+    // ── Transparencia hojas contiguas (onion skin) ──────────────────────────
+    // Ayuda de dibujo para animación: fotografía de fondo fija de la hoja
+    // anterior y posterior (si las hay), al 50% de opacidad SIEMPRE — no pasa
+    // por _isDimmed/dimFactor de más abajo (eso solo dimea las capas de la
+    // hoja EN VIGOR), así que no se ve afectada por el dimming al seleccionar
+    // o editar un objeto. No son capas reales: no están en edLayers, así que
+    // no son seleccionables, no salen en miniaturas ni se cuentan al crear la
+    // animación automática (todo eso recorre edLayers/page.layers, no esto).
+    // page._onionSkinEnabled (no una variable global): activarlo en una hoja
+    // no afecta a las demás — ver el checkbox en edInitRules/edLoadPage.
+    if (page._onionSkinEnabled) {
+      _edOnionSkinEnsure();
+      if (_edOnionPrevCanvas || _edOnionNextCanvas) {
+        const _oMx = edMarginX(), _oMy = edMarginY();
+        const _oW = edPageW(), _oH = edPageH();
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        if (_edOnionPrevCanvas) {
+          ctx.drawImage(_edOnionPrevCanvas,
+            _oMx + (_oW - _edOnionPrevCanvas.width)  / 2,
+            _oMy + (_oH - _edOnionPrevCanvas.height) / 2);
+        }
+        if (_edOnionNextCanvas) {
+          ctx.drawImage(_edOnionNextCanvas,
+            _oMx + (_oW - _edOnionNextCanvas.width)  / 2,
+            _oMy + (_oH - _edOnionNextCanvas.height) / 2);
+        }
+        ctx.restore();
+      }
+    }
   }
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
@@ -7482,6 +7518,91 @@ function _edCachePageThumb(pageIdx) {
   } catch(_) {} // si falla, _pgDrawThumb simplemente hará el render en vivo como antes
 }
 
+// ── Onion skin de hojas contiguas (checkbox por página, ver
+// page._onionSkinEnabled y el desplegable Animar) ──────────────────────────
+// Renderiza `page` (una hoja distinta a la actual) ajustada por "contain"
+// dentro del área de la hoja EN VIGOR, preservando su propia proporción
+// real (no la deforma aunque su orientación sea distinta a la actual).
+// Reutiliza _pgRenderThumbLive (editor-pages.js) — el mismo render que usan
+// las miniaturas del panel Hojas — a una resolución adecuada para verse
+// bien en el lienzo principal, no al tamaño diminuto de una miniatura.
+function _edOnionRenderPage(page) {
+  if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return null;
+  const _isV  = (page.orientation || 'vertical') === 'vertical';
+  const adjW  = _isV ? ED_PAGE_W : ED_PAGE_H;
+  const adjH  = _isV ? ED_PAGE_H : ED_PAGE_W;
+  const curW  = edPageW(), curH = edPageH();
+  const scale = Math.min(curW / adjW, curH / adjH);
+  const fitW  = Math.max(1, Math.round(adjW * scale));
+  const fitH  = Math.max(1, Math.round(adjH * scale));
+  // _pgRenderThumbLive cambia temporalmente edOrientation/edCurrentPage mientras
+  // dibuja `page` y los restaura al terminar — pero sin try/finally interno. Como
+  // aquí se llama en mitad del render del lienzo PRINCIPAL (no aislado, como al
+  // cachear una miniatura), se guardan y restauran también aquí por fuera, en un
+  // finally, para blindar el estado global ante cualquier fallo dentro de
+  // _pgRenderThumbLive (p.ej. una capa corrupta en la hoja contigua) — sin esto,
+  // un fallo ahí dejaría edOrientation/edCurrentPage apuntando a la hoja contigua
+  // durante el resto del frame de la hoja EN VIGOR.
+  const _savedOrient = edOrientation, _savedPage = edCurrentPage;
+  try {
+    const off = document.createElement('canvas');
+    off.width = fitW; off.height = fitH;
+    _pgRenderThumbLive(off, page);
+    return off;
+  } catch(_) {
+    return null; // no se muestra el onion skin de esa hoja, pero el resto del frame sigue
+  } finally {
+    edOrientation = _savedOrient;
+    edCurrentPage = _savedPage;
+  }
+}
+
+// Mantiene _edOnionPrevCanvas/_edOnionNextCanvas al día con la hoja anterior
+// y posterior de la ACTUAL (edCurrentPage), regenerando solo cuando la hoja
+// de referencia cambia (comparación por referencia, no por contenido) — así
+// cubre cualquier vía que pueda alterar qué hoja es la contigua (cambiar de
+// hoja, borrar/reordenar hojas, deshacer...) sin tener que engancharse a
+// cada una de ellas por separado. Se llama desde _edRenderFrame, solo si
+// page._onionSkinEnabled — el coste normal (checkbox activado pero sin
+// cambios de hoja contigua) son dos comparaciones por referencia, no un
+// re-render.
+function _edOnionSkinEnsure() {
+  const prevIdx = edCurrentPage - 1, nextIdx = edCurrentPage + 1;
+  const prevPage = edPages[prevIdx] || null;
+  const nextPage = edPages[nextIdx] || null;
+  if (prevPage !== _edOnionPrevSrc) {
+    _edOnionPrevSrc = prevPage;
+    _edOnionPrevCanvas = prevPage ? _edOnionRenderPage(prevPage) : null;
+    if (prevPage) _edOnionReloadThenRefresh(prevIdx, prevPage);
+  }
+  if (nextPage !== _edOnionNextSrc) {
+    _edOnionNextSrc = nextPage;
+    _edOnionNextCanvas = nextPage ? _edOnionRenderPage(nextPage) : null;
+    if (nextPage) _edOnionReloadThenRefresh(nextIdx, nextPage);
+  }
+}
+
+// _edUnloadPageCanvases (más abajo) descarga SIEMPRE los canvas pesados
+// (relleno/lápiz/acuarela/dibujo/trazo) de la hoja de la que se sale, en
+// TODA navegación — así que justo al llegar a una hoja nueva, su hoja
+// anterior casi siempre acaba de perderlos, y el render de arriba saldría
+// con el dibujo a mano vacío. _edLoadPageCanvases los reconstruye bajo
+// demanda (async, idempotente — no hace nada si ya estaban cargados);
+// igual que edLoadPage con la hoja actual, aquí se dispara y, al resolver,
+// se regenera el onion skin de esa hoja en concreto y se redibuja. No hace
+// falta comprobar aquí si el checkbox sigue activo: _edRenderFrame ya
+// decide si dibuja algo según page._onionSkinEnabled, así que llamar a
+// edRedraw() de más es inofensivo — el guard por referencia de abajo
+// (page === _edOnionPrevSrc/_edOnionNextSrc) basta para no pisar una
+// navegación más reciente.
+function _edOnionReloadThenRefresh(pageIdx, page) {
+  if (typeof _edLoadPageCanvases !== 'function') return;
+  _edLoadPageCanvases(pageIdx).then(() => {
+    if (page === _edOnionPrevSrc) { _edOnionPrevCanvas = _edOnionRenderPage(page); edRedraw(); }
+    else if (page === _edOnionNextSrc) { _edOnionNextCanvas = _edOnionRenderPage(page); edRedraw(); }
+  });
+}
+
 function _edUnloadPageAnims(pageIdx) {
   const page = edPages[pageIdx];
   if (!page) return;
@@ -7550,6 +7671,11 @@ function edLoadPage(idx){
   }
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  // Onion skin por página: el checkbox debe reflejar el estado de LA HOJA a
+  // la que se navega, no arrastrar el de la que se deja (ver edInitRules,
+  // _edRenderFrame).
+  const _onionChkNav = $('dd-onionskin-check');
+  if (_onionChkNav) _onionChkNav.checked = !!edPages[idx]?._onionSkinEnabled;
   const _po = edPages[idx]?.orientation || 'vertical';
   if(_po !== edOrientation){
     edOrientation = _po;
@@ -22315,6 +22441,24 @@ function edInitRules() {
       edRedraw();
     });
   }
+
+  // ── Transparencia hojas contiguas (onion skin) — estado POR PÁGINA
+  // (page._onionSkinEnabled), no una variable global: activarlo en una hoja
+  // no debe afectar a las demás. El checkbox se sincroniza con la hoja
+  // actual aquí (carga inicial del editor) y en edLoadPage (cada cambio de
+  // hoja) — desactivado por defecto en cualquier hoja que no lo tenga
+  // activado explícitamente (propiedad en memoria, no se guarda con el
+  // proyecto — mismo criterio que la cuadrícula de arriba).
+  const _onionChk = $('dd-onionskin-check');
+  if (_onionChk) {
+    _onionChk.checked = !!edPages[edCurrentPage]?._onionSkinEnabled;
+    _onionChk.addEventListener('change', () => {
+      const _p = edPages[edCurrentPage];
+      if (_p) _p._onionSkinEnabled = _onionChk.checked;
+      document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+      edRedraw();
+    });
+  }
 }
 
 // ── Snap a reglas durante el drag ────────────────────────────────────────────
@@ -30392,7 +30536,12 @@ function EditorView_init(){
   const _edFsUpdate = () => {
     const btn = $('edFsBtn'); if(!btn) return;
     const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    btn.textContent = active ? '⛶✕' : '⛶';
+    // Mismo icono (⛶) en los dos estados — antes se añadía "✕" al activarse
+    // (⛶✕), un segundo carácter que agrandaba el botón hasta superponerse
+    // con otro elemento en móvil. El cambio de color por aria-pressed ya
+    // basta para saber que está activa (mismo patrón que .hdr-fs-row2-btn/
+    // .hdr-sys-btn en main.css: fondo negro + icono amarillo).
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     btn.title = active ? 'Salir pantalla completa' : 'Pantalla completa';
   };
   document.addEventListener('fullscreenchange', _edFsUpdate);
@@ -40757,6 +40906,7 @@ function gcpOpen(edLayerIdx) {
     // Sincronizar UI al abrir el dropdown de comportamiento
     _gcpInitRules(); // botones Guías GCP
     _gcpInitAlignMenu(); // botones Ordenar (alinear objetos) GCP
+    _gcpInitViewEditorToggle(); // checkbox Visualizar contenido del Editor
     document.querySelector('[data-gcpmenu="comportamiento"]')?.addEventListener('pointerup', () => {
       requestAnimationFrame(_gcpSyncComportamiento);
     });
@@ -41485,6 +41635,25 @@ function _gcpInitRules() {
       _gcpRedraw();
     });
   }
+}
+
+// "Visualizar contenido del Editor" — checkbox entre Comportamiento y
+// Guardar en la barra del GCP. #gcpCanvas es transparente por diseño (para
+// ver el dibujo de fondo del editor general mientras se anima), pero eso
+// puede confundirse con el contenido del propio fotograma. Desactivado por
+// defecto en cada apertura del GCP: fondo blanco opaco (clase CSS
+// gcp-canvas-opaque, ver editor.css); al activarlo, vuelve a verse
+// transparente como hasta ahora. Puro toggle de clase CSS — no toca el
+// dibujado del canvas, así que no hace falta _gcpRedraw().
+function _gcpInitViewEditorToggle() {
+  const _chk = document.getElementById('gcpViewEditorCheck');
+  const _canvas = document.getElementById('gcpCanvas');
+  if (!_chk || !_canvas) return;
+  _chk.checked = false;
+  _canvas.classList.add('gcp-canvas-opaque');
+  _chk.addEventListener('change', () => {
+    _canvas.classList.toggle('gcp-canvas-opaque', !_chk.checked);
+  });
 }
 
 // ── Ordenar (alinear objetos) del editor de animaciones — botón propio en

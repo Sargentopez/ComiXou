@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.71</footer>
+    <footer class="app-version">v39.74</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -406,7 +406,7 @@ Router.register('editor', {
           <span id="edPageNum">1</span>
           <button class="ed-top-pagebn" id="edPageNext" data-i18n-title="td_nextPage" title="Página siguiente">&#9654;</button>
         </div>
-        <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa">⛶</button>
+        <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
         <!-- Botón de diagnóstico — oculto de nuevo (mismo criterio de
              siempre: se muestra temporalmente para cada investigación y se
@@ -418,8 +418,9 @@ Router.register('editor', {
              CARTA_SIGUIENTE_INSTANCIA_v39_11.md. Para volver a mostrarlo,
              descomentar la línea de abajo; toda la instrumentación (incluida
              la sección "ANIMACIONES EN FLUJOS DE TEXTO" añadida esta sesión)
-             sigue activa en editor.js aunque el botón esté oculto. -->
+             sigue activa en editor.js aunque el botón esté oculto.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -487,6 +488,11 @@ Router.register('editor', {
             <div class="ed-dropdown" id="dd-animar">
               <button class="ed-dropdown-item" id="dd-convertPages" data-i18n="ed_convertPagesToAnim">Convertir hojas en animación...</button>
               <button class="ed-dropdown-item" id="dd-animEditor" data-i18n="ed_animEditorBtn">Editor de Animaciones</button>
+              <div class="ed-dropdown-sep"></div>
+              <label class="ed-dropdown-item" id="dd-onionskin-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+                <input type="checkbox" id="dd-onionskin-check" style="width:16px;height:16px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
+                <span data-i18n="ed_onionSkin">Transparencia hojas contiguas</span>
+              </label>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
@@ -1129,6 +1135,18 @@ Router.register('editor', {
             <!-- Burbuja flotante de valor para sliders de comportamiento -->
             <div id="gcpSliderBubble" style="display:none;position:fixed;z-index:10000;background:var(--black);border-radius:8px;padding:5px 10px;color:var(--white);font-size:.85rem;font-weight:900;pointer-events:none;text-align:center;transform:translateX(-50%) translateY(-100%);margin-top:-8px;font-family:var(--font-body)"></div>
           </div>
+          <div class="ed-menu-sep"></div>
+          <!-- Visualizar contenido del Editor: el canvas GCP (#gcpCanvas) es
+               transparente por diseño para poder ver el dibujo de fondo del
+               editor general mientras se anima (ver comentario junto a
+               #gcpCanvas en editor.css) — pero eso puede confundirse con el
+               contenido del propio fotograma que se está editando aquí. Este
+               checkbox (desactivado por defecto) le pone un fondo blanco
+               opaco; al activarlo vuelve a verse transparente, como ahora. -->
+          <label class="ed-menu-btn" id="gcpViewEditorLabel" style="cursor:pointer;gap:6px;user-select:none">
+            <input type="checkbox" id="gcpViewEditorCheck" style="width:15px;height:15px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
+            <span data-i18n="gcp_viewEditor">Visualizar contenido del Editor</span>
+          </label>
           <div class="ed-menu-sep"></div>
           <!-- Guardar -->
           <div class="ed-menu-item" style="position:relative">

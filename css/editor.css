@@ -160,6 +160,18 @@ body.editor-page #appView {
 #gcpTopbar .ed-top-action:active,
 #tdTopbar .ed-top-action:active  { background: rgba(0,0,0,.2); }
 
+/* Pantalla completa activa: mismo icono que en pantalla normal (ver
+   _edFsUpdate en editor.js — antes se añadía "✕" al icono, un segundo
+   carácter que agrandaba el botón hasta superponerse con otro elemento en
+   móvil). El cambio de color ya es suficiente para saber que está activa —
+   mismo esquema (fondo negro + icono amarillo) que .hdr-sys-btn/
+   .hdr-fs-row2-btn en main.css para el mismo estado. */
+#edFsBtn[aria-pressed="true"] {
+  background: var(--black);
+  color: var(--yellow);
+  border-color: var(--black);
+}
+
 /* Nav de páginas en topbar — el centrado HORIZONTAL (position:absolute +
    left:50%) pasa a estar siempre activo, en cualquier ancho de pantalla:
    antes solo aplicaba a partir de 768px, por debajo se quedaba en flujo
@@ -2513,6 +2525,16 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
   z-index: 499;  /* encima del gcpBlocker (498) para recibir eventos */
   opacity: 1;
   pointer-events: none;
+}
+
+/* Transparente por diseño (para ver el dibujo de fondo del editor general
+   mientras se anima) — pero eso puede confundir el contenido de la hoja con
+   el del propio fotograma que se está editando aquí. Checkbox "Visualizar
+   contenido del Editor" (desactivado por defecto, ver _gcpInitViewEditorToggle
+   en editor.js): añade esta clase para tapar ese fondo con blanco opaco —
+   puro CSS, no toca el dibujado del canvas, que sigue siendo el mismo. */
+#gcpCanvas.gcp-canvas-opaque {
+  background: var(--white);
 }
 
 /* Canvas del editor: al 50% cuando el editor GIF está activo */
