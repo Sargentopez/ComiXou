@@ -5448,25 +5448,23 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // o editar un objeto. No son capas reales: no están en edLayers, así que
     // no son seleccionables, no salen en miniaturas ni se cuentan al crear la
     // animación automática (todo eso recorre edLayers/page.layers, no esto).
+    // Incluye TODO el área de trabajo de esa hoja, no solo lo que cae dentro
+    // de la página (antes de v39.83 se recortaba a la página).
     // page._onionSkinEnabled (no una variable global): activarlo en una hoja
     // no afecta a las demás — ver el checkbox en edInitRules/edLoadPage.
     if (page._onionSkinEnabled) {
       _edOnionSkinEnsure();
       if (_edOnionPrevCanvas || _edOnionNextCanvas) {
-        const _oMx = edMarginX(), _oMy = edMarginY();
-        const _oW = edPageW(), _oH = edPageH();
+        // _edOnionPrevCanvas/_edOnionNextCanvas ya son el área de trabajo
+        // COMPLETA (ED_CANVAS_W×ED_CANVAS_H) de la hoja contigua, en el mismo
+        // origen (0,0) que el área de trabajo de la hoja en vigor — esa área
+        // es una constante global, igual para las dos hojas sea cual sea su
+        // orientación (ver _edOnionRenderPage), así que ya no hace falta
+        // centrar ni ajustar tamaño: se dibuja directamente.
         ctx.save();
         ctx.globalAlpha = 0.5;
-        if (_edOnionPrevCanvas) {
-          ctx.drawImage(_edOnionPrevCanvas,
-            _oMx + (_oW - _edOnionPrevCanvas.width)  / 2,
-            _oMy + (_oH - _edOnionPrevCanvas.height) / 2);
-        }
-        if (_edOnionNextCanvas) {
-          ctx.drawImage(_edOnionNextCanvas,
-            _oMx + (_oW - _edOnionNextCanvas.width)  / 2,
-            _oMy + (_oH - _edOnionNextCanvas.height) / 2);
-        }
+        if (_edOnionPrevCanvas) ctx.drawImage(_edOnionPrevCanvas, 0, 0);
+        if (_edOnionNextCanvas) ctx.drawImage(_edOnionNextCanvas, 0, 0);
         ctx.restore();
       }
     }
@@ -7528,13 +7526,15 @@ function _edCachePageThumb(pageIdx) {
 // bien en el lienzo principal, no al tamaño diminuto de una miniatura.
 function _edOnionRenderPage(page) {
   if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return null;
-  const _isV  = (page.orientation || 'vertical') === 'vertical';
-  const adjW  = _isV ? ED_PAGE_W : ED_PAGE_H;
-  const adjH  = _isV ? ED_PAGE_H : ED_PAGE_W;
-  const curW  = edPageW(), curH = edPageH();
-  const scale = Math.min(curW / adjW, curH / adjH);
-  const fitW  = Math.max(1, Math.round(adjW * scale));
-  const fitH  = Math.max(1, Math.round(adjH * scale));
+  // ED_CANVAS_W/ED_CANVAS_H son constantes globales del área de trabajo, iguales
+  // para CUALQUIER página sea cual sea su orientación (es la propia página quien
+  // se inscribe con distinto margen dentro de esa área fija, no al revés — ver
+  // edMarginX/edMarginY). Por eso aquí ya NO hace falta ningún ajuste "contain"
+  // por orientación como antes (eso solo aplicaba al rectángulo de página, que sí
+  // cambia de forma): el área de trabajo de la hoja contigua SIEMPRE mide
+  // exactamente lo mismo que la de la hoja en vigor, así que basta pedirla
+  // completa a tamaño real — el punto de dibujo en _edRenderFrame ya no necesita
+  // centrar ni escalar nada.
   // _pgRenderThumbLive cambia temporalmente edOrientation/edCurrentPage mientras
   // dibuja `page` y los restaura al terminar — pero sin try/finally interno. Como
   // aquí se llama en mitad del render del lienzo PRINCIPAL (no aislado, como al
@@ -7546,8 +7546,8 @@ function _edOnionRenderPage(page) {
   const _savedOrient = edOrientation, _savedPage = edCurrentPage;
   try {
     const off = document.createElement('canvas');
-    off.width = fitW; off.height = fitH;
-    _pgRenderThumbLive(off, page);
+    off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
+    _pgRenderThumbLive(off, page, true); // true = área de trabajo completa (antes: solo la página)
     return off;
   } catch(_) {
     return null; // no se muestra el onion skin de esa hoja, pero el resto del frame sigue

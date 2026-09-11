@@ -324,7 +324,7 @@ function _pgDrawThumb(canvas, page) {
   _pgRenderThumbLive(canvas, page);
 }
 
-function _pgRenderThumbLive(canvas, page) {
+function _pgRenderThumbLive(canvas, page, full) {
   const ctx = canvas.getContext('2d');
   const tw = canvas.width, th = canvas.height;
   ctx.fillStyle = '#ffffff';
@@ -342,12 +342,30 @@ function _pgRenderThumbLive(canvas, page) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
 
+  // full=true (onion skin de área de trabajo completa): el lienzo interno pasa
+  // de "ventana recortada a la página" (pw×ph, origen desplazado -mx,-my) a
+  // "área de trabajo completa" (ED_CANVAS_W×ED_CANVAS_H, origen real de la
+  // hoja, sin desplazar). El resto de la función no cambia: cada capa ya se
+  // posiciona en coordenadas absolutas del área de trabajo (edMarginX()+x*pw,
+  // etc.) o dibuja su propio canvas ya del tamaño del área de trabajo (caso
+  // DrawLayer) — con solo este cambio de lienzo/transform, todas ellas pasan a
+  // dibujarse igual dentro o fuera del rectángulo de página. Se rellena de
+  // blanco SOLO el rectángulo de la página (no toda el área de trabajo), para
+  // que una zona vacía del área de trabajo no añada un velo blanco encima de
+  // lo que ya se ve en el lienzo principal — solo se transparenta contenido real.
   const off = document.createElement('canvas');
-  off.width = pw; off.height = ph;
+  off.width  = full ? ED_CANVAS_W : pw;
+  off.height = full ? ED_CANVAS_H : ph;
   const offCtx = off.getContext('2d');
-  offCtx.fillStyle = '#ffffff';
-  offCtx.fillRect(0, 0, pw, ph);
-  offCtx.setTransform(1, 0, 0, 1, -mx, -my);
+  if (full) {
+    offCtx.setTransform(1, 0, 0, 1, 0, 0);
+    offCtx.fillStyle = '#ffffff';
+    offCtx.fillRect(mx, my, pw, ph);
+  } else {
+    offCtx.fillStyle = '#ffffff';
+    offCtx.fillRect(0, 0, pw, ph);
+    offCtx.setTransform(1, 0, 0, 1, -mx, -my);
+  }
 
   const _textLayers = page.layers.filter(l => (l.type === 'text' || l.type === 'bubble') && !l.hidden);
   const _textAlpha  = page.textLayerOpacity ?? 1;
@@ -402,7 +420,7 @@ function _pgRenderThumbLive(canvas, page) {
   edOrientation  = _savedOrient;
   edCurrentPage  = _savedPage;
 
-  ctx.drawImage(off, 0, 0, pw, ph, 0, 0, tw, th);
+  ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, tw, th);
 }
 
 function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
