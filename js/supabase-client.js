@@ -1239,15 +1239,46 @@ const SupabaseClient = (() => {
     };
   }
 
-  // opts: { genre, author, limit } — genre/author filtran igual que hacía
-  // antes el filtro en memoria de home.js, pero ahora en el propio servidor
-  // (necesario para que, con miles de obras, un filtro siga encontrando
-  // resultados que no estuvieran en las primeras páginas ya cargadas).
+  // Escapa los caracteres especiales de SQL LIKE (%, _, \) y del comodín
+  // propio de PostgREST (*) para que un prefijo escrito por la persona que
+  // por casualidad contenga alguno de ellos (p.ej. un título con un "%"
+  // real) se compare como texto literal, no como comodín — ver
+  // authorPrefix/titlePrefix más abajo.
+  function _likeEscape(s) {
+    return String(s).replace(/[\\%_*]/g, ch => '\\' + ch);
+  }
+
+  // opts: { genre, author, title } — valor EXACTO ya existente, filtra
+  // igual que hacía antes el filtro en memoria de home.js, pero ahora en el
+  // propio servidor (necesario para que, con miles de obras, un filtro siga
+  // encontrando resultados que no estuvieran en las primeras páginas ya
+  // cargadas). opts: { genreIn, authorPrefix, titlePrefix } — búsqueda por
+  // PREFIJO (Intro/lupa en el buscador de Filtros, ver applyPrefixFilter en
+  // home.js): puede coincidir con VARIAS obras a la vez.
+  // authorPrefix/titlePrefix necesitan las columnas generadas
+  // author_search/title_search (minúsculas + sin acentos vía unaccent) —
+  // ver el SQL que se le ha pasado a Alberto para crearlas; sin ellas esta
+  // llamada devuelve un error 400 de Supabase (columna inexistente), que
+  // home.js ya trata igual que cualquier otro fallo de carga de página.
+  // genreIn no necesita nada de eso: el universo de géneros es fijo y
+  // pequeño (GENRES en genres.js), así que ya llega aquí resuelto a una
+  // lista de ids exactos.
   async function fetchPublishedWorksPage(cursor, opts) {
     let filter = 'published=eq.true';
     if (opts && opts.genre)  filter += `&genre=eq.${encodeURIComponent(opts.genre)}`;
     if (opts && opts.author) filter += `&author_name=eq.${encodeURIComponent(opts.author)}`;
     if (opts && opts.title)  filter += `&title=eq.${encodeURIComponent(opts.title)}`;
+    if (opts && opts.genreIn) {
+      // Prefijo que no coincidió con ninguna etiqueta de género (ver
+      // applyPrefixFilter): debe devolver CERO obras, no todas — "eq" a un
+      // id imposible es el truco estándar para eso sin liar el resto de la
+      // consulta con un "in.()" vacío (sintaxis inválida en PostgREST).
+      filter += opts.genreIn.length
+        ? `&genre=in.(${opts.genreIn.map(encodeURIComponent).join(',')})`
+        : `&genre=eq.__sin_coincidencias__`;
+    }
+    if (opts && opts.authorPrefix) filter += `&author_search=like.${encodeURIComponent(_likeEscape(opts.authorPrefix) + '*')}`;
+    if (opts && opts.titlePrefix)  filter += `&title_search=like.${encodeURIComponent(_likeEscape(opts.titlePrefix) + '*')}`;
     return _fetchWorksPage(filter, cursor, opts && opts.limit);
   }
 

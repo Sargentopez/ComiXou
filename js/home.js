@@ -30,7 +30,22 @@
    home.js — Lógica de la página de inicio
    ============================================================ */
 
-let activeFilter       = { type: null, value: null }; // tipo: 'genre' | 'author' | null
+let activeFilter       = { type: null, value: null }; // {type:'genre'|'author'|'title'|null, value, mode:'exact'|'prefix', label}
+// mode 'exact' (por defecto, ver applyFilter): value es UN valor exacto ya
+// existente (elegido de la lista de sugerencias). mode 'prefix' (ver
+// applyPrefixFilter): value es el texto normalizado escrito por Alberto —
+// coincide con TODAS las obras cuyo campo empiece por ese texto, ignorando
+// mayúsculas/acentos (para género, value es un array de ids coincidentes,
+// resuelto en cliente contra GENRES — universo pequeño y fijo, no hace
+// falta ida y vuelta al servidor).
+
+// Normaliza texto para comparar ignorando mayúsculas y acentos — usada
+// tanto por la lista de sugerencias en vivo (showFiltrosLevel2) como por el
+// filtro de prefijo (applyPrefixFilter) y el fallback local sin Supabase
+// (_homeRenderLocalFallback), para que las tres vías coincidan siempre.
+function normalize(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
 
 // ── ESTADO DE PAGINACIÓN DEL EXPOSITOR ──────────────────────────────────
 // Rediseño completo (antes: _loadPublishedWorks traía TODAS las obras
@@ -145,9 +160,16 @@ function _homeRenderLocalFallback() {
   if (!grid || !empty) return;
   const source = typeof WorkStore !== 'undefined' ? WorkStore.getPublished() : [];
   let comics = [...source].sort((a, b) => new Date(b.updatedAt||0) - new Date(a.updatedAt||0));
-  if (activeFilter.type === 'genre')  comics = comics.filter(c => c.genre === activeFilter.value);
-  if (activeFilter.type === 'author') comics = comics.filter(c => c.username === activeFilter.value);
-  if (activeFilter.type === 'title')  comics = comics.filter(c => c.title === activeFilter.value);
+  const _isPrefix = activeFilter.mode === 'prefix';
+  if (activeFilter.type === 'genre')  comics = _isPrefix
+    ? comics.filter(c => activeFilter.value.includes(c.genre))
+    : comics.filter(c => c.genre === activeFilter.value);
+  if (activeFilter.type === 'author') comics = _isPrefix
+    ? comics.filter(c => normalize(c.username).startsWith(activeFilter.value))
+    : comics.filter(c => c.username === activeFilter.value);
+  if (activeFilter.type === 'title')  comics = _isPrefix
+    ? comics.filter(c => normalize(c.title).startsWith(activeFilter.value))
+    : comics.filter(c => c.title === activeFilter.value);
 
   grid.innerHTML = '';
   if (comics.length === 0) {
@@ -401,9 +423,20 @@ async function _homeLoadNextPage() {
       throw new Error('SupabaseClient.fetchPublishedWorksPage no disponible');
     }
     const filterOpts = {};
-    if (activeFilter.type === 'genre')  filterOpts.genre  = activeFilter.value;
-    if (activeFilter.type === 'author') filterOpts.author = activeFilter.value;
-    if (activeFilter.type === 'title')  filterOpts.title  = activeFilter.value;
+    if (activeFilter.mode === 'prefix') {
+      // Búsqueda por prefijo (Intro/lupa en showFiltrosLevel2, ver
+      // applyPrefixFilter) — requiere las columnas generadas
+      // title_search/author_search en Supabase (unaccent + minúsculas),
+      // ver fetchPublishedWorksPage. Género se resuelve en cliente contra
+      // GENRES, así que ahí value ya es un array de ids exactos.
+      if (activeFilter.type === 'genre')  filterOpts.genreIn      = activeFilter.value;
+      if (activeFilter.type === 'author') filterOpts.authorPrefix = activeFilter.value;
+      if (activeFilter.type === 'title')  filterOpts.titlePrefix  = activeFilter.value;
+    } else {
+      if (activeFilter.type === 'genre')  filterOpts.genre  = activeFilter.value;
+      if (activeFilter.type === 'author') filterOpts.author = activeFilter.value;
+      if (activeFilter.type === 'title')  filterOpts.title  = activeFilter.value;
+    }
     const page = await _withTimeout(
       SupabaseClient.fetchPublishedWorksPage(_homeCursor, filterOpts),
       _HOME_PAGE_TIMEOUT_MS
@@ -536,7 +569,21 @@ function setupPageNav() {
     e.stopPropagation();
     const isOpen = filtrosMenu.classList.contains('open');
     document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
-    if (!isOpen) filtrosMenu.classList.add('open');
+    if (!isOpen) {
+      filtrosMenu.classList.add('open');
+    } else {
+      // BUG reportado por Alberto (Android: "una vez ejecutado, ya no es
+      // posible cambiar de filtro"): este handler tiene su propio
+      // e.stopPropagation(), así que el listener de "click fuera" de más
+      // abajo (el que sí resetea a nivel 1) NUNCA se dispara al cerrar el
+      // desplegable volviendo a tocar el propio botón "Filtros" — solo
+      // cubría cerrar tocando FUERA o al aplicar un filtro (applyFilter).
+      // Tocar el botón para cerrar es el gesto más natural en táctil (no
+      // hay "mover el ratón fuera"), así que sin este reset el menú se
+      // quedaba encallado en el nivel 2 (buscador de Género/Autor/Nombre)
+      // de la última vez, para siempre, en cuanto se cerraba así una vez.
+      showFiltrosLevel1();
+    }
     // Por si el fetch inicial (disparado al entrar en la vista) aún no ha
     // terminado, o falló, intentarlo aquí también — es barato si ya está listo.
     if (!_homeFacets) _homeLoadFacets();
@@ -581,9 +628,30 @@ function showFiltrosLevel1() {
   if (!menu) return;
   menu.innerHTML = '';
 
+  // "Anular filtro": solo tiene sentido ofrecerlo si hay uno activo — ver
+  // clearFilter(). Puesto primero y con icono propio para distinguirlo
+  // visualmente de las 3 categorías de siempre.
+  if (activeFilter.type) {
+    menu.appendChild(buildFilterItem('✕ ' + I18n.t('clearFilter'), clearFilter, false));
+  }
   menu.appendChild(buildFilterItem(I18n.t('byGenre'), () => showFiltrosLevel2('genre'), false));
   menu.appendChild(buildFilterItem(I18n.t('byAuthor'),  () => showFiltrosLevel2('author'), false));
   menu.appendChild(buildFilterItem(I18n.t('byTitle'),  () => showFiltrosLevel2('title'), false));
+}
+
+// Quita cualquier filtro activo y vuelve a mostrar todas las obras — pedido
+// explícito de Alberto ("debe existir la opción anular filtros"). El botón
+// "Publicados" ya hacía este mismo reset como efecto colateral, pero no era
+// evidente que sirviera para eso; esta opción vive junto a las demás dentro
+// del propio desplegable de Filtros, que es donde se espera encontrarla.
+function clearFilter() {
+  activeFilter = { type: null, value: null };
+  updateFiltrosLabel();
+  setActiveBtn('novedadesBtn');
+  document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
+  showFiltrosLevel1();
+  _homeStartLoading();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function showFiltrosLevel2(type) {
@@ -597,11 +665,6 @@ function showFiltrosLevel2(type) {
   // tiene que poder ofrecer también géneros/autores de obras más antiguas
   // aún sin cargar en pantalla.
   const published = _homeFacets || [];
-
-  // Normalizar texto: minúsculas sin acentos para comparación
-  function normalize(s) {
-    return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  }
 
   const allItems = type === 'genre'
     ? [...new Set(published.map(c => c.genre).filter(Boolean))].sort((a,b) => genreLabel(a).localeCompare(genreLabel(b), 'es'))
@@ -619,6 +682,11 @@ function showFiltrosLevel2(type) {
   input.type = 'text';
   input.placeholder = type === 'genre' ? I18n.t('home_searchGenre') : type === 'title' ? I18n.t('home_searchTitle') : I18n.t('home_searchAuthor');
   input.style.cssText = 'border:none;outline:none;font-family:var(--font-body);font-size:.85rem;font-weight:700;width:100%;background:transparent;color:var(--ink)';
+  // Muestra "Buscar" (en vez de "Ir"/genérico) en el teclado táctil, ya que
+  // Intro aquí ejecuta la búsqueda por prefijo (ver applyPrefixFilter) —
+  // pequeño detalle, pero es la pista visual de que Intro hace algo.
+  input.setAttribute('enterkeyhint', 'search');
+  lupa.style.cursor = 'pointer';
   searchWrap.appendChild(lupa);
   searchWrap.appendChild(input);
   menu.appendChild(searchWrap);
@@ -648,8 +716,36 @@ function showFiltrosLevel2(type) {
 
   // Filtrar en tiempo real
   input.addEventListener('input', () => renderItems(input.value));
-  // Foco automático al abrir
-  requestAnimationFrame(() => input.focus());
+
+  // Intro (o tocar la lupa) ejecuta una búsqueda por PREFIJO sobre el texto
+  // ya escrito — a diferencia de tocar un elemento de la lista (arriba, un
+  // valor EXACTO ya existente), esto muestra TODAS las obras cuyo campo
+  // empiece por ese texto, aunque haya varias coincidencias distintas
+  // (p.ej. "mar" → María, Mario, Marta a la vez). Petición explícita de
+  // Alberto: la lista de sugerencias en vivo no sustituye a poder buscar
+  // directamente por lo escrito.
+  const runPrefixSearch = () => {
+    const norm = normalize(input.value);
+    if (norm) applyPrefixFilter(type, norm, input.value.trim());
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runPrefixSearch(); }
+  });
+  lupa.addEventListener('click', (e) => { e.stopPropagation(); runPrefixSearch(); });
+
+  // Foco automático al abrir — SÍNCRONO, sin requestAnimationFrame.
+  // BUG reportado por Alberto (Android: "el filtro por nombre no permite
+  // empezar a escribir"): en iOS y en bastantes navegadores/WebViews de
+  // Android, .focus() solo abre el teclado táctil si se llama DENTRO del
+  // mismo gesto de toque que lo originó (aquí, el toque en "Nombre de la
+  // obra" que ejecuta showFiltrosLevel2) — diferirlo con
+  // requestAnimationFrame/setTimeout dejaba el input técnicamente enfocado
+  // (document.activeElement lo confirmaba) pero SIN teclado visible, así
+  // que en la práctica no se podía escribir nada. El input ya está
+  // insertado en el DOM y el desplegable ya está visible (misma apertura
+  // que el nivel 1, nunca se cierra al pasar a nivel 2) — no hace falta
+  // esperar ningún frame para poder enfocarlo.
+  input.focus();
 }
 
 // Aplicar un filtro (género/autor) recarga la paginación DESDE CERO, ya
@@ -658,7 +754,7 @@ function showFiltrosLevel2(type) {
 // cliente, como se hacía antes, solo habría podido ver lo ya cargado hasta
 // ese momento, incompleto en cuanto hubiera miles de obras.
 function applyFilter(type, value) {
-  activeFilter = { type, value };
+  activeFilter = { type, value, mode: 'exact' };
   updateFiltrosLabel();
   setActiveBtn('filtrosBtn');
   document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
@@ -666,6 +762,30 @@ function applyFilter(type, value) {
   // abría "Filtros" seguía mostrando el nivel 2 (con el cuadro de búsqueda y
   // el texto) de la búsqueda anterior, en vez de volver a Género/Autor/
   // Nombre de la obra para poder buscar algo distinto.
+  showFiltrosLevel1();
+  _homeStartLoading();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Búsqueda por PREFIJO (Intro/lupa en showFiltrosLevel2) — a diferencia de
+// applyFilter (un valor exacto ya existente), aquí puede coincidir con
+// VARIAS obras distintas a la vez. normPrefix ya viene normalizado
+// (minúsculas, sin acentos, ver normalize()); rawText es el texto tal cual
+// lo escribió Alberto, solo para mostrarlo en el botón.
+function applyPrefixFilter(type, normPrefix, rawText) {
+  if (type === 'genre') {
+    // Universo de géneros pequeño y fijo (GENRES, ver genres.js) — se
+    // resuelve aquí mismo contra las ETIQUETAS visibles, sin ida y vuelta
+    // al servidor; el resultado son ids exactos que sí puede filtrar
+    // Supabase con "in.(...)".
+    const ids = GENRES.filter(g => normalize(g.label).startsWith(normPrefix)).map(g => g.id);
+    activeFilter = { type: 'genre', value: ids, mode: 'prefix', label: rawText };
+  } else {
+    activeFilter = { type, value: normPrefix, mode: 'prefix', label: rawText };
+  }
+  updateFiltrosLabel();
+  setActiveBtn('filtrosBtn');
+  document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('open'));
   showFiltrosLevel1();
   _homeStartLoading();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -692,6 +812,10 @@ function updateFiltrosLabel() {
   if (!btn) return;
   if (!activeFilter.type) {
     btn.textContent = I18n.t('filterBtn');
+  } else if (activeFilter.mode === 'prefix') {
+    // Puntos suspensivos = "empieza por", para distinguirlo visualmente de
+    // un valor exacto elegido de la lista (sin ellos).
+    btn.textContent = `"${activeFilter.label}…" ▾`;
   } else if (activeFilter.type === 'genre') {
     btn.textContent = `${genreLabel(activeFilter.value)} ▾`;
   } else {
