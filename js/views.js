@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v39.88</footer>
+    <footer class="app-version">v39.89</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -324,74 +324,6 @@ Router.register('editor', {
           <button class="ed-dropdown-item" id="ctx-paste" data-i18n="ed_paste">Pegar</button>
         </div>
 
-      <!-- Modal de interpolación de frames GCP -->
-      <div id="gcpInterpModal" class="ed-confirm-overlay">
-        <div class="ed-confirm-box" style="max-width:320px;">
-          <p class="ed-confirm-msg" style="margin-bottom:12px;">Interpolación de frames</p>
-          <p style="font-size:0.8rem;color:var(--gray-500);text-align:center;margin:0 0 16px;line-height:1.5;">
-            Frames intermedios a insertar entre el fotograma <strong id="gcpInterpF1"></strong> y el <strong id="gcpInterpF2"></strong> de esta fila:
-          </p>
-          <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:20px;">
-            <button id="gcpInterpMinus" class="ed-modal-btn cancel" style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">−</button>
-            <span id="gcpInterpCount" style="font-size:2rem;font-weight:900;min-width:40px;text-align:center;">1</span>
-            <button id="gcpInterpPlus"  class="ed-modal-btn ok"     style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">+</button>
-          </div>
-          <div class="ed-modal-actions">
-            <button id="gcpInterpCancel" class="ed-modal-btn cancel">Cancelar</button>
-            <button id="gcpInterpOk"     class="ed-modal-btn ok">Interpolar</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Modal de acción de botón (navegación a hoja o URL externa) -->
-      <div id="edBtnModal" class="ed-confirm-overlay">
-        <div class="ed-confirm-box" style="max-width:340px;width:92vw;gap:0">
-          <p class="ed-confirm-msg" style="font-size:1rem;margin-bottom:14px">🔗 Acción al tocar</p>
-          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
-              <input type="radio" name="bamType" id="bam-none" value="none" style="accent-color:var(--black);width:18px;height:18px">
-              Sin acción
-            </label>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
-              <input type="radio" name="bamType" id="bam-page" value="page" style="accent-color:var(--black);width:18px;height:18px">
-              Navegar a hoja…
-            </label>
-            <div id="bam-page-list" style="display:none;max-height:160px;overflow-y:auto;border:1.5px solid var(--gray-300);border-radius:8px;padding:4px;background:var(--white)"></div>
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
-              <input type="radio" name="bamType" id="bam-url" value="url" style="accent-color:var(--black);width:18px;height:18px">
-              Abrir URL externa
-            </label>
-            <div id="bam-url-row" style="display:none">
-              <input id="bam-url-input" type="url" placeholder="https://…"
-                style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--gray-300);border-radius:8px;font-size:.9rem;font-family:var(--font-body)">
-            </div>
-          </div>
-          <div class="ed-modal-actions" style="gap:8px">
-            <button id="bam-cancel" class="ed-modal-btn cancel">Cancelar</button>
-            <button id="bam-ok" class="ed-modal-btn ok">✓ OK</button>
-          </div>
-        </div>
-      </div>
-      <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
-      <div id="edConfirmModal" class="ed-confirm-overlay">
-        <div class="ed-confirm-box">
-          <p id="edConfirmMsg" class="ed-confirm-msg"></p>
-          <div class="ed-modal-actions">
-            <button id="edConfirmCancel" class="ed-modal-btn cancel" data-i18n="cancel">Cancelar</button>
-            <button id="edConfirmOk" class="ed-modal-btn ok" data-i18n="delete">Eliminar</button>
-          </div>
-        </div>
-      </div>
-      <!-- Modal selección de capa (barra flotante) -->
-      <div id="edLayerPickModal" class="ed-confirm-overlay">
-        <div class="ed-confirm-box">
-          <p id="edLayerPickMsg" class="ed-confirm-msg"></p>
-          <div class="ed-modal-actions">
-            <button id="edLayerPickDraw" class="ed-modal-btn cancel">Capa de dibujo</button>
-            <button id="edLayerPickFill" class="ed-modal-btn ok">Capa de relleno</button>
-          </div>
-        </div>
-      </div>
       </div>
 
       <!-- ── BARRA SUPERIOR ── -->
@@ -820,6 +752,89 @@ Router.register('editor', {
       </div>
 
     </div>
+
+    <!-- Modales de confirmación (gcpInterpModal/edBtnModal/edConfirmModal/
+         edLayerPickModal), movidos aquí FUERA de editorShell (v39.89,
+         bug Android: pointerdown llegaba pero click nunca se sintetizaba).
+         editorShell recibe touch-action:none por JS para que el lienzo
+         dibuje sin interferencia del navegador — la spec de touch-action
+         computa el valor efectivo por INTERSECCIÓN con TODOS los
+         ancestros (MDN: "the browser intersects the touch-action values
+         of the touched element and its ancestors"), así que un
+         touch-action distinto puesto en el propio modal NO basta para
+         escapar del none del antecesor — hay que sacarlo del árbol de
+         editorShell de verdad, como ya asumía (por error, estaban dentro)
+         el comentario original de _shell.style.touchAction en editor.js.
+         Posición fixed + editorShell sin transform/filter/perspective:
+         cambiar de padre no mueve nada visualmente. -->
+      <!-- Modal de interpolación de frames GCP -->
+      <div id="gcpInterpModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box" style="max-width:320px;">
+          <p class="ed-confirm-msg" style="margin-bottom:12px;">Interpolación de frames</p>
+          <p style="font-size:0.8rem;color:var(--gray-500);text-align:center;margin:0 0 16px;line-height:1.5;">
+            Frames intermedios a insertar entre el fotograma <strong id="gcpInterpF1"></strong> y el <strong id="gcpInterpF2"></strong> de esta fila:
+          </p>
+          <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:20px;">
+            <button id="gcpInterpMinus" class="ed-modal-btn cancel" style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">−</button>
+            <span id="gcpInterpCount" style="font-size:2rem;font-weight:900;min-width:40px;text-align:center;">1</span>
+            <button id="gcpInterpPlus"  class="ed-modal-btn ok"     style="flex:0 0 40px;padding:10px 0;font-size:1.2rem;">+</button>
+          </div>
+          <div class="ed-modal-actions">
+            <button id="gcpInterpCancel" class="ed-modal-btn cancel">Cancelar</button>
+            <button id="gcpInterpOk"     class="ed-modal-btn ok">Interpolar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal de acción de botón (navegación a hoja o URL externa) -->
+      <div id="edBtnModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box" style="max-width:340px;width:92vw;gap:0">
+          <p class="ed-confirm-msg" style="font-size:1rem;margin-bottom:14px">🔗 Acción al tocar</p>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-none" value="none" style="accent-color:var(--black);width:18px;height:18px">
+              Sin acción
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-page" value="page" style="accent-color:var(--black);width:18px;height:18px">
+              Navegar a hoja…
+            </label>
+            <div id="bam-page-list" style="display:none;max-height:160px;overflow-y:auto;border:1.5px solid var(--gray-300);border-radius:8px;padding:4px;background:var(--white)"></div>
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+              <input type="radio" name="bamType" id="bam-url" value="url" style="accent-color:var(--black);width:18px;height:18px">
+              Abrir URL externa
+            </label>
+            <div id="bam-url-row" style="display:none">
+              <input id="bam-url-input" type="url" placeholder="https://…"
+                style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--gray-300);border-radius:8px;font-size:.9rem;font-family:var(--font-body)">
+            </div>
+          </div>
+          <div class="ed-modal-actions" style="gap:8px">
+            <button id="bam-cancel" class="ed-modal-btn cancel">Cancelar</button>
+            <button id="bam-ok" class="ed-modal-btn ok">✓ OK</button>
+          </div>
+        </div>
+      </div>
+      <!-- Modal de confirmación (evita confirm() nativo que sale de fullscreen) -->
+      <div id="edConfirmModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box">
+          <p id="edConfirmMsg" class="ed-confirm-msg"></p>
+          <div class="ed-modal-actions">
+            <button id="edConfirmCancel" class="ed-modal-btn cancel" data-i18n="cancel">Cancelar</button>
+            <button id="edConfirmOk" class="ed-modal-btn ok" data-i18n="delete">Eliminar</button>
+          </div>
+        </div>
+      </div>
+      <!-- Modal selección de capa (barra flotante) -->
+      <div id="edLayerPickModal" class="ed-confirm-overlay">
+        <div class="ed-confirm-box">
+          <p id="edLayerPickMsg" class="ed-confirm-msg"></p>
+          <div class="ed-modal-actions">
+            <button id="edLayerPickDraw" class="ed-modal-btn cancel">Capa de dibujo</button>
+            <button id="edLayerPickFill" class="ed-modal-btn ok">Capa de relleno</button>
+          </div>
+        </div>
+      </div>
 
     <!-- VISOR: canvas fullscreen + controles flotantes -->
     <div id="editorViewer">

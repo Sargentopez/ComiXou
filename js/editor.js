@@ -32210,7 +32210,7 @@ function EditorView_init(){
 
 
     if(['draw','eraser','fill','shape','line'].includes(edActiveTool)){
-      const inCanvas   = e.target.closest('#editorCanvas') || e.target.closest('#editorCanvasWrap');
+      const inCanvas   = e.target.closest('#editorCanvas') || e.target.closest('#editorCanvasWrap') || e.target.closest('.ed-confirm-overlay');
       const inPanel    = e.target.closest('#edOptionsPanel');
       const inMenu     = e.target.closest('#edMenuBar');
       const inQuickTools = e.target.closest('#edQuickTools');
