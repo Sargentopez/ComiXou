@@ -38888,6 +38888,18 @@ function _gcpUpdateFramesBar() {
 
       scroll.appendChild(card);
     }
+    // Hueco final reservado para el botón ⟳ de interpolación circular (ver
+    // _gcpBuildColActions): ese botón se ancla en px = finDeLaÚltimaTarjeta+12,
+    // fuera del propio scrollWidth de esta fila. Sin este hueco, el scroll
+    // horizontal (compartido con colActionsContent vía _gcpSyncFrameRowsScroll)
+    // nunca puede desplazarse lo bastante para dejarlo a la vista — su tope
+    // máximo (scrollWidth-clientWidth) deja el botón siempre más allá del
+    // borde visible del viewport, por mucho que se arrastre. Verificado con
+    // Playwright: sin este spacer el botón queda 100% fuera del viewport en
+    // el scroll máximo; con él, plenamente visible y alcanzable.
+    const trailingSpacer = document.createElement('div');
+    trailingSpacer.style.cssText = 'flex-shrink:0;width:24px;height:1px;';
+    scroll.appendChild(trailingSpacer);
     framesPane.appendChild(scroll);
   }
 
