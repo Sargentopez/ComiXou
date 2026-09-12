@@ -1383,7 +1383,7 @@ body.ed-scale-tablet .ed-modal-sheet {
 .ed-modal-field input:focus, .ed-modal-field select:focus { border-color: var(--black); }
 .ed-modal-field select { appearance: none; }
 .ed-modal-actions { display: flex; gap: 8px; margin-top: 16px; }
-.ed-modal-btn { flex: 1; padding: 12px; border: 2px solid var(--black); border-radius: 10px; font-family: var(--font-body); font-weight: 900; font-size: 0.9rem; cursor: pointer; box-shadow: 2px 2px 0 var(--black); }
+.ed-modal-btn { flex: 1; padding: 12px; border: 2px solid var(--black); border-radius: 10px; font-family: var(--font-body); font-weight: 900; font-size: 0.9rem; cursor: pointer; box-shadow: 2px 2px 0 var(--black); touch-action: manipulation; }
 .ed-modal-btn.cancel { background: var(--white); }
 .ed-modal-btn.ok { background: var(--yellow); }
 
@@ -1414,6 +1414,7 @@ body.ed-scale-tablet .ed-modal-sheet {
   background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
   opacity: 0; pointer-events: none; transition: opacity .18s;
+  touch-action: manipulation;
 }
 .ed-confirm-overlay.open { opacity: 1; pointer-events: all; }
 .ed-confirm-box {

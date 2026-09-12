@@ -30205,25 +30205,17 @@ function edConfirm(msg, onOk, okLabel){
   const okBtn   = $('edConfirmOk');
   const cancelBtn = $('edConfirmCancel');
   if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
-  // DIAGNOSTICO TEMPORAL (quitar al resolver el bloqueo en Android): el toast
-  // anterior (v39.86) no servía porque #edToast y #edConfirmModal comparten
-  // z-index:9999 y el overlay va DESPUÉS en el DOM — el toast quedaba
-  // tapado por el fondo oscuro del propio modal. Escribiendo el aviso DENTRO
-  // de edConfirmMsg (mismo elemento que ya se ve) evitamos ese problema.
-  msgEl.textContent = msg + ' [🩺1 abierto]';
+  msgEl.textContent = msg;
   okBtn.textContent = okLabel || I18n.t('delete');
   _edConfirmCb = onOk;
   overlay.classList.add('open');
   // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
-  const _stopAll = e => { msgEl.textContent += ' [🩺2 pointerdown]'; e.stopPropagation(); }; // DIAGNOSTICO TEMPORAL
+  const _stopAll = e => e.stopPropagation();
   overlay.addEventListener('pointerdown', _stopAll, { capture: true });
-  const _overlayClick = e => { if (e.target !== okBtn && e.target !== cancelBtn) msgEl.textContent += ' [🩺X click-fuera-de-botones:' + e.target.tagName + ']'; }; // DIAGNOSTICO TEMPORAL
-  overlay.addEventListener('click', _overlayClick);
   // Listeners de un solo uso
   const close = (exec) => {
     overlay.classList.remove('open');
     overlay.removeEventListener('pointerdown', _stopAll, { capture: true });
-    overlay.removeEventListener('click', _overlayClick); // DIAGNOSTICO TEMPORAL
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
     if(exec && _edConfirmCb) _edConfirmCb();
@@ -30234,8 +30226,8 @@ function edConfirm(msg, onOk, okLabel){
       _edDeactivateMultiSel();
     }
   };
-  const onYes = () => { msgEl.textContent += ' [🩺3 click-OK]'; close(true); }; // DIAGNOSTICO TEMPORAL
-  const onNo  = () => { msgEl.textContent += ' [🩺3 click-CANCEL]'; close(false); }; // DIAGNOSTICO TEMPORAL
+  const onYes = () => close(true);
+  const onNo  = () => close(false);
   okBtn.addEventListener('click', onYes);
   cancelBtn.addEventListener('click', onNo);
 }
