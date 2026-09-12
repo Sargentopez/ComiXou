@@ -7408,6 +7408,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
 }
 
 function edDeletePage(){
+  edToast('🩺 edDeletePage() llamada'); // DIAGNOSTICO TEMPORAL — quitar al resolver
   if(edPages.length<=1){edToast(I18n.t('ed_needAtLeastOnePage'));return;}
   edConfirm(I18n.t('ed_confirmDeletePage'), ()=>{
     // Ver _tdMigrateFlowSourceHTMLIfNeeded (editor-textdoc.js) — si esta
@@ -30210,7 +30211,7 @@ function edConfirm(msg, onOk, okLabel){
   _edConfirmCb = onOk;
   overlay.classList.add('open');
   // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
-  const _stopAll = e => e.stopPropagation();
+  const _stopAll = e => { edToast('🩺 pointerdown en overlay'); e.stopPropagation(); }; // DIAGNOSTICO TEMPORAL
   overlay.addEventListener('pointerdown', _stopAll, { capture: true });
   // Listeners de un solo uso
   const close = (exec) => {
@@ -30226,8 +30227,8 @@ function edConfirm(msg, onOk, okLabel){
       _edDeactivateMultiSel();
     }
   };
-  const onYes = () => close(true);
-  const onNo  = () => close(false);
+  const onYes = () => { edToast('🩺 click en OK'); close(true); }; // DIAGNOSTICO TEMPORAL
+  const onNo  = () => { edToast('🩺 click en CANCELAR'); close(false); }; // DIAGNOSTICO TEMPORAL
   okBtn.addEventListener('click', onYes);
   cancelBtn.addEventListener('click', onNo);
 }
