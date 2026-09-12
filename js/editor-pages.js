@@ -267,18 +267,13 @@ function _pgBuildCard(page, idx) {
   delBtn.addEventListener('click', e => {
     e.stopPropagation();
     if (_pgActionLocked()) return;
-    if (edPages.length <= 1) { edToast(I18n.t('ed_pageDeleteLastErr')); return; }
-    edConfirm(I18n.t('ed_pageDeleteConfirm'), () => {
-      // Ver _tdMigrateFlowSourceHTMLIfNeeded (editor-textdoc.js) — si esta
-      // hoja es la que guarda el sourceHTML del flujo de texto, lo traslada
-      // antes de borrarla.
-      if (typeof _tdMigrateFlowSourceHTMLIfNeeded === 'function') _tdMigrateFlowSourceHTMLIfNeeded(idx);
-      edPages.splice(idx, 1);
-      if (typeof _edMarkPagesStructureDirty === 'function') _edMarkPagesStructureDirty();
-      edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
-      edPushHistory();
-      _pgRender();
-    });
+    // _edDeleteOrClearPage (editor.js) — mismo punto único que usa el menú
+    // "Hoja ▾"; ya se encarga de vaciar en vez de bloquear si es la única
+    // hoja. onDone=_pgRender: la confirmación es asíncrona (edConfirm), así
+    // que el refresco del panel debe ir DESPUÉS del borrado/vaciado real,
+    // no justo tras este click — mismo momento en que antes se llamaba
+    // aquí mismo, dentro del callback de edConfirm.
+    _edDeleteOrClearPage(idx, _pgRender);
   });
 
   actions.appendChild(dupBtn);
@@ -541,6 +536,31 @@ function _pgDuplicate(idx) {
     _dirtyCountLocal: 1,
     _dirtyCountCloud: 1,
   };
+
+  // Miniatura del duplicado, disponible YA — sin esto, se veía en blanco
+  // hasta cerrar y reabrir el panel de hojas (bug reportado por Alberto).
+  // Causa: los layers pesados (fill/pencil/watercolor/draw/stroke) se
+  // reconstruyen desde dataURL de forma ASÍNCRONA (ver DrawLayer.fromDataUrl
+  // y hermanas, editor.js — new Image()+img.onload, nunca inmediato ni
+  // siquiera con un data: URL) — edDeserLayer, un par de líneas arriba, ya
+  // ha devuelto newLayers con canvas todavía EN BLANCO en este mismo
+  // instante síncrono; un render en vivo de newPage aquí saldría vacío.
+  // En vez de esperar esa carga, se usa de entrada una COPIA de la
+  // miniatura de la hoja ORIGEN (src) — visualmente idéntica ahora mismo,
+  // porque el contenido recién duplicado es el mismo — asegurando primero
+  // que esa miniatura exista (_edCachePageThumb la genera en vivo si src es
+  // justo la hoja activa, o si aún no se había cacheado nunca). En la
+  // siguiente apertura del panel, _pgRender ya pide _pgDrawThumb de nuevo
+  // para cada página, y para entonces newPage tiene sus propios canvas
+  // reales cargados — se sustituye sola por el render correcto.
+  if (!src._cachedThumbCanvas && typeof _edCachePageThumb === 'function') _edCachePageThumb(idx);
+  if (src._cachedThumbCanvas) {
+    const _thumbCopy = document.createElement('canvas');
+    _thumbCopy.width  = src._cachedThumbCanvas.width;
+    _thumbCopy.height = src._cachedThumbCanvas.height;
+    _thumbCopy.getContext('2d').drawImage(src._cachedThumbCanvas, 0, 0);
+    newPage._cachedThumbCanvas = _thumbCopy;
+  }
 
   // Insertar a continuación
   edPages.splice(idx + 1, 0, newPage);

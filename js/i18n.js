@@ -193,6 +193,8 @@ const TRANSLATIONS = {
     ed_pageDelete:        "Eliminar hoja",
     ed_pageDeleteLastErr: "No puedes eliminar la última hoja",
     ed_pageDeleteConfirm: "¿Eliminar esta hoja?",
+    ed_pageClearConfirm:  "Es la única hoja: no puede eliminarse, pero se vaciará todo su contenido y quedará en blanco. ¿Continuar?",
+    ed_pageCleared:       "Hoja vaciada",
     ed_pageDuplicatedToast: "Hoja {n} duplicada",
     ed_pageOrientChanged: "Orientación cambiada",
 
@@ -1259,6 +1261,8 @@ const TRANSLATIONS = {
     ed_pageDelete:        "Delete page",
     ed_pageDeleteLastErr: "You can't delete the last page",
     ed_pageDeleteConfirm: "Delete this page?",
+    ed_pageClearConfirm:  "This is the only page: it can't be deleted, but all its content will be cleared, leaving it blank. Continue?",
+    ed_pageCleared:       "Page cleared",
     ed_pageDuplicatedToast: "Page {n} duplicated",
     ed_pageOrientChanged: "Orientation changed",
 

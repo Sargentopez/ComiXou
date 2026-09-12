@@ -4302,6 +4302,7 @@ function _edPageDirtyCloud(p) {
 // así que es la fuente correcta para esta pregunta también.
 function _edHasUnsavedLocalChanges() {
   if (window._edPagesStructureDirtyLocal) return true;
+  if (window._edProjectMetaDirtyLocal) return true;
   return edPages.some(p => _edPageDirtyLocal(p));
 }
 
@@ -7407,17 +7408,58 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   delete dlOutside._wcOutside;
 }
 
-function edDeletePage(){
-  if(edPages.length<=1){edToast(I18n.t('ed_needAtLeastOnePage'));return;}
-  edConfirm(I18n.t('ed_confirmDeletePage'), ()=>{
+// Punto único para "eliminar hoja", llamado tanto desde el menú "Hoja ▾"
+// (edDeletePage, justo debajo) como desde el ✕ de cada miniatura en el
+// panel de páginas (editor-pages.js/delBtn) — misma acción, dos sitios de
+// la interfaz, así que debe comportarse igual en ambos en vez de mantener
+// dos copias de la misma lógica (como pasaba antes: cada una con su propio
+// texto de confirmación y de aviso, ligeramente distintos por pura deriva).
+//
+// Petición de Alberto: una obra SIEMPRE debe tener al menos una hoja, así
+// que esa última hoja no puede desaparecer — pero antes, al intentarlo, se
+// bloqueaba con un aviso y no pasaba nada más. Ahora en su lugar se vacía
+// todo su contenido, quedando en blanco (misma forma que una hoja nueva de
+// edAddPage), sin eliminar la hoja en sí.
+function _edDeleteOrClearPage(idx, onDone) {
+  if (edPages.length <= 1) { _edClearPageContent(idx, onDone); return; }
+  edConfirm(I18n.t('ed_pageDeleteConfirm'), () => {
     // Ver _tdMigrateFlowSourceHTMLIfNeeded (editor-textdoc.js) — si esta
     // hoja es la que guarda el sourceHTML del flujo de texto, lo traslada
     // antes de borrarla.
-    if(typeof _tdMigrateFlowSourceHTMLIfNeeded === 'function') _tdMigrateFlowSourceHTMLIfNeeded(edCurrentPage);
-    edPages.splice(edCurrentPage,1);
+    if (typeof _tdMigrateFlowSourceHTMLIfNeeded === 'function') _tdMigrateFlowSourceHTMLIfNeeded(idx);
+    edPages.splice(idx, 1);
     _edMarkPagesStructureDirty();
-    edLoadPage(Math.min(edCurrentPage,edPages.length-1));
+    edLoadPage(Math.min(edCurrentPage, edPages.length - 1));
+    edPushHistory();
+    if (typeof onDone === 'function') onDone();
   });
+}
+
+// Vacía el contenido de una hoja dejándola en blanco, SIN eliminarla — para
+// cuando es la única que queda (ver _edDeleteOrClearPage). layers/drawData
+// son los dos únicos campos de "contenido" de una hoja (ver edAddPage y
+// _pgDuplicate: el resto — orientation/textMode/textLayerOpacity — es
+// FORMATO, no contenido, y se conserva tal cual). No hace falta migrar
+// ningún flujo de texto (_tdMigrateFlowSourceHTMLIfNeeded): al ser la única
+// hoja, cualquier flujo que tuviera vive entero aquí — no hay otra hoja a
+// la que trasladarlo, igual que si se pudiera eliminar del todo.
+function _edClearPageContent(idx, onDone) {
+  const p = edPages[idx];
+  if (!p) return;
+  edConfirm(I18n.t('ed_pageClearConfirm'), () => {
+    p.layers = [];
+    p.drawData = null;
+    p._dirtyCountLocal = (p._dirtyCountLocal || 0) + 1;
+    p._dirtyCountCloud = (p._dirtyCountCloud || 0) + 1;
+    edLoadPage(idx);
+    edPushHistory();
+    edToast(I18n.t('ed_pageCleared'));
+    if (typeof onDone === 'function') onDone();
+  });
+}
+
+function edDeletePage(){
+  _edDeleteOrClearPage(edCurrentPage);
 }
 // Liberar _animFrames de una página (mantiene _oc con último frame para thumbnails)
 // Genera y cachea una miniatura pequeña (90×127 o 90×64) de una página,
@@ -25217,6 +25259,10 @@ async function _edCloudSaveInner() {
       });
     }
     window._edPagesStructureDirtyCloud = false;
+    // Mismo criterio que en edSaveProject: comic (con el edProjectMeta ya
+    // aplicado) se sube siempre entero a "works" en saveDraft — ver ahí el
+    // porqué no depende de _dirtyPageIndices.
+    window._edProjectMetaDirtyCloud = false;
     // Borrar autosave explícitamente tras guardado en nube exitoso.
     // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
     // por versionchange. Este segundo intento garantiza que no queda autosave espurio
@@ -25747,6 +25793,11 @@ async function _edSaveProjectInner(_keepOverlay){
       page._cachedSizeBytes  = _edPageCachedBytes(page, ser);
     });
     window._edPagesStructureDirtyLocal = false;
+    // edProjectMeta (título/autor/género/modo lectura/créditos) va SIEMPRE
+    // incluido en este guardado (ver el spread "...edProjectMeta" un poco
+    // más arriba) — así que si el guardado ha llegado hasta aquí (verificado
+    // de verdad, no solo intentado), también ha quedado limpio.
+    window._edProjectMetaDirtyLocal = false;
   } else {
     // Detectar si es incógnito (OPFS no disponible) para dar un mensaje más claro
     const _isIncognito = !navigator.storage || !navigator.storage.getDirectory;
@@ -27729,6 +27780,12 @@ async function edLoadProject(id){
   sessionStorage.removeItem('cx_just_synced_cloud'); // consumir — solo vale para esta carga
   window._edPagesStructureDirtyLocal = false;
   window._edPagesStructureDirtyCloud = !_justSyncedCloud;
+  // Mismo criterio que las dos líneas de arriba, aplicado a edProjectMeta
+  // (ver _edApplyProjectMeta/_edHasUnsavedLocalChanges): recién cargada,
+  // coincide por definición con OPFS; con la nube, conservador salvo que se
+  // acabe de sincronizar.
+  window._edProjectMetaDirtyLocal = false;
+  window._edProjectMetaDirtyCloud = !_justSyncedCloud;
   // Cargar biblioteca antes de continuar — await garantiza que _bibCache esté listo
   // cuando el usuario abra el panel.
   _bibCache = null;
@@ -29918,6 +29975,18 @@ function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _new
   edProjectMeta.genre   = _newGenre;
   edProjectMeta.navMode = _newNavMode;
   edProjectMeta.social  = _newSocial;
+  // BUG CORREGIDO (reportado por Alberto): _edHasUnsavedLocalChanges() —
+  // fuente única del aviso al salir, el autoguardado y el beforeunload —
+  // solo miraba páginas (_edPagesStructureDirtyLocal/_edPageDirtyLocal),
+  // nunca edProjectMeta. Editar SOLO créditos/título/autor/género/modo de
+  // lectura desde este modal no marcaba nada como sucio: si el guardado
+  // inmediato de más abajo (edSaveProjectModal) fallara o no llegara a
+  // ejecutarse, no había ninguna red de seguridad que avisara al salir —
+  // se perdía el cambio en silencio. "Ante la duda, contar" (mismo criterio
+  // que _edInteractionTick): no hace falta comparar valor a valor, con que
+  // se haya llegado a aplicar el modal ya basta para marcarlo.
+  window._edProjectMetaDirtyLocal = true;
+  window._edProjectMetaDirtyCloud = true;
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||I18n.t('noWork');
   _edUpdateTitlePill();
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
@@ -42601,6 +42670,7 @@ async function _edRunDiag() {
     L('  Nº de páginas: ' + edPages.length);
     L('  edCurrentPage: ' + edCurrentPage);
     L('  Flags estructurales — local: ' + window._edPagesStructureDirtyLocal + ' | nube: ' + window._edPagesStructureDirtyCloud);
+    L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud);
     const _pageFingerprints = [];
     for (let _pi = 0; _pi < edPages.length; _pi++) {
       const p = edPages[_pi];
