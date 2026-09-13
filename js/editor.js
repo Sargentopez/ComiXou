@@ -21611,10 +21611,16 @@ function edRenderOptionsPanel(mode){
       _edRefocusAfterCollapse();
     });
     $('pp-crop')?.addEventListener('click',()=>{ _edStartCrop(la); });
-    $('pp-edit-anim')?.addEventListener('click',()=>{
+    $('pp-edit-anim')?.addEventListener('click', async () => {
       const _animIdx = edSelectedIdx;
       edCloseOptionsPanel();
       _edDrawUnlockUI(); _edPropsOverlayHide();
+      // Si es una animación importada (GIF/APNG real, nunca editada antes en
+      // GCP) sintetiza aquí _gcpLayersData/_gcpFramesData ANTES de abrir GCP
+      // — ver _gcpPrepareExternalAnimForEdit para el motivo completo. Para
+      // una animación ya nativa de GCP esto es un no-op inmediato (ya tiene
+      // sus propios datos, ver la comprobación al principio de la función).
+      await _gcpPrepareExternalAnimForEdit(edLayers[_animIdx]);
       gcpOpen(_animIdx);
     });
     $('pp-path-btn')?.addEventListener('click', () => {
@@ -34996,8 +35002,18 @@ let _gcpLastTapTime2 = 0, _gcpLastTapIdx2 = -1;
 
 // Resetear estado de doble tap al insertar una capa nueva — evita que el primer
 // toque sobre el objeto recién insertado se interprete erróneamente como doble tap.
-function _gcpPushLayer(la) {
+function _gcpPushLayer(la, opts) {
   window._gcpLayers.push(la);
+  // Marcar sesión sucia salvo que sea una RESTAURACIÓN de una animación ya
+  // guardada (ver gcpOpen, rama hasData, que pasa {isRestore:true}) — ahí no
+  // hay nada nuevo que se perdería al cerrar sin guardar, y forzar el aviso
+  // de "cambios sin guardar" solo por reabrir para mirar sería molesto sin
+  // motivo. Bug reportado por Alberto: al insertar un objeto nuevo dentro de
+  // GCP (biblioteca, espejo, duplicar, o la extracción de una animación
+  // importada) la sesión no quedaba marcada como sucia — si esa era la única
+  // acción antes de cerrar, gcpClose() cerraba en silencio sin ofrecer
+  // guardar, y el objeto añadido se perdía sin ningún aviso.
+  if (!opts || !opts.isRestore) window._gcpDirty = true;
   // Resetear AMBOS sistemas de doble tap al insertar un objeto.
   // Sin esto, el primer toque sobre el objeto recién insertado puede disparar el doble tap
   // si el tap de inserción ocurrió hace menos de 380ms en una posición cercana.
@@ -37228,7 +37244,94 @@ function _gcpShowCircularInterpModal(fi) {
   };
 }
 
-// Aplica un frame global fi: lee la._frames[fi] de cada layer
+// Espera (por sondeo, mismo patrón que _gcpCpWaitLayerReady un poco más
+// abajo, pero mirando el campo de "listo" correcto según el tipo — _ready
+// para GifLayer, _animReady para ImageLayer, son campos distintos entre las
+// dos clases) a que una animación termine de decodificar. Timeout defensivo:
+// nunca esperar de más si algo falla en la decodificación.
+function _gcpWaitAnimReady(la, timeoutMs) {
+  const limit = timeoutMs || 8000;
+  return new Promise(resolve => {
+    const t0 = Date.now();
+    (function poll() {
+      if (!la) return resolve(la);
+      const ready = la.type === 'gif' ? !!la._ready : !!la._animReady;
+      if (ready || (Date.now() - t0) > limit) return resolve(la);
+      setTimeout(poll, 30);
+    })();
+  });
+}
+
+// Prepara una animación insertada desde FUERA de la app (GIF/APNG real
+// importado, o desde biblioteca sin haber pasado nunca por GCP) para
+// editarse en GCP — llamar ANTES de gcpOpen(idx) (ver el listener de
+// pp-edit-anim), nunca desde dentro de gcpOpen.
+//
+// Petición explícita de Alberto, dos rondas de revisión después de un
+// primer intento (una sola capa "viva" con su animación embebida, sincronizada
+// a mano por columna — v39.95-v39.99) que no era lo pedido: "cada fotograma
+// [debe estar] en una fila [de la matriz de objetos], porque cada fotograma
+// es un objeto independiente". Y explícitamente: "puedes reutilizar el
+// código que ya existe para crear una animación con las hojas del editor
+// general" — es decir, el mismo patrón que _gcpCpBuildFromRange (Convertir
+// hojas en animación): cada fotograma se convierte en un objeto (capa)
+// independiente, existiendo SOLO en su columna, nunca en las demás.
+//
+// En vez de reconstruir esa lógica en paralelo, aquí se SINTETIZAN
+// _gcpLayersData/_gcpFramesData/_gcpLayerNames sobre la propia capa
+// importada — exactamente la forma en la que quedarían tras un guardado
+// nativo de GCP — y se deja que gcpOpen(idx) los restaure con su rama
+// hasData de siempre, sin ningún caso especial: cada fotograma real pasa a
+// ser una imagen ESTÁTICA normal y corriente (misma posición/tamaño que
+// tenía la animación al insertarla), así que añadir más objetos después
+// (biblioteca, espejo, duplicar...) funciona con el mismo código ya
+// probado — el bug de "el objeto nuevo no aparece" de la v39.95-v39.99 no
+// puede volver a pasar porque ya no hay ninguna capa con animación propia
+// dentro de la sesión de GCP a la que chocar.
+async function _gcpPrepareExternalAnimForEdit(gifLayer) {
+  if (!gifLayer || gifLayer._gcpLayersData) return; // ya tiene datos propios de GCP: nada que sintetizar
+  _cxLoadOverlayShow(I18n.t('gcp_extractingFrames', { n: 1, total: '…' }));
+  try {
+    await _gcpWaitAnimReady(gifLayer);
+    const srcFrames = (gifLayer.type === 'gif' ? gifLayer._frames : gifLayer._animFrames) || [];
+    const total = srcFrames.length;
+    if (total <= 1) return; // sin animación real que extraer: gcpOpen ya la trata como "nueva animación" de un objeto
+    const bx = gifLayer.x, by = gifLayer.y, bw = gifLayer.width, bh = gifLayer.height;
+    const layersData = [];
+    const framesData  = [];
+    const layerNames  = [];
+    for (let i = 0; i < total; i++) {
+      const fr = srcFrames[i];
+      // Cada fotograma real → una imagen PNG estática de verdad (dataURL),
+      // en la MISMA posición/tamaño que tenía la animación al insertarse —
+      // toDataURL es síncrono y barato (solo un putImageData de por medio);
+      // lo costoso de verdad (decodificar cada imagen resultante) lo hace
+      // luego edDeserLayer, en paralelo, dentro de la rama hasData de
+      // gcpOpen — no hace falta esperarlo aquí uno a uno.
+      const c = document.createElement('canvas');
+      c.width = fr.imageData.width; c.height = fr.imageData.height;
+      c.getContext('2d').putImageData(fr.imageData, 0, 0);
+      layersData.push({ type: 'image', x: bx, y: by, width: bw, height: bh, src: c.toDataURL('image/png') });
+      const snaps = new Array(total).fill(null);
+      snaps[i] = { x: bx, y: by, width: bw, height: bh, rotation: 0, opacity: 1 };
+      framesData.push(snaps);
+      layerNames.push(I18n.t('gcp_frameLayerName', { n: i + 1 }));
+      _cxLoadOverlayUpdate(I18n.t('gcp_extractingFrames', { n: i + 1, total }));
+      // De uno en uno, no todos de golpe — petición explícita de Alberto:
+      // con animaciones de muchos fotogramas (pegatinas, etc. — 50-100+ es
+      // habitual) generar todos los PNG synchronously de golpe notaba.
+      if (i < total - 1) await new Promise(r => requestAnimationFrame(r));
+    }
+    gifLayer._gcpLayersData = layersData;
+    gifLayer._gcpFramesData = framesData;
+    gifLayer._gcpLayerNames = layerNames;
+  } catch (e) {
+    console.warn('_gcpPrepareExternalAnimForEdit:', e);
+  } finally {
+    _cxLoadOverlayHide();
+  }
+}
+
 function _gcpApplyFrame(fi) {
   // Cerrar panel de propiedades al cambiar de frame
   _gcpClosePropsPanel();
@@ -40613,7 +40716,7 @@ function gcpOpen(edLayerIdx) {
           || (la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj'));
         // Inicializar visibilidad según el frame 0 (existe = no-null)
         la._gcpVisible = !!(la._frames && la._frames[0]);
-        _gcpPushLayer(la);
+        _gcpPushLayer(la, { isRestore: true });
       });
       window._gcpSelIdx = window._gcpLayers.length > 0 ? 0 : -1;
       _gcpLastTapTime2 = 0; _gcpLastTapIdx2 = -1;
@@ -41399,8 +41502,43 @@ function _gcpSaveToLib(onDone) {
   // animación" sobre una capa ya seleccionada) que esto es una reedición — exigir
   // ADEMÁS _isGcpImage es una comprobación redundante que, si ese flag se pierde
   // por cualquier vía, convierte una actualización en una animación duplicada.
-  const existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
+  let existingLayer = (window._gcpEdLayerIdx>=0) ? edLayers[window._gcpEdLayerIdx] : null;
   if (existingLayer && (existingLayer.type==='gif' || existingLayer._isGcpImage || existingLayer._gcpLayersData)) {
+    // BUG confirmado por Alberto ("el objeto añadido vuelve a desaparecer...
+    // es posible que se trate de insertar como gif en vez de como apng, que
+    // es su nueva naturaleza" — confirmado también que los APNG importados
+    // SÍ conservan los cambios, solo los GIF no): si la capa ORIGINAL era un
+    // GifLayer real (GIF importado, nunca antes reeditado en GCP), su
+    // "naturaleza" ya no es un gif de un solo frame cíclico — ahora es una
+    // composición de varios objetos independientes, exactamente igual que
+    // una animación nativa de GCP (que siempre es ImageLayer + APNG).
+    // GifLayer.draw() SOLO mira this._oc — nunca this.img, y la clase no
+    // tiene loadAnim — así que, aunque el resto de este bloque actualice
+    // img/src/pngFrames con total normalidad, una GifLayer real nunca
+    // reflejaba el cambio visualmente: _oc se quedaba con el contenido
+    // VIEJO para siempre (ver el guard "typeof existingLayer.loadAnim"
+    // unas líneas más abajo — puesto ahí a propósito en una sesión anterior
+    // para no reventar una GifLayer sin más, pero sin arreglar el fondo del
+    // problema, marcado explícitamente como "fuera del alcance" en su
+    // momento — con la extracción a objetos independientes, reeditar un GIF
+    // real dejó de ser un caso raro para ser el camino normal).
+    // Arreglo: sustituir aquí la instancia por una ImageLayer nueva en el
+    // MISMO índice de edLayers (misma posición/tamaño/rotación/opacidad),
+    // antes de tocar nada más — a partir de aquí se comporta exactamente
+    // como cualquier otra animación nativa de GCP, con su loadAnim/img de
+    // verdad.
+    if (existingLayer.type === 'gif') {
+      if (typeof existingLayer.stopAnim === 'function') existingLayer.stopAnim();
+      const _converted = new ImageLayer(null, existingLayer.x, existingLayer.y, existingLayer.width);
+      _converted.height   = existingLayer.height;
+      _converted.rotation = existingLayer.rotation || 0;
+      _converted.opacity  = existingLayer.opacity ?? 1;
+      _converted.hidden   = existingLayer.hidden;
+      _converted.locked   = existingLayer.locked;
+      _converted.name     = existingLayer.name;
+      if (window._gcpEdLayerIdx >= 0) edLayers[window._gcpEdLayerIdx] = _converted;
+      existingLayer = _converted;
+    }
     const savedR=existingLayer.rotation;
     existingLayer._gcpLayersData=gcpLayersData;
     existingLayer._gcpFramesData=gcpFramesData;
@@ -41420,11 +41558,11 @@ function _gcpSaveToLib(onDone) {
     // Invalidar _oc aquí (además de _animReady/_animFrames) hace que, mientras tanto,
     // draw() caiga al fallback this.img (ya actualizado al recorte nuevo, ver
     // img.onload más abajo) en vez de a un _oc con proporciones ajenas.
-    // Guarda con typeof: si existingLayer es una GifLayer reeditada vía GCP
-    // (existingLayer.type==='gif', también entra en esta rama), esa clase no tiene
-    // loadAnim ni el fallback this.img en su draw() — poner _oc a null la dejaría sin
-    // pintar nada hasta que algo (no implementado) volviera a llamar a su propio
-    // .load(). No toco ese caso: está fuera del alcance de este bug.
+    // Guarda con typeof por pura precaución defensiva — existingLayer YA es
+    // siempre una ImageLayer llegados aquí (ver la conversión GifLayer→
+    // ImageLayer justo arriba, al entrar en esta rama), así que loadAnim
+    // siempre existe; se deja la comprobación por si en el futuro volviera
+    // a colarse aquí algún tipo de capa sin loadAnim.
     if (typeof existingLayer.loadAnim === 'function') existingLayer._oc = null;
     // BUG (reportado por Alberto): _apngSrc es el APNG ya "horneado" (con fcTL
     // propio) que se descarga de la nube al abrir la obra — pero NUNCA se
