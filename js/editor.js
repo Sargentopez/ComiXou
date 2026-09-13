@@ -7773,7 +7773,23 @@ function edLoadPage(idx){
   if(_isRealPageChange && !window._edLoadProjectInProgress){
     edHistory = [];
     edHistoryIdx = -1;
+    // BUG CORREGIDO (Alberto: al salir preguntaba si guardar aunque solo se
+    // hubieran pasado hojas sin editar nada). edPushHistory() SIEMPRE marca
+    // sucia la página al final (ver su comentario — diseñado así a propósito
+    // para ediciones reales); este push en concreto solo fija la instantánea
+    // de partida de la hoja a la que se navega, no es una edición. edLoadProject
+    // ya evita este mismo efecto colateral en su propio push inicial con
+    // _edLoadingSuppressDirty (ver _edMarkPageDirty) — aquí se reutiliza el
+    // mismo mecanismo, solo que durante la ventana síncrona de esta llamada
+    // en vez de toda la carga de la obra. Nota: _edInteractionTick ya excluía
+    // los controles de cambio de hoja de su CONTADOR de interacción, pero ese
+    // contador es un mecanismo distinto del FLAG que marca este push — no
+    // importa si se llega aquí con clic, miniatura, teclado o swipe: todos
+    // pasan por edLoadPage(), así que basta con corregirlo aquí una sola vez.
+    const _wasSuppressingDirty = window._edLoadingSuppressDirty;
+    window._edLoadingSuppressDirty = true;
     edPushHistory(true);
+    window._edLoadingSuppressDirty = _wasSuppressingDirty;
   }
   edUpdateUndoRedoBtns();
   // Cargar bajo demanda los _animFrames de la nueva página (liberados al salir de otras)
