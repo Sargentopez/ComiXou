@@ -3223,14 +3223,161 @@ ${scripts.map(s => '<script>' + s + '</script>').join('\n')}
   return { html, fileName: _safeFileName(snapshot.title) };
 }
 
+// ── Guardar con nombre (mismo criterio que _edSaveBlob en js/editor.js) ────
+// showSaveFilePicker: Chrome/Edge desktop desde 2020, y desde Chrome 132
+// (ene-2025) también en Chrome para Android (incluida una PWA instalada) —
+// deja elegir/editar el nombre y avisa de sobrescritura si ya existe, ambos
+// gestionados por el propio SO. Sin él (Android con Chrome viejo, Firefox
+// Android, Safari…), <a>.click() no abre ningún diálogo — de ahí el modal
+// propio de más abajo, con el mismo registro local de "nombres ya
+// descargados desde este dispositivo" que usa el editor (misma clave de
+// localStorage — comparten origen, así que el registro es el mismo se
+// descargue desde el editor o desde el lector).
+function _rdFilePickerSupported() {
+  return typeof window.showSaveFilePicker === 'function';
+}
+
+function _rdSplitNameExt(name) {
+  const s = String(name || '');
+  const i = s.lastIndexOf('.');
+  if (i <= 0) return { base: s, ext: '' };
+  return { base: s.slice(0, i), ext: s.slice(i + 1) };
+}
+function _rdSanitizeFileBase(base) {
+  const clean = String(base || '').replace(/[\\/:*?"<>|\x00-\x1F]/g, '_').trim();
+  return clean || 'archivo';
+}
+
+const _RD_DL_NAMES_KEY = 'cx_downloaded_names';
+const _RD_DL_NAMES_MAX = 300;
+function _rdDownloadedNamesGet() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(_RD_DL_NAMES_KEY) || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function _rdDownloadedNameExists(fullName) {
+  const norm = fullName.toLowerCase();
+  return _rdDownloadedNamesGet().some(n => n.toLowerCase() === norm);
+}
+function _rdDownloadedNameRemember(fullName) {
+  try {
+    let arr = _rdDownloadedNamesGet().filter(n => n.toLowerCase() !== fullName.toLowerCase());
+    arr.push(fullName);
+    if (arr.length > _RD_DL_NAMES_MAX) arr = arr.slice(-_RD_DL_NAMES_MAX);
+    localStorage.setItem(_RD_DL_NAMES_KEY, JSON.stringify(arr));
+  } catch (e) {}
+}
+
+// Modal "¿nombre para el archivo?" — estética oscura/difuminada a juego con
+// el resto del lector (mismo lenguaje visual que .page-nav-bar). Resuelve
+// con el nombre final, o con null si el usuario cancela.
+function _rdPromptSaveName(suggestedName) {
+  return new Promise(resolve => {
+    const { base: _baseSug, ext } = _rdSplitNameExt(suggestedName);
+    document.getElementById('rdSaveNameModal')?.remove();
+    document.getElementById('rdDupNameModal')?.remove();
+
+    const ov = document.createElement('div');
+    ov.id = 'rdSaveNameModal';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.6);';
+    ov.innerHTML = `
+      <div style="width:100%;max-width:340px;background:rgba(24,24,24,.94);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.2);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box">
+        <h3 style="margin:0;color:#fff;font-size:1.05rem;font-weight:700">${I18n.t('reader_saveAsTitle')}</h3>
+        <div>
+          <label style="display:block;font-size:.72rem;font-weight:700;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px">${I18n.t('reader_saveAsLabel')}</label>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="text" id="rdSaveNameInput" inputmode="text" enterkeyhint="done" style="flex:1;min-width:0;box-sizing:border-box;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:9px 12px;color:#fff;font-size:.95rem;outline:none">
+            <span style="font-weight:700;color:rgba(255,255,255,.6);white-space:nowrap">.${ext}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <button class="btn-outline" id="rdSaveNameCancel" style="flex:1;padding:10px 0;cursor:pointer">${I18n.t('cancel')}</button>
+          <button class="btn-yellow" id="rdSaveNameOk" style="flex:1;padding:10px 0;cursor:pointer">${I18n.t('reader_saveAsConfirm')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+
+    const input = ov.querySelector('#rdSaveNameInput');
+    input.value = _baseSug;
+    input.focus();
+    input.select();
+
+    const finish = (result) => { ov.remove(); resolve(result); };
+
+    const tryConfirm = () => {
+      const base = _rdSanitizeFileBase(input.value);
+      const fullName = ext ? `${base}.${ext}` : base;
+      if (_rdDownloadedNameExists(fullName)) {
+        _rdShowDupNameModal(fullName, {
+          onChange: () => { input.focus(); input.select(); },
+          onOverwrite: () => { _rdDownloadedNameRemember(fullName); finish(fullName); },
+        });
+        return;
+      }
+      _rdDownloadedNameRemember(fullName);
+      finish(fullName);
+    };
+
+    ov.querySelector('#rdSaveNameOk').addEventListener('click', tryConfirm);
+    ov.querySelector('#rdSaveNameCancel').addEventListener('click', () => finish(null));
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); tryConfirm(); }
+      if (e.key === 'Escape') { finish(null); }
+    });
+  });
+}
+
+// Aviso "ya existe" — mismo patrón que _rdPromptSaveName, apilado encima.
+function _rdShowDupNameModal(fullName, { onChange, onOverwrite }) {
+  document.getElementById('rdDupNameModal')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'rdDupNameModal';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(0,0,0,.6);';
+  ov.innerHTML = `
+    <div style="width:100%;max-width:340px;background:rgba(24,24,24,.96);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.2);border-radius:16px;padding:18px;display:flex;flex-direction:column;gap:12px;box-sizing:border-box">
+      <h3 style="margin:0;color:#fff;font-size:1rem;font-weight:700">${I18n.t('reader_dupNameTitle')}</h3>
+      <p style="margin:0;color:rgba(255,255,255,.75);font-size:.85rem;line-height:1.5">${I18n.t('reader_dupNameMsg', { name: fullName.replace(/</g,'&lt;') })}</p>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+        <button class="btn-outline" id="rdDupNameChange" style="width:100%;padding:10px 0;cursor:pointer">${I18n.t('reader_dupNameChange')}</button>
+        <button class="btn-yellow" id="rdDupNameOverwrite" style="width:100%;padding:10px 0;cursor:pointer">${I18n.t('reader_dupNameOverwrite')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#rdDupNameChange').addEventListener('click', () => { ov.remove(); onChange(); });
+  ov.querySelector('#rdDupNameOverwrite').addEventListener('click', () => { ov.remove(); onOverwrite(); });
+}
+
 async function _downloadStandaloneBundle() {
   const bundle = await _buildStandaloneBundle();
   if (!bundle) return false;
   const blob = new Blob([bundle.html], { type: 'text/html' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
+
+  if (_rdFilePickerSupported()) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: bundle.fileName,
+        types: [{ description: I18n.t('reader_htmlFileDesc'), accept: { 'text/html': ['.html'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true; // descargado con éxito via picker
+    } catch (e) {
+      if (e.name === 'AbortError') return true; // usuario canceló → no hacer fallback
+      // cualquier otro error: caer al método clásico
+    }
+  }
+
+  // Fallback: pedir nombre con modal propio, porque <a>.click() no abre
+  // ningún diálogo del sistema ni evita sobrescrituras silenciosas.
+  const finalName = await _rdPromptSaveName(bundle.fileName);
+  if (finalName === null) return false; // usuario canceló el nombre
+
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
   a.href = url;
-  a.download = bundle.fileName;
+  a.download = finalName;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -3275,8 +3422,8 @@ async function _setupOfflineBtn() {
       const snapshot = await _buildOfflineSnapshot();
       if (snapshot) {
         await _offlineSave(RS._workId, snapshot);
-        await _downloadStandaloneBundle();
-        _readerToast(I18n.t('reader_downloadedToast'), 3500);
+        const _downloaded = await _downloadStandaloneBundle();
+        if (_downloaded) _readerToast(I18n.t('reader_downloadedToast'), 3500);
       } else {
         _readerToast(I18n.t('reader_downloadPrepareFail'), 3000);
       }

@@ -32404,16 +32404,30 @@ function EditorView_init(){
 // Exportar la hoja actual como PNG o JPG
 // Renderiza en canvas offscreen con transform z=1, desplazado al origen de la página
 
-// ── Descarga con File System Access API (showSaveFilePicker) en PC ────────
-// Usa el diálogo nativo del SO si está disponible (Chrome/Edge desktop).
-// Fallback automático a <a>.click() en Android, Firefox y Safari.
+// ── Descarga con File System Access API (showSaveFilePicker) ──────────────
+// Disponible en Chrome/Edge desktop desde 2020, y desde Chrome 132 (ene-2025)
+// TAMBIÉN en Chrome para Android (incluida una PWA instalada) — feature-
+// detection puro, sin sniffing de touch/plataforma. Usar
+// `navigator.maxTouchPoints` para decidir "esto es táctil, luego no lo
+// soporta" es el mismo antipatrón que ya se descartó en su día para el botón
+// de cerrar el visor (laptops Windows con pantalla táctil también dan
+// maxTouchPoints>0 — ver HISTORIAL DE BUGS) — y aquí además excluía a TODO
+// Android, que desde esa versión de Chrome SÍ soporta el diálogo nativo
+// (nombre editable + aviso de sobrescritura si el nombre ya existe, ambos
+// gestionados por el propio SO, igual que en PC). Hasta v40.01 Android caía
+// siempre al fallback <a>.click(), que no permite elegir nombre ni detecta
+// duplicados — de ahí que todas las descargas acabaran con el nombre de la
+// obra y se sobrescribieran entre sí.
+// Fallback real (Android con Chrome viejo, Firefox Android, Safari…):
+// <a>.click(), que no abre ningún diálogo del sistema — por eso SIEMPRE debe
+// llamarse a través de _edSaveBlobNamed() (más abajo), que en ese caso pide
+// nombre con un modal propio antes de llegar aquí.
+function _edFilePickerSupported() {
+  return typeof window.showSaveFilePicker === 'function';
+}
+
 async function _edSaveBlob(blob, suggestedName, mimeType) {
-  // showSaveFilePicker: disponible en Chrome/Edge desktop (no en Android Chrome)
-  const _supportsFilePicker = (
-    typeof window.showSaveFilePicker === 'function' &&
-    !navigator.maxTouchPoints // excluir táctil (Android/tablet)
-  );
-  if (_supportsFilePicker) {
+  if (_edFilePickerSupported()) {
     const ext = suggestedName.split('.').pop().toLowerCase();
     const _typeMap = {
       png:  [{description:I18n.t('ed_pngImageDesc'), accept:{'image/png':['.png']}}],
@@ -32444,6 +32458,157 @@ async function _edSaveBlob(blob, suggestedName, mimeType) {
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
   return false;
+}
+
+// ── Pedir nombre antes de descargar (solo cuando NO hay File System Access) ─
+// _edSaveBlob ya resuelve "nombre editable + aviso de sobrescritura" con el
+// propio diálogo del SO cuando showSaveFilePicker existe. Cuando no existe
+// (Android con Chrome viejo, Firefox Android, Safari…), <a>.click() no abre
+// ningún diálogo — así que sin este paso el usuario nunca podría elegir
+// nombre, y dos descargas con el mismo nombre por defecto (p.ej. dos
+// animaciones GIF exportadas seguidas sin cambiar nada) se pisarían en
+// silencio, igual que reportó Alberto en Android.
+//
+// Ninguna API web permite consultar la carpeta de Descargas real del
+// dispositivo (por diseño, motivos de privacidad — ninguna página puede ver
+// qué archivos hay ya en el disco) — así que el registro de "nombres ya
+// usados" es propio de la app y vive en localStorage: sabe si ESTA app ya
+// descargó ese nombre desde este dispositivo, no si el archivo sigue
+// existiendo de verdad o si vino de otro sitio. Es la única aproximación
+// posible sin acceso real al sistema de archivos — precisamente por eso es
+// tan importante activar showSaveFilePicker en Android arriba, que sí tiene
+// acceso real y no depende de este registro aproximado.
+function _edSplitNameExt(name) {
+  const s = String(name || '');
+  const i = s.lastIndexOf('.');
+  if (i <= 0) return { base: s, ext: '' };
+  return { base: s.slice(0, i), ext: s.slice(i + 1) };
+}
+
+function _edSanitizeFileBase(base) {
+  const clean = String(base || '').replace(/[\\/:*?"<>|\x00-\x1F]/g, '_').trim();
+  return clean || 'archivo';
+}
+
+const _CX_DL_NAMES_KEY = 'cx_downloaded_names';
+const _CX_DL_NAMES_MAX = 300;
+
+function _edDownloadedNamesGet() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(_CX_DL_NAMES_KEY) || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function _edDownloadedNameExists(fullName) {
+  const norm = fullName.toLowerCase();
+  return _edDownloadedNamesGet().some(n => n.toLowerCase() === norm);
+}
+function _edDownloadedNameRemember(fullName) {
+  try {
+    let arr = _edDownloadedNamesGet().filter(n => n.toLowerCase() !== fullName.toLowerCase());
+    arr.push(fullName);
+    if (arr.length > _CX_DL_NAMES_MAX) arr = arr.slice(-_CX_DL_NAMES_MAX);
+    localStorage.setItem(_CX_DL_NAMES_KEY, JSON.stringify(arr));
+  } catch (e) {}
+}
+
+// Modal "¿nombre para el archivo?" — resuelve con el nombre final elegido, o
+// con null si el usuario cancela (el llamador debe entonces NO mostrar el
+// toast de "exportado", ver _edSaveBlobNamed).
+function _edPromptSaveName(suggestedName) {
+  return new Promise(resolve => {
+    const { base: _baseSug, ext } = _edSplitNameExt(suggestedName);
+    document.getElementById('edSaveNameModal')?.remove();
+    document.getElementById('edDupNameModal')?.remove();
+
+    const ov = document.createElement('div');
+    ov.className = 'mc-modal-overlay open';
+    ov.id = 'edSaveNameModal';
+    ov.innerHTML = `
+      <div class="mc-modal-box">
+        <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('ed_saveAsTitle')}</span></h3>
+        <div class="mc-field">
+          <label>${I18n.t('ed_saveAsLabel')}</label>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="text" id="edSaveNameInput" inputmode="text" enterkeyhint="done" style="flex:1;min-width:0">
+            <span style="font-weight:700;color:var(--gray-500);white-space:nowrap">.${ext}</span>
+          </div>
+        </div>
+        <div class="mc-modal-actions">
+          <button class="btn" id="edSaveNameCancel" style="flex:1">${I18n.t('cancel')}</button>
+          <button class="btn btn-primary" id="edSaveNameOk" style="flex:1">${I18n.t('ed_saveAsConfirm')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+
+    const input = ov.querySelector('#edSaveNameInput');
+    input.value = _baseSug;
+    input.focus();
+    input.select();
+
+    const finish = (result) => { ov.remove(); resolve(result); };
+
+    const tryConfirm = () => {
+      const base = _edSanitizeFileBase(input.value);
+      const fullName = ext ? `${base}.${ext}` : base;
+      if (_edDownloadedNameExists(fullName)) {
+        _edShowDupNameModal(fullName, {
+          onChange: () => { input.focus(); input.select(); },
+          onOverwrite: () => { _edDownloadedNameRemember(fullName); finish(fullName); },
+        });
+        return;
+      }
+      _edDownloadedNameRemember(fullName);
+      finish(fullName);
+    };
+
+    ov.querySelector('#edSaveNameOk').addEventListener('click', tryConfirm);
+    ov.querySelector('#edSaveNameCancel').addEventListener('click', () => finish(null));
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); tryConfirm(); }
+      if (e.key === 'Escape') { finish(null); }
+    });
+  });
+}
+
+// Aviso "ya existe" — mismo patrón visual que _mcConfirmDuplicate (my-works.js,
+// título de obra duplicado): overlay propio apilado sobre el modal de nombre,
+// dos botones apilados.
+function _edShowDupNameModal(fullName, { onChange, onOverwrite }) {
+  document.getElementById('edDupNameModal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'mc-modal-overlay open';
+  ov.id = 'edDupNameModal';
+  ov.innerHTML = `
+    <div class="mc-modal-box" style="gap:14px">
+      <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">${I18n.t('ed_dupNameTitle')}</span></h3>
+      <p style="margin:0 20px;color:var(--gray-600);font-size:.9rem;line-height:1.5">
+        ${I18n.t('ed_dupNameMsg', { name: fullName.replace(/</g,'&lt;') })}
+      </p>
+      <div class="mc-modal-actions" style="flex-direction:column;gap:8px">
+        <button class="btn" id="edDupNameChange" style="width:100%">${I18n.t('ed_dupNameChange')}</button>
+        <button class="btn btn-primary" id="edDupNameOverwrite" style="width:100%">${I18n.t('ed_dupNameOverwrite')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#edDupNameChange').addEventListener('click', () => { ov.remove(); onChange(); });
+  ov.querySelector('#edDupNameOverwrite').addEventListener('click', () => { ov.remove(); onOverwrite(); });
+}
+
+// ── Punto de entrada único para todas las descargas ─────────────────────────
+// Con showSaveFilePicker disponible: delega en _edSaveBlob sin más — el
+// propio diálogo del SO ya deja elegir/editar nombre y avisa si existe.
+// Sin él: pide nombre con el modal propio (con su propio aviso de "ya existe"
+// contra el registro local) y descarga con _edSaveBlob una vez resuelto.
+// Devuelve null si el usuario cancela el nombre — el llamador debe
+// comprobarlo y NO mostrar el toast de "exportado" en ese caso.
+async function _edSaveBlobNamed(blob, suggestedName, mimeType) {
+  if (_edFilePickerSupported()) {
+    return _edSaveBlob(blob, suggestedName, mimeType);
+  }
+  const finalName = await _edPromptSaveName(suggestedName);
+  if (finalName === null) return null;
+  return _edSaveBlob(blob, finalName, mimeType);
 }
 
 function edExportPagePNG(format){
@@ -32509,7 +32674,8 @@ function edExportPagePNG(format){
     if(!blob){ edToast(I18n.t('ed_errExport')); return; }
     const title = (edProjectMeta.title || 'hoja').replace(/\s+/g, '_');
     const pg    = edCurrentPage + 1;
-    await _edSaveBlob(blob, `${title}_hoja${pg}.${format}`, mimeType);
+    const _dl = await _edSaveBlobNamed(blob, `${title}_hoja${pg}.${format}`, mimeType);
+    if (_dl === null) return;
     edToast(I18n.t('ed_pageExported', { n: pg }));
   }, mimeType, quality);
 }
@@ -32627,7 +32793,8 @@ function edExportSelectionPNG(format, insertMode) {
   off.toBlob(async blob => {
     if(!blob){ edToast(I18n.t('ed_errExport')); return; }
     const _selName = `${(edProjectMeta.title||'seleccion').replace(/\s+/g,'_')}_sel.${format}`;
-    await _edSaveBlob(blob, _selName, mimeType);
+    const _dl = await _edSaveBlobNamed(blob, _selName, mimeType);
+    if (_dl === null) return;
     edToast(I18n.t('ed_selectionExported'));
   }, mimeType, quality);
 }
@@ -32895,7 +33062,8 @@ async function edExportSelectionSVG() {
       '</svg>'
     ].join('\n');
     const blob = new Blob([svgStr], { type: 'image/svg+xml' });
-    await _edSaveBlob(blob, _selName, 'image/svg+xml');
+    const _dl = await _edSaveBlobNamed(blob, _selName, 'image/svg+xml');
+    if (_dl === null) return;
     edToast(I18n.t('ed_svgVectorExported'));
     return;
   }
@@ -32926,7 +33094,8 @@ async function edExportSelectionSVG() {
     '</svg>'
   ].join('\n');
   const blob = new Blob([svgStr], { type: 'image/svg+xml' });
-  await _edSaveBlob(blob, _selName, 'image/svg+xml');
+  const _dl = await _edSaveBlobNamed(blob, _selName, 'image/svg+xml');
+  if (_dl === null) return;
   edToast(I18n.t('ed_svgExported'));
 }
 
@@ -34831,7 +35000,8 @@ async function edBibExport() {
     const stamp = new Date().toISOString().slice(0, 10);
     const filename = `${safeTitle}_biblioteca_${stamp}.${_BIB_EXPORT_EXT}`;
 
-    await _edSaveBlob(blob, filename, _BIB_EXPORT_MIME);
+    const _dl = await _edSaveBlobNamed(blob, filename, _BIB_EXPORT_MIME);
+    if (_dl === null) return;
     edToast(I18n.t('ed_bibExported', { n: _totalItems }));
   } catch(e) {
     console.warn('edBibExport:', e);
@@ -42158,7 +42328,8 @@ async function _gcpDownloadApng() {
 
     const blob = new Blob([apngBuf], { type: 'image/png' });
     const _animTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.png';
-    await _edSaveBlob(blob, _animTitle, 'image/png');
+    const _dl = await _edSaveBlobNamed(blob, _animTitle, 'image/png');
+    if (_dl === null) return;
     edToast(I18n.t('gcp_apngDownloaded'));
   } catch (err) {
     edToast(I18n.t('gcp_errGeneratePng') + err.message);
@@ -42383,7 +42554,8 @@ async function _gcpDownloadGif() {
     const gifBytes = buf.slice(0, gw.end());
     const blob = new Blob([gifBytes], {type: 'image/gif'});
     const _gifTitle = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.gif';
-    await _edSaveBlob(blob, _gifTitle, 'image/gif');
+    const _dl = await _edSaveBlobNamed(blob, _gifTitle, 'image/gif');
+    if (_dl === null) return;
     edToast(I18n.t('gcp_gifDownloaded'));
   } catch(err) {
     edToast(I18n.t('gcp_errGenerateGif') + err.message);
@@ -42551,7 +42723,8 @@ async function _gcpDownloadMp4() {
     const { buffer } = target;
     const blob = new Blob([buffer], { type: 'video/mp4' });
     const _mp4Title = (edProjectMeta && edProjectMeta.title ? edProjectMeta.title.replace(/\s+/g,'_') : 'animacion') + '.mp4';
-    await _edSaveBlob(blob, _mp4Title, 'video/mp4');
+    const _dl = await _edSaveBlobNamed(blob, _mp4Title, 'video/mp4');
+    if (_dl === null) return;
     const kb = Math.round(blob.size / 1024);
     edToast(I18n.t('gcp_mp4Downloaded', { kb }));
   } catch (err) {
