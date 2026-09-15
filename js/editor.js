@@ -27872,11 +27872,13 @@ function _cxOpenFontSearch(onPick, onCancel) {
   ov.innerHTML = `
     <div class="mc-modal-box" style="max-height:82vh;width:min(440px,92vw);display:flex;flex-direction:column;padding-bottom:14px">
       <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('ed_fontSearchTitle')}</span></h3>
-      <div class="mc-field" style="padding:0 20px">
-        <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
+      <div id="cxFontSearchBrowse" style="display:flex;flex-direction:column;flex:1;min-height:0">
+        <div class="mc-field" style="padding:0 20px">
+          <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
+        </div>
+        <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
+        <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:180px;margin:10px 20px 0;display:flex;flex-direction:column;gap:2px;touch-action:pan-y"></div>
       </div>
-      <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
-      <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:180px;margin:10px 20px 0;display:flex;flex-direction:column;gap:2px"></div>
       <div id="cxFontSearchPreview" style="display:none;margin:10px 20px 0;padding:14px;border:2px solid var(--gray-300);border-radius:10px;text-align:center"></div>
       <div class="mc-modal-actions">
         <button class="btn" id="cxFontSearchCancel" style="flex:1">${I18n.t('cancel')}</button>
@@ -27884,6 +27886,7 @@ function _cxOpenFontSearch(onPick, onCancel) {
     </div>`;
   document.body.appendChild(ov);
 
+  const browseEl  = ov.querySelector('#cxFontSearchBrowse');
   const input     = ov.querySelector('#cxFontSearchInput');
   const catsBox   = ov.querySelector('#cxFontSearchCats');
   const resultsEl = ov.querySelector('#cxFontSearchResults');
@@ -27907,6 +27910,30 @@ function _cxOpenFontSearch(onPick, onCancel) {
   catsBox.firstElementChild.style.background = 'var(--black)';
   catsBox.firstElementChild.style.color = '#fff';
 
+  // Umbral para distinguir un toque/clic real de un arrastre de scroll —
+  // mismo criterio (6px) que ya usa _bibBindDrag para el panel de
+  // biblioteca. Sin esto, en una lista larga con scroll táctil, un dedo que
+  // solo pretendía desplazarse podía acabar "seleccionando" la fuente que
+  // hubiera debajo al levantarlo. Se guarda en el propio botón (no en una
+  // variable compartida) porque varias filas pueden estar en distintos
+  // puntos de su gesto a la vez si el usuario levanta y vuelve a tocar
+  // rápido — cada una lleva la cuenta de la suya.
+  const DRAG_THRESHOLD = 6;
+  function _makeTapSafe(el, onTap) {
+    el.addEventListener('pointerdown', e => {
+      el._downX = e.clientX; el._downY = e.clientY; el._wasDrag = false;
+    });
+    el.addEventListener('pointermove', e => {
+      if (el._downX == null) return;
+      const dist = Math.hypot(e.clientX - el._downX, e.clientY - el._downY);
+      if (dist > DRAG_THRESHOLD) el._wasDrag = true;
+    });
+    el.addEventListener('click', () => {
+      if (el._wasDrag) { el._wasDrag = false; return; } // fue scroll, no una selección
+      onTap();
+    });
+  }
+
   function renderResults() {
     const q = input.value.trim().toLowerCase();
     let matches = _catalog.filter(f => (!_cat || f.category === _cat) && (!q || f.family.toLowerCase().includes(q)));
@@ -27923,7 +27950,7 @@ function _cxOpenFontSearch(onPick, onCancel) {
       row.style.cssText = 'text-align:left;padding:9px 10px;border:none;border-radius:6px;background:transparent;font-family:inherit;font-size:.92rem;cursor:pointer';
       row.addEventListener('mouseenter', () => row.style.background = 'var(--gray-100)');
       row.addEventListener('mouseleave', () => row.style.background = 'transparent');
-      row.addEventListener('click', () => showPreview(f.family));
+      _makeTapSafe(row, () => showPreview(f.family));
       resultsEl.appendChild(row);
     });
     if (matches.length > shown.length) {
@@ -27934,7 +27961,17 @@ function _cxOpenFontSearch(onPick, onCancel) {
     }
   }
 
+  // La vista previa SUSTITUYE a la lista de búsqueda en vez de aparecer
+  // debajo de ella — con las dos a la vez, el hueco que la vista previa le
+  // quita a la lista (misma caja, en flex-column con altura máxima) hacía
+  // que la lista se encogiera de golpe en cuanto tocabas una fuente, lo que
+  // se percibía como si el scroll saltara solo (reportado por Alberto). Al
+  // ocultar la lista entera en vez de encogerla, no hay ningún reajuste de
+  // layout que pueda desplazar nada mientras hay contenido con scroll a la
+  // vista. Volver atrás restaura la lista tal cual estaba (nunca se destruye
+  // su contenido, solo se oculta), con su posición de scroll intacta.
   async function showPreview(family) {
+    browseEl.style.display = 'none';
     previewEl.style.display = 'block';
     previewEl.innerHTML = `<div style="font-size:.8rem;color:var(--gray-500);margin-bottom:8px">${I18n.t('ed_fontSearchDownloading')}</div>`;
     try {
@@ -27945,11 +27982,21 @@ function _cxOpenFontSearch(onPick, onCancel) {
       await _cxLoadExternalFont(family);
       previewEl.innerHTML = `
         <div style="font-family:'${family.replace(/'/g,"\\'")}',sans-serif;font-size:1.6rem;margin-bottom:10px;word-break:break-word">${family}</div>
-        <button class="btn btn-primary" id="cxFontSearchUseBtn" style="width:100%">${I18n.t('ed_fontSearchUse')}</button>`;
+        <button class="btn btn-primary" id="cxFontSearchUseBtn" style="width:100%;margin-bottom:8px">${I18n.t('ed_fontSearchUse')}</button>
+        <button class="btn" id="cxFontSearchBackBtn" style="width:100%">${I18n.t('ed_fontSearchBack')}</button>`;
       previewEl.querySelector('#cxFontSearchUseBtn').addEventListener('click', () => { _picked = true; close(); onPick(family); });
+      previewEl.querySelector('#cxFontSearchBackBtn').addEventListener('click', backToBrowse);
     } catch(e) {
-      previewEl.innerHTML = `<div style="color:#c0392b;font-size:.85rem">${I18n.t('ed_fontSearchError')}</div>`;
+      previewEl.innerHTML = `
+        <div style="color:#c0392b;font-size:.85rem;margin-bottom:10px">${I18n.t('ed_fontSearchError')}</div>
+        <button class="btn" id="cxFontSearchBackBtn" style="width:100%">${I18n.t('ed_fontSearchBack')}</button>`;
+      previewEl.querySelector('#cxFontSearchBackBtn').addEventListener('click', backToBrowse);
     }
+  }
+
+  function backToBrowse() {
+    previewEl.style.display = 'none';
+    browseEl.style.display = 'flex';
   }
 
   input.addEventListener('input', renderResults);
