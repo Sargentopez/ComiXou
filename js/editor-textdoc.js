@@ -1914,7 +1914,7 @@ async function _tdRunDiag(){
 // controles del editor (ver dd-tdFontFamily/dd-tdFontSize en views.js), para
 // que el texto pegado quepa en la página igual que el escrito a mano.
 const TD_PASTE_FONT_MIN = 12, TD_PASTE_FONT_MAX = 40;
-const TD_ALLOWED_FONTS = ['Lora','Patrick Hand','Bangers','Permanent Marker','Bebas Neue','Oswald','Comic Neue','Press Start 2P','Arial','Verdana'];
+const TD_ALLOWED_FONTS = ['Lora','Patrick Hand','Bangers','Permanent Marker','Bebas Neue','Bungee Outline','Oswald','Comic Neue','Press Start 2P','Arial','Verdana'];
 function _tdSanitizePastedHTML(html){
   try{
     const doc = new DOMParser().parseFromString(html || '', 'text/html');
@@ -2039,7 +2039,7 @@ function _tdWireFontControls(){
   // absoluto (bug reportado: "las alineaciones no se aplican"). Usando
   // "pointerdown" + preventDefault(), igual que el propio Trix, el
   // navegador nunca llega a mover el foco fuera del editor.
-  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item').forEach(btn => {
+  document.querySelectorAll('#dd-tdFontFamily .ed-dropdown-item[data-value]').forEach(btn => {
     btn.addEventListener('pointerdown', e => {
       e.preventDefault();
       const _appliedToWhole = _tdApplyScoped(() => {
@@ -2058,6 +2058,32 @@ function _tdWireFontControls(){
       finishChoice();
       _tdSyncFontMenuActive();
     });
+  });
+  // "🔍 Buscar más fuentes…" — mismo botón congelado (freeze) que el resto
+  // del menú para que la selección se siga viendo resaltada, pero el propio
+  // cambio de fuente llega de forma asíncrona (buscar + descargar puede
+  // tardar), así que aquí NO se puede usar _tdApplyScoped tal cual en el
+  // "pointerdown" — para cuando el usuario elige una fuente en el buscador,
+  // el foco lleva rato fuera del editor. Se guarda el rango ahora (todavía
+  // válido) y se restaura justo antes de aplicar el atributo, igual que hace
+  // _tdApplyScoped consigo mismo pero salvando el hueco asíncrono de en medio.
+  document.getElementById('tdFontSearchBtn')?.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    freeze();
+    const _savedRange = editorEl.editor?.getSelectedRange();
+    if(typeof edCloseMenus === 'function') edCloseMenus();
+    _cxOpenFontSearch(
+      family => {
+        if(_savedRange && editorEl.editor) editorEl.editor.setSelectedRange(_savedRange);
+        const _appliedToWhole = _tdApplyScoped(() => {
+          try{ editorEl.editor?.activateAttribute('fontFamily', family); }catch(_e){}
+        });
+        _tdDocFontFamily = _appliedToWhole ? family : null;
+        finishChoice();
+        _tdSyncFontMenuActive();
+      },
+      () => { unfreeze(); editorEl.focus(); } // canceló el buscador sin elegir nada
+    );
   });
   document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
     btn.addEventListener('pointerdown', e => {

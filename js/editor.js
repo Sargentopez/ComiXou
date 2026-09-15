@@ -21353,13 +21353,16 @@ function edRenderOptionsPanel(mode){
           <option value="Bangers" ${la.fontFamily==='Bangers'?'selected':''}>Bangers</option>
           <option value="Permanent Marker" ${la.fontFamily==='Permanent Marker'?'selected':''}>Permanent Marker</option>
           <option value="Bebas Neue" ${la.fontFamily==='Bebas Neue'?'selected':''}>Bebas Neue</option>
+          <option value="Bungee Outline" ${la.fontFamily==='Bungee Outline'?'selected':''}>Bungee Outline</option>
           <option value="Oswald" ${la.fontFamily==='Oswald'?'selected':''}>Oswald</option>
           <option value="Comic Neue" ${la.fontFamily==='Comic Neue'?'selected':''}>Comic Neue</option>
           <option value="Lora" ${la.fontFamily==='Lora'?'selected':''}>Lora (Serif)</option>
           <option value="Press Start 2P" ${la.fontFamily==='Press Start 2P'?'selected':''}>Press Start 2P (8-bit)</option>
           <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
           <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
+          ${!_CX_BUILTIN_FONTS.has(la.fontFamily) ? `<option value="${la.fontFamily.replace(/"/g,'&quot;')}" selected>${la.fontFamily.replace(/</g,'&lt;')}</option>` : ''}
         </select>
+        <button type="button" id="pp-font-search" title="${I18n.t('ed_fontSearchOpenBtn')}" style="margin-left:4px;padding:4px 8px;border:2px solid var(--gray-300);border-radius:6px;background:#fff;font-size:.85rem;cursor:pointer">🔍</button>
         <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="${I18n.t('td_boldTitle')}">
           <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
         </label>
@@ -21581,6 +21584,16 @@ function edRenderOptionsPanel(mode){
         _btn.style.opacity = _la.locked ? '1' : '0.4';
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
+    });
+    $('pp-font-search')?.addEventListener('click', () => {
+      if (edSelectedIdx < 0) return;
+      const _laFs = edLayers[edSelectedIdx];
+      _cxOpenFontSearch(family => {
+        _laFs.fontFamily = family;
+        _laFs.resizeToFitText(edCanvas);
+        edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
+        edToast(I18n.t('ed_fontSearchApplied'));
+      });
     });
     $('pp-ok')?.addEventListener('click',()=>{
       const _laOk = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
@@ -27755,6 +27768,200 @@ function _edAutosaveStop() {
   if (_edAutosaveTimer) { clearInterval(_edAutosaveTimer); _edAutosaveTimer = null; }
 }
 
+// ── Fuentes de Google Fonts bajo demanda (comxow-storage-worker) ──────────
+// Complementa las fuentes autoalojadas de fonts.css. Cualquier otra familia
+// que aparezca en las capas de texto de la obra se intenta cargar de forma
+// dinámica desde el worker, que las cachea en R2 la primera vez que alguien
+// las elige desde el buscador (ver _cxFetchGoogleFont/POST /fonts/fetch,
+// autenticado) y las sirve después SIN autenticación a cualquiera — igual
+// que gifs/anims/covers (ver supabase-client.js, WORKER + rutas públicas).
+// Esta función de aquí NUNCA dispara una descarga nueva desde Google: solo
+// pide lo que el worker YA tenga cacheado. Si una variante concreta no
+// existe o aún no se cacheó, esa promesa individual falla y se ignora —
+// nunca rompe la carga de la obra por una fuente que falte.
+const _CX_FONTS_WORKER = 'https://comxow-storage-worker.albertobicho.workers.dev';
+const _CX_BUILTIN_FONTS = new Set([
+  'Bangers','Bebas Neue','Bungee Outline','Comic Neue','Lora','Nunito',
+  'Oswald','Patrick Hand','Permanent Marker','Press Start 2P','Arial','Verdana',
+]);
+function _cxFontSlug(family) {
+  return String(family || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+const _CX_FONT_VARIANTS = [
+  { tag: '400',       weight: '400', style: 'normal' },
+  { tag: '700',       weight: '700', style: 'normal' },
+  { tag: '400italic', weight: '400', style: 'italic' },
+  { tag: '700italic', weight: '700', style: 'italic' },
+];
+async function _cxLoadExternalFont(family) {
+  if (!family || _CX_BUILTIN_FONTS.has(family)) return;
+  if (!('fonts' in document) || typeof FontFace !== 'function') return;
+  // OJO: document.fonts.check() devuelve true para CUALQUIER familia sin
+  // ningún FontFace asociado todavía (referencia sin más: comprobado con un
+  // FontFaceSet vacío, con .check() de una familia jamás declarada — 'true'
+  // en ambos casos, porque el navegador siempre tiene ALGÚN fallback listo
+  // para pintar "ya mismo", que es lo que check() responde). Usarlo aquí tal
+  // cual haría que esta función se saltara SIEMPRE la descarga real, la
+  // primera vez que se pide cualquier fuente externa — justo el caso que
+  // existe para resolver. Se comprueba en su lugar si YA hay un FontFace con
+  // ese nombre exacto y en estado 'loaded' de verdad.
+  const _already = [...document.fonts].some(f => f.family.replace(/^['"]|['"]$/g, '') === family && f.status === 'loaded');
+  if (_already) return;
+  const slug = _cxFontSlug(family);
+  if (!slug) return;
+  await Promise.all(_CX_FONT_VARIANTS.map(async v => {
+    try {
+      const url = `${_CX_FONTS_WORKER}/fonts/${slug}/${v.tag}.woff2`;
+      const face = new FontFace(family, `url("${url}")`, { weight: v.weight, style: v.style });
+      const loaded = await face.load();
+      document.fonts.add(loaded);
+    } catch(e) { /* variante inexistente para esta familia, o aún no cacheada — normal */ }
+  }));
+}
+// Mismo criterio de detección que _scanUsedFonts en reader/reader.js — no se
+// replica aquí la cadena de fallback del motor de dibujado, se recoge
+// cualquier valor de fuente presente y se intenta cargar; como mucho se pide
+// alguna de más, nunca se deja de pedir la que hace falta.
+function _cxScanPagesExternalFonts(pages) {
+  const fonts = new Set();
+  const add = v => { if (v && typeof v === 'string' && v.trim() && !_CX_BUILTIN_FONTS.has(v.trim())) fonts.add(v.trim()); };
+  (pages || []).forEach(p => {
+    (p.texts || []).forEach(t => { add(t.font_family); add(t.fontFamily); add(t.richFontFamily); });
+    (p.layers || []).forEach(l => {
+      if (!l || (l.type !== 'bubble' && l.type !== 'text')) return;
+      add(l.font_family); add(l.fontFamily); add(l.richFontFamily);
+      (l.richLines || []).forEach(line => (line.runs || []).forEach(r => { if (!r.mono) add(r.fontFamily); }));
+    });
+  });
+  return [...fonts];
+}
+async function _cxLoadPagesExternalFonts(pages) {
+  const names = _cxScanPagesExternalFonts(pages);
+  if (!names.length) return;
+  await Promise.all(names.map(n => _cxLoadExternalFont(n).catch(() => {})));
+}
+
+// ── Buscador de Google Fonts ───────────────────────────────────────────
+// Modal compartido por los dos selectores de fuente (panel de bocadillo y
+// barra del editor de texto). onPick(family) solo se llama cuando la fuente
+// ya se ha descargado+cacheado (si hacía falta) Y cargado de verdad en
+// document.fonts — nunca antes, para no aplicar un nombre que todavía
+// renderizaría con la tipografía de reserva.
+let _cxFontCatalogCache = null;
+async function _cxGetFontCatalog() {
+  if (_cxFontCatalogCache) return _cxFontCatalogCache;
+  const data = await SupabaseClient.fetchFontCatalog();
+  _cxFontCatalogCache = (data && data.fonts) || [];
+  return _cxFontCatalogCache;
+}
+
+const _CX_FONT_CATEGORIES = [
+  { id: '',             key: 'ed_fontSearchAll' },
+  { id: 'display',      key: 'ed_fontSearchCatDisplay' },
+  { id: 'handwriting',  key: 'ed_fontSearchCatHandwriting' },
+  { id: 'serif',        key: 'ed_fontSearchCatSerif' },
+  { id: 'sans-serif',   key: 'ed_fontSearchCatSansSerif' },
+  { id: 'monospace',    key: 'ed_fontSearchCatMonospace' },
+];
+
+function _cxOpenFontSearch(onPick, onCancel) {
+  document.getElementById('cxFontSearchModal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'mc-modal-overlay open';
+  ov.id = 'cxFontSearchModal';
+  ov.innerHTML = `
+    <div class="mc-modal-box" style="max-height:82vh;width:min(440px,92vw);display:flex;flex-direction:column;padding-bottom:14px">
+      <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('ed_fontSearchTitle')}</span></h3>
+      <div class="mc-field" style="padding:0 20px">
+        <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
+      </div>
+      <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
+      <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:180px;margin:10px 20px 0;display:flex;flex-direction:column;gap:2px"></div>
+      <div id="cxFontSearchPreview" style="display:none;margin:10px 20px 0;padding:14px;border:2px solid var(--gray-300);border-radius:10px;text-align:center"></div>
+      <div class="mc-modal-actions">
+        <button class="btn" id="cxFontSearchCancel" style="flex:1">${I18n.t('cancel')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+
+  const input     = ov.querySelector('#cxFontSearchInput');
+  const catsBox   = ov.querySelector('#cxFontSearchCats');
+  const resultsEl = ov.querySelector('#cxFontSearchResults');
+  const previewEl = ov.querySelector('#cxFontSearchPreview');
+  let _cat = '';
+  let _catalog = [];
+  let _picked = false;
+
+  const close = () => ov.remove();
+  ov.querySelector('#cxFontSearchCancel').addEventListener('click', () => { close(); if (!_picked) onCancel?.(); });
+
+  _CX_FONT_CATEGORIES.forEach(c => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = I18n.t(c.key);
+    b.dataset.cat = c.id;
+    b.style.cssText = 'padding:5px 12px;border-radius:20px;border:2px solid var(--gray-300);background:#fff;font-family:inherit;font-size:.78rem;font-weight:800;cursor:pointer';
+    b.addEventListener('click', () => { _cat = c.id; renderResults(); [...catsBox.children].forEach(x => x.style.background = x === b ? 'var(--black)' : '#fff'); [...catsBox.children].forEach(x => x.style.color = x === b ? '#fff' : 'inherit'); });
+    catsBox.appendChild(b);
+  });
+  catsBox.firstElementChild.style.background = 'var(--black)';
+  catsBox.firstElementChild.style.color = '#fff';
+
+  function renderResults() {
+    const q = input.value.trim().toLowerCase();
+    let matches = _catalog.filter(f => (!_cat || f.category === _cat) && (!q || f.family.toLowerCase().includes(q)));
+    resultsEl.innerHTML = '';
+    if (!matches.length) {
+      resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:.85rem">${I18n.t('ed_fontSearchNoResults')}</div>`;
+      return;
+    }
+    const shown = matches.slice(0, 60);
+    shown.forEach(f => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.textContent = f.family;
+      row.style.cssText = 'text-align:left;padding:9px 10px;border:none;border-radius:6px;background:transparent;font-family:inherit;font-size:.92rem;cursor:pointer';
+      row.addEventListener('mouseenter', () => row.style.background = 'var(--gray-100)');
+      row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+      row.addEventListener('click', () => showPreview(f.family));
+      resultsEl.appendChild(row);
+    });
+    if (matches.length > shown.length) {
+      const more = document.createElement('div');
+      more.style.cssText = 'padding:8px 10px;color:var(--gray-500);font-size:.78rem;text-align:center';
+      more.textContent = I18n.t('ed_fontSearchTooMany', { n: shown.length });
+      resultsEl.appendChild(more);
+    }
+  }
+
+  async function showPreview(family) {
+    previewEl.style.display = 'block';
+    previewEl.innerHTML = `<div style="font-size:.8rem;color:var(--gray-500);margin-bottom:8px">${I18n.t('ed_fontSearchDownloading')}</div>`;
+    try {
+      // Puede que ya esté cacheada de antes (otro usuario/obra la trajo ya) —
+      // fetchGoogleFont es idempotente en el worker, así que llamarla de
+      // todas formas no duplica nada, solo confirma que está disponible.
+      await SupabaseClient.fetchGoogleFont(family);
+      await _cxLoadExternalFont(family);
+      previewEl.innerHTML = `
+        <div style="font-family:'${family.replace(/'/g,"\\'")}',sans-serif;font-size:1.6rem;margin-bottom:10px;word-break:break-word">${family}</div>
+        <button class="btn btn-primary" id="cxFontSearchUseBtn" style="width:100%">${I18n.t('ed_fontSearchUse')}</button>`;
+      previewEl.querySelector('#cxFontSearchUseBtn').addEventListener('click', () => { _picked = true; close(); onPick(family); });
+    } catch(e) {
+      previewEl.innerHTML = `<div style="color:#c0392b;font-size:.85rem">${I18n.t('ed_fontSearchError')}</div>`;
+    }
+  }
+
+  input.addEventListener('input', renderResults);
+
+  _cxGetFontCatalog().then(list => {
+    _catalog = list;
+    renderResults();
+  }).catch(() => {
+    resultsEl.innerHTML = `<div style="padding:20px;text-align:center;color:#c0392b;font-size:.85rem">${I18n.t('ed_fontSearchCatalogError')}</div>`;
+  });
+}
+
 let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
   if(_edLoadProjectInProgress) return;
@@ -28047,7 +28254,12 @@ async function edLoadProject(id){
     // Antes solo se esperaba la (1); el contador bloqueante de my-works podía
     // desbloquear la app justo antes del redraw final, mostrando un instante
     // de cámara/lienzo todavía sin encajar.
-    let _edFullyLoadedGate = 2;
+    // 3ª condición: fuentes externas (Google Fonts bajo demanda) de esta
+    // obra concreta. No debe poder colgar la apertura de la obra si el
+    // worker tarda o falla — límite de 4s, tras el cual se libera igualmente
+    // (el redibujado normal de la edición ya recompondrá el texto en cuanto
+    // la fuente real termine de llegar, igual que hace el lector).
+    let _edFullyLoadedGate = 3;
     const _edGateDone = () => {
       _edFullyLoadedGate--;
       if (_edFullyLoadedGate <= 0) _edResolveFullyLoaded();
@@ -28061,6 +28273,13 @@ async function edLoadProject(id){
       _edLoadProjectInProgress = false;
       _edGateDone();
     };
+    // Disparar la 3ª condición de la puerta en paralelo con las otras dos —
+    // no bloquea nada más mientras tanto (el redibujado normal la recoge en
+    // cuanto llega, igual que las páginas que aún no se han visitado).
+    Promise.race([
+      _cxLoadPagesExternalFonts(edPages).catch(() => {}),
+      new Promise(res => setTimeout(res, 4000)),
+    ]).then(_edGateDone);
     if(_fillLoadPromises.length) {
       // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
       Promise.all(_fillLoadPromises).then(_doPushHistory).catch(() => {
@@ -30344,6 +30563,7 @@ function EditorView_init(){
     const _edFontVariants = [
       "400 16px Bangers",
       "400 16px 'Bebas Neue'",
+      "400 16px 'Bungee Outline'",
       "400 16px 'Comic Neue'",  "700 16px 'Comic Neue'",
       "400 16px Lora",          "700 16px Lora",
       "400 italic 16px Lora",  "700 italic 16px Lora",

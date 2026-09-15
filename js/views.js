@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.03</footer>
+    <footer class="app-version">v40.05</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1329,11 +1329,14 @@ Router.register('editor', {
               <button class="ed-dropdown-item" data-value="Bangers">Bangers</button>
               <button class="ed-dropdown-item" data-value="Permanent Marker">Permanent Marker</button>
               <button class="ed-dropdown-item" data-value="Bebas Neue">Bebas Neue</button>
+              <button class="ed-dropdown-item" data-value="Bungee Outline">Bungee Outline</button>
               <button class="ed-dropdown-item" data-value="Oswald">Oswald</button>
               <button class="ed-dropdown-item" data-value="Comic Neue">Comic Neue</button>
               <button class="ed-dropdown-item" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
               <button class="ed-dropdown-item" data-value="Arial">Arial</button>
               <button class="ed-dropdown-item" data-value="Verdana">Verdana</button>
+              <div class="ed-dropdown-sep"></div>
+              <button type="button" class="ed-dropdown-item" id="tdFontSearchBtn" data-i18n="ed_fontSearchOpenBtn">🔍 Buscar más fuentes…</button>
             </div>
           </div>
           <div class="ed-menu-sep"></div>

@@ -1609,5 +1609,30 @@ continue;
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole };
+  // Dispara la descarga+caché en R2 de una familia de Google Fonts a través
+  // del worker (POST /fonts/fetch, requiere sesión — ver _hdrsWorker). Solo
+  // se llama desde el buscador de fuentes del editor, nunca automáticamente.
+  // Una vez cacheada queda servida en público para siempre (igual que gifs/
+  // anims/covers) — _cxLoadExternalFont (editor.js/reader.js) es quien la
+  // carga después, sin autenticación.
+  async function fetchGoogleFont(family) {
+    if (window._authTryRefresh) await window._authTryRefresh();
+    const r = await fetch(`${WORKER}/fonts/fetch`, {
+      method:  'POST',
+      headers: { ..._hdrsWorker(), 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ family }),
+    });
+    if (!r.ok) throw new Error(`fetchGoogleFont ${family}: ${r.status} ${await r.text()}`);
+    return r.json();
+  }
+
+  // Catálogo de Google Fonts (nombre + categoría), cacheado por el propio
+  // worker — ver GET /fonts/catalog, público, sin autenticación.
+  async function fetchFontCatalog() {
+    const r = await fetch(`${WORKER}/fonts/catalog`);
+    if (!r.ok) throw new Error(`fetchFontCatalog: ${r.status} ${await r.text()}`);
+    return r.json();
+  }
+
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
 })();

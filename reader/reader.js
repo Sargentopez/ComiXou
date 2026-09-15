@@ -2236,6 +2236,45 @@ function _scanUsedFonts(panels) {
   return [...fonts];
 }
 
+// ── Fuentes de Google Fonts bajo demanda (comxow-storage-worker) ──────────
+// Misma lógica que en js/editor.js (_cxLoadExternalFont) — ver su comentario
+// allí para el porqué completo. Aquí solo se CARGAN fuentes ya cacheadas,
+// nunca se dispara una descarga nueva desde el lector (eso solo lo hace el
+// buscador del editor, con sesión).
+const _CX_FONTS_WORKER = 'https://comxow-storage-worker.albertobicho.workers.dev';
+const _CX_BUILTIN_FONTS = new Set([
+  'Bangers','Bebas Neue','Bungee Outline','Comic Neue','Lora','Nunito',
+  'Oswald','Patrick Hand','Permanent Marker','Press Start 2P','Arial','Verdana',
+]);
+function _cxFontSlug(family) {
+  return String(family || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+const _CX_FONT_VARIANTS = [
+  { tag: '400',       weight: '400', style: 'normal' },
+  { tag: '700',       weight: '700', style: 'normal' },
+  { tag: '400italic', weight: '400', style: 'italic' },
+  { tag: '700italic', weight: '700', style: 'italic' },
+];
+async function _cxLoadExternalFont(family) {
+  if (!family || _CX_BUILTIN_FONTS.has(family)) return;
+  if (!('fonts' in document) || typeof FontFace !== 'function') return;
+  // Ver el comentario largo en la misma función de js/editor.js: check()
+  // devuelve true para cualquier familia sin FontFace asociado, así que no
+  // sirve para detectar "aún no cargada" — se comprueba el propio conjunto.
+  const _already = [...document.fonts].some(f => f.family.replace(/^['"]|['"]$/g, '') === family && f.status === 'loaded');
+  if (_already) return;
+  const slug = _cxFontSlug(family);
+  if (!slug) return;
+  await Promise.all(_CX_FONT_VARIANTS.map(async v => {
+    try {
+      const url = `${_CX_FONTS_WORKER}/fonts/${slug}/${v.tag}.woff2`;
+      const face = new FontFace(family, `url("${url}")`, { weight: v.weight, style: v.style });
+      const loaded = await face.load();
+      document.fonts.add(loaded);
+    } catch(e) { /* variante inexistente o aún no cacheada — normal, se ignora */ }
+  }));
+}
+
 async function _ensureFontsLoaded(panels) {
   if (!document.fonts) return; // navegador sin CSS Font Loading API — degradar sin bloquear
   const names = _scanUsedFonts(panels);
@@ -2246,8 +2285,14 @@ async function _ensureFontsLoaded(panels) {
   // _edFontVariants). Una capa con negrita/cursiva activa dispara una regla
   // @font-face DISTINTA de la variante normal; pedir solo "16px FontName"
   // no garantiza que esa variante concreta llegue a tiempo.
+  // Las que NO estén entre las autoalojadas de fonts.css (elegidas desde el
+  // buscador de Google Fonts del editor) no tienen ninguna regla @font-face
+  // estática que cargar — se piden aparte con _cxLoadExternalFont, que
+  // construye su propio FontFace apuntando al worker.
   const specs = [];
+  const externalNames = [];
   names.forEach(name => {
+    if (!_CX_BUILTIN_FONTS.has(name)) { externalNames.push(name); return; }
     const fam = name.includes(' ') ? '"' + name + '"' : name;
     specs.push('400 16px ' + fam);
     specs.push('700 16px ' + fam);
@@ -2255,13 +2300,14 @@ async function _ensureFontsLoaded(panels) {
     specs.push('700 italic 16px ' + fam);
   });
   try {
-    await Promise.all(specs.map(spec => {
+    await Promise.all([
       // .load() no debe hacer fallar todo el arranque si UNA combinación en
       // concreto no existe o no llega a cargar (p.ej. nombre mal escrito
       // por el autor, o una variante que esa fuente no tiene) — se ignora
       // ese caso puntual y se sigue con las demás.
-      return document.fonts.load(spec).catch(() => {});
-    }));
+      ...specs.map(spec => document.fonts.load(spec).catch(() => {})),
+      ...externalNames.map(name => _cxLoadExternalFont(name).catch(() => {})),
+    ]);
   } catch(_) {}
   // Verificación final de conjunto — normalmente ya resuelto por las cargas
   // explícitas de arriba, pero cubre cualquier otra fuente que sí se haya

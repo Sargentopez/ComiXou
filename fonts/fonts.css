@@ -6,6 +6,8 @@
  *                      https://github.com/googlefonts/bangers
  * Bebas Neue         – Copyright 2010 Dharma Type
  *                      (Ryoichi Tsunekawa, dharmatype.com)
+ * Bungee Outline     – Copyright 2023 The Bungee Project Authors
+ *                      https://github.com/djrrb/Bungee
  * Comic Neue         – Copyright 2014 The Comic Neue Project Authors
  *                      (Craig Rozynski, github.com/crozynski/comicneue)
  * Lora               – Copyright 2011 The Lora Project Authors
@@ -41,6 +43,15 @@
   font-weight: 400;
   font-display: swap;
   src: url('BebasNeue-Regular.woff2') format('woff2');
+}
+
+/* ── Bungee Outline (400) ─────────────────────────── */
+@font-face {
+  font-family: 'Bungee Outline';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('BungeeOutline-Regular.woff2') format('woff2');
 }
 
 /* ── Comic Neue (400, 700) ────────────────────────── */

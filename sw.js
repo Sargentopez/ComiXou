@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v40-03';
+const CACHE = 'comxow-v40-05';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
@@ -42,6 +42,7 @@ const STATIC_ASSETS = [
   // Fuentes WOFF2 autoalojadas — precacheadas para funcionar offline/sin conexión
   './fonts/Bangers-Regular.woff2',
   './fonts/BebasNeue-Regular.woff2',
+  './fonts/BungeeOutline-Regular.woff2',
   './fonts/ComicNeue-Bold.woff2',
   './fonts/ComicNeue-Regular.woff2',
   './fonts/Lora-Italic-Variable.woff2',
