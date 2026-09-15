@@ -27945,7 +27945,17 @@ function _cxOpenFontSearch(onPick, onCancel) {
   // hubiera debajo al levantarlo.
   const DRAG_THRESHOLD = 6;
   function _makeTapSafe(el, onTap) {
+    // preventDefault() aquí — MISMO motivo que los botones de fuente de
+    // editor-textdoc.js van por pointerdown en vez de click a secas: sin
+    // esto, el navegador enfoca el botón al pulsarlo por defecto, y si no
+    // está 100% visible dentro de la lista con scroll, desplaza él SOLO el
+    // contenedor para mostrarlo entero — eso es lo que se percibía como "el
+    // scroll salta" (bug reportado dos veces: la primera vez se arregló una
+    // causa real pero distinta — la vista previa empujando la lista — sin
+    // saber que esta era la causa principal). No puede llevar
+    // {passive:true} porque preventDefault() no tiene efecto ahí.
     el.addEventListener('pointerdown', e => {
+      e.preventDefault();
       el._downX = e.clientX; el._downY = e.clientY; el._wasDrag = false;
     });
     el.addEventListener('pointermove', e => {
