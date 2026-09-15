@@ -40355,10 +40355,96 @@ function _gcpRenderLayersDropdown(dd) {
 // _gcpMergeLayersToImage — gcpInsertFromBib usa el tope de tamaño (recorta a
 // máx. 90% de la página) porque ahí un grupo de la Biblioteca aterriza en una
 // composición nueva y conviene que quepa con margen. `opts.preserveSize`
-// (usado por _gcpCpUnitToLayer, la conversión "Hojas → animación") desactiva
+// (usado por _gcpCpFlattenPrepared, la conversión "Hojas → animación") desactiva
 // ese tope: ahí el objetivo es reproducir el tamaño EXACTO que ya tenía en su
 // hoja de origen, nunca reducirlo — cambiar esta función en vez de escribir
 // una copia sería reinventar la rueda, así que se parametriza en su lugar.
+// Busca el bbox (por alpha>10) del contenido ya dibujado en un contexto de
+// canvas, en DOS pasadas — coarse-to-fine — en vez de un único recorrido
+// manual sobre TODOS los píxeles del canvas (lo que hacían, cada una por su
+// cuenta, _gcpVectorToImage y _gcpMergeLayersToImage antes de v40.09: sobre
+// el lienzo temporal de esas dos funciones, ~2580×3120px = ~8 millones de
+// píxeles, un getImageData()+bucle JS de esa magnitud, UNA VEZ POR OBJETO —
+// medido con Playwright contra "Convertir hojas en animación" con datos
+// reales: ~90-95% del tiempo total de construcción de la animación estaba
+// aquí dentro, y con ninguna cesión al hilo principal entre objetos de la
+// misma hoja, ver comentario en _gcpCpBuildFromRange).
+//
+// Pasada 1 (aproximada): la MISMA imagen ya dibujada se reescala a un canvas
+// pequeño (como mucho ~220px de lado — proporción fija según cuál sea el
+// lado mayor del original) y se escanea ESE, no el original — hasta ~250×
+// menos píxeles que recorrer. Pasada 2 (precisa): el resultado aproximado,
+// con un margen generoso (redondeo de escala + posible pérdida de detalle al
+// reducir), delimita una zona pequeña — solo esa zona se vuelve a leer a
+// resolución completa con el MISMO criterio pixel a pixel de siempre. El
+// resultado final es idéntico a un recorrido completo (incluida cualquier
+// rareza ya existente de los límites, p. ej. un contenido de una sola
+// columna de ancho sigue dando x1<=x0 igual que antes) — el atajo está solo
+// en CUÁNTOS píxeles hace falta mirar, no en el criterio de qué cuenta como
+// contenido.
+//
+// Es la única función de esta zona que SÍ se comparte entre las dos
+// funciones de "fotografiar a imagen" (el resto de su código de tamaño de
+// lienzo/dibujo sigue duplicado a propósito, ver cabecera de
+// _gcpMergeLayersToImage) — aquí no hay lógica de capas/tipos que
+// diverja entre ambas, es un algoritmo puro sobre píxeles ya pintados;
+// mantener dos copias de ESTE en concreto (más delicado que una resta de
+// tamaños) solo multiplicaría el riesgo de que una de las dos copias
+// divergiera con un bug sutil de redondeo.
+function _gcpFindAlphaBbox(ctx, w, h) {
+  const _scan = (data, rw, rh, ox, oy) => {
+    let x0 = rw, y0 = rh, x1 = 0, y1 = 0;
+    for (let y = 0; y < rh; y++) {
+      for (let x = 0; x < rw; x++) {
+        if (data[(y * rw + x) * 4 + 3] > 10) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+    return { x0: x0 + ox, y0: y0 + oy, x1: x1 + ox, y1: y1 + oy };
+  };
+  const _fullScan = () => _scan(ctx.getImageData(0, 0, w, h).data, w, h, 0, 0);
+
+  const MAX_COARSE = 220; // lado máx. de la copia reducida para la pasada 1
+  const scale = Math.min(1, MAX_COARSE / Math.max(w, h));
+  if (scale >= 1) {
+    // Canvas ya pequeño (no ocurre con los tamaños actuales de esta app,
+    // pero la función debe seguir siendo correcta si eso cambia): pasada
+    // única, exactamente el comportamiento de siempre.
+    return _fullScan();
+  }
+  const cw = Math.max(1, Math.round(w * scale));
+  const ch = Math.max(1, Math.round(h * scale));
+  const small = document.createElement('canvas');
+  small.width = cw; small.height = ch;
+  const sctx = small.getContext('2d');
+  sctx.drawImage(ctx.canvas, 0, 0, w, h, 0, 0, cw, ch);
+  const coarse = _scan(sctx.getImageData(0, 0, cw, ch).data, cw, ch, 0, 0);
+  small.width = 0; small.height = 0; // liberar el backing store cuanto antes (Android)
+  if (coarse.x1 < coarse.x0 || coarse.y1 < coarse.y0) {
+    // La pasada aproximada no encontró nada — pero reducir de escala puede
+    // diluir por debajo del umbral de alpha un contenido real MUY fino (p.ej.
+    // una línea de 1px de ancho) que sí está presente a resolución completa.
+    // Confirmado con un caso de prueba real antes de dar esto por bueno (ver
+    // bench/correctness.js, caso "columna_1px") — nunca asumir "vacío" solo
+    // por la pasada aproximada: repetir el escaneo completo antes de
+    // concluirlo. Caso raro en la práctica (un objeto real creado a
+    // propósito casi nunca es enteramente invisible o de 1px de grosor), así
+    // que perder aquí el atajo no cuesta nada en el caso común.
+    return _fullScan();
+  }
+  // Margen generoso al traducir a resolución completa: redondeo de la
+  // reducción de escala + posible pérdida de 1-2px de detalle al reducir.
+  const margin = Math.ceil(1 / scale) + 4;
+  const fx0 = Math.max(0, Math.floor(coarse.x0 / scale) - margin);
+  const fy0 = Math.max(0, Math.floor(coarse.y0 / scale) - margin);
+  const fx1 = Math.min(w - 1, Math.ceil((coarse.x1 + 1) / scale) + margin);
+  const fy1 = Math.min(h - 1, Math.ceil((coarse.y1 + 1) / scale) + margin);
+  const fw = fx1 - fx0 + 1, fh = fy1 - fy0 + 1;
+  return _scan(ctx.getImageData(fx0, fy0, fw, fh).data, fw, fh, fx0, fy0);
+}
+
 function _gcpMergeLayersToImage(items, cb, opts) {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
@@ -40426,14 +40512,11 @@ function _gcpMergeLayersToImage(items, cb, opts) {
       octx.restore();
     });
 
-    // Bbox por alpha > 10
-    const d = octx.getImageData(0, 0, wsW, wsH).data;
-    let x0=wsW, y0=wsH, x1=0, y1=0;
-    for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-      if (d[(y*wsW+x)*4+3] > 10) {
-        if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
-      }
-    }
+    // Bbox por alpha > 10 — ver _gcpFindAlphaBbox (coarse-to-fine, mismo
+    // resultado que el escaneo manual completo de antes de v40.09, pero sin
+    // recorrer los ~8 millones de píxeles del lienzo temporal en JS puro).
+    const _bb = _gcpFindAlphaBbox(octx, wsW, wsH);
+    let x0=_bb.x0, y0=_bb.y0, x1=_bb.x1, y1=_bb.y1;
     if (x1<=x0||y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
     const pad=4;
     x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
@@ -40443,7 +40526,9 @@ function _gcpMergeLayersToImage(items, cb, opts) {
     const crop = document.createElement('canvas');
     crop.width=cw; crop.height=ch;
     crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
+    off.width = 0; off.height = 0; // liberar el backing store del lienzo grande cuanto antes (Android)
     const dataUrl = crop.toDataURL('image/png');
+    crop.width = 0; crop.height = 0;
 
     const _wsCx = (x0 + x1) / 2 - offX;
     const _wsCy = (y0 + y1) / 2 - offY;
@@ -40482,14 +40567,11 @@ function _gcpVectorToImage(la, cb) {
   octx.globalAlpha = 1;
   octx.setTransform(1, 0, 0, 1, 0, 0);
 
-  // Bbox por alpha > 10
-  const d = octx.getImageData(0, 0, wsW, wsH).data;
-  let x0=wsW, y0=wsH, x1=0, y1=0;
-  for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
-    if (d[(y*wsW+x)*4+3] > 10) {
-      if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
-    }
-  }
+  // Bbox por alpha > 10 — ver _gcpFindAlphaBbox (coarse-to-fine, mismo
+  // resultado que el escaneo manual completo de antes de v40.09, pero sin
+  // recorrer los ~8 millones de píxeles del lienzo temporal en JS puro).
+  const _bb = _gcpFindAlphaBbox(octx, wsW, wsH);
+  let x0=_bb.x0, y0=_bb.y0, x1=_bb.x1, y1=_bb.y1;
   if (x1<=x0||y1<=y0) { x0=mx+offX; y0=my+offY; x1=x0+pw-1; y1=y0+ph-1; }
   const pad=4;
   x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
@@ -40500,7 +40582,9 @@ function _gcpVectorToImage(la, cb) {
   const crop = document.createElement('canvas');
   crop.width=cw; crop.height=ch;
   crop.getContext('2d').drawImage(off, x0, y0, cw, ch, 0, 0, cw, ch);
+  off.width = 0; off.height = 0; // liberar el backing store del lienzo grande cuanto antes (Android)
   const dataUrl = crop.toDataURL('image/png');
+  crop.width = 0; crop.height = 0;
 
   // Tamaño derivado del RECORTE REAL (cw×ch) — igual patrón que _gcpSaveToLib/_gcpMergeLayersToImage.
   // Usar la.width/la.height (sin el padding de recorte) desincroniza el raster del tamaño
@@ -40968,7 +41052,25 @@ function _gcpCpFitsWorkspace(boxes, destOrientation){
   });
 }
 
-function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
+// _gcpCpUnitToLayer se dividió en dos fases en v40.09 (antes era una sola
+// función que hacía las dos cosas seguidas). Motivo, medido con Playwright
+// contra datos reales (24 hojas, 3 objetos cada una): con la función
+// original, "Convertir hojas en animación" bloqueaba el hilo principal en
+// tramos de hasta 224ms SEGUIDOS sin ceder ni una sola vez dentro de una
+// misma hoja — `Promise.all(units.map(...))` dispara _gcpCpUnitToLayer para
+// cada objeto de la hoja, pero el dibujo+recorte a canvas (lo caro de
+// verdad) es síncrono dentro del executor de cada `new Promise(...)`, así
+// que ese `.map()` ya ha hecho TODO el trabajo pesado de la hoja entera
+// antes de que el bucle `for` exterior llegue a su próximo `await` — un 94%
+// del tiempo total de la prueba eran tramos de bloqueo >50ms (48 de ellos,
+// suma 5.87s de 6.26s totales).
+//
+// Fase 1 — _gcpCpPrepareUnit: todo lo que puede resolverse/esperarse SIN
+// dibujar nada (adaptar orientación, comprobar que cabe, y esperar a que una
+// imagen/gif clonados tengan contenido real — hasta 8s, _gcpCpWaitLayerReady)
+// SÍ puede lanzarse junto para varios objetos de la misma hoja: es solo
+// polling asíncrono barato, no bloquea nada mientras espera.
+function _gcpCpPrepareUnit(unit, srcOrientation, destOrientation){
   if(unit.kind === 'single'){
     const ld   = edSerLayer(unit.la);
     const copy = edDeserLayer(ld, destOrientation);
@@ -40976,11 +41078,11 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
     if(copy.type === 'shape' || copy.type === 'line' || copy.type === 'text' || copy.type === 'bubble'){
       _gcpCpAdaptOrientation(copy, srcOrientation, destOrientation);
       if(!_gcpCpFitsWorkspace([copy], destOrientation)){
-        console.warn('_gcpCpUnitToLayer: objeto demasiado grande/lejano, excluido de la conversión', copy);
+        console.warn('_gcpCpPrepareUnit: objeto demasiado grande/lejano, excluido de la conversión', copy);
         window._gcpCpExcludedCount = (window._gcpCpExcludedCount || 0) + 1;
         return Promise.resolve(null);
       }
-      return new Promise(resolve => _gcpVectorToImage(copy, imgLayer => resolve(imgLayer)));
+      return Promise.resolve({ kind: 'vector', la: copy });
     }
     if(copy.type === 'image'){
       _edCloneLayerAnimData(copy);
@@ -40988,7 +41090,7 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
     }
     return _gcpCpWaitLayerReady(copy).then(ready => {
       _gcpCpAdaptOrientation(ready, srcOrientation, destOrientation);
-      return ready;
+      return { kind: 'ready', la: ready }; // imagen/gif: ya insertable, no hace falta fotografiar
     });
   }
   // mergegroup: dibujo/trazo + relleno/acuarela/lápiz vinculados → una sola
@@ -41006,40 +41108,117 @@ function _gcpCpUnitToLayer(unit, srcOrientation, destOrientation){
   _push(unit.fl); _push(unit.wc); _push(unit.pc); _push(unit.la);
   if(!items.length) return Promise.resolve(null);
   if(!_gcpCpFitsWorkspace(items.map(it => it.la), destOrientation)){
-    console.warn('_gcpCpUnitToLayer: grupo dibujo+relleno demasiado grande/lejano, excluido de la conversión', items);
+    console.warn('_gcpCpPrepareUnit: grupo dibujo+relleno demasiado grande/lejano, excluido de la conversión', items);
     window._gcpCpExcludedCount = (window._gcpCpExcludedCount || 0) + 1;
     return Promise.resolve(null);
   }
-  return new Promise(resolve => _gcpMergeLayersToImage(items, imgLayer => resolve(imgLayer), { preserveSize: true }));
+  return Promise.resolve({ kind: 'merge', items });
+}
+
+// Fase 2 — _gcpCpFlattenPrepared: la conversión que SÍ dibuja en un canvas y
+// busca su bbox (_gcpVectorToImage/_gcpMergeLayersToImage) — el coste real
+// del bloqueo. _gcpCpBuildFromRange llama a esto una unidad a la vez,
+// cediendo un frame al hilo principal entre cada una — mismo patrón ya
+// pedido por Alberto y en uso desde antes para _gcpPrepareExternalAnimForEdit
+// (animaciones importadas de 50-100+ fotogramas: "generarlos todos de golpe
+// notaba"). Aquí el coste por unidad es mayor (dibuja capas arbitrarias,
+// no solo un putImageData de un fotograma ya decodificado), así que la
+// cesión hace más falta, no menos.
+function _gcpCpFlattenPrepared(prepped){
+  if(!prepped) return Promise.resolve(null);
+  if(prepped.kind === 'ready')  return Promise.resolve(prepped.la);
+  if(prepped.kind === 'vector') return new Promise(resolve => _gcpVectorToImage(prepped.la, imgLayer => resolve(imgLayer)));
+  return new Promise(resolve => _gcpMergeLayersToImage(prepped.items, imgLayer => resolve(imgLayer), { preserveSize: true }));
 }
 
 // Construye la animación a partir del rango de hojas [fromIdx, toIdx]
-// (0-based, ambos incluidos) y abre el editor de animaciones ya con ella
-// dentro. Procesa las hojas EN SECUENCIA (no todas en paralelo) para no
-// disparar demasiadas operaciones de canvas a la vez en un móvil Android
-// (plataforma principal de la app) — dentro de cada hoja, sus objetos sí se
-// procesan en paralelo.
-async function _gcpCpBuildFromRange(fromIdx, toIdx){
+// (0-based, ambos incluidos). Puerta previa (v40.09): cuenta cuántos
+// objetos hay en el rango — recorrido barato, _gcpCpCollectPageUnits no
+// dibuja nada — y si son muchos, avisa ANTES de empezar en vez de que el
+// usuario descubra a mitad de proceso que iba a tardar. Umbral elegido a
+// partir de la medición real con Playwright (ver bench de esta entrega):
+// ~72 objetos (24 hojas de la prueba) tardaban 2.3s ya optimizados en un
+// equipo de escritorio rápido — en un Android de gama baja (varias veces
+// más lento en canvas/JS) eso son ya varios segundos reales, así que 45
+// objetos de margen deja pasar sin aviso las conversiones cortas de verdad
+// y avisa antes de rangos grandes como el que reportó Alberto (21 hojas con
+// dibujo a mano — justo el caso que debía avisar). Si con uso real hiciera
+// falta afinarlo, es esta única constante.
+const _GCP_CP_LARGE_RANGE_UNITS = 45;
+function _gcpCpBuildFromRange(fromIdx, toIdx){
+  const total = (toIdx - fromIdx) + 1;
+  let _units = 0;
+  for(let fi = 0; fi < total; fi++){
+    const pageIdx = fromIdx + fi;
+    const page = edPages[pageIdx];
+    if(!page) continue;
+    const liveLayers = (pageIdx === edCurrentPage) ? edLayers : page.layers;
+    _units += _gcpCpCollectPageUnits({ layers: liveLayers }).length;
+  }
+  if(_units > _GCP_CP_LARGE_RANGE_UNITS){
+    appConfirm(
+      I18n.t('ed_animRangeLargeWarn', { pages: total, units: _units }),
+      () => _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx),
+      I18n.t('ed_animRangeLargeContinue')
+    );
+    return;
+  }
+  _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx);
+}
+
+// Trabajo real, ya sin la puerta previa — separado de _gcpCpBuildFromRange
+// para que el aviso de arriba pueda esperar la confirmación del usuario
+// (appConfirm es de callback, no de promesa) sin anidar todo lo demás dentro.
+// Procesa las hojas EN SECUENCIA (no todas en paralelo) para no disparar
+// demasiadas operaciones de canvas a la vez en un móvil Android (plataforma
+// principal de la app) — y, desde v40.09, TAMBIÉN sus objetos uno a uno
+// dentro de cada hoja (ver _gcpCpFlattenPrepared): "en paralelo" dentro de
+// una misma hoja nunca evitó de verdad el bloqueo del hilo principal (JS
+// sigue siendo de un solo hilo — dibujar en canvas y buscar un bbox no se
+// reparte entre núcleos por lanzar varias promesas a la vez), y sí impedía
+// ceder el control entre objetos. Lo que SÍ sigue solapándose es la fase de
+// ESPERA (imagen/gif aún no lista) — ver _gcpCpPrepareUnit.
+async function _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx){
   // Bloqueo con contador (petición de Alberto): construir la animación puede
-  // tardar — cada objeto de cada hoja se clona/convierte (_gcpCpUnitToLayer),
-  // con esperas de hasta 8s por objeto si una imagen/gif tarda en quedar
-  // lista (_gcpCpWaitLayerReady) — y mientras tanto el editor general seguía
+  // tardar — cada objeto de cada hoja se clona/convierte, con esperas de
+  // hasta 8s por objeto si una imagen/gif tarda en quedar lista
+  // (_gcpCpWaitLayerReady) — y mientras tanto el editor general seguía
   // activo, permitiendo cambios que podían chocar con hojas que se estaban
   // leyendo/clonando en ese preciso momento. Reutiliza tal cual el mismo
   // mecanismo ya usado al abrir una obra (_cxLoadOverlayShow/Hide, utils.js):
-  // overlay de pantalla completa + contador de segundos propio + su misma
-  // red de seguridad (25s) por si algún camino de código no llegara nunca a
-  // ocultarlo. Sustituye al toast "Procesando…" que había aquí antes (mismo
-  // criterio ya aplicado cuando este overlay se introdujo para abrir obras,
-  // ver comentario en my-works.js "action==='edit'").
-  if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('ed_animRangeCreating'));
+  // overlay de pantalla completa + contador de segundos propio. Desde v40.09
+  // también se actualiza con progreso real página a página (ver
+  // _cxLoadOverlayUpdate más abajo) — la propia actualización reinicia la
+  // red de seguridad de 25s (ver utils.js): con un rango grande de hojas es
+  // esperable pasar de 25s sin haber terminado, y antes de v40.09 eso hacía
+  // que el overlay se ocultara solo (con el aviso genérico de "tardando más
+  // de lo normal") AUNQUE la conversión siguiera en marcha de verdad detrás,
+  // en vez de reservar ese aviso para cuando de verdad deja de progresar.
+  //
+  // Cancelar permanente (petición explícita de Alberto): el overlay recibe
+  // un botón Cancelar real (ver _cxLoadOverlayShow, utils.js) — al tocarlo
+  // se marca _cancelled y el bucle de abajo lo comprueba en cada punto donde
+  // ya cede el control de todos modos (una vez por hoja y una vez por
+  // objeto), así que deja de avanzar en, como mucho, el tiempo de un solo
+  // objeto — nunca se llega a gcpOpen() ni se toca edPages/edLayers, así que
+  // cancelar a mitad de proceso no deja nada a medias que limpiar.
+  let _cancelled = false;
+  const _abortIfCancelled = () => {
+    if(!_cancelled) return false;
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide(); // ya oculto normalmente (lo hace el propio botón), idempotente
+    edToast(I18n.t('ed_animRangeCancelled'));
+    return true;
+  };
+  if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('ed_animRangeCreating'), () => { _cancelled = true; });
   try {
     window._gcpCpExcludedCount = 0;
     const destOrientation = edOrientation; // fija durante toda la construcción — no se navega ninguna hoja
     const total = (toIdx - fromIdx) + 1;
     const perFrameLayers = []; // perFrameLayers[fi] = [capa, capa, ...]
     for(let fi = 0; fi < total; fi++){
+      if(_abortIfCancelled()) return;
       const pageIdx = fromIdx + fi;
+      if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('ed_animRangeCreatingProgress', { n: fi + 1, total }));
       const page = edPages[pageIdx];
       if(!page){ perFrameLayers.push([]); continue; }
       const srcOrientation = page.orientation || destOrientation;
@@ -41047,7 +41226,19 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
       // a edPages[edCurrentPage].layers) — usar la copia en vivo si toca.
       const liveLayers = (pageIdx === edCurrentPage) ? edLayers : page.layers;
       const units = _gcpCpCollectPageUnits({ layers: liveLayers });
-      const ready = (await Promise.all(units.map(u => _gcpCpUnitToLayer(u, srcOrientation, destOrientation)))).filter(Boolean);
+      // Fase 1: preparar/esperar cada unidad — esto sí puede solaparse
+      // (no dibuja nada, ver _gcpCpPrepareUnit).
+      const prepped = await Promise.all(units.map(u => _gcpCpPrepareUnit(u, srcOrientation, destOrientation)));
+      if(_abortIfCancelled()) return;
+      // Fase 2: fotografiar a imagen — de una en una, cediendo un frame al
+      // hilo principal entre cada objeto (ver _gcpCpFlattenPrepared).
+      const ready = [];
+      for(const p of prepped){
+        const la = await _gcpCpFlattenPrepared(p);
+        if(la) ready.push(la);
+        if(_abortIfCancelled()) return;
+        await new Promise(r => requestAnimationFrame(r));
+      }
       perFrameLayers.push(ready);
     }
     const anyObjects = perFrameLayers.some(arr => arr.length);
@@ -41087,7 +41278,7 @@ async function _gcpCpBuildFromRange(fromIdx, toIdx){
     }
   } catch(e) {
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-    console.warn('_gcpCpBuildFromRange:', e);
+    console.warn('_gcpCpBuildFromRangeConfirmed:', e);
     edToast(I18n.t('ed_animRangeNoObjects'));
   }
 }

@@ -673,11 +673,19 @@ function appConfirm(msg, onOk, okLabel) {
    reemplaza el innerHTML de #appView al navegar de my-works a editor, así
    que un overlay dentro de #appView desaparecería a mitad de la transición.
    ══════════════════════════════════════════ */
-let _cxLoadOverlayTimer  = null;
-let _cxLoadOverlaySecs   = 0;
-let _cxLoadOverlaySafety = null;
+let _cxLoadOverlayTimer    = null;
+let _cxLoadOverlaySecs     = 0;
+let _cxLoadOverlaySafety   = null;
+let _cxLoadOverlayOnCancel = null; // callback vigente del botón Cancelar (null = sin botón)
 
-function _cxLoadOverlayShow(title) {
+// title: texto del overlay. onCancel (opcional, v40.09): si se pasa una
+// función, muestra un botón Cancelar que la ejecuta al tocarlo — para
+// operaciones largas y genuinamente interrumpibles sin dejar nada a medias
+// (petición explícita de Alberto para "Convertir hojas en animación": nada
+// que construye este overlay debe poder dejar al usuario sin forma de
+// cerrarlo si tarda). Las llamadas existentes que no pasan onCancel siguen
+// exactamente igual que antes — sin botón, mismo comportamiento de siempre.
+function _cxLoadOverlayShow(title, onCancel) {
   let ov = document.getElementById('_cxLoadOverlay');
   if (!ov) {
     ov = document.createElement('div');
@@ -693,40 +701,77 @@ function _cxLoadOverlayShow(title) {
       <img src="loading-icon.png?v=36.42" alt="${I18n.t('loadingAlt')}" style="width:48px;height:auto;margin-bottom:16px">
       <div id="_cxLoadOvTitle" style="font-size:1.1rem;font-weight:700;margin-bottom:16px"></div>
       <span id="_cxLoadOvSecs" style="font-size:.9rem;opacity:.8">0s</span>
+      <button id="_cxLoadOvCancel" type="button" style="display:none;margin-top:20px;
+              padding:10px 22px;border:2px solid #fff;border-radius:10px;background:transparent;
+              color:#fff;font-weight:700;font-size:.9rem;cursor:pointer">${I18n.t('cancel')}</button>
     `;
     // Bloquear scroll/gestos por debajo aunque algo intente moverse mientras carga
     ov.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
     document.body.appendChild(ov);
+    // Un único listener para toda la vida del elemento — lee el callback
+    // VIGENTE en _cxLoadOverlayOnCancel en el momento del toque, en vez de
+    // añadir/quitar un listener nuevo en cada _cxLoadOverlayShow() (así no
+    // se van acumulando listeners de llamadas anteriores).
+    document.getElementById('_cxLoadOvCancel').addEventListener('click', () => {
+      const cb = _cxLoadOverlayOnCancel;
+      _cxLoadOverlayHide();
+      if (cb) cb();
+    });
   }
   const titleEl = document.getElementById('_cxLoadOvTitle');
   if (titleEl) titleEl.textContent = title || I18n.t('mc_openingWork');
   _cxLoadOverlaySecs = 0;
   const secsEl = document.getElementById('_cxLoadOvSecs');
   if (secsEl) secsEl.textContent = '0s';
+  _cxLoadOverlayOnCancel = (typeof onCancel === 'function') ? onCancel : null;
+  const cancelBtn = document.getElementById('_cxLoadOvCancel');
+  if (cancelBtn) cancelBtn.style.display = _cxLoadOverlayOnCancel ? 'inline-block' : 'none';
   clearInterval(_cxLoadOverlayTimer);
   _cxLoadOverlayTimer = setInterval(() => {
     _cxLoadOverlaySecs++;
     const el = document.getElementById('_cxLoadOvSecs');
     if (el) el.textContent = _cxLoadOverlaySecs + 's';
   }, 1000);
-  // Seguridad: nunca bloquear la app de forma permanente si algo falla y ningún
-  // camino de código llega a llamar a _cxLoadOverlayHide().
+  _cxLoadOverlayArmSafety();
+  ov.style.display = 'flex';
+}
+
+// Seguridad: nunca bloquear la app de forma permanente si algo falla y ningún
+// camino de código llega a llamar a _cxLoadOverlayHide(). Antes de v40.09
+// este plazo era fijo desde _cxLoadOverlayShow() y nunca se reiniciaba — una
+// operación legítimamente larga (p.ej. "Convertir hojas en animación" con
+// muchas hojas) se topaba con él a los 25s en marcha SIN que nada hubiera
+// fallado, y el overlay se ocultaba solo con el aviso genérico de "tardando
+// más de lo normal" mientras el trabajo real seguía en curso detrás — el
+// aviso quedaba mal (parecía que algo se había colgado) y encima dejaba de
+// proteger la operación de choques con cambios del usuario a mitad de
+// proceso (ver comentario de _gcpCpBuildFromRange). Arreglo: cada llamada a
+// _cxLoadOverlayUpdate() (progreso real reportado por quien esté haciendo el
+// trabajo) reinicia este mismo plazo desde aquí — el aviso de "tardando más"
+// pasa a significar "25s SIN ningún progreso nuevo", no "25s en total desde
+// que empezó", que es lo que de verdad hace falta saber.
+function _cxLoadOverlayArmSafety() {
   clearTimeout(_cxLoadOverlaySafety);
   _cxLoadOverlaySafety = setTimeout(() => {
     _cxLoadOverlayHide();
     if (typeof showToast === 'function') showToast(I18n.t('loadingSlowWarn'));
   }, 25000);
-  ov.style.display = 'flex';
 }
 
 function _cxLoadOverlayUpdate(title) {
   const el = document.getElementById('_cxLoadOvTitle');
   if (el) el.textContent = title;
+  // Progreso real → la operación sigue viva: reiniciar la red de seguridad
+  // (ver _cxLoadOverlayArmSafety). Sin esto, una operación con muchas
+  // actualizaciones de progreso pero que en total tarda >25s se ocultaría
+  // sola a mitad de proceso pese a estar avanzando con normalidad.
+  _cxLoadOverlayArmSafety();
 }
 
 function _cxLoadOverlayHide() {
   clearInterval(_cxLoadOverlayTimer);
   clearTimeout(_cxLoadOverlaySafety);
+  _cxLoadOverlayOnCancel = null;
   const ov = document.getElementById('_cxLoadOverlay');
   if (ov) ov.style.display = 'none';
 }
