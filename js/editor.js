@@ -27866,37 +27866,65 @@ const _CX_FONT_CATEGORIES = [
 
 function _cxOpenFontSearch(onPick, onCancel) {
   document.getElementById('cxFontSearchModal')?.remove();
+  // Reglas de la propia búsqueda — inyectadas una sola vez, no en cada
+  // apertura (comprobado por id). La media query compacta cabecera/buscador/
+  // categorías/vista previa cuando hay poca altura disponible (móvil en
+  // horizontal), para dejarle sitio de verdad a la lista: Alberto pidió que
+  // se sigan viendo 3-4 fuentes ahí incluso en ese caso.
+  if (!document.getElementById('cxFontSearchStyles')) {
+    const style = document.createElement('style');
+    style.id = 'cxFontSearchStyles';
+    style.textContent = `
+      @media (max-height: 480px) {
+        #cxFontSearchModal .mc-modal-box { max-height: 94vh !important; padding-bottom: 8px !important; }
+        #cxFontSearchModal .mc-modal-title { margin: 8px 0 4px !important; font-size: .95rem !important; }
+        #cxFontSearchModal #cxFontSearchInput { padding: 6px 10px !important; font-size: .85rem !important; }
+        #cxFontSearchModal #cxFontSearchCats { padding: 4px 20px 0 !important; gap: 4px !important; }
+        #cxFontSearchModal #cxFontSearchCats button { padding: 3px 9px !important; font-size: .7rem !important; }
+        #cxFontSearchModal #cxFontSearchResults { min-height: 120px !important; margin-top: 6px !important; }
+        #cxFontSearchModal #cxFontSearchResults button { padding: 6px 10px !important; font-size: .85rem !important; }
+        #cxFontSearchModal #cxFontSearchPreview { min-height: 40px !important; margin-top: 6px !important; padding: 5px 10px !important; }
+        #cxFontSearchModal .mc-modal-actions { margin-top: 6px !important; }
+      }`;
+    document.head.appendChild(style);
+  }
   const ov = document.createElement('div');
   ov.className = 'mc-modal-overlay open';
   ov.id = 'cxFontSearchModal';
   ov.innerHTML = `
     <div class="mc-modal-box" style="max-height:82vh;width:min(440px,92vw);display:flex;flex-direction:column;padding-bottom:14px">
       <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('ed_fontSearchTitle')}</span></h3>
-      <div id="cxFontSearchBrowse" style="display:flex;flex-direction:column;flex:1;min-height:0">
-        <div class="mc-field" style="padding:0 20px">
-          <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
-        </div>
-        <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
-        <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:180px;margin:10px 20px 0;display:flex;flex-direction:column;gap:2px;touch-action:pan-y"></div>
+      <div class="mc-field" style="padding:0 20px">
+        <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
       </div>
-      <div id="cxFontSearchPreview" style="display:none;margin:10px 20px 0;padding:14px;border:2px solid var(--gray-300);border-radius:10px;text-align:center"></div>
+      <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
+      <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:110px;margin:8px 20px 0;display:flex;flex-direction:column;gap:2px;touch-action:pan-y"></div>
+      <div id="cxFontSearchPreview" style="display:flex;align-items:center;gap:10px;min-height:44px;margin:8px 20px 0;padding:6px 12px;border:2px solid var(--gray-300);border-radius:10px;box-sizing:border-box">
+        <div id="cxFontSearchPreviewText" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.02rem;color:var(--gray-500)">${I18n.t('ed_fontSearchChooseHint')}</div>
+        <button class="btn btn-primary" id="cxFontSearchUseBtn" disabled style="flex-shrink:0;padding:7px 14px;font-size:.85rem;opacity:.45;cursor:default">${I18n.t('ed_fontSearchUse')}</button>
+      </div>
       <div class="mc-modal-actions">
         <button class="btn" id="cxFontSearchCancel" style="flex:1">${I18n.t('cancel')}</button>
       </div>
     </div>`;
   document.body.appendChild(ov);
 
-  const browseEl  = ov.querySelector('#cxFontSearchBrowse');
-  const input     = ov.querySelector('#cxFontSearchInput');
-  const catsBox   = ov.querySelector('#cxFontSearchCats');
-  const resultsEl = ov.querySelector('#cxFontSearchResults');
-  const previewEl = ov.querySelector('#cxFontSearchPreview');
+  const input      = ov.querySelector('#cxFontSearchInput');
+  const catsBox    = ov.querySelector('#cxFontSearchCats');
+  const resultsEl  = ov.querySelector('#cxFontSearchResults');
+  const previewText = ov.querySelector('#cxFontSearchPreviewText');
+  const useBtn      = ov.querySelector('#cxFontSearchUseBtn');
   let _cat = '';
   let _catalog = [];
   let _picked = false;
+  let _currentPreviewFamily = null; // para ignorar respuestas de una carga vieja si se elige otra fuente antes de que termine
 
   const close = () => ov.remove();
   ov.querySelector('#cxFontSearchCancel').addEventListener('click', () => { close(); if (!_picked) onCancel?.(); });
+  useBtn.addEventListener('click', () => {
+    if (useBtn.disabled || !_currentPreviewFamily) return;
+    _picked = true; close(); onPick(_currentPreviewFamily);
+  });
 
   _CX_FONT_CATEGORIES.forEach(c => {
     const b = document.createElement('button');
@@ -27914,10 +27942,7 @@ function _cxOpenFontSearch(onPick, onCancel) {
   // mismo criterio (6px) que ya usa _bibBindDrag para el panel de
   // biblioteca. Sin esto, en una lista larga con scroll táctil, un dedo que
   // solo pretendía desplazarse podía acabar "seleccionando" la fuente que
-  // hubiera debajo al levantarlo. Se guarda en el propio botón (no en una
-  // variable compartida) porque varias filas pueden estar en distintos
-  // puntos de su gesto a la vez si el usuario levanta y vuelve a tocar
-  // rápido — cada una lleva la cuenta de la suya.
+  // hubiera debajo al levantarlo.
   const DRAG_THRESHOLD = 6;
   function _makeTapSafe(el, onTap) {
     el.addEventListener('pointerdown', e => {
@@ -27961,42 +27986,37 @@ function _cxOpenFontSearch(onPick, onCancel) {
     }
   }
 
-  // La vista previa SUSTITUYE a la lista de búsqueda en vez de aparecer
-  // debajo de ella — con las dos a la vez, el hueco que la vista previa le
-  // quita a la lista (misma caja, en flex-column con altura máxima) hacía
-  // que la lista se encogiera de golpe en cuanto tocabas una fuente, lo que
-  // se percibía como si el scroll saltara solo (reportado por Alberto). Al
-  // ocultar la lista entera en vez de encogerla, no hay ningún reajuste de
-  // layout que pueda desplazar nada mientras hay contenido con scroll a la
-  // vista. Volver atrás restaura la lista tal cual estaba (nunca se destruye
-  // su contenido, solo se oculta), con su posición de scroll intacta.
+  // La lista de resultados y la vista previa conviven siempre en la misma
+  // ventana (petición explícita de Alberto: nada de cambiar a otra
+  // pantalla). Para que elegir una fuente no reproduzca el salto de scroll
+  // ya arreglado una vez, la tira de vista previa tiene su hueco reservado
+  // desde el principio (min-height fijo, visible con un texto de aviso
+  // incluso sin nada elegido) — rellenarla con el nombre de la fuente no
+  // cambia ninguna altura, así que no hay ningún reajuste de layout que
+  // pueda desplazar la lista mientras se está viendo con scroll.
   async function showPreview(family) {
-    browseEl.style.display = 'none';
-    previewEl.style.display = 'block';
-    previewEl.innerHTML = `<div style="font-size:.8rem;color:var(--gray-500);margin-bottom:8px">${I18n.t('ed_fontSearchDownloading')}</div>`;
+    _currentPreviewFamily = family;
+    useBtn.disabled = true; useBtn.style.opacity = '.45'; useBtn.style.cursor = 'default';
+    previewText.style.color = 'var(--gray-500)';
+    previewText.style.fontFamily = 'inherit';
+    previewText.textContent = I18n.t('ed_fontSearchDownloading');
     try {
       // Puede que ya esté cacheada de antes (otro usuario/obra la trajo ya) —
       // fetchGoogleFont es idempotente en el worker, así que llamarla de
       // todas formas no duplica nada, solo confirma que está disponible.
       await SupabaseClient.fetchGoogleFont(family);
       await _cxLoadExternalFont(family);
-      previewEl.innerHTML = `
-        <div style="font-family:'${family.replace(/'/g,"\\'")}',sans-serif;font-size:1.6rem;margin-bottom:10px;word-break:break-word">${family}</div>
-        <button class="btn btn-primary" id="cxFontSearchUseBtn" style="width:100%;margin-bottom:8px">${I18n.t('ed_fontSearchUse')}</button>
-        <button class="btn" id="cxFontSearchBackBtn" style="width:100%">${I18n.t('ed_fontSearchBack')}</button>`;
-      previewEl.querySelector('#cxFontSearchUseBtn').addEventListener('click', () => { _picked = true; close(); onPick(family); });
-      previewEl.querySelector('#cxFontSearchBackBtn').addEventListener('click', backToBrowse);
+      if (_currentPreviewFamily !== family) return; // se eligió otra mientras esta cargaba — no pisar el resultado más reciente
+      previewText.textContent = family;
+      previewText.style.fontFamily = `'${family.replace(/'/g,"\\'")}',sans-serif`;
+      previewText.style.color = 'inherit';
+      useBtn.disabled = false; useBtn.style.opacity = '1'; useBtn.style.cursor = 'pointer';
     } catch(e) {
-      previewEl.innerHTML = `
-        <div style="color:#c0392b;font-size:.85rem;margin-bottom:10px">${I18n.t('ed_fontSearchError')}</div>
-        <button class="btn" id="cxFontSearchBackBtn" style="width:100%">${I18n.t('ed_fontSearchBack')}</button>`;
-      previewEl.querySelector('#cxFontSearchBackBtn').addEventListener('click', backToBrowse);
+      if (_currentPreviewFamily !== family) return;
+      previewText.textContent = I18n.t('ed_fontSearchError');
+      previewText.style.color = '#c0392b';
+      previewText.style.fontFamily = 'inherit';
     }
-  }
-
-  function backToBrowse() {
-    previewEl.style.display = 'none';
-    browseEl.style.display = 'flex';
   }
 
   input.addEventListener('input', renderResults);
