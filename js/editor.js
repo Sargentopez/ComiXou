@@ -1364,6 +1364,7 @@ let edPinchCenter0 = null, edPinchCamera0 = null;
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
+let _ppKbCollapseDone = false;  // true tras auto-colapsar el panel por teclado+horizontal — no repetir si el usuario lo reabre a mano (v40.21)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
 let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
@@ -6311,6 +6312,40 @@ function _edShowLockIconDraw(dl) {
   _edShowLockIcon({x:cx, y:cy, width:0.1, height:0.1});
 }
 
+/* ── Teclado virtual durante la edición in situ de texto/bocadillo (v40.21) ──
+   Bajo <meta viewport interactive-widget=overlays-content> (necesaria para
+   el editor — ver _tdSyncViewportHeight en editor-textdoc.js), NI
+   window.innerHeight NI window.visualViewport.height reflejan el teclado:
+   confirmado ya dos veces en este proyecto (editor-textdoc.js primero, y de
+   nuevo en utils.js al resolver el mismo problema para los modales). Se
+   reutiliza la MISMA técnica ya probada en ambos sitios — combinar
+   navigator.virtualKeyboard.boundingRect.height con una sonda CSS ligada a
+   env(keyboard-inset-height), quedándose con la mayor — en vez de la Visual
+   Viewport API sola, que en esta app ya se demostró que no sirve. Sonda
+   propia (_ppKbProbe), independiente de #tdKbProbe y de _kbModalProbe: no
+   tocar esos dos sistemas, ya delicados y afinados para su propio caso, por
+   algo que cuesta nada duplicar (un div de 1px invisible). */
+function _ppKbProbeEl() {
+  let probe = document.getElementById('_ppKbProbe');
+  if (!probe) {
+    probe = document.createElement('div');
+    probe.id = '_ppKbProbe';
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:fixed;left:0;top:0;width:1px;visibility:hidden;pointer-events:none;height:env(keyboard-inset-height, 0px);';
+    document.body.appendChild(probe);
+  }
+  return probe;
+}
+function _ppReadKeyboardH() {
+  let apiH = 0;
+  if ('virtualKeyboard' in navigator) {
+    try { apiH = navigator.virtualKeyboard.boundingRect.height || 0; } catch (_e) {}
+  }
+  const probeH = _ppKbProbeEl().getBoundingClientRect().height || 0;
+  return Math.max(apiH, probeH);
+}
+const _PP_KB_MIN_H = 80; // px — por debajo de esto, ruido / teclado cerrado (mismo umbral que utils.js); usado en _ppKbSettle para decidir el auto-colapso en horizontal
+
 /* ── Centra la cámara en el objeto al abrir panel, dejándolo en el área libre ── */
 function _edFocusOnLayer(la) {
   if (!la || !edCanvas) return;
@@ -6340,7 +6375,12 @@ function _edFocusOnLayer(la) {
     if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
   });
   const freeTop    = Math.max(panelBottom, floatBottom);
-  const freeBottom = canvasRect.bottom;
+  // Teclado virtual (v40.21): si hay uno abierto (edición de texto/bocadillo
+  // en curso), esa franja no es espacio libre de verdad — de lo contrario el
+  // objeto se centra sobre un área que en pantalla real queda tapada. Lectura
+  // siempre fresca (0 de forma natural cuando no hay edición de texto en
+  // marcha, así que no hace falta condicionar esto al tipo de capa).
+  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
   const freeLeft   = canvasRect.left;
   const freeRight  = canvasRect.right;
   const freeW = Math.max(freeRight - freeLeft, 80);
@@ -6376,6 +6416,30 @@ function _edFocusOnLayer(la) {
     if (p < 1) requestAnimationFrame(_animate);
   }
   requestAnimationFrame(_animate);
+}
+
+/* ── Reacciona a un cambio de teclado mientras se edita texto/bocadillo
+   (v40.21): en horizontal, panel+teclado no dejan hueco útil de canvas —
+   colapsa el panel una sola vez por sesión de edición (igual que pulsar ▲ a
+   mano) y siempre re-centra la capa con el hueco libre ya actualizado.
+   Llamado desde los reintentos al enfocar #edInlineTextEdit (el teclado
+   puede tardar en reportar su alto real) y desde geometrychange
+   (cambios posteriores, p.ej. girar el móvil a media edición). */
+function _ppKbSettle(la) {
+  if (edSelectedIdx < 0 || edLayers[edSelectedIdx] !== la) return; // ya no es la capa activa
+  const panel = $('edOptionsPanel');
+  if (!panel) return;
+  const kbH = _ppReadKeyboardH();
+  const isLandscape = window.innerWidth > window.innerHeight;
+  const isExpanded = panel.classList.contains('open') && !panel.classList.contains('panel-collapsed');
+  if (!_ppKbCollapseDone && isLandscape && kbH > _PP_KB_MIN_H && isExpanded) {
+    _ppKbCollapseDone = true;
+    panel.classList.add('panel-collapsed');
+    _edPanelTabShow();
+    edFitCanvas();
+  }
+  _edFocusDone = false;
+  _edFocusOnLayer(la);
 }
 
 
@@ -21810,6 +21874,12 @@ function edRenderOptionsPanel(mode){
     // haya cerrado edCloseOptionsPanel antes de llegar aquí).
     if((la.type==='text'||la.type==='bubble') && !(la.richLines && la.richLines.length)){
       _edInlineTextEditSync(la);
+      // Teclado virtual (v40.21): el foco de #edInlineTextEdit puede llegar
+      // antes de que el teclado termine de abrirse/reportar su alto real —
+      // mismo patrón de reintentos ya probado en editor-textdoc.js/utils.js
+      // para este mismo problema, no fiarse de una sola lectura.
+      _ppKbCollapseDone = false;
+      [50, 200, 400, 650].forEach(ms => setTimeout(() => _ppKbSettle(la), ms));
     } else if(_edInlineTextEditFor){
       _edInlineTextEditEnd();
     }
@@ -30531,6 +30601,10 @@ function EditorView_destroy(){
     window.removeEventListener('orientationchange', window._edOrientFn);
     window._edOrientFn = null;
   }
+  if(window._edKbGeomFn){
+    if('virtualKeyboard' in navigator) navigator.virtualKeyboard.removeEventListener('geometrychange', window._edKbGeomFn);
+    window._edKbGeomFn = null;
+  }
   if(window._edQuotaFn){
     window.removeEventListener('cx:storage:quota', window._edQuotaFn);
     window._edQuotaFn = null;
@@ -33012,6 +33086,23 @@ function EditorView_init(){
   // Guardar referencia para cleanup en EditorView_destroy
   window._edOrientFn = () => { setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); edApplyDeviceClass(); }, 200); };
   window.addEventListener('orientationchange', window._edOrientFn);
+
+  // Teclado virtual + edición de texto/bocadillo (v40.21): geometrychange
+  // cubre cambios POSTERIORES al foco inicial (p.ej. girar el móvil a media
+  // edición) — los reintentos programados al abrir el panel (ver
+  // edRenderOptionsPanel('props')) ya cubren la apertura inicial del
+  // teclado. Guardar referencia para cleanup en EditorView_destroy, mismo
+  // patrón que _edOrientFn justo arriba.
+  window._edKbGeomFn = () => {
+    const _p = $('edOptionsPanel');
+    if (!_p || _p.dataset.mode !== 'props' || edSelectedIdx < 0) return;
+    const _la = edLayers[edSelectedIdx];
+    if (!_la || (_la.type !== 'text' && _la.type !== 'bubble')) return;
+    _ppKbSettle(_la);
+  };
+  if ('virtualKeyboard' in navigator) {
+    navigator.virtualKeyboard.addEventListener('geometrychange', window._edKbGeomFn);
+  }
 
   // ── Pinch en cualquier zona (fuera del canvas) = zoom ──
   let _shellPinch0 = 0, _shellZoom0 = 1;
