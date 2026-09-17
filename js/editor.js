@@ -967,6 +967,13 @@ let edRuleNodes = [];      // nodos compartidos entre reglas: {id, x, y, ruleIds
 let _edRuleNodeId = 0;     // contador IDs de nodos
 let _edRulePanelId = null; // id de la regla con panel abierto
 let edSelectedIdx = -1;
+// Edición de texto directamente en la caja/bocadillo (v40.14, petición de
+// Alberto): referencia a la capa (TextLayer/BubbleLayer, texto simple — NO
+// richLines, que tiene su propio editor a pantalla completa en
+// editor-textdoc.js) cuyo <textarea> flotante está activo ahora mismo, o
+// null si no hay ninguna edición en curso. Ver _edInlineTextEditSync/
+// Reposition/End más abajo.
+let _edInlineTextEditFor = null;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
 // Umbral de movimiento (px de pantalla) para distinguir clic de arrastre con
 // pointerType==='pen' (tableta gráfica en PC). window._edPenDragPending guarda
@@ -2308,6 +2315,19 @@ class TextLayer extends BaseLayer {
       // Sin marco: fondo simple de siempre, límites de la propia caja, sin cambios.
       ctx.globalAlpha=_ctxAlpha*_bgo;ctx.fillStyle=this.backgroundColor;ctx.fillRect(-w/2,-h/2,w,h);ctx.globalAlpha=_ctxAlpha;
     }
+    // Caja de texto simple (sin richLines) con marco: el bucle de arriba
+    // (_fm) es EXCLUSIVO del flujo de texto paginado (solo entra si
+    // this.richLines tiene contenido) — para una caja de texto normal
+    // nunca se llegaba a dibujar ningún borde, aunque el panel de
+    // propiedades siempre ha tenido controles de ancho/color de marco para
+    // ella (bug ya existente antes de v40.14, detectado al revisar que
+    // "todas las opciones del panel se puedan aplicar" — Alberto). Border
+    // alrededor de los límites de la propia caja, independiente de la
+    // opacidad del FONDO (bgOpacity es solo del relleno, no del trazo).
+    if(!(this.richLines && this.richLines.length) && this.borderWidth>0){
+      ctx.strokeStyle=this.borderColor; ctx.lineWidth=this.borderWidth;
+      ctx.strokeRect(-w/2,-h/2,w,h);
+    }
     // Hoja de texto paginada (Editor de textos): formato enriquecido ya maquetado
     if(this.richLines && this.richLines.length){
       this._drawRichLines(ctx,w,h);
@@ -2319,7 +2339,13 @@ class TextLayer extends BaseLayer {
     ctx.fillStyle=isPlaceholder?'#aaaaaa':this.color;
     ctx.textAlign='center'; ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
-    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    // v40.14: mientras este objeto se edita in situ (textarea flotante
+    // encima, ver _edInlineTextEditFor), no dibujar el texto aquí — se
+    // vería duplicado (el del canvas + el que se está tecleando encima).
+    // El fondo/marco de más arriba SÍ sigue dibujándose con normalidad.
+    if(typeof _edInlineTextEditFor === 'undefined' || _edInlineTextEditFor !== this){
+      lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    }
     ctx.restore();
   }
   // Selección por píxel para el flujo de texto paginado (richLines) cuando su
@@ -2631,7 +2657,9 @@ class BubbleLayer extends BaseLayer {
       const isPlaceholderT=this.text===I18n.t('ed_writeHerePlaceholder');
       ctx.fillStyle=isPlaceholderT?'#999999':this.color;ctx.textAlign='center';ctx.textBaseline='middle';
       const linesT=this.getLines(),lhT=this.fontSize*1.2,totalHT=linesT.length*lhT;
-      linesT.forEach((l,i)=>ctx.fillText(l,0,_tYOff+(-totalHT/2+lhT/2+i*lhT)));
+      if(typeof _edInlineTextEditFor === 'undefined' || _edInlineTextEditFor !== this){
+        linesT.forEach((l,i)=>ctx.fillText(l,0,_tYOff+(-totalHT/2+lhT/2+i*lhT)));
+      }
       ctx.restore();return;
     }
     if(this.style==='explosion'){
@@ -2667,7 +2695,9 @@ class BubbleLayer extends BaseLayer {
       ctx.fillStyle=isPlaceholderE?'#999999':this.color;
       ctx.textAlign='center';ctx.textBaseline='middle';
       const linesE=this.getLines(),lhE=this.fontSize*1.2,totalHE=linesE.length*lhE;
-      linesE.forEach((l,i)=>ctx.fillText(l,0,-totalHE/2+lhE/2+i*lhE));
+      if(typeof _edInlineTextEditFor === 'undefined' || _edInlineTextEditFor !== this){
+        linesE.forEach((l,i)=>ctx.fillText(l,0,-totalHE/2+lhE/2+i*lhE));
+      }
       ctx.restore();return;
     }
     // Estilos convencionales (conventional, lowvoice, radio, etc.)
@@ -2699,7 +2729,9 @@ class BubbleLayer extends BaseLayer {
     ctx.fillStyle=isPlaceholder?'#999999':this.color;
     ctx.textAlign='center';ctx.textBaseline='middle';
     const lines=this.getLines(),lh=this.fontSize*1.2,totalH=lines.length*lh;
-    lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    if(typeof _edInlineTextEditFor === 'undefined' || _edInlineTextEditFor !== this){
+      lines.forEach((l,i)=>ctx.fillText(l,0,-totalH/2+lh/2+i*lh));
+    }
     ctx.restore();
   }
 }
@@ -5727,6 +5759,7 @@ function _edRedrawCameraThrottled(){
   });
 }
 function edRedraw(){
+  if (_edInlineTextEditFor) _edInlineTextEditReposition(); // v40.14 — barato, no-op si no hay edición activa
   if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
 
@@ -19981,6 +20014,7 @@ function _edFreezeDrawLayer(){
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
   _edEraserPickClose(); // cerrar picker del borrador si está abierto
+  _edInlineTextEditEnd(); // edición de texto en la propia caja/bocadillo, si había alguna activa (v40.14)
   // Misma razón que en _bibClose: el ghost de arrastre de la biblioteca vive
   // en document.body, no dentro del panel — si este cierre genérico se
   // dispara con un arrastre en curso (p.ej. toque fuera del panel), hay que
@@ -20243,6 +20277,283 @@ function _edBindAllNumInputs(container) {
   if (!container) return;
   container.querySelectorAll('input[type="number"]').forEach(_edBindNumInput);
   _edInitSliderBubbles(container);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// EDICIÓN DE TEXTO DIRECTAMENTE EN LA CAJA/BOCADILLO (v40.14)
+// Petición explícita de Alberto: al abrir el panel de propiedades de una
+// caja de texto o un bocadillo (texto simple, sin richLines — el flujo de
+// texto paginado del Editor de textos es otra cosa y no cambia aquí), el
+// texto se escribe directamente sobre el objeto en el lienzo, no en un
+// cuadro aparte del panel — por eso pp-text desaparece del HTML del panel.
+//
+// Técnica estándar para "editar texto in situ sobre un canvas" (la misma
+// que usan Figma/Canva/Excalidrav): un <textarea> real de HTML, transparente,
+// colocado con position:fixed EXACTAMENTE encima de donde ese texto se
+// dibujaría — mismo centro, mismo tamaño, mismo giro que draw() calcula, ya
+// pasado por la transformación de cámara (edCamera.x/y/z) para convertir
+// coordenadas lógicas de página en píxeles reales de pantalla. Mientras
+// está activo, TextLayer.draw()/BubbleLayer.draw() se saltan el fillText()
+// de esa capa en concreto (pero seguirán dibujando fondo/marco/forma del
+// bocadillo con normalidad) — si no, se vería el texto duplicado: una vez
+// dibujado por el canvas debajo, y otra vez tecleado en el textarea encima.
+//
+// _edInlineTextEditFor guarda la capa en edición; null si no hay ninguna.
+
+// Arranca (o, si ya estaba en marcha para esta misma capa, solo
+// resincroniza posición/tamaño) la edición in situ de `la`. Se llama desde
+// edRenderOptionsPanel('props') cada vez que hay un objeto de texto/
+// bocadillo simple seleccionado — idempotente: si `la` ya es la capa en
+// edición, no recrea el <textarea> (perdería el cursor/foco), solo
+// resincroniza por si ha cambiado tamaño/fuente/color desde otra fila del
+// panel (p.ej. cambiar el tamaño de fuente).
+// Posiciones en pantalla de los tiradores de la cola (tailStart/tailEnd, uno
+// por voz) de la capa en edición — mismo cálculo de caja+cámara que
+// _edInlineTextEditReposition, aplicado a las fracciones tailStarts[i]/
+// tailEnds[i] en vez de al centro del texto. Vacío si no es un bocadillo con
+// cola, o si no hay ninguna edición activa.
+function _edInlineTextEditHandlePositions() {
+  const la = _edInlineTextEditFor;
+  if (!la || la.type !== 'bubble' || !la.tail || !edCanvas) return [];
+  const pw = edPageW(), ph = edPageH();
+  const logicalCx = edMarginX() + la.x * pw, logicalCy = edMarginY() + la.y * ph;
+  const w = la.width * pw, h = la.height * ph;
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const z = edCamera.z;
+  const toScreen = (fx, fy) => ({
+    x: canvasRect.left + z * (logicalCx + fx * w) + edCamera.x,
+    y: canvasRect.top + z * (logicalCy + fy * h) + edCamera.y,
+  });
+  const pts = [];
+  const starts = la.tailStarts || [la.tailStart];
+  const ends = la.tailEnds || [la.tailEnd];
+  const vc = la.voiceCount || 1;
+  for (let v = 0; v < vc; v++) {
+    const s = starts[v] || starts[0], e = ends[v] || ends[0];
+    if (s) pts.push(toScreen(s.x, s.y));
+    if (e) pts.push(toScreen(e.x, e.y));
+  }
+  return pts;
+}
+
+function _edInlineTextEditSync(la) {
+  let ta = document.getElementById('edInlineTextEdit');
+  if (!ta) {
+    ta = document.createElement('textarea');
+    ta.id = 'edInlineTextEdit';
+    ta.wrap = 'off';           // sin ajuste de línea automático — mismo criterio que getLines()/measure() (solo saltos manuales, sin word-wrap)
+    ta.spellcheck = false;
+    ta.autocapitalize = 'sentences';
+    ta.style.cssText = [
+      'position:fixed', 'resize:none', 'border:none', 'outline:none',
+      'background:transparent', 'overflow:hidden', 'margin:0',
+      'white-space:pre', 'z-index:500', 'box-sizing:border-box',
+      'text-align:center'
+    ].join(';');
+    document.body.appendChild(ta);
+    ta.addEventListener('input', () => {
+      const l = _edInlineTextEditFor;
+      if (!l) return;
+      l.text = ta.value;
+      l.resizeToFitText(edCanvas);
+      _edInlineTextEditReposition();
+      edRedraw();
+    });
+    // Prevalencia de los tiradores de cola sobre el texto (petición explícita
+    // de Alberto — antes, al cubrir el textarea toda la caja, esos tiradores
+    // quedaban inalcanzables: TODO lo que caía dentro de la caja se
+    // entendía como texto, incluso justo encima de un tirador). Primer
+    // intento (v40.16): interceptar el pointerdown, comprobar cercanía y
+    // dejarlo pasar sin detenerlo — no funcionó de forma fiable en ratón de
+    // verdad (reportado por Alberto: el cursor ni siquiera cambiaba al
+    // pasar por encima, seguía como si fuera a escribir). Motivo: el hit
+    // real del navegador para ESE evento concreto ya había recaído en el
+    // textarea ANTES de que mi código llegara a ejecutarse — cambiar
+    // pointer-events en ese momento no lo deshace retroactivamente.
+    //
+    // v40.17 — enfoque distinto para ratón: en vez de reaccionar DESPUÉS del
+    // clic, el textarea se vuelve transparente a eventos de puntero EN
+    // CUANTO el cursor pasa cerca de un tirador — con pointer-events:none
+    // ya puesto ANTES de que el usuario pulse el botón, el propio
+    // hit-testing nativo del navegador entrega tanto el cursor (arreglando
+    // también lo que Alberto veía) como el clic directamente al lienzo de
+    // debajo, sin que este código tenga que interceptar ni reenviar nada.
+    // En táctil no hay "pasar por encima" antes de tocar, así que ahí se
+    // mantiene la comprobación en el propio touchstart — pero reenviando
+    // explícitamente el toque al elemento que de verdad hay debajo
+    // (document.elementFromPoint), en vez de limitarse a no detener la
+    // propagación, para no depender de por dónde burbujea el evento.
+    const HANDLE_HIT_R = 32;
+    let _taPointerEventsAuto = true;
+    const _setTaInteractive = (interactive) => {
+      if (interactive === _taPointerEventsAuto) return;
+      _taPointerEventsAuto = interactive;
+      ta.style.pointerEvents = interactive ? 'auto' : 'none';
+    };
+    const _nearAnyHandle = (x, y) => {
+      const handles = _edInlineTextEditHandlePositions();
+      return handles.some(h => Math.hypot(h.x - x, h.y - y) < HANDLE_HIT_R);
+    };
+    // Ratón: reevaluar en cada movimiento sobre el textarea. Cuando se aleja
+    // lo suficiente como para que el propio lienzo reciba el mousemove (ya
+    // no está "sobre" el textarea, que ahora es transparente ahí), un
+    // listener en document cubre la vuelta a modo texto.
+    ta.addEventListener('mousemove', e => { if (!_nearAnyHandle(e.clientX, e.clientY)) _setTaInteractive(true); else _setTaInteractive(false); });
+    document.addEventListener('mousemove', e => {
+      if (_taPointerEventsAuto) return; // ya interactivo, nada que hacer
+      if (!_edInlineTextEditFor) return;
+      if (!_nearAnyHandle(e.clientX, e.clientY)) _setTaInteractive(true);
+    });
+    // Ratón/lápiz: si el clic ATERRIZA en el textarea, puede ser (a) un clic
+    // de texto normal de verdad, o (b) un tirador que SÍ estaba cerca en el
+    // último mousemove pero la cámara se ha desplazado ligeramente desde
+    // entonces (la app la reajusta sola en los primeros instantes tras
+    // abrir el panel) — hacer aquí la MISMA comprobación una vez más, por
+    // si acaso, en vez de fiarse solo del mousemove anterior.
+    ['pointerdown', 'mousedown'].forEach(evt => ta.addEventListener(evt, e => {
+      if (!_nearAnyHandle(e.clientX, e.clientY)) { e.stopPropagation(); return; }
+      e.preventDefault();
+      _setTaInteractive(false);
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      if (under && under !== ta) {
+        under.dispatchEvent(new PointerEvent(evt, {
+          bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY,
+          pointerId: e.pointerId ?? 1, pointerType: e.pointerType || 'mouse', button: e.button ?? 0, buttons: e.buttons ?? 1,
+        }));
+      }
+    }));
+    ta.addEventListener('touchstart', e => {
+      const pt = e.touches[0] || e.changedTouches[0];
+      if (!pt || !_nearAnyHandle(pt.clientX, pt.clientY)) { e.stopPropagation(); return; }
+      e.preventDefault();
+      _setTaInteractive(false);
+      const under = document.elementFromPoint(pt.clientX, pt.clientY) || edCanvas;
+      if (under !== ta) {
+        under.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, clientX: pt.clientX, clientY: pt.clientY,
+          pointerId: pt.identifier ?? 1, pointerType: 'touch', button: 0, buttons: 1,
+        }));
+      }
+      const restore = () => _setTaInteractive(true);
+      window.addEventListener('touchend', restore, { once: true });
+      window.addEventListener('touchcancel', restore, { once: true });
+    });
+    // Soltar en cualquier sitio, con cualquier tipo de puntero, vuelve a
+    // dejar el textarea listo para escribir — red de seguridad además de la
+    // reevaluación por mousemove.
+    ['pointerup', 'mouseup'].forEach(evt => window.addEventListener(evt, () => _setTaInteractive(true)));
+    // Escape: salir de la edición sin más (mismo texto ya sincronizado en
+    // cada tecla) — conveniencia de teclado físico (PC/tableta), no
+    // imprescindible en táctil puro pero barata de añadir.
+    ta.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { ta.blur(); edCloseOptionsPanel(); edRedraw(); }
+    });
+  }
+  const isNewLayer = _edInlineTextEditFor !== la;
+  _edInlineTextEditFor = la;
+  if (isNewLayer) {
+    // Igual que hacía pp-text: al empezar a editar, si el texto actual es
+    // el placeholder ("Escribe aquí"), arrancar con el campo vacío en vez
+    // de obligar a borrarlo a mano.
+    ta.value = (la.text === I18n.t('ed_writeHerePlaceholder')) ? '' : la.text;
+  }
+  _edInlineTextEditReposition();
+  if (isNewLayer) {
+    ta.focus();
+    // En móvil, colocar el cursor al final del texto existente en vez de
+    // seleccionarlo todo (comportamiento por defecto de focus() en algunos
+    // navegadores para <textarea> con contenido).
+    const _len = ta.value.length;
+    try { ta.setSelectionRange(_len, _len); } catch(e) {}
+  }
+}
+
+// Recalcula posición/tamaño/estilo del <textarea> activo a partir de la
+// geometría actual de la capa (x/y/width/height/rotation/fuente/color) y de
+// la cámara (pan+zoom) — mismo cálculo que TextLayer.draw()/BubbleLayer.draw()
+// para el centro y el tamaño de la caja, para que quede exactamente donde se
+// dibujaría el texto. Se llama en cada pulsación de tecla (la caja
+// auto-ajusta su tamaño al texto, igual que hacía resizeToFitText con
+// pp-text) y en cada edRedraw() (para seguir la cámara si el usuario
+// hace zoom/pan mientras edita, o si el panel cambia el hueco disponible
+// del lienzo).
+function _edInlineTextEditReposition() {
+  const la = _edInlineTextEditFor;
+  const ta = document.getElementById('edInlineTextEdit');
+  if (!la || !ta || !edCanvas) return;
+  const pw = edPageW(), ph = edPageH();
+  const logicalCx = edMarginX() + la.x * pw, logicalCy = edMarginY() + la.y * ph;
+  const logicalW = Math.max(1, la.width * pw), logicalH = Math.max(1, la.height * ph);
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const z = edCamera.z;
+  const screenCx = canvasRect.left + (z * logicalCx + edCamera.x);
+  const screenCy = canvasRect.top + (z * logicalCy + edCamera.y);
+  const screenW = logicalW * z, screenH = logicalH * z;
+  ta.style.left   = (screenCx - screenW / 2) + 'px';
+  ta.style.top    = (screenCy - screenH / 2) + 'px';
+  ta.style.width  = screenW + 'px';
+  ta.style.height = screenH + 'px';
+  ta.style.fontSize = Math.max(1, la.fontSize * z) + 'px';
+  const lineHeightPx = Math.max(1, la.fontSize * 1.2 * z);
+  ta.style.lineHeight = lineHeightPx + 'px';
+  const _ff = la.fontFamily && la.fontFamily.includes(' ') ? `"${la.fontFamily}"` : (la.fontFamily || 'Arial');
+  ta.style.fontFamily = _ff;
+  // 'bold' (la palabra clave CSS que usa _fontStr() para el canvas) equivale
+  // a peso 700, no 900: con 900 el textarea renderizaba los trazos más
+  // gruesos de lo que mide/dibuja el propio canvas, así que mientras se
+  // editaba en negrita el texto llegaba a tocar el borde de la caja (más
+  // perceptible en "pensamiento", el estilo con menos margen de los tres) —
+  // al cerrar, ya con el canvas dibujando con su peso real, se veía bien.
+  // Bug reportado por Alberto.
+  ta.style.fontWeight = la.fontBold ? '700' : '400';
+  ta.style.fontStyle  = la.fontItalic ? 'italic' : 'normal';
+  ta.style.color = la.color || '#000000';
+  // Horizontal: el mismo padding interior que usa draw() en todo su perímetro.
+  const padH = Math.max(0, (la.padding || 0) * z);
+  ta.style.paddingLeft  = padH + 'px';
+  ta.style.paddingRight = padH + 'px';
+  // Vertical: un <textarea> normal alinea el texto arriba por defecto, pero
+  // el canvas lo centra en vertical (textBaseline='middle') dentro de la
+  // caja — y en los bocadillos esa caja es bastante más alta que el propio
+  // texto (~2.76x para el estilo convencional, más aún en pensamiento y
+  // explosión: hace falta ese margen para que el texto no toque el borde
+  // curvo). Con padding fijo el texto aparecía pegado arriba mientras se
+  // escribía, notablemente por encima de donde el canvas lo centra al
+  // cerrar — bug reportado por Alberto. Arreglo: calcular cuánto texto hay
+  // AHORA (cambia con cada pulsación) y repartir el espacio sobrante mitad
+  // arriba, mitad abajo — igual que -totalH/2+lh/2+i*lh en draw().
+  const numLines = (ta.value.match(/\n/g) || []).length + 1;
+  const textBlockH = numLines * lineHeightPx;
+  let padTop = Math.max(padH, (screenH - textBlockH) / 2);
+  let padBottom = padTop;
+  // Pensamiento: el blob es asimétrico (menos margen en la base) y draw()
+  // aplica un pequeño empujón extra hacia arriba (_tYOff = -5*h/149, ver
+  // BubbleLayer.draw) por encima del centrado normal — replicarlo aquí para
+  // que coincida también en ese estilo concreto.
+  if (la.type === 'bubble' && la.style === 'thought') {
+    const tYOffScreen = -5 * (screenH / 149);
+    padTop = Math.max(0, padTop + tYOffScreen);
+    padBottom = Math.max(0, padBottom - tYOffScreen);
+  }
+  ta.style.paddingTop = padTop + 'px';
+  ta.style.paddingBottom = padBottom + 'px';
+  const rot = (la.rotation || 0) + (typeof _edLayerPathRotDeg === 'function' ? _edLayerPathRotDeg(la) : 0);
+  ta.style.transform = rot ? `rotate(${rot}deg)` : 'none';
+  ta.style.transformOrigin = 'center center';
+}
+
+// Termina la edición in situ activa (si hay alguna) y oculta el textarea —
+// se llama desde edCloseOptionsPanel() (cubre OK, tocar fuera, seleccionar
+// otro objeto: es el cierre centralizado del panel de propiedades, así que
+// cualquier camino que deje de mostrar el panel pasa por aquí). El texto ya
+// está sincronizado en tiempo real (cada tecla), así que esto es solo
+// limpieza — no hay nada que "guardar" aquí.
+function _edInlineTextEditEnd() {
+  if (!_edInlineTextEditFor) return;
+  _edInlineTextEditFor = null;
+  const ta = document.getElementById('edInlineTextEdit');
+  if (ta) { ta.blur(); ta.style.left = '-9999px'; ta.style.top = '-9999px'; }
+  edRedraw(); // el texto vuelve a dibujarse en el canvas (draw() ya no lo salta)
 }
 
 function edRenderOptionsPanel(mode){
@@ -20992,6 +21303,12 @@ function edRenderOptionsPanel(mode){
       panel.classList.remove('open');panel.innerHTML='';requestAnimationFrame(edFitCanvas);return;
     }
     panel.dataset.mode = 'props';
+    // Defensivo: si el desplegable de fuente de un render anterior quedó
+    // abierto (movido a body) justo cuando este panel se ha vuelto a
+    // regenerar por otro motivo (p.ej. cambiar el grosor del marco), no
+    // dejar dos elementos con id="dd-ppFont" a la vez — el nuevo HTML de
+    // abajo va a crear uno limpio.
+    document.getElementById('dd-ppFont')?.remove();
     const la=edLayers[edSelectedIdx];
     // Centrar cámara en el objeto al abrir el panel
     _edFocusDone = false;
@@ -21344,25 +21661,32 @@ function edRenderOptionsPanel(mode){
         </div>`;
       } else {
       html+=`
-      <div id="edPanelHeader"><button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>
-      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_textLabel')}</span>
-        <textarea id="pp-text" style="border-radius:8px;resize:vertical;min-height:40px;flex:1;border:2px solid var(--gray-300);padding:4px 8px;font-family:var(--font-body);font-size:.84rem;">${la.text.replace(/</g,'&lt;')}</textarea></div>
+      <div class="op-prop-row" style="margin-top:0">
+        <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>
+        <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 14px;font-family:inherit;font-size:.82rem;font-weight:900;cursor:pointer;flex-shrink:0">✓ OK</button>
+      </div>
       <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_fontLabel')}</span>
-        <select id="pp-font">
-          <option value="Patrick Hand" ${la.fontFamily==='Patrick Hand'?'selected':''}>Patrick Hand</option>
-          <option value="Bangers" ${la.fontFamily==='Bangers'?'selected':''}>Bangers</option>
-          <option value="Permanent Marker" ${la.fontFamily==='Permanent Marker'?'selected':''}>Permanent Marker</option>
-          <option value="Bebas Neue" ${la.fontFamily==='Bebas Neue'?'selected':''}>Bebas Neue</option>
-          <option value="Bungee Outline" ${la.fontFamily==='Bungee Outline'?'selected':''}>Bungee Outline</option>
-          <option value="Oswald" ${la.fontFamily==='Oswald'?'selected':''}>Oswald</option>
-          <option value="Comic Neue" ${la.fontFamily==='Comic Neue'?'selected':''}>Comic Neue</option>
-          <option value="Lora" ${la.fontFamily==='Lora'?'selected':''}>Lora (Serif)</option>
-          <option value="Press Start 2P" ${la.fontFamily==='Press Start 2P'?'selected':''}>Press Start 2P (8-bit)</option>
-          <option value="Arial" ${la.fontFamily==='Arial'?'selected':''}>Arial</option>
-          <option value="Verdana" ${la.fontFamily==='Verdana'?'selected':''}>Verdana</option>
-          ${!_CX_BUILTIN_FONTS.has(la.fontFamily) ? `<option value="${la.fontFamily.replace(/"/g,'&quot;')}" selected>${la.fontFamily.replace(/</g,'&lt;')}</option>` : ''}
-        </select>
-        <button type="button" id="pp-font-search" title="${I18n.t('ed_fontSearchOpenBtn')}" style="margin-left:4px;padding:4px 8px;border:2px solid var(--gray-300);border-radius:6px;background:#fff;font-size:.85rem;cursor:pointer">🔍</button>
+        <button type="button" id="pp-font-trigger" data-menu="ppFont" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:4px;background:var(--white);border:2px solid var(--gray-300);border-radius:14px;padding:5px 9px;font-family:var(--font-body);font-size:.8rem;font-weight:600;color:var(--black);cursor:pointer">
+          <span id="pp-font-trigger-label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${la.fontFamily.replace(/</g,'&lt;')}</span><span style="flex-shrink:0">▾</span>
+        </button>
+        <div class="ed-dropdown" id="dd-ppFont">
+          <button type="button" class="ed-dropdown-item" id="pp-font-search" data-i18n="ed_fontSearchOpenBtn">${I18n.t('ed_fontSearchOpenBtn')}</button>
+          <div class="ed-dropdown-sep"></div>
+          <div class="ed-dropdown-scroll-list">
+            <button class="ed-dropdown-item${la.fontFamily==='Patrick Hand'?' active':''}" data-value="Patrick Hand">Patrick Hand</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Bangers'?' active':''}" data-value="Bangers">Bangers</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Permanent Marker'?' active':''}" data-value="Permanent Marker">Permanent Marker</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Bebas Neue'?' active':''}" data-value="Bebas Neue">Bebas Neue</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Bungee Outline'?' active':''}" data-value="Bungee Outline">Bungee Outline</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Oswald'?' active':''}" data-value="Oswald">Oswald</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Comic Neue'?' active':''}" data-value="Comic Neue">Comic Neue</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Lora'?' active':''}" data-value="Lora">Lora (Serif)</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Press Start 2P'?' active':''}" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Arial'?' active':''}" data-value="Arial">Arial</button>
+            <button class="ed-dropdown-item${la.fontFamily==='Verdana'?' active':''}" data-value="Verdana">Verdana</button>
+            ${!_CX_BUILTIN_FONTS.has(la.fontFamily) ? `<button class="ed-dropdown-item active" data-value="${la.fontFamily.replace(/"/g,'&quot;')}">${la.fontFamily.replace(/</g,'&lt;')}</button>` : ''}
+          </div>
+        </div>
         <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="${I18n.t('td_boldTitle')}">
           <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
         </label>
@@ -21393,13 +21717,11 @@ function edRenderOptionsPanel(mode){
             <option value="thought" ${la.style==='thought'?'selected':''}>${I18n.t('op_bubbleThought')}</option>
             <option value="explosion" ${la.style==='explosion'?'selected':''}>${I18n.t('op_bubbleExplosion')}</option>
           </select>
-        </div>
-        <div class="op-prop-row">
-          <span class="op-prop-label">${I18n.t('op_voiceCountLabel')}</span>
-          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
-          <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:12px">
-            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}>  ${I18n.t('op_tailLabel')}
+          <label style="display:flex;align-items:center;gap:4px;font-size:.75rem;font-weight:700;margin-left:8px;white-space:nowrap">
+            <input type="checkbox" id="pp-tail" ${la.tail?'checked':''}> ${I18n.t('op_tailLabel')}
           </label>
+          <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_voiceCountLabel')}</span>
+          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
         </div>`;
       }
     } else if(la.type==='draw'){
@@ -21455,9 +21777,7 @@ function edRenderOptionsPanel(mode){
     }
     const _isTextBubble = (la.type==='text'||la.type==='bubble');
     const _isRichText = !!(la.richLines && la.richLines.length);
-    html+=`${(_isRichText || !_isTextBubble) ? '' : `<div class="op-prop-row" style="margin-top:4px">
-      <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>
-    </div>`}
+    html+=`
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="pp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
       ${_isRichText ? `<button class="op-btn" id="pp-td-except" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.7rem;cursor:pointer" title="${I18n.t('op_exceptPageTitle')}">${I18n.t('op_exceptPageBtn')}</button>` : ''}
@@ -21477,6 +21797,20 @@ function edRenderOptionsPanel(mode){
     // ha cambiado, edFitCanvas recalcula totalBarsH y actualiza _edCanvasTop.
     edFitCanvas();
 
+    // Edición de texto directamente en la caja/bocadillo (v40.14): arrancar
+    // (o resincronizar si ya estaba en marcha para este mismo objeto) justo
+    // aquí, ya con el panel pintado y edFitCanvas() asentado — ver
+    // _edInlineTextEditSync más arriba. Solo para texto/bocadillo simple
+    // (sin richLines, que edita aparte con Trix); para cualquier otro tipo,
+    // terminar una edición que hubiera quedado activa de la capa
+    // seleccionada anteriormente (red de seguridad — lo normal es que ya la
+    // haya cerrado edCloseOptionsPanel antes de llegar aquí).
+    if((la.type==='text'||la.type==='bubble') && !(la.richLines && la.richLines.length)){
+      _edInlineTextEditSync(la);
+    } else if(_edInlineTextEditFor){
+      _edInlineTextEditEnd();
+    }
+
     // (voiceCount es independiente del estilo)
     // Live update
     panel.querySelectorAll('input,select,textarea').forEach(inp=>{
@@ -21492,40 +21826,13 @@ function edRenderOptionsPanel(mode){
         inp.addEventListener('change', e=>{
           if(edSelectedIdx<0) return;
           const la=edLayers[edSelectedIdx], id=e.target.id;
-          if(id==='pp-font'){
-            la.fontFamily=e.target.value;
-            la.resizeToFitText(edCanvas);
-            // Precargar la fuente seleccionada antes de redibujar para evitar
-            // que Canvas use el fallback si la fuente aún no está en caché.
-            const _ff = la.fontFamily.includes(' ') ? `'${la.fontFamily}'` : la.fontFamily;
-            if(document.fonts){
-              document.fonts.load(`400 ${la.fontSize||30}px ${_ff}`)
-                .catch(()=>{}).finally(()=>{ edRedraw(); });
-            } else { edRedraw(); }
-          } else if(id==='pp-style'){la.style=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
+          if(id==='pp-style'){la.style=e.target.value;la.resizeToFitText(edCanvas);edRedraw();}
         });
       }
       inp.addEventListener('input',e=>{
         if(edSelectedIdx<0)return;
         const la=edLayers[edSelectedIdx],id=e.target.id;
-        if(id==='pp-text'){
-          // Borrar placeholder al empezar a escribir
-          if(la.text===I18n.t('ed_writeHerePlaceholder') && e.target.value.length > I18n.t('ed_writeHerePlaceholder').length){
-            la.text = e.target.value.replace(I18n.t('ed_writeHerePlaceholder'),'');
-            e.target.value = la.text;
-          } else {
-            la.text=e.target.value;
-          }
-          la.resizeToFitText(edCanvas);
-        }
-        else if(id==='pp-font'){
-          la.fontFamily=e.target.value; la.resizeToFitText(edCanvas);
-          const _ff3=la.fontFamily.includes(' ')?`'${la.fontFamily}'`:la.fontFamily;
-          if(document.fonts){
-            document.fonts.load(`400 ${la.fontSize||30}px ${_ff3}`).catch(()=>{}).finally(()=>edRedraw());
-          } else { edRedraw(); }
-        }
-        else if(id==='pp-bold')  {la.fontBold=e.target.checked;la.resizeToFitText(edCanvas);}
+        if(id==='pp-bold')  {la.fontBold=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-italic'){la.fontItalic=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
         else if(id==='pp-color')  la.color=e.target.value;
@@ -21585,8 +21892,48 @@ function edRenderOptionsPanel(mode){
         _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
       }
     });
+    // ── Desplegable "Fuente" del panel de propiedades (v40.12) ──────────
+    // Antes: <select> nativo + botón de búsqueda aparte en la misma fila.
+    // Ahora, mismo patrón ya usado en el editor de textos (#dd-tdFontFamily,
+    // v40.11): desplegable propio con el buscador como cabecera FIJA arriba
+    // y la lista de fuentes ya incluidas con su propio scroll acotado —
+    // petición explícita de Alberto de mantener ambos sitios consistentes.
+    // _edPositionDropdown/edCloseMenus se reutilizan tal cual (mismo
+    // mecanismo que el resto de menús de la app) — pero SIN pasar por
+    // edToggleMenu, que cerraría este panel de propiedades entero al
+    // detectarlo abierto (pensado para los menús de nivel superior, no para
+    // un desplegable anidado DENTRO del propio panel).
+    const _ppApplyFont = (la, family) => {
+      la.fontFamily = family;
+      la.resizeToFitText(edCanvas);
+      const _ff = family.includes(' ') ? `'${family}'` : family;
+      if(document.fonts){
+        document.fonts.load(`400 ${la.fontSize||30}px ${_ff}`).catch(()=>{}).finally(()=>edRedraw());
+      } else { edRedraw(); }
+    };
+    const ppFontTrigger = $('pp-font-trigger'), ppFontDd = $('dd-ppFont');
+    ppFontTrigger?.addEventListener('click', e => {
+      e.stopPropagation();
+      if(edMenuOpen === 'ppFont'){ edCloseMenus(); return; }
+      edCloseMenus();
+      ppFontDd._origParent = ppFontDd._origParent || ppFontDd.parentNode;
+      document.body.appendChild(ppFontDd);
+      ppFontDd.classList.add('open');
+      _edPositionDropdown(ppFontDd, ppFontTrigger.getBoundingClientRect());
+      edMenuOpen = 'ppFont';
+    });
+    ppFontDd?.querySelectorAll('.ed-dropdown-scroll-list .ed-dropdown-item[data-value]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if(edSelectedIdx < 0) return;
+        _ppApplyFont(edLayers[edSelectedIdx], btn.dataset.value);
+        const lbl = $('pp-font-trigger-label'); if(lbl) lbl.textContent = btn.dataset.value;
+        ppFontDd.querySelectorAll('.ed-dropdown-item').forEach(b => b.classList.toggle('active', b === btn));
+        edCloseMenus();
+      });
+    });
     $('pp-font-search')?.addEventListener('click', () => {
       if (edSelectedIdx < 0) return;
+      edCloseMenus(); // cerrar el desplegable de fuentes antes de abrir el buscador
       const _laFs = edLayers[edSelectedIdx];
       _cxOpenFontSearch(family => {
         _laFs.fontFamily = family;

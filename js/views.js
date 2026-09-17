@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.09</footer>
+    <footer class="app-version">v40.19</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1324,19 +1324,21 @@ Router.register('editor', {
           <div class="ed-menu-item" style="position:relative">
             <button type="button" class="ed-menu-btn td-fmt-btn" data-menu="tdFontFamily" data-i18n-title="td_fontTitle" data-i18n="td_fontBtn" title="Tipo de letra de la selección">Fuente ▾</button>
             <div class="ed-dropdown" id="dd-tdFontFamily">
-              <button class="ed-dropdown-item" data-value="Lora">Lora (serif)</button>
-              <button class="ed-dropdown-item" data-value="Patrick Hand">Patrick Hand</button>
-              <button class="ed-dropdown-item" data-value="Bangers">Bangers</button>
-              <button class="ed-dropdown-item" data-value="Permanent Marker">Permanent Marker</button>
-              <button class="ed-dropdown-item" data-value="Bebas Neue">Bebas Neue</button>
-              <button class="ed-dropdown-item" data-value="Bungee Outline">Bungee Outline</button>
-              <button class="ed-dropdown-item" data-value="Oswald">Oswald</button>
-              <button class="ed-dropdown-item" data-value="Comic Neue">Comic Neue</button>
-              <button class="ed-dropdown-item" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
-              <button class="ed-dropdown-item" data-value="Arial">Arial</button>
-              <button class="ed-dropdown-item" data-value="Verdana">Verdana</button>
-              <div class="ed-dropdown-sep"></div>
               <button type="button" class="ed-dropdown-item" id="tdFontSearchBtn" data-i18n="ed_fontSearchOpenBtn">🔍 Buscar más fuentes…</button>
+              <div class="ed-dropdown-sep"></div>
+              <div class="ed-dropdown-scroll-list">
+                <button class="ed-dropdown-item" data-value="Lora">Lora (serif)</button>
+                <button class="ed-dropdown-item" data-value="Patrick Hand">Patrick Hand</button>
+                <button class="ed-dropdown-item" data-value="Bangers">Bangers</button>
+                <button class="ed-dropdown-item" data-value="Permanent Marker">Permanent Marker</button>
+                <button class="ed-dropdown-item" data-value="Bebas Neue">Bebas Neue</button>
+                <button class="ed-dropdown-item" data-value="Bungee Outline">Bungee Outline</button>
+                <button class="ed-dropdown-item" data-value="Oswald">Oswald</button>
+                <button class="ed-dropdown-item" data-value="Comic Neue">Comic Neue</button>
+                <button class="ed-dropdown-item" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
+                <button class="ed-dropdown-item" data-value="Arial">Arial</button>
+                <button class="ed-dropdown-item" data-value="Verdana">Verdana</button>
+              </div>
             </div>
           </div>
           <div class="ed-menu-sep"></div>

@@ -417,6 +417,51 @@ body.editor-page #appView {
   height: 1px; background: var(--gray-200); margin: 4px 10px;
 }
 
+/* Desplegable "Fuente" del editor de textos (v40.11) y del panel de
+   propiedades de texto/bocadillo (v40.12): el buscador de más fuentes era
+   el ÚLTIMO elemento de la lista — con 11 tipos ya incluidos había que
+   bajar del todo para encontrarlo, y al no tener la lista ningún límite de
+   altura (.ed-dropdown es overflow:visible sin max-height), el desplegable
+   entero crecía con cada fuente que se añadiera, cada vez más alto.
+   Petición de Alberto: el buscador pasa a ser una cabecera FIJA arriba
+   (fuera del scroll), y la lista de fuentes ya incluidas vive en su propio
+   contenedor con scroll y una altura máxima — así el buscador siempre está
+   a un toque sin bajar nada, y el desplegable no crece sin límite aunque se
+   añadan más fuentes a la lista. Ambos sitios comparten esta misma regla a
+   propósito — mismo comportamiento en los dos, petición explícita de
+   Alberto. #dd-tdFontSize no tiene buscador, no necesita este cambio.
+   BUG CORREGIDO (v40.13 — reportado por Alberto: "aparece abierto al
+   entrar... y fuera de su lugar"): esta regla puesta sobre el id a secas
+   (#dd-ppFont{display:flex}) tiene MÁS especificidad que
+   ".ed-dropdown{display:none}" y por tanto GANABA siempre, sin importar si
+   .open estaba presente — el desplegable se veía permanentemente visible
+   desde que se pintaba el panel/la barra, en su posición estática original
+   (position:fixed sin top/left explícitos, que solo pone
+   _edPositionDropdown al abrir de verdad, se comporta como estático) en vez
+   de oculto hasta tocar el disparador. Afectaba a los dos sitios por igual
+   desde que se introdujo esta regla en v40.11. Arreglo: exigir también
+   .open en el selector, igual que ya hace ".ed-dropdown.open" — así esta
+   regla solo gana cuando además está abierto (más específica que esa por
+   tener también el id), y cuando no lo está, manda ".ed-dropdown{display:
+   none}" sin ninguna otra que la contradiga. */
+#dd-tdFontFamily.open,
+#dd-ppFont.open {
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 70vh);
+}
+#dd-tdFontFamily > .ed-dropdown-item,
+#dd-tdFontFamily > .ed-dropdown-sep,
+#dd-ppFont > .ed-dropdown-item,
+#dd-ppFont > .ed-dropdown-sep {
+  flex-shrink: 0;
+}
+#dd-tdFontFamily .ed-dropdown-scroll-list,
+#dd-ppFont .ed-dropdown-scroll-list {
+  overflow-y: auto;
+  min-height: 0; /* permite que el hijo flex encoja por debajo de su contenido para que el scroll haga efecto */
+}
+
 .ed-dropdown-label {
   padding: 5px 14px 3px;
   font-size: 0.68rem; font-weight: 900;
@@ -1074,8 +1119,22 @@ body.ed-scale-tablet {
 
 
 /* Props de capa seleccionada */
+/* flex-wrap (v40.10): filas con muchos controles (p.ej. la de "Fuente" en
+   texto/bocadillo — selector + búsqueda + negrita + cursiva + tamaño + 2
+   selectores de color, 7 controles en una sola fila) no tenían dónde encoger
+   más una vez el <select> llegaba a su ancho mínimo de renderizado, y el
+   sobrante — los últimos controles de la fila — quedaba literalmente fuera
+   de la pantalla en móviles en vertical (~360-412px de ancho), inalcanzable
+   incluso con scroll porque #edOptionsPanel solo hace scroll vertical.
+   Reproducido con Playwright en 360×640/360×740/393×786/412×915 con un
+   TextLayer/BubbleLayer por defecto (fuente "Arial", ni siquiera un nombre
+   largo) — pp-color y pp-bg quedaban fuera en los cuatro tamaños. Con
+   flex-wrap:wrap una fila que ya cabía en una línea sigue exactamente igual
+   (no hay de dónde envolver si sobra espacio); solo las filas que de verdad
+   no caben pasan sus últimos controles a una segunda línea, visibles y
+   utilizables en vez de invisibles. */
 .op-prop-row {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
   width: 100%; margin-bottom: 5px;
 }
 .op-prop-label {
