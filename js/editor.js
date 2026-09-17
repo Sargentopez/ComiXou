@@ -12688,11 +12688,18 @@ function edOnStart(e){
     return;
   }
   const c=edCoords(e);
-  // Cola bocadillo — solo cuando el panel de propiedades del bocadillo está abierto
-  const _bubblePanelOpen = $('edOptionsPanel')?.classList.contains('open') &&
-                           ($('edOptionsPanel')?.dataset.mode === 'props' || $('edOptionsPanel')?.dataset.mode === 'text-props');
-  if(edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='bubble' && _bubblePanelOpen){
-    const la=edLayers[edSelectedIdx];
+  // Cola bocadillo — nunca mientras se escribe en él (edición in situ activa,
+  // v40.14): el texto fuerza el tamaño del bocadillo, no hay ninguna razón
+  // para permitir arrastrar nada suyo mientras tanto, y era precisamente el
+  // intento de alcanzar estos tiradores durante la escritura lo que acababa
+  // redimensionando el bocadillo (v40.22 — decisión de Alberto: dejar de
+  // intentar reenviar el toque al lienzo durante la edición, en vez de
+  // depender de "¿está el panel abierto?" — antes de OK, edSelectedIdx sigue
+  // apuntando al bocadillo con el panel ya cerrado, así que ahí los
+  // tiradores vuelven a estar disponibles sin más).
+  const _laTail = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(_laTail && _laTail.type==='bubble' && _edInlineTextEditFor !== _laTail){
+    const la=_laTail;
     // Helper: distancia en píxeles de pantalla entre punto normalizado y toque
     // Usa el mismo sistema que los handles de control (hitScreen táctil=28, PC=18)
     const _isTouch = e.pointerType === 'touch';
@@ -20371,35 +20378,6 @@ function _edBindAllNumInputs(container) {
 // edición, no recrea el <textarea> (perdería el cursor/foco), solo
 // resincroniza por si ha cambiado tamaño/fuente/color desde otra fila del
 // panel (p.ej. cambiar el tamaño de fuente).
-// Posiciones en pantalla de los tiradores de la cola (tailStart/tailEnd, uno
-// por voz) de la capa en edición — mismo cálculo de caja+cámara que
-// _edInlineTextEditReposition, aplicado a las fracciones tailStarts[i]/
-// tailEnds[i] en vez de al centro del texto. Vacío si no es un bocadillo con
-// cola, o si no hay ninguna edición activa.
-function _edInlineTextEditHandlePositions() {
-  const la = _edInlineTextEditFor;
-  if (!la || la.type !== 'bubble' || !la.tail || !edCanvas) return [];
-  const pw = edPageW(), ph = edPageH();
-  const logicalCx = edMarginX() + la.x * pw, logicalCy = edMarginY() + la.y * ph;
-  const w = la.width * pw, h = la.height * ph;
-  const canvasRect = edCanvas.getBoundingClientRect();
-  const z = edCamera.z;
-  const toScreen = (fx, fy) => ({
-    x: canvasRect.left + z * (logicalCx + fx * w) + edCamera.x,
-    y: canvasRect.top + z * (logicalCy + fy * h) + edCamera.y,
-  });
-  const pts = [];
-  const starts = la.tailStarts || [la.tailStart];
-  const ends = la.tailEnds || [la.tailEnd];
-  const vc = la.voiceCount || 1;
-  for (let v = 0; v < vc; v++) {
-    const s = starts[v] || starts[0], e = ends[v] || ends[0];
-    if (s) pts.push(toScreen(s.x, s.y));
-    if (e) pts.push(toScreen(e.x, e.y));
-  }
-  return pts;
-}
-
 function _edInlineTextEditSync(la) {
   let ta = document.getElementById('edInlineTextEdit');
   if (!ta) {
@@ -20423,89 +20401,24 @@ function _edInlineTextEditSync(la) {
       _edInlineTextEditReposition();
       edRedraw();
     });
-    // Prevalencia de los tiradores de cola sobre el texto (petición explícita
-    // de Alberto — antes, al cubrir el textarea toda la caja, esos tiradores
-    // quedaban inalcanzables: TODO lo que caía dentro de la caja se
-    // entendía como texto, incluso justo encima de un tirador). Primer
-    // intento (v40.16): interceptar el pointerdown, comprobar cercanía y
-    // dejarlo pasar sin detenerlo — no funcionó de forma fiable en ratón de
-    // verdad (reportado por Alberto: el cursor ni siquiera cambiaba al
-    // pasar por encima, seguía como si fuera a escribir). Motivo: el hit
-    // real del navegador para ESE evento concreto ya había recaído en el
-    // textarea ANTES de que mi código llegara a ejecutarse — cambiar
-    // pointer-events en ese momento no lo deshace retroactivamente.
-    //
-    // v40.17 — enfoque distinto para ratón: en vez de reaccionar DESPUÉS del
-    // clic, el textarea se vuelve transparente a eventos de puntero EN
-    // CUANTO el cursor pasa cerca de un tirador — con pointer-events:none
-    // ya puesto ANTES de que el usuario pulse el botón, el propio
-    // hit-testing nativo del navegador entrega tanto el cursor (arreglando
-    // también lo que Alberto veía) como el clic directamente al lienzo de
-    // debajo, sin que este código tenga que interceptar ni reenviar nada.
-    // En táctil no hay "pasar por encima" antes de tocar, así que ahí se
-    // mantiene la comprobación en el propio touchstart — pero reenviando
-    // explícitamente el toque al elemento que de verdad hay debajo
-    // (document.elementFromPoint), en vez de limitarse a no detener la
-    // propagación, para no depender de por dónde burbujea el evento.
-    const HANDLE_HIT_R = 32;
-    let _taPointerEventsAuto = true;
-    const _setTaInteractive = (interactive) => {
-      if (interactive === _taPointerEventsAuto) return;
-      _taPointerEventsAuto = interactive;
-      ta.style.pointerEvents = interactive ? 'auto' : 'none';
-    };
-    const _nearAnyHandle = (x, y) => {
-      const handles = _edInlineTextEditHandlePositions();
-      return handles.some(h => Math.hypot(h.x - x, h.y - y) < HANDLE_HIT_R);
-    };
-    // Ratón: reevaluar en cada movimiento sobre el textarea. Cuando se aleja
-    // lo suficiente como para que el propio lienzo reciba el mousemove (ya
-    // no está "sobre" el textarea, que ahora es transparente ahí), un
-    // listener en document cubre la vuelta a modo texto.
-    ta.addEventListener('mousemove', e => { if (!_nearAnyHandle(e.clientX, e.clientY)) _setTaInteractive(true); else _setTaInteractive(false); });
-    document.addEventListener('mousemove', e => {
-      if (_taPointerEventsAuto) return; // ya interactivo, nada que hacer
-      if (!_edInlineTextEditFor) return;
-      if (!_nearAnyHandle(e.clientX, e.clientY)) _setTaInteractive(true);
-    });
-    // Ratón/lápiz: si el clic ATERRIZA en el textarea, puede ser (a) un clic
-    // de texto normal de verdad, o (b) un tirador que SÍ estaba cerca en el
-    // último mousemove pero la cámara se ha desplazado ligeramente desde
-    // entonces (la app la reajusta sola en los primeros instantes tras
-    // abrir el panel) — hacer aquí la MISMA comprobación una vez más, por
-    // si acaso, en vez de fiarse solo del mousemove anterior.
-    ['pointerdown', 'mousedown'].forEach(evt => ta.addEventListener(evt, e => {
-      if (!_nearAnyHandle(e.clientX, e.clientY)) { e.stopPropagation(); return; }
-      e.preventDefault();
-      _setTaInteractive(false);
-      const under = document.elementFromPoint(e.clientX, e.clientY);
-      if (under && under !== ta) {
-        under.dispatchEvent(new PointerEvent(evt, {
-          bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY,
-          pointerId: e.pointerId ?? 1, pointerType: e.pointerType || 'mouse', button: e.button ?? 0, buttons: e.buttons ?? 1,
-        }));
-      }
-    }));
-    ta.addEventListener('touchstart', e => {
-      const pt = e.touches[0] || e.changedTouches[0];
-      if (!pt || !_nearAnyHandle(pt.clientX, pt.clientY)) { e.stopPropagation(); return; }
-      e.preventDefault();
-      _setTaInteractive(false);
-      const under = document.elementFromPoint(pt.clientX, pt.clientY) || edCanvas;
-      if (under !== ta) {
-        under.dispatchEvent(new PointerEvent('pointerdown', {
-          bubbles: true, cancelable: true, clientX: pt.clientX, clientY: pt.clientY,
-          pointerId: pt.identifier ?? 1, pointerType: 'touch', button: 0, buttons: 1,
-        }));
-      }
-      const restore = () => _setTaInteractive(true);
-      window.addEventListener('touchend', restore, { once: true });
-      window.addEventListener('touchcancel', restore, { once: true });
-    });
-    // Soltar en cualquier sitio, con cualquier tipo de puntero, vuelve a
-    // dejar el textarea listo para escribir — red de seguridad además de la
-    // reevaluación por mousemove.
-    ['pointerup', 'mouseup'].forEach(evt => window.addEventListener(evt, () => _setTaInteractive(true)));
+    // Prevalencia de los tiradores de cola sobre el texto — HISTORIAL (v40.16/
+    // v40.17, retirado en v40.22): se intentó dejar pasar el toque/clic hasta
+    // el lienzo cuando caía cerca de un tirador (pointer-events:none puntual
+    // + reenvío con document.elementFromPoint). En Android generaba un
+    // pointerdown SINTÉTICO además del pointerdown NATIVO que ya llega solo
+    // (el editor escucha pointerdown en document — ver comentario "evitamos
+    // que edOnStart se llame dos veces" en su registro — precisamente el
+    // duplicado que esta técnica reintroducía sin querer): dos pointerdown
+    // casi simultáneos con pointerId distinto se leían como un pellizco de
+    // dos dedos, y de ahí el redimensionado que reportó Alberto en vez de
+    // mover la cola. Decisión (Alberto): en vez de perseguir ese bug, los
+    // tiradores dejan de estar activos mientras se escribe (ver el gating
+    // por _edInlineTextEditFor en edOnStart) — ya no hace falta alcanzarlos
+    // desde aquí, así que el textarea vuelve a ser un textarea normal,
+    // siempre interactivo. Tras pulsar OK (edición terminada, panel
+    // cerrado) la capa sigue siendo edSelectedIdx, así que los tiradores
+    // vuelven a responder directamente sobre el lienzo sin nada especial.
+
     // Escape: salir de la edición sin más (mismo texto ya sincronizado en
     // cada tecla) — conveniencia de teclado físico (PC/tableta), no
     // imprescindible en táctil puro pero barata de añadir.
