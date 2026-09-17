@@ -21665,38 +21665,41 @@ function edRenderOptionsPanel(mode){
         <button id="pp-btn-action" style="flex:1;background:${la._buttonAction?'var(--yellow)':'var(--gray-100)'};border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${la._buttonAction?I18n.t('ed_btnActiveOn'):I18n.t('ed_btnActiveOff')}</button>
         <button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 14px;font-family:inherit;font-size:.82rem;font-weight:900;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>
-      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_fontLabel')}</span>
-        <button type="button" id="pp-font-trigger" data-menu="ppFont" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:4px;background:var(--white);border:2px solid var(--gray-300);border-radius:14px;padding:5px 9px;font-family:var(--font-body);font-size:.8rem;font-weight:600;color:var(--black);cursor:pointer">
-          <span id="pp-font-trigger-label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${la.fontFamily.replace(/</g,'&lt;')}</span><span style="flex-shrink:0">▾</span>
-        </button>
-        <div class="ed-dropdown" id="dd-ppFont">
-          <button type="button" class="ed-dropdown-item" id="pp-font-search" data-i18n="ed_fontSearchOpenBtn">${I18n.t('ed_fontSearchOpenBtn')}</button>
-          <div class="ed-dropdown-sep"></div>
-          <div class="ed-dropdown-scroll-list">
-            <button class="ed-dropdown-item${la.fontFamily==='Patrick Hand'?' active':''}" data-value="Patrick Hand">Patrick Hand</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Bangers'?' active':''}" data-value="Bangers">Bangers</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Permanent Marker'?' active':''}" data-value="Permanent Marker">Permanent Marker</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Bebas Neue'?' active':''}" data-value="Bebas Neue">Bebas Neue</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Bungee Outline'?' active':''}" data-value="Bungee Outline">Bungee Outline</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Oswald'?' active':''}" data-value="Oswald">Oswald</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Comic Neue'?' active':''}" data-value="Comic Neue">Comic Neue</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Lora'?' active':''}" data-value="Lora">Lora (Serif)</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Press Start 2P'?' active':''}" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Arial'?' active':''}" data-value="Arial">Arial</button>
-            <button class="ed-dropdown-item${la.fontFamily==='Verdana'?' active':''}" data-value="Verdana">Verdana</button>
-            ${!_CX_BUILTIN_FONTS.has(la.fontFamily) ? `<button class="ed-dropdown-item active" data-value="${la.fontFamily.replace(/"/g,'&quot;')}">${la.fontFamily.replace(/</g,'&lt;')}</button>` : ''}
+      <div class="op-prop-row">
+        <div class="op-prop-group" id="pp-font-group"><span class="op-prop-label">${I18n.t('op_fontLabel')}</span>
+          <button type="button" id="pp-font-trigger" data-menu="ppFont" style="flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:4px;background:var(--white);border:2px solid var(--gray-300);border-radius:14px;padding:5px 9px;font-family:var(--font-body);font-size:.8rem;font-weight:600;color:var(--black);cursor:pointer">
+            <span id="pp-font-trigger-label" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${la.fontFamily.replace(/</g,'&lt;')}</span><span style="flex-shrink:0">▾</span>
+          </button>
+          <div class="ed-dropdown" id="dd-ppFont">
+            <button type="button" class="ed-dropdown-item" id="pp-font-search" data-i18n="ed_fontSearchOpenBtn">${I18n.t('ed_fontSearchOpenBtn')}</button>
+            <div class="ed-dropdown-sep"></div>
+            <div class="ed-dropdown-scroll-list">
+              <button class="ed-dropdown-item${la.fontFamily==='Patrick Hand'?' active':''}" data-value="Patrick Hand">Patrick Hand</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Bangers'?' active':''}" data-value="Bangers">Bangers</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Permanent Marker'?' active':''}" data-value="Permanent Marker">Permanent Marker</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Bebas Neue'?' active':''}" data-value="Bebas Neue">Bebas Neue</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Bungee Outline'?' active':''}" data-value="Bungee Outline">Bungee Outline</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Oswald'?' active':''}" data-value="Oswald">Oswald</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Comic Neue'?' active':''}" data-value="Comic Neue">Comic Neue</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Lora'?' active':''}" data-value="Lora">Lora (Serif)</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Press Start 2P'?' active':''}" data-value="Press Start 2P">Press Start 2P (8-bit)</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Arial'?' active':''}" data-value="Arial">Arial</button>
+              <button class="ed-dropdown-item${la.fontFamily==='Verdana'?' active':''}" data-value="Verdana">Verdana</button>
+              ${!_CX_BUILTIN_FONTS.has(la.fontFamily) ? `<button class="ed-dropdown-item active" data-value="${la.fontFamily.replace(/"/g,'&quot;')}">${la.fontFamily.replace(/</g,'&lt;')}</button>` : ''}
+            </div>
           </div>
+          <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="${I18n.t('td_boldTitle')}">
+            <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
+          </label>
+          <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-style:italic;margin-left:4px;cursor:pointer" title="${I18n.t('td_italicTitle')}">
+            <input type="checkbox" id="pp-italic" ${la.fontItalic?'checked':''}><i>I</i>
+          </label>
         </div>
-        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-weight:900;margin-left:6px;cursor:pointer" title="${I18n.t('td_boldTitle')}">
-          <input type="checkbox" id="pp-bold" ${la.fontBold?'checked':''}><b>B</b>
-        </label>
-        <label style="display:flex;align-items:center;gap:3px;font-size:.82rem;font-style:italic;margin-left:4px;cursor:pointer" title="${I18n.t('td_italicTitle')}">
-          <input type="checkbox" id="pp-italic" ${la.fontItalic?'checked':''}><i>I</i>
-        </label>
-        <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_sizeLabel')}</span>
-        <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-fs" value="${la.fontSize}" min="8" max="120">
-        <input type="color" id="pp-color" value="${la.color}">
-        <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
+        <div class="op-prop-group" id="pp-size-group"><span class="op-prop-label">${I18n.t('op_sizeLabel')}</span>
+          <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-fs" value="${la.fontSize}" min="8" max="120">
+          <input type="color" id="pp-color" value="${la.color}">
+          <input type="color" id="pp-bg" value="${la.backgroundColor.startsWith('#')?la.backgroundColor:'#ffffff'}">
+        </div>
       </div>
       <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_frameLabel')}</span>
         <select id="pp-bw">

@@ -1159,6 +1159,29 @@ body.ed-scale-tablet {
 }
 .op-prop-row textarea { border-radius: 8px; resize: vertical; min-height: 44px; }
 
+/* Grupos "Fuente" / "Tamaño" de la fila de texto/bocadillo (v40.20): el
+   flex-wrap genérico de arriba (v40.10) evita que los controles queden
+   fuera de pantalla, pero al envolver control por control el punto de
+   corte es impredecible — podía separar "Tamaño" de su propio <input>, o
+   dejar la cursiva sola junto al tamaño, rompiendo la relación etiqueta→
+   control ("confuso" en móvil). Aquí #pp-font-group (fuente+negrita+
+   cursiva) y #pp-size-group (tamaño+color+fondo) son bloques atómicos
+   (flex-wrap:nowrap interno): con espacio de sobra conviven en la misma
+   fila exactamente igual que antes; si no caben, es SIEMPRE el bloque
+   completo el que baja a su propia línea, con su etiqueta (FUENTE /
+   TAMAÑO) siempre al inicio. min-width en px fijo — no auto ni % — para
+   que el punto de envoltura sea estable y no dependa del cálculo de
+   min-content de un flex anidado (poco fiable en WebViews Android
+   antiguas). #pp-font-group crece (flex-grow:1) igual que hacía antes
+   #pp-font-trigger solo, absorbiendo el espacio libre cuando ambos
+   bloques caben juntos; #pp-size-group no crece, se queda en su ancho de
+   contenido, igual que los inputs de tamaño/color hacían antes sueltos. */
+.op-prop-group {
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 7px;
+}
+#pp-font-group { flex: 1 1 auto; min-width: 210px; }
+#pp-size-group { flex: 0 1 auto; min-width: 200px; }
+
 /* ══════════════════════════════
    TOAST
    ══════════════════════════════ */
