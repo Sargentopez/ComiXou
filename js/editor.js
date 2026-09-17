@@ -6347,7 +6347,7 @@ function _ppReadKeyboardH() {
 const _PP_KB_MIN_H = 80; // px — por debajo de esto, ruido / teclado cerrado (mismo umbral que utils.js); usado en _ppKbSettle para decidir el auto-colapso en horizontal
 
 /* ── Centra la cámara en el objeto al abrir panel, dejándolo en el área libre ── */
-function _edFocusOnLayer(la) {
+function _edFocusOnLayer(la, instant) {
   if (!la || !edCanvas) return;
   if (_edFocusDone) return;
   _edFocusDone = true;
@@ -6404,6 +6404,15 @@ function _edFocusOnLayer(la) {
   const newCamX = camOffX - objCx * newZ;
   const newCamY = camOffY - objCy * newZ;
   const startX = edCamera.x, startY = edCamera.y, startZ = edCamera.z;
+  // Modo instantáneo (v40.23): usado mientras se escribe, para recentrar en
+  // cada pulsación sin arrastrar una animación de 220ms detrás de otra —
+  // con tecleo rápido se solaparían y el resultado temblaría en vez de
+  // seguir el crecimiento del bocadillo con suavidad.
+  if (instant) {
+    edCamera.x = newCamX; edCamera.y = newCamY; edCamera.z = newZ;
+    edRedraw();
+    return;
+  }
   const t0 = performance.now();
   const DURATION = 220;
   function _animate(t) {
@@ -6439,7 +6448,12 @@ function _ppKbSettle(la) {
     edFitCanvas();
   }
   _edFocusDone = false;
-  _edFocusOnLayer(la);
+  // Instantáneo (v40.23): los reintentos [50,200,400,650]ms caen más
+  // seguidos que los 220ms de la animación — con la versión animada, un
+  // reintento podía arrancar mientras el anterior aún estaba en marcha
+  // (o mientras el usuario ya había empezado a escribir, ver el recentrado
+  // por pulsación en _edInlineTextEditSync) y competían por la cámara.
+  _edFocusOnLayer(la, true);
 }
 
 
@@ -20385,7 +20399,13 @@ function _edInlineTextEditSync(la) {
     ta.id = 'edInlineTextEdit';
     ta.wrap = 'off';           // sin ajuste de línea automático — mismo criterio que getLines()/measure() (solo saltos manuales, sin word-wrap)
     ta.spellcheck = false;
-    ta.autocapitalize = 'sentences';
+    // 'off', no 'sentences': aquí los saltos de línea son manuales, solo para
+    // encajar visualmente el texto en la forma del bocadillo — no marcan el
+    // inicio de una frase nueva. Con 'sentences' el teclado (Gboard y
+    // similares en Android) trata cada salto de línea como fin de frase y
+    // pone mayúscula sola al empezar la siguiente, aunque sea la misma
+    // frase partida en dos líneas. Petición de Alberto.
+    ta.autocapitalize = 'off';
     ta.style.cssText = [
       'position:fixed', 'resize:none', 'border:none', 'outline:none',
       'background:transparent', 'overflow:hidden', 'margin:0',
@@ -20398,6 +20418,15 @@ function _edInlineTextEditSync(la) {
       if (!l) return;
       l.text = ta.value;
       l.resizeToFitText(edCanvas);
+      // Mantener el bocadillo (y el cursor) siempre centrado en el hueco
+      // libre mientras crece con cada línea nueva — instantáneo, no la
+      // animación de 220ms de _edFocusOnLayer (con tecleo rápido se
+      // solaparía consigo misma) — ver "Modo instantáneo" ahí (v40.23).
+      // _edFocusDone se resetea aquí a propósito en cada pulsación: seguir
+      // el crecimiento del propio objeto mientras se escribe en él no es
+      // "pelear" con un ajuste manual, es la razón de ser de este recentrado.
+      _edFocusDone = false;
+      _edFocusOnLayer(l, true);
       _edInlineTextEditReposition();
       edRedraw();
     });
