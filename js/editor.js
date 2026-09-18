@@ -1,4 +1,4 @@
-/* Comxow/COMXOW,  creada por A. Gavina Costero  2026, contacto@comxow.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -6390,19 +6390,43 @@ function _edFocusOnLayer(la, instant) {
   const objW  = (la.width  || 0.1) * pw;
   const objH  = (la.height || 0.1) * ph;
   const MARGIN = 0.75;
+  // Texto/bocadillo (v40.24): NO encajar la altura real, que crece sin techo
+  // con cada línea nueva y acababa encogiendo la letra hasta ilegible en
+  // bocadillos largos ("el tamaño de lectura debe mantenerse", reportado
+  // por Alberto — no hace falta ver el bocadillo entero, con 2-3 líneas
+  // basta). En su lugar, la altura para efectos de zoom se trata como si
+  // tuviera como mucho REF_LINES líneas — misma fórmula de interlineado que
+  // measure()/resizeToFitText (fontSize*1.2) más el padding — así el zoom
+  // deja de encoger a partir de ahí; el resto de líneas quedan fuera de
+  // vista en vez de hacerse más pequeñas. Con 1-2 líneas (altura real por
+  // debajo del techo) no cambia nada respecto a antes. Solo afecta a texto/
+  // bocadillo — el resto de tipos (imagen, dibujo...) sigue encajando su
+  // altura real, que es lo correcto al seleccionarlos.
+  const _isTextyLa = la.type==='text' || la.type==='bubble';
+  const REF_LINES = 3;
+  const refH = _isTextyLa ? (REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2) : Infinity;
+  const capObjH = Math.min(objH, refH);
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
-  const zForH  = (freeH * MARGIN) / Math.max(objH, 1);
+  const zForH  = (freeH * MARGIN) / Math.max(capObjH, 1);
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños
   const targetZ = Math.min(Math.min(zForW, zForH), 4);
-  const currentlyFitsW = objW * edCamera.z <= freeW * MARGIN;
-  const currentlyFitsH = objH * edCamera.z <= freeH * MARGIN;
+  const currentlyFitsW = objW    * edCamera.z <= freeW * MARGIN;
+  const currentlyFitsH = capObjH * edCamera.z <= freeH * MARGIN;
   const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2);
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
   const camOffY = freeCy - canvasRect.top;
-  const newCamX = camOffX - objCx * newZ;
-  const newCamY = camOffY - objCy * newZ;
+  // Centro vertical "de ventana": con el objeto por debajo del techo de
+  // líneas, es el centro real (objCy) de siempre — nada cambia. Por encima
+  // del techo, es el centro de una ventana de REF_LINES ANCLADA AL BORDE
+  // INFERIOR del objeto (el texto crece hacia abajo desde su centro fijo,
+  // así que el cursor está siempre ahí) — deja las líneas de más arriba
+  // fuera del área visible en vez de encogerlas todas para que quepan.
+  const objBottom = objCy + objH/2;
+  const windowCy  = objBottom - capObjH/2;
+  const newCamX = camOffX - objCx   * newZ;
+  const newCamY = camOffY - windowCy * newZ;
   const startX = edCamera.x, startY = edCamera.y, startZ = edCamera.z;
   // Modo instantáneo (v40.23): usado mientras se escribe, para recentrar en
   // cada pulsación sin arrastrar una animación de 220ms detrás de otra —
