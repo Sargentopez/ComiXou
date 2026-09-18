@@ -1367,6 +1367,7 @@ let _edFocusDone = false;       // true mientras panel abierto — inhibe recent
 let _ppKbHeaderHideDone = false; // true tras auto-ocultar la cabecera completa (edMinimize) por falta real de espacio en horizontal — no repetir si el usuario la restaura a mano (v40.30, antes solo colapsaba el panel en v40.21)
 let _edTextEditZoomLocked = false; // true en cuanto se teclea el primer carácter de la sesión de edición — a partir de ahí el zoom queda fijo, solo se paniza (v40.25)
 let _edTextEditMaxKbH = 0; // altura de teclado "estabilizada" (máximo visto) durante la sesión de escritura — ver _edStableKbH (v40.32)
+let _edSuppressAutoHide = false; // true durante la llamada síncrona de edMaximize a _edFocusOnLayer — evita que _edMaybeHideHeaderForTyping vuelva a ocultar la cabecera que se acaba de restaurar, sin depender de que la lectura del teclado ya esté al día (v40.34, corrige v40.33)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
 let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
@@ -6421,7 +6422,7 @@ function _edStableKbH() {
 function _edMaybeHideHeaderForTyping(la) {
   if (!la || !edCanvas) return false;
   const _isTextyLa = la.type==='text' || la.type==='bubble';
-  if (!_isTextyLa || _ppKbHeaderHideDone || edMinimized) return false;
+  if (!_isTextyLa || _ppKbHeaderHideDone || edMinimized || _edSuppressAutoHide) return false;
   if (window.innerWidth <= window.innerHeight) return false; // solo horizontal
   // v40.31 (corrige v40.30): había que comprobar si caben REF_LINES a
   // tamaño estándar, no si cabe la altura ACTUAL del bocadillo — un
@@ -22746,23 +22747,29 @@ function edMaximize(keepBar=false){
   // impide al navegador quitarle el foco a #edInlineTextEdit — blur()
   // explícito aquí, tal como pidió Alberto ("debería cerrar el teclado").
   //
-  // _edTextEditMaxKbH TAMBIÉN a 0 aquí (v40.33, corrige v40.32): es
-  // precisamente la estabilización que arregló la alternancia al escribir
-  // la que rompía esto — se queda con el MÁXIMO visto mientras el teclado
-  // sigue "abierto", y justo tras blur() el navegador aún no ha tenido
-  // tiempo de reportar el cierre, así que _edFocusOnLayer (llamado a
-  // continuación, en el mismo tick) veía el teclado como si siguiera
-  // ocupando toda su altura anterior — "sigue sin caber", volvía a
-  // ocultar la cabecera de inmediato, deshaciendo el restaurar antes de
-  // que Alberto llegara a verlo. Al ser NOSOTROS quienes cerramos el
-  // teclado a propósito, no hace falta esperar a que el navegador lo
-  // confirme: se da por cerrado ya mismo.
+  // _edSuppressAutoHide (v40.34, corrige v40.33): el intento anterior
+  // (resetear _edTextEditMaxKbH a 0 antes de llamar) no bastaba —
+  // _edFocusOnLayer, nada más empezar, vuelve a leer el teclado por su
+  // cuenta (computeFree → _edStableKbH) y como el navegador aún no ha
+  // reportado el cierre en este mismo instante, repuebla el máximo con el
+  // valor alto de antes — deshaciendo el reseteo DENTRO de la misma
+  // llamada, antes de que _edMaybeHideHeaderForTyping llegara a
+  // comprobarlo. Por eso seguía sin abrirse la cabecera. Esta bandera es
+  // una supresión explícita, independiente de si la lectura del teclado
+  // ya está al día o no: mientras esté activa, _edMaybeHideHeaderForTyping
+  // no hace nada, así que no importa lo que lea. Se activa justo antes de
+  // esta llamada síncrona y se desactiva justo después — no afecta a los
+  // reintentos posteriores (50-650ms más tarde, para entonces el teclado
+  // ya habrá cerrado de verdad), que si hace falta sí podrán volver a
+  // ocultar la cabecera con normalidad.
   if (_edInlineTextEditFor) {
     _ppKbHeaderHideDone = false;
     document.getElementById('edInlineTextEdit')?.blur();
     _edTextEditMaxKbH = 0;
+    _edSuppressAutoHide = true;
     _edFocusDone = false;
     _edFocusOnLayer(_edInlineTextEditFor, true);
+    _edSuppressAutoHide = false;
   }
 }
 // Activa visualmente el modo de edición de nodos (V⟺C) dentro del panel,

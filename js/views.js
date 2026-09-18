@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.33</footer>
+    <footer class="app-version">v40.34</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -340,19 +340,17 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — oculto de nuevo (mismo criterio de
-             siempre: se muestra temporalmente para cada investigación y se
-             vuelve a ocultar al cerrarse). Usado esta vez v39.40→v39.44 para
-             la saga de animaciones en flujos de texto que nunca se
-             reproducían en el visor interno (ver CARTA_SIGUIENTE_INSTANCIA_
-             v39_43.md) — problema ya cerrado y confirmado por Alberto. Antes,
-             para la biblioteca que no subía a la nube — ver
-             CARTA_SIGUIENTE_INSTANCIA_v39_11.md. Para volver a mostrarlo,
-             descomentar la línea de abajo; toda la instrumentación (incluida
-             la sección "ANIMACIONES EN FLUJOS DE TEXTO" añadida esta sesión)
-             sigue activa en editor.js aunque el botón esté oculto.
+        <!-- Botón de diagnóstico — visible temporalmente (mismo criterio de
+             siempre: se muestra para cada investigación y se vuelve a
+             ocultar al cerrarse). En uso desde v40.33 para la cámara
+             alternando arriba/abajo al escribir en horizontal y el botón de
+             restaurar cabecera que no abría (sección "SEGUIMIENTO DE CÁMARA
+             AL ESCRIBIR" en editor.js, _edRunDiag). Antes, v39.40→v39.44,
+             para animaciones en flujos de texto — ver
+             CARTA_SIGUIENTE_INSTANCIA_v39_43.md. Volver a comentar el
+             <button> de abajo (no borrarlo) cuando esta investigación se
+             cierre. -->
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
-        -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
