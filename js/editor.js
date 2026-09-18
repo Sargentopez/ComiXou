@@ -11719,6 +11719,22 @@ function edOnStart(e){
     edCloseMenus();
     return;
   }
+  // Botón flotante de restaurar cabecera (v40.36): registra pointerdown Y
+  // touchstart sobre sí mismo (edInitFloatDrag, para poder arrastrarlo) —
+  // en Android un toque dispara los dos, y aunque su propio preventDefault()
+  // evita el comportamiento por defecto del navegador, NO detiene la
+  // propagación: el mismo pointerdown burbujea hasta aquí (edOnStart
+  // escucha en document) y, exactamente igual que el bug ya documentado
+  // arriba para #edContextMenu ("bastaba con dejar caer la ejecución en
+  // esta función para que el resto de edOnStart procesara ese mismo
+  // pointerdown como una interacción normal del lienzo"), se interpretaba
+  // como un toque sobre el propio bocadillo en esas coordenadas de
+  // pantalla — alterando selección/cámara a la vez que edMaximize()
+  // intentaba restaurar la cabecera, de ahí que hiciera falta un segundo
+  // toque para que el resultado se viera bien. Mismo arreglo: ignorar aquí
+  // por completo, dejando pasar solo su propio pointerdown/touchstart y el
+  // 'click' que dispara edMaximize() (ver edInitFloatDrag).
+  if(e.target && e.target.closest && e.target.closest('#edFloatBtn')) return;
   // Botón secundario del ratón (clic derecho): lo gestiona en exclusiva el
   // menú contextual propio — nunca debe iniciar selección/arrastre normal
   // aquí, para no decidir qué queda seleccionado antes de que ese menú
