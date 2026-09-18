@@ -6372,10 +6372,19 @@ function _edMaybeHideHeaderForTyping(la) {
   const _isTextyLa = la.type==='text' || la.type==='bubble';
   if (!_isTextyLa || _ppKbHeaderHideDone || edMinimized) return false;
   if (window.innerWidth <= window.innerHeight) return false; // solo horizontal
-  const ph = edPageH();
-  const objH = (la.height || 0.1) * ph;
+  // v40.31 (corrige v40.30): había que comprobar si caben REF_LINES a
+  // tamaño estándar, no si cabe la altura ACTUAL del bocadillo — un
+  // bocadillo recién creado, de 1 línea, es minúsculo y "cabía" en
+  // cualquier hueco, así que esta comprobación nunca llegaba a disparar el
+  // ocultado aunque el móvil estuviera en horizontal y el teclado ya
+  // abierto (reportado por Alberto). refH representa "el hueco que haría
+  // falta para escribir con comodidad", no "lo que ya hay escrito" — por
+  // eso no se topa con la altura real del objeto, al revés que en
+  // _edFocusOnLayer, donde capObjH SÍ debe ser la altura real topada (ahí
+  // decide qué PARTE de un bocadillo ya largo centrar, no si hace falta
+  // más sitio).
   const REF_LINES = 3;
-  const capObjH = Math.min(objH, REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2);
+  const refH = REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2;
   const ED_TEXT_EDIT_STD_PX = 1.05 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
   const zForReading = ED_TEXT_EDIT_STD_PX / Math.max(la.fontSize || 16, 1);
   const canvasRect = edCanvas.getBoundingClientRect();
@@ -6387,7 +6396,7 @@ function _edMaybeHideHeaderForTyping(la) {
     ? panel.getBoundingClientRect().bottom : canvasRect.top;
   const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
   const freeH = Math.max(freeBottom - panelBottom, 80);
-  const zForHNow = (freeH * 0.75) / Math.max(capObjH, 1);
+  const zForHNow = (freeH * 0.75) / Math.max(refH, 1);
   if (zForHNow >= zForReading) return false; // ya hay sitio de sobra (p.ej. tablet)
   _ppKbHeaderHideDone = true;
   edMinimize();
