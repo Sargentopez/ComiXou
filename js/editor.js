@@ -1366,6 +1366,7 @@ let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabr
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
 let _ppKbHeaderHideDone = false; // true tras auto-ocultar la cabecera completa (edMinimize) por falta real de espacio en horizontal — no repetir si el usuario la restaura a mano (v40.30, antes solo colapsaba el panel en v40.21)
 let _edTextEditZoomLocked = false; // true en cuanto se teclea el primer carácter de la sesión de edición — a partir de ahí el zoom queda fijo, solo se paniza (v40.25)
+let _edTextEditMaxKbH = 0; // altura de teclado "estabilizada" (máximo visto) durante la sesión de escritura — ver _edStableKbH (v40.32)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
 let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
@@ -6346,6 +6347,27 @@ function _ppReadKeyboardH() {
   return Math.max(apiH, probeH);
 }
 
+// Lectura ESTABILIZADA del teclado durante la escritura (v40.32): muchos
+// teclados Android (Gboard incluido) muestran u ocultan una barra de
+// sugerencias según haya o no una palabra a medio escribir — cambia su
+// altura real varias veces por segundo mientras se teclea. Usando la
+// lectura en crudo (_ppReadKeyboardH), esa franja pasaba de estar dentro
+// del margen de _edFollowTextCursor a quedar fuera y viceversa en cada
+// pulsación: "un carácter bien ubicado, el siguiente bajo el teclado, el
+// siguiente bien..." (reportado por Alberto). Aquí se toma el MÁXIMO visto
+// mientras el teclado sigue genuinamente abierto (lectura por encima del
+// umbral de ruido) — así una franja de sugerencias que aparece y
+// desaparece no hace bailar la cámara, porque siempre se reserva el hueco
+// por si reaparece. En cuanto la lectura cae por debajo del umbral
+// (teclado de verdad cerrado), se resetea sola — no hace falta reponerla a
+// mano en ningún otro punto del ciclo minimizar/restaurar/reanudar.
+function _edStableKbH() {
+  const raw = _ppReadKeyboardH();
+  if (raw < 40) { _edTextEditMaxKbH = 0; return 0; }
+  _edTextEditMaxKbH = Math.max(_edTextEditMaxKbH, raw);
+  return _edTextEditMaxKbH;
+}
+
 // Decide si hay que ocultar la cabecera completa (edMinimize) porque, ni
 // siquiera con REF_LINES, el hueco actual llega al tamaño de lectura
 // estándar — y si hace falta, la oculta (v40.30, Alberto: "colapsar el
@@ -6394,7 +6416,7 @@ function _edMaybeHideHeaderForTyping(la) {
   const _panelHidden    = panel && panel.style.visibility === 'hidden';
   const panelBottom = (_panelOpen && !_panelCollapsed && !_panelHidden)
     ? panel.getBoundingClientRect().bottom : canvasRect.top;
-  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+  const freeBottom = canvasRect.bottom - _edStableKbH();
   const freeH = Math.max(freeBottom - panelBottom, 80);
   const zForHNow = (freeH * 0.75) / Math.max(refH, 1);
   if (zForHNow >= zForReading) return false; // ya hay sitio de sobra (p.ej. tablet)
@@ -6479,10 +6501,11 @@ function _edFocusOnLayer(la, instant) {
     const freeTop = Math.max(panelBottom, floatBottom);
     // Teclado virtual (v40.21): si hay uno abierto (edición de texto/bocadillo
     // en curso), esa franja no es espacio libre de verdad — de lo contrario el
-    // objeto se centra sobre un área que en pantalla real queda tapada. Lectura
-    // siempre fresca (0 de forma natural cuando no hay edición de texto en
-    // marcha, así que no hace falta condicionar esto al tipo de capa).
-    const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+    // objeto se centra sobre un área que en pantalla real queda tapada.
+    // Lectura ESTABILIZADA (v40.32, ver _edStableKbH) — 0 de forma natural
+    // cuando no hay edición de texto en marcha, así que no hace falta
+    // condicionar esto al tipo de capa.
+    const freeBottom = canvasRect.bottom - _edStableKbH();
     const freeLeft  = canvasRect.left;
     const freeRight = canvasRect.right;
     return {
@@ -6619,7 +6642,14 @@ function _edFollowTextCursor(la) {
     if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
   });
   const freeTop    = Math.max(panelBottom, floatBottom);
-  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+  // Lectura ESTABILIZADA, no en crudo (v40.32): la barra de sugerencias de
+  // muchos teclados Android aparece/desaparece según haya o no una palabra
+  // a medio escribir, cambiando su altura real varias veces por segundo —
+  // con la lectura en crudo, esta función (que corre en cada pulsación)
+  // pasaba de "dentro del margen" a "fuera" y otra vez "dentro" al ritmo de
+  // esa barra: "un carácter bien ubicado, el siguiente bajo el teclado, el
+  // siguiente bien..." (Alberto). Ver _edStableKbH.
+  const freeBottom = canvasRect.bottom - _edStableKbH();
   const z = edCamera.z; // fijo — es precisamente lo que esta función nunca toca
   const objCy = edMarginY() + la.y * ph;
   const objH  = (la.height || 0.1) * ph;
@@ -22668,17 +22698,22 @@ function edMaximize(keepBar=false){
       if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
     });
   }
-  // Bocadillo/texto en edición (v40.30): si la cabecera se había ocultado
-  // para poder escribir en horizontal, al restaurarla el hueco libre
-  // cambia por completo (vuelve el panel, y al no quedar nada enfocado el
-  // teclado se cierra solo) — reencuadrar de cero para que el bocadillo
-  // siga siendo visible (Alberto), y soltar el guard de auto-ocultar para
-  // que, si se vuelve a tocar el texto y el teclado reabre, pueda volver a
-  // ocultarse sola (Alberto: "si se vuelve a tocar el texto, vuelva a
-  // ocultarse la cabecera entera"). _edFocusOnLayer ya sabe evaluar por su
-  // cuenta si hace falta o no (p. ej. si mientras tanto se giró a vertical).
+  // Bocadillo/texto en edición (v40.30/v40.32): si la cabecera se había
+  // ocultado para poder escribir en horizontal, al restaurarla el hueco
+  // libre cambia por completo (vuelve el panel) — reencuadrar de cero para
+  // que el bocadillo siga siendo visible (Alberto), y soltar el guard de
+  // auto-ocultar para que, si se vuelve a tocar el texto y el teclado
+  // reabre, pueda volver a ocultarse sola (Alberto: "si se vuelve a tocar
+  // el texto, vuelva a ocultarse la cabecera entera"). _edFocusOnLayer ya
+  // sabe evaluar por su cuenta si hace falta o no (p. ej. si mientras tanto
+  // se giró a vertical). El teclado NO se cierra solo por restaurar: el
+  // botón flotante hace preventDefault() en su propio pointerdown (para
+  // poder arrastrarlo sin iniciar un scroll/selección), lo que de paso le
+  // impide al navegador quitarle el foco a #edInlineTextEdit — blur()
+  // explícito aquí, tal como pidió Alberto ("debería cerrar el teclado").
   if (_edInlineTextEditFor) {
     _ppKbHeaderHideDone = false;
+    document.getElementById('edInlineTextEdit')?.blur();
     _edFocusDone = false;
     _edFocusOnLayer(_edInlineTextEditFor, true);
   }

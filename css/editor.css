@@ -529,7 +529,13 @@ body.editor-page #appView {
   display: none;
   align-items: center; justify-content: center;
   box-shadow: 2px 2px 0 rgba(0,0,0,.3);
-  z-index: 50;
+  /* 510, no 50 (v40.32): con un bocadillo en edición ocupando buena parte
+     de la pantalla en horizontal (#edInlineTextEdit, z-index:190), a 50
+     quedaba tapado por el propio texto y el toque nunca le llegaba —
+     restaurar la cabecera es precisamente la salida de ese estado, así que
+     este botón debe quedar por encima de cualquier contenido, incluido el
+     panel (200). */
+  z-index: 510;
   touch-action: none;
   user-select: none;
 }
