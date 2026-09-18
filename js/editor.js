@@ -1468,6 +1468,35 @@ function _edDragPerfMark(label, redrawMs){
   if (window._edDragPerfLog.length > 150) window._edDragPerfLog.shift();
 }
 
+// ── DIAGNÓSTICO TEMPORAL: cámara alternando arriba/abajo al escribir en
+// horizontal ──────────────────────────────────────────────────────────────
+// Para investigar "un carácter bien ubicado, el siguiente bajo el teclado,
+// el siguiente bien..." (Alberto) — la estabilización de v40.32 (máximo de
+// teclado visto) no lo arregló, así que en vez de seguir adivinando se
+// registra en cada llamada a _edFollowTextCursor: quién la llamó (pulsación
+// de teclado vs geometrychange/reintento), la altura de teclado en crudo Y
+// la estabilizada (para ver si de verdad son distintas o si el problema es
+// otro), y la cámara antes/después. No afecta al comportamiento — solo
+// mide y guarda en window._edFollowLog. Se lee desde el botón de
+// diagnóstico (🩺, ya visible en la topbar del editor).
+window._edFollowLog = [];
+function _edFollowMark(source, camYBefore, camYAfter, screenBottom, freeTop, freeBottom, rawKb, stableKb) {
+  window._edFollowLog.push({
+    t: Math.round(performance.now()),
+    source,
+    camYBefore: +camYBefore.toFixed(1),
+    camYAfter: +camYAfter.toFixed(1),
+    moved: +(camYAfter - camYBefore).toFixed(1),
+    screenBottom: +screenBottom.toFixed(1),
+    freeTop: +freeTop.toFixed(1),
+    freeBottom: +freeBottom.toFixed(1),
+    rawKb: +rawKb.toFixed(1),
+    stableKb: +stableKb.toFixed(1),
+  });
+  if (window._edFollowLog.length > 150) window._edFollowLog.shift();
+}
+
+
 // Franja blanca tras el título del proyecto — refuerza su legibilidad con la
 // nueva tipografía (Arial Bold). Empieza en el borde izquierdo de la página
 // (por eso también queda detrás de edBackBtn) y termina justo tras el texto
@@ -6584,7 +6613,7 @@ function _edFocusOnLayer(la, instant) {
    enfocar #edInlineTextEdit (el teclado puede tardar en reportar su alto
    real) y desde geometrychange (cambios posteriores, p.ej. girar el móvil a
    media edición). */
-function _ppKbSettle(la) {
+function _ppKbSettle(la, source) {
   if (edSelectedIdx < 0 || edLayers[edSelectedIdx] !== la) return; // ya no es la capa activa
   const panel = $('edOptionsPanel');
   if (!panel) return;
@@ -6608,7 +6637,7 @@ function _ppKbSettle(la) {
   // tarda en asentarse) — no para seguir el crecimiento del texto, que es
   // trabajo de _edFollowTextCursor. Si Alberto ya ha empezado a escribir
   // (_edTextEditZoomLocked), un reintento tardío no debe tocar el zoom.
-  if (_edTextEditZoomLocked) { _edFollowTextCursor(la); return; }
+  if (_edTextEditZoomLocked) { _edFollowTextCursor(la, source||'ppKbSettle'); return; }
   _edFocusDone = false;
   _edFocusOnLayer(la, true);
 }
@@ -6623,7 +6652,7 @@ function _ppKbSettle(la) {
 // el techo de REF_LINES ya existente), y a partir de ahí esta función solo
 // desplaza la cámara lo justo para que ese borde inferior no quede tapado
 // por el teclado ni por el panel — nunca reencuadra el objeto entero.
-function _edFollowTextCursor(la) {
+function _edFollowTextCursor(la, source) {
   if (!la || !edCanvas) return;
   const pw = edPageW(), ph = edPageH();
   const canvasRect = edCanvas.getBoundingClientRect();
@@ -6649,20 +6678,25 @@ function _edFollowTextCursor(la) {
   // pasaba de "dentro del margen" a "fuera" y otra vez "dentro" al ritmo de
   // esa barra: "un carácter bien ubicado, el siguiente bajo el teclado, el
   // siguiente bien..." (Alberto). Ver _edStableKbH.
-  const freeBottom = canvasRect.bottom - _edStableKbH();
+  const rawKb = _ppReadKeyboardH();
+  const stableKb = _edStableKbH();
+  const freeBottom = canvasRect.bottom - stableKb;
   const z = edCamera.z; // fijo — es precisamente lo que esta función nunca toca
   const objCy = edMarginY() + la.y * ph;
   const objH  = (la.height || 0.1) * ph;
   const objBottom = objCy + objH / 2; // borde inferior real, sin techo de líneas
   const screenBottom = canvasRect.top + objBottom * z + edCamera.y;
   const PAD = 20; // aire para que el cursor no quede pegado al borde del hueco
+  const camYBefore = edCamera.y;
   if (screenBottom > freeBottom - PAD) {
     edCamera.y += (freeBottom - PAD) - screenBottom;
   } else if (screenBottom < freeTop + PAD) {
     edCamera.y += (freeTop + PAD) - screenBottom;
   } else {
+    _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
     return; // ya visible con el margen pedido — no mover la cámara sin necesidad
   }
+  _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
   _edInlineTextEditReposition();
   edRedraw();
 }
@@ -20646,7 +20680,7 @@ function _edInlineTextEditSync(la) {
       // aquí queda bloqueado — cada pulsación solo desplaza la cámara lo
       // justo para que el cursor no quede tapado, sin tocar el zoom.
       _edTextEditZoomLocked = true;
-      _edFollowTextCursor(l);
+      _edFollowTextCursor(l, 'input');
     });
     // Prevalencia de los tiradores de cola sobre el texto — HISTORIAL (v40.16/
     // v40.17, retirado en v40.22): se intentó dejar pasar el toque/clic hasta
@@ -22049,7 +22083,7 @@ function edRenderOptionsPanel(mode){
       // mismo patrón de reintentos ya probado en editor-textdoc.js/utils.js
       // para este mismo problema, no fiarse de una sola lectura.
       _ppKbHeaderHideDone = false;
-      [50, 200, 400, 650].forEach(ms => setTimeout(() => _ppKbSettle(la), ms));
+      [50, 200, 400, 650].forEach(ms => setTimeout(() => _ppKbSettle(la, 'retry'), ms));
     } else if(_edInlineTextEditFor){
       _edInlineTextEditEnd();
     }
@@ -22711,9 +22745,22 @@ function edMaximize(keepBar=false){
   // poder arrastrarlo sin iniciar un scroll/selección), lo que de paso le
   // impide al navegador quitarle el foco a #edInlineTextEdit — blur()
   // explícito aquí, tal como pidió Alberto ("debería cerrar el teclado").
+  //
+  // _edTextEditMaxKbH TAMBIÉN a 0 aquí (v40.33, corrige v40.32): es
+  // precisamente la estabilización que arregló la alternancia al escribir
+  // la que rompía esto — se queda con el MÁXIMO visto mientras el teclado
+  // sigue "abierto", y justo tras blur() el navegador aún no ha tenido
+  // tiempo de reportar el cierre, así que _edFocusOnLayer (llamado a
+  // continuación, en el mismo tick) veía el teclado como si siguiera
+  // ocupando toda su altura anterior — "sigue sin caber", volvía a
+  // ocultar la cabecera de inmediato, deshaciendo el restaurar antes de
+  // que Alberto llegara a verlo. Al ser NOSOTROS quienes cerramos el
+  // teclado a propósito, no hace falta esperar a que el navegador lo
+  // confirme: se da por cerrado ya mismo.
   if (_edInlineTextEditFor) {
     _ppKbHeaderHideDone = false;
     document.getElementById('edInlineTextEdit')?.blur();
+    _edTextEditMaxKbH = 0;
     _edFocusDone = false;
     _edFocusOnLayer(_edInlineTextEditFor, true);
   }
@@ -33303,7 +33350,7 @@ function EditorView_init(){
     if (!_p || _p.dataset.mode !== 'props' || edSelectedIdx < 0) return;
     const _la = edLayers[edSelectedIdx];
     if (!_la || (_la.type !== 'text' && _la.type !== 'bubble')) return;
-    _ppKbSettle(_la);
+    _ppKbSettle(_la, 'geometrychange');
   };
   if ('virtualKeyboard' in navigator) {
     navigator.virtualKeyboard.addEventListener('geometrychange', window._edKbGeomFn);
@@ -44236,6 +44283,22 @@ async function _edRunDiag() {
   });
   L('(sincePrevMs alto DENTRO del mismo gesto = cuelgue real durante el arrastre.');
   L(' Alto justo tras ">>> INICIO GESTO" = solo la pausa antes de empezar, no es el bug)');
+  L('');
+
+  // ── CÁMARA AL ESCRIBIR EN BOCADILLO/TEXTO (temporal, investigando la
+  // alternancia arriba/abajo en horizontal) ──
+  L('── SEGUIMIENTO DE CÁMARA AL ESCRIBIR (últimas '+(window._edFollowLog?.length||0)+' llamadas) ──');
+  L('Formato: origen  camY antes→después (movió X)  screenBottom vs [freeTop,freeBottom]  teclado crudo/estable');
+  (window._edFollowLog||[]).forEach(e => {
+    L('  ' + e.source.padEnd(14) + ' camY ' + e.camYBefore + '→' + e.camYAfter + ' (mov ' + e.moved + ')'
+      + '  sB=' + e.screenBottom + ' vs [' + e.freeTop + ',' + e.freeBottom + ']'
+      + '  kb crudo=' + e.rawKb + ' estable=' + e.stableKb);
+  });
+  L('(mov=0 en todas = el problema NO es esta función, es otra cosa la que mueve la');
+  L(' cámara o el problema es puramente visual/reflow, no de estas coordenadas.');
+  L(' rawKb y estable muy distintos = el teclado sí fluctúa de verdad.');
+  L(' varias líneas "input" seguidas sin ninguna "geometrychange"/"retry" de por');
+  L(' medio = el origen no es una carrera entre eventos, es esta única función.)');
   L('');
   L('── Eventos pointermove CRUDOS recibidos por gesto (antes de cualquier filtro) ──');
   L('Si aquí solo hay 1 por gesto, el dedo se mueve y el navegador NO manda más');
