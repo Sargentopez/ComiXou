@@ -1365,6 +1365,7 @@ let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pi
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
 let _ppKbCollapseDone = false;  // true tras auto-colapsar el panel por teclado+horizontal — no repetir si el usuario lo reabre a mano (v40.21)
+let _edTextEditZoomLocked = false; // true en cuanto se teclea el primer carácter de la sesión de edición — a partir de ahí el zoom queda fijo, solo se paniza (v40.25)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
 let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
@@ -6471,13 +6472,65 @@ function _ppKbSettle(la) {
     _edPanelTabShow();
     edFitCanvas();
   }
-  _edFocusDone = false;
   // Instantáneo (v40.23): los reintentos [50,200,400,650]ms caen más
   // seguidos que los 220ms de la animación — con la versión animada, un
-  // reintento podía arrancar mientras el anterior aún estaba en marcha
-  // (o mientras el usuario ya había empezado a escribir, ver el recentrado
-  // por pulsación en _edInlineTextEditSync) y competían por la cámara.
+  // reintento podía arrancar mientras el anterior aún estaba en marcha y
+  // competían por la cámara.
+  // Bloqueo de zoom (v40.25): estos reintentos existen para afinar el
+  // encuadre mientras el TECLADO todavía se está abriendo (su alto real
+  // tarda en asentarse) — no para seguir el crecimiento del texto, que es
+  // trabajo de _edFollowTextCursor. Si Alberto ya ha empezado a escribir
+  // (_edTextEditZoomLocked), un reintento tardío no debe tocar el zoom.
+  if (_edTextEditZoomLocked) { _edFollowTextCursor(la); return; }
+  _edFocusDone = false;
   _edFocusOnLayer(la, true);
+}
+
+// Mantiene visible el cursor de escritura (aproximado como el borde inferior
+// del bocadillo/caja, que es hacia donde crece con cada línea nueva desde su
+// centro fijo) SIN TOCAR EL ZOOM — a diferencia de _edFocusOnLayer, que
+// encuadra recalculando zoom+posición. Alberto: "no es necesario que entre
+// todo el bocadillo en el hueco, solo necesito que el texto mantenga
+// siempre su tamaño, y el cursor esté siempre visible" (v40.25) — el zoom
+// se decide UNA VEZ, al empezar la sesión de edición (_edFocusOnLayer, con
+// el techo de REF_LINES ya existente), y a partir de ahí esta función solo
+// desplaza la cámara lo justo para que ese borde inferior no quede tapado
+// por el teclado ni por el panel — nunca reencuadra el objeto entero.
+function _edFollowTextCursor(la) {
+  if (!la || !edCanvas) return;
+  const pw = edPageW(), ph = edPageH();
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const panel = $('edOptionsPanel');
+  const _panelOpen = panel && panel.classList.contains('open');
+  const _panelCollapsed = panel && panel.classList.contains('panel-collapsed');
+  const panelBottom = (_panelOpen && !_panelCollapsed)
+    ? panel.getBoundingClientRect().bottom : canvasRect.top;
+  let floatBottom = 0;
+  ['edDrawBar','edShapeBar'].forEach(id => {
+    const bar = $(id);
+    if (!bar || !bar.classList.contains('visible')) return;
+    const r = bar.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return;
+    const canvasMidY = canvasRect.top + canvasRect.height / 2;
+    if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
+  });
+  const freeTop    = Math.max(panelBottom, floatBottom);
+  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+  const z = edCamera.z; // fijo — es precisamente lo que esta función nunca toca
+  const objCy = edMarginY() + la.y * ph;
+  const objH  = (la.height || 0.1) * ph;
+  const objBottom = objCy + objH / 2; // borde inferior real, sin techo de líneas
+  const screenBottom = canvasRect.top + objBottom * z + edCamera.y;
+  const PAD = 20; // aire para que el cursor no quede pegado al borde del hueco
+  if (screenBottom > freeBottom - PAD) {
+    edCamera.y += (freeBottom - PAD) - screenBottom;
+  } else if (screenBottom < freeTop + PAD) {
+    edCamera.y += (freeTop + PAD) - screenBottom;
+  } else {
+    return; // ya visible con el margen pedido — no mover la cámara sin necesidad
+  }
+  _edInlineTextEditReposition();
+  edRedraw();
 }
 
 
@@ -20419,6 +20472,7 @@ function _edBindAllNumInputs(container) {
 function _edInlineTextEditSync(la) {
   let ta = document.getElementById('edInlineTextEdit');
   if (!ta) {
+    _edTextEditZoomLocked = false; // sesión nueva: el zoom aún puede establecerse (v40.25)
     ta = document.createElement('textarea');
     ta.id = 'edInlineTextEdit';
     ta.wrap = 'off';           // sin ajuste de línea automático — mismo criterio que getLines()/measure() (solo saltos manuales, sin word-wrap)
@@ -20442,17 +20496,16 @@ function _edInlineTextEditSync(la) {
       if (!l) return;
       l.text = ta.value;
       l.resizeToFitText(edCanvas);
-      // Mantener el bocadillo (y el cursor) siempre centrado en el hueco
-      // libre mientras crece con cada línea nueva — instantáneo, no la
-      // animación de 220ms de _edFocusOnLayer (con tecleo rápido se
-      // solaparía consigo misma) — ver "Modo instantáneo" ahí (v40.23).
-      // _edFocusDone se resetea aquí a propósito en cada pulsación: seguir
-      // el crecimiento del propio objeto mientras se escribe en él no es
-      // "pelear" con un ajuste manual, es la razón de ser de este recentrado.
-      _edFocusDone = false;
-      _edFocusOnLayer(l, true);
-      _edInlineTextEditReposition();
-      edRedraw();
+      // v40.25 (corrige v40.23/v40.24): recalcular zoom en cada pulsación
+      // era precisamente el problema — con el techo de REF_LINES el zoom se
+      // ESTABILIZABA pero seguía cambiando de la línea 1 a la 3, y "el texto
+      // debe mantener siempre su tamaño" (Alberto) significa que no debe
+      // cambiar NUNCA, ni una vez. El zoom se decide una sola vez al abrir
+      // la sesión de edición (_edFocusOnLayer, más arriba) y a partir de
+      // aquí queda bloqueado — cada pulsación solo desplaza la cámara lo
+      // justo para que el cursor no quede tapado, sin tocar el zoom.
+      _edTextEditZoomLocked = true;
+      _edFollowTextCursor(l);
     });
     // Prevalencia de los tiradores de cola sobre el texto — HISTORIAL (v40.16/
     // v40.17, retirado en v40.22): se intentó dejar pasar el toque/clic hasta
@@ -20581,6 +20634,7 @@ function _edInlineTextEditReposition() {
 function _edInlineTextEditEnd() {
   if (!_edInlineTextEditFor) return;
   _edInlineTextEditFor = null;
+  _edTextEditZoomLocked = false; // por simetría — la próxima sesión empieza limpia igualmente al crear el textarea
   const ta = document.getElementById('edInlineTextEdit');
   if (ta) { ta.blur(); ta.style.left = '-9999px'; ta.style.top = '-9999px'; }
   edRedraw(); // el texto vuelve a dibujarse en el canvas (draw() ya no lo salta)
