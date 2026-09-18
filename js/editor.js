@@ -21958,7 +21958,23 @@ function edRenderOptionsPanel(mode){
         const la=edLayers[edSelectedIdx],id=e.target.id;
         if(id==='pp-bold')  {la.fontBold=e.target.checked;la.resizeToFitText(edCanvas);}
         else if(id==='pp-italic'){la.fontItalic=e.target.checked;la.resizeToFitText(edCanvas);}
-        else if(id==='pp-fs'){la.fontSize=parseInt(e.target.value)||12;la.resizeToFitText(edCanvas);}
+        else if(id==='pp-fs'){
+          la.fontSize=parseInt(e.target.value)||12;
+          la.resizeToFitText(edCanvas);
+          // Cambiar el tamaño de fuente desde el panel en plena edición
+          // (v40.29): el tamaño en pantalla debe seguir siendo el estándar
+          // de lectura (v40.28), no el doble o la mitad solo porque
+          // fontSize cambió y la cámara se quedó como estaba. Esto NO es
+          // "crecer por escribir más línea" (lo que _edTextEditZoomLocked
+          // bloquea a propósito, ver _edFollowTextCursor) — es un cambio
+          // explícito del propio fontSize de referencia, así que aquí SÍ
+          // toca recalcular zoom además de paneo. _edFocusDone se reabre
+          // solo para esta llamada puntual; _edTextEditZoomLocked no se
+          // toca — si ya estaba bloqueado por haber escrito, lo sigue
+          // estando después: las próximas pulsaciones vuelven a solo
+          // panear, ya con este zoom recién recalculado como referencia.
+          if(_edInlineTextEditFor === la){ _edFocusDone = false; _edFocusOnLayer(la, true); }
+        }
         else if(id==='pp-color')  la.color=e.target.value;
         else if(id==='pp-bg')     la.backgroundColor=e.target.value;
         else if(id==='pp-bgop'){const v=parseInt(e.target.value)||0;la.bgOpacity=v/100;const lbl=$('pp-bgop-val');if(lbl)lbl.textContent=v+'%';}
