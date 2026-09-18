@@ -20484,10 +20484,17 @@ function _edInlineTextEditSync(la) {
     // pone mayúscula sola al empezar la siguiente, aunque sea la misma
     // frase partida en dos líneas. Petición de Alberto.
     ta.autocapitalize = 'off';
+    // z-index 190, no 500 (v40.27): por debajo de #edOptionsPanel (200) a
+    // propósito — el texto no debe pintarse NUNCA por encima del panel,
+    // ni siquiera si algún día una posición fuera de lo previsto lo
+    // acercara a su franja (el recentrado de _edFollowTextCursor ya evita
+    // que eso pase, pero esto es la garantía de verdad, a nivel de capas,
+    // no de cálculo de posición). Sigue por encima de #edQuickTools (150)
+    // y del canvas. Petición de Alberto.
     ta.style.cssText = [
       'position:fixed', 'resize:none', 'border:none', 'outline:none',
       'background:transparent', 'overflow:hidden', 'margin:0',
-      'white-space:pre', 'z-index:500', 'box-sizing:border-box',
+      'white-space:pre', 'z-index:190', 'box-sizing:border-box',
       'text-align:center'
     ].join(';');
     document.body.appendChild(ta);
@@ -20534,6 +20541,14 @@ function _edInlineTextEditSync(la) {
   }
   const isNewLayer = _edInlineTextEditFor !== la;
   _edInlineTextEditFor = la;
+  // Clase para CSS (v40.26): editor.css la usa para ocultar #edQuickTools
+  // (deshacer/rehacer/lupa) mientras se escribe — z-index 150, por debajo
+  // del panel a propósito, pero por encima del canvas; con el bocadillo
+  // desplazándose para seguir al cursor (v40.25) por pura coincidencia
+  // podía acabar tapando el texto. Puesta aquí (no solo en la rama "nueva
+  // capa") para que cubra también el resincronizado de una sesión ya en
+  // marcha, que pasa por este mismo punto.
+  $('editorShell')?.classList.add('ed-typing');
   if (isNewLayer) {
     // Igual que hacía pp-text: al empezar a editar, si el texto actual es
     // el placeholder ("Escribe aquí"), arrancar con el campo vacío en vez
@@ -20635,6 +20650,7 @@ function _edInlineTextEditEnd() {
   if (!_edInlineTextEditFor) return;
   _edInlineTextEditFor = null;
   _edTextEditZoomLocked = false; // por simetría — la próxima sesión empieza limpia igualmente al crear el textarea
+  $('editorShell')?.classList.remove('ed-typing');
   const ta = document.getElementById('edInlineTextEdit');
   if (ta) { ta.blur(); ta.style.left = '-9999px'; ta.style.top = '-9999px'; }
   edRedraw(); // el texto vuelve a dibujarse en el canvas (draw() ya no lo salta)

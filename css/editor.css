@@ -1637,11 +1637,20 @@ body.ed-scale-tablet .ed-modal-sheet {
    op-shape-undo/redo, op-line-undo/redo), así que se oculta igual. Se
    acota por data-mode, no por .open a secas, para no afectar al panel de
    propiedades (data-mode="props"), que no tiene deshacer propio. */
+/* Ocultar también mientras se escribe en un bocadillo/caja de texto (clase
+   ed-typing puesta por _edInlineTextEditSync/_edInlineTextEditEnd, v40.26):
+   edQuickTools queda deliberadamente por debajo del panel pero por encima
+   del canvas (150) — con el bocadillo desplazándose para seguir siempre al
+   cursor (v40.25), por pura coincidencia podía acabar tapando el texto que
+   se está escribiendo. Hace falta la clase (no basta con data-mode="props",
+   que también se da con imagen/dibujo seleccionados sin edición de texto
+   activa, donde edQuickTools debe seguir visible). */
 #editorShell:has(> #edDrawBar.visible) #edQuickTools,
 #editorShell:has(> #edShapeBar.visible) #edQuickTools,
 #editorShell:has(> #edOptionsPanel.open[data-mode="draw"])  #edQuickTools,
 #editorShell:has(> #edOptionsPanel.open[data-mode="shape"]) #edQuickTools,
-#editorShell:has(> #edOptionsPanel.open[data-mode="line"])  #edQuickTools {
+#editorShell:has(> #edOptionsPanel.open[data-mode="line"])  #edQuickTools,
+#editorShell.ed-typing #edQuickTools {
   display: none;
 }
 
