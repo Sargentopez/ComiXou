@@ -6419,11 +6419,19 @@ function _edStableKbH() {
 // móviles... debe comprobarse que sea necesario" (Alberto) — una tablet en
 // horizontal, con mucha más altura disponible, no entra en esta rama
 // aunque esté en horizontal.
+window._edHideCheckLog = [];
+function _edHideCheckMark(reason, extra) {
+  window._edHideCheckLog.push({ t: Math.round(performance.now()), reason, ...extra });
+  if (window._edHideCheckLog.length > 150) window._edHideCheckLog.shift();
+}
 function _edMaybeHideHeaderForTyping(la) {
-  if (!la || !edCanvas) return false;
+  if (!la || !edCanvas) { _edHideCheckMark('sin-la-o-canvas'); return false; }
   const _isTextyLa = la.type==='text' || la.type==='bubble';
-  if (!_isTextyLa || _ppKbHeaderHideDone || edMinimized || _edSuppressAutoHide) return false;
-  if (window.innerWidth <= window.innerHeight) return false; // solo horizontal
+  if (!_isTextyLa) { _edHideCheckMark('no-es-texto/bocadillo'); return false; }
+  if (_ppKbHeaderHideDone) { _edHideCheckMark('ya-oculta-esta-sesion'); return false; }
+  if (edMinimized) { _edHideCheckMark('ya-minimizado'); return false; }
+  if (_edSuppressAutoHide) { _edHideCheckMark('suprimido-por-restaurar'); return false; }
+  if (window.innerWidth <= window.innerHeight) { _edHideCheckMark('vertical', {w:window.innerWidth, h:window.innerHeight}); return false; }
   // v40.31 (corrige v40.30): había que comprobar si caben REF_LINES a
   // tamaño estándar, no si cabe la altura ACTUAL del bocadillo — un
   // bocadillo recién creado, de 1 línea, es minúsculo y "cabía" en
@@ -6449,7 +6457,11 @@ function _edMaybeHideHeaderForTyping(la) {
   const freeBottom = canvasRect.bottom - _edStableKbH();
   const freeH = Math.max(freeBottom - panelBottom, 80);
   const zForHNow = (freeH * 0.75) / Math.max(refH, 1);
-  if (zForHNow >= zForReading) return false; // ya hay sitio de sobra (p.ej. tablet)
+  if (zForHNow >= zForReading) {
+    _edHideCheckMark('cabe-de-sobra', {zForHNow:+zForHNow.toFixed(3), zForReading:+zForReading.toFixed(3), freeH:+freeH.toFixed(1), panelBottom:+panelBottom.toFixed(1), canvasBottom:+canvasRect.bottom.toFixed(1)});
+    return false; // ya hay sitio de sobra (p.ej. tablet)
+  }
+  _edHideCheckMark('OCULTANDO', {zForHNow:+zForHNow.toFixed(3), zForReading:+zForReading.toFixed(3), freeH:+freeH.toFixed(1), panelBottom:+panelBottom.toFixed(1), canvasBottom:+canvasRect.bottom.toFixed(1)});
   _ppKbHeaderHideDone = true;
   edMinimize();
   // Botón de restaurar (Alberto: "debe estar visible en el hueco"):
@@ -6689,6 +6701,31 @@ function _edFollowTextCursor(la, source) {
   const screenBottom = canvasRect.top + objBottom * z + edCamera.y;
   const PAD = 20; // aire para que el cursor no quede pegado al borde del hueco
   const camYBefore = edCamera.y;
+  // Hueco DEGENERADO (v40.35): freeBottom<=freeTop significa que panel y
+  // teclado juntos ya no dejan literalmente ningún espacio libre — visto
+  // en datos reales (freeBottom=72 < freeTop=197.5). Con los dos umbrales
+  // de más abajo, esto entra en ping-pong perfecto: empujar hacia arriba
+  // por estar "bajo el teclado" lo deja "bajo el panel", empujar hacia
+  // abajo lo vuelve a dejar bajo el teclado, sin parar nunca — exactamente
+  // "un carácter bien ubicado, el siguiente bajo el teclado, el siguiente
+  // bien..." (Alberto). _edMaybeHideHeaderForTyping debería evitar llegar
+  // aquí ocultando la cabecera antes, pero esto es la red de seguridad: en
+  // el hueco degenerado, quedar tapado por el TECLADO (invisible del
+  // todo) es peor que quedar parcialmente bajo el PANEL (se sigue viendo
+  // algo) — se prioriza solo el límite del teclado y no se intenta
+  // también satisfacer el del panel.
+  if (freeBottom <= freeTop) {
+    if (screenBottom > freeBottom - PAD) {
+      edCamera.y += (freeBottom - PAD) - screenBottom;
+    } else {
+      _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
+      return;
+    }
+    _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
+    _edInlineTextEditReposition();
+    edRedraw();
+    return;
+  }
   if (screenBottom > freeBottom - PAD) {
     edCamera.y += (freeBottom - PAD) - screenBottom;
   } else if (screenBottom < freeTop + PAD) {
@@ -20680,8 +20717,25 @@ function _edInlineTextEditSync(la) {
       // la sesión de edición (_edFocusOnLayer, más arriba) y a partir de
       // aquí queda bloqueado — cada pulsación solo desplaza la cámara lo
       // justo para que el cursor no quede tapado, sin tocar el zoom.
-      _edTextEditZoomLocked = true;
-      _edFollowTextCursor(l, 'input');
+      //
+      // v40.35: la comprobación de "¿hace falta ocultar la cabecera?" vivía
+      // solo en _ppKbSettle (reintentos al abrir + geometrychange) — datos
+      // reales (🩺) mostraron sesiones enteras escribiendo con panel+
+      // teclado dejando hueco negativo y la cabecera sin llegar a
+      // ocultarse nunca, probablemente porque el teclado alcanza su alto
+      // final DESPUÉS de que los reintentos ya hayan terminado, o entre
+      // dos geometrychange sin que ninguno vea el momento justo. Aquí SÍ
+      // hay un evento fiable en cada pulsación — mismo que ya mueve la
+      // cámara — así que se comprueba también aquí, no solo por eventos
+      // externos. Si acaba de ocultarla, el hueco libre cambió por
+      // completo: reencuadrar de cero, no solo panear con el zoom de antes.
+      if (_edMaybeHideHeaderForTyping(l)) {
+        _edFocusDone = false;
+        _edFocusOnLayer(l, true);
+      } else {
+        _edTextEditZoomLocked = true;
+        _edFollowTextCursor(l, 'input');
+      }
     });
     // Prevalencia de los tiradores de cola sobre el texto — HISTORIAL (v40.16/
     // v40.17, retirado en v40.22): se intentó dejar pasar el toque/clic hasta
@@ -44306,6 +44360,22 @@ async function _edRunDiag() {
   L(' rawKb y estable muy distintos = el teclado sí fluctúa de verdad.');
   L(' varias líneas "input" seguidas sin ninguna "geometrychange"/"retry" de por');
   L(' medio = el origen no es una carrera entre eventos, es esta única función.)');
+  L('');
+
+  // ── DECISIÓN DE OCULTAR CABECERA (temporal, investigando por qué no se
+  // disparaba con panel+teclado ya sin hueco real) ──
+  L('── DECISIÓN DE OCULTAR CABECERA (últimas '+(window._edHideCheckLog?.length||0)+' llamadas) ──');
+  L('Formato: motivo  [valores, si los hay]');
+  L('"OCULTANDO" = disparó edMinimize() en esa llamada. Cualquier otro motivo = no lo hizo.');
+  (window._edHideCheckLog||[]).forEach(e => {
+    const extra = Object.keys(e).filter(k => k!=='t' && k!=='reason').map(k => k+'='+e[k]).join(' ');
+    L('  ' + e.reason + (extra ? '  '+extra : ''));
+  });
+  L('("cabe-de-sobra" con freeH pequeño y zForHNow cerca de zForReading = el');
+  L(' umbral está mal calibrado. "ya-oculta-esta-sesion" repetido sin ningún');
+  L(' "OCULTANDO" antes = el guard se puso a true en otro sitio sin llegar a');
+  L(' ocultar de verdad. Si esta sección sale VACÍA durante un tramo en el que sí');
+  L(' hubo alternancia = la función ni se está llamando en ese tramo.)');
   L('');
   L('── Eventos pointermove CRUDOS recibidos por gesto (antes de cualquier filtro) ──');
   L('Si aquí solo hay 1 por gesto, el dedo se mueve y el navegador NO manda más');
