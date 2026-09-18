@@ -6419,6 +6419,30 @@ function _edStableKbH() {
 // móviles... debe comprobarse que sea necesario" (Alberto) — una tablet en
 // horizontal, con mucha más altura disponible, no entra en esta rama
 // aunque esté en horizontal.
+// ── DIAGNÓSTICO TEMPORAL: secuencia completa toque→edMaximize→panel visible
+// ──────────────────────────────────────────────────────────────────────────
+// Para investigar "el primer toque cierra el teclado, el segundo abre el
+// panel" y "el bocadillo queda tapado por el panel al restaurar" (Alberto,
+// persiste igual tras el arreglo de interferencia con edOnStart en v40.36 —
+// esa hipótesis no era la causa). Registra CADA paso de la secuencia: qué
+// evento de puntero llega al botón, si dispara edMaximize, y dentro de
+// edMaximize el estado antes/después de cada tramo (menú/topbar, panel,
+// canvas) — así como la posición en pantalla del bocadillo frente a la del
+// panel al terminar. No afecta al comportamiento — solo mide y guarda en
+// window._edRestoreLog. Se lee desde el botón de diagnóstico (🩺).
+window._edRestoreLog = [];
+function _edRestoreMark(step, extra) {
+  window._edRestoreLog.push({ t: Math.round(performance.now()), step, ...(extra||{}) });
+  if (window._edRestoreLog.length > 150) window._edRestoreLog.shift();
+}
+// JSON.stringify(rect) da "{}" en muchos navegadores — DOMRect expone sus
+// propiedades como getters del prototipo, no como propias enumerables, así
+// que JSON.stringify (que solo mira propias enumerables) no ve nada.
+function _edRectStr(r) {
+  if (!r) return 'null';
+  return '{top:'+r.top.toFixed(1)+',left:'+r.left.toFixed(1)+',right:'+r.right.toFixed(1)+',bottom:'+r.bottom.toFixed(1)+',w:'+r.width.toFixed(1)+',h:'+r.height.toFixed(1)+'}';
+}
+
 window._edHideCheckLog = [];
 function _edHideCheckMark(reason, extra) {
   window._edHideCheckLog.push({ t: Math.round(performance.now()), reason, ...extra });
@@ -22740,6 +22764,11 @@ function edMinimize(){
   });
 }
 function edMaximize(keepBar=false){
+  _edRestoreMark('edMaximize:inicio', {
+    edMinimizedAntes: edMinimized,
+    minimizedDrawMode: window._edMinimizedDrawMode,
+    hayEdicionTexto: !!_edInlineTextEditFor,
+  });
   edMinimized=false;
   // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag)
   // si la edición de nodos (V⟺C) estaba activa en la barra flotante.
@@ -22757,8 +22786,11 @@ function edMaximize(keepBar=false){
     window._edMinimizedDrawMode = null;
     window._edMinimizedCollapsed = false;
     const panel=$('edOptionsPanel');
+    _edRestoreMark('rama-minimizedDrawMode', {mode, wasCollapsed, visibilityAntes: panel?.style.visibility});
     if(panel) panel.style.visibility='';
+    _edRestoreMark('panel-visibility-puesta', {visibilityDespues: panel?.style.visibility, panelRectAntesFit: panel ? _edRectStr(panel.getBoundingClientRect()) : null});
     edFitCanvas();
+    _edRestoreMark('tras-edFitCanvas', {canvasRect: _edRectStr(edCanvas.getBoundingClientRect()), panelRect: panel ? _edRectStr(panel.getBoundingClientRect()) : null});
     requestAnimationFrame(() => {
       _edBarClampToScreen();
       // Restaurar lengüeta DESPUÉS del layout recalculado
@@ -22779,6 +22811,7 @@ function edMaximize(keepBar=false){
       if(_wasCurveActiveInBar) _edRestoreCurveModeInPanel('line');
     } else {
       edRenderOptionsPanel(mode);
+      _edRestoreMark('tras-edRenderOptionsPanel', {mode, panelRect: _edRectStr($('edOptionsPanel')?.getBoundingClientRect()), panelVisibility: $('edOptionsPanel')?.style.visibility, panelDisplay: getComputedStyle($('edOptionsPanel')||document.body).display, panelOpenClass: $('edOptionsPanel')?.classList.contains('open')});
     }
   } else if(_vsHistory.length > 0) {
     edShapeBarHide();
@@ -22838,8 +22871,43 @@ function edMaximize(keepBar=false){
     _edTextEditMaxKbH = 0;
     _edSuppressAutoHide = true;
     _edFocusDone = false;
+    // Posición del bocadillo en pantalla ANTES de reencuadrar, para comparar
+    // con la del panel (Alberto: "el bocadillo queda tapado por el panel").
+    (() => {
+      const _la = _edInlineTextEditFor;
+      const _ph = edPageH();
+      const _objBottom = (edMarginY() + _la.y*_ph) + ((_la.height||0.1)*_ph)/2;
+      const _screenBottomAntes = edCanvas.getBoundingClientRect().top + _objBottom*edCamera.z + edCamera.y;
+      _edRestoreMark('antes-de-reencuadrar', {
+        screenBottomBocadillo: +_screenBottomAntes.toFixed(1),
+        panelRect: _edRectStr($('edOptionsPanel')?.getBoundingClientRect()),
+        panelVisibility: $('edOptionsPanel')?.style.visibility,
+        edCameraZ: edCamera.z, edCameraY: edCamera.y,
+      });
+    })();
     _edFocusOnLayer(_edInlineTextEditFor, true);
     _edSuppressAutoHide = false;
+    // Y DESPUÉS — si screenBottomBocadillo (después) < panelRect.bottom (de
+    // antes o después, apenas cambia), el bocadillo queda literalmente por
+    // encima del borde inferior del panel = tapado por él.
+    (() => {
+      const _la = _edInlineTextEditFor;
+      const _ph = edPageH();
+      const _objBottom = (edMarginY() + _la.y*_ph) + ((_la.height||0.1)*_ph)/2;
+      const _objTop = (edMarginY() + _la.y*_ph) - ((_la.height||0.1)*_ph)/2;
+      const _cr = edCanvas.getBoundingClientRect();
+      const _screenBottomDespues = _cr.top + _objBottom*edCamera.z + edCamera.y;
+      const _screenTopDespues = _cr.top + _objTop*edCamera.z + edCamera.y;
+      _edRestoreMark('despues-de-reencuadrar', {
+        screenTopBocadillo: +_screenTopDespues.toFixed(1),
+        screenBottomBocadillo: +_screenBottomDespues.toFixed(1),
+        panelRect: _edRectStr($('edOptionsPanel')?.getBoundingClientRect()),
+        panelVisibility: $('edOptionsPanel')?.style.visibility,
+        panelOpenClass: $('edOptionsPanel')?.classList.contains('open'),
+        canvasRect: _edRectStr(_cr),
+        edCameraZ: edCamera.z, edCameraY: edCamera.y,
+      });
+    })();
   }
 }
 // Activa visualmente el modo de edición de nodos (V⟺C) dentro del panel,
@@ -22860,6 +22928,7 @@ function edInitFloatDrag(){
   const btn=$('edFloatBtn');if(!btn)return;
   let dragging=false,startX=0,startY=0,startLeft=0,startTop=0;
   function onDown(e){
+    _edRestoreMark('onDown', {type:e.type, x:Math.round(e.touches?e.touches[0].clientX:e.clientX), y:Math.round(e.touches?e.touches[0].clientY:e.clientY)});
     dragging=true;
     const src=e.touches?e.touches[0]:e;
     startX=src.clientX;startY=src.clientY;
@@ -22877,11 +22946,13 @@ function edInitFloatDrag(){
     e.preventDefault();
   }
   function onUp(e){
+    const src=e.changedTouches?e.changedTouches[0]:e;
+    const dist=Math.hypot(src.clientX-startX,src.clientY-startY);
+    _edRestoreMark('onUp', {type:e.type, dragging, dist:+dist.toFixed(1), llamaraMaximize:(dragging && dist<8)});
     if(!dragging)return;
     dragging=false;
     // Si apenas se movió, es un click
-    const src=e.changedTouches?e.changedTouches[0]:e;
-    if(Math.hypot(src.clientX-startX,src.clientY-startY)<8)edMaximize();
+    if(dist<8)edMaximize();
   }
   btn.addEventListener('pointerdown',onDown,{passive:false});
   window.addEventListener('pointermove',onMove,{passive:false});
@@ -44392,6 +44463,26 @@ async function _edRunDiag() {
   L(' "OCULTANDO" antes = el guard se puso a true en otro sitio sin llegar a');
   L(' ocultar de verdad. Si esta sección sale VACÍA durante un tramo en el que sí');
   L(' hubo alternancia = la función ni se está llamando en ese tramo.)');
+  L('');
+
+  // ── SECUENCIA COMPLETA DE RESTAURAR (temporal, investigando "hace falta
+  // tocar dos veces" y "el bocadillo queda tapado por el panel") ──
+  L('── SECUENCIA DE RESTAURAR — toque → edMaximize → panel/bocadillo (últimos '+(window._edRestoreLog?.length||0)+' pasos) ──');
+  (window._edRestoreLog||[]).forEach(e => {
+    const extra = Object.keys(e).filter(k => k!=='t' && k!=='step').map(k => k+'='+e[k]).join('  ');
+    L('  [t+' + e.t + 'ms] ' + e.step + (extra ? '\n      ' + extra : ''));
+  });
+  L('(Si por cada toque real solo aparece UN "onDown" y UN "onUp" con type=');
+  L(' pointerdown/pointerup (nunca también touchstart/touchend para el mismo toque),');
+  L(' el doble disparo pointer+touch no es el problema aquí. Si "onUp" con');
+  L(' llamaraMaximize=true no va seguido de "edMaximize:inicio", algo external está');
+  L(' llamando a edMaximize() por su cuenta o el propio edMaximize no arranca. Si hay');
+  L(' UN "edMaximize:inicio" pero el toque parece no hacer nada visible, comparar');
+  L(' panelRect y screenBottomBocadillo/screenTopBocadillo en "despues-de-');
+  L(' reencuadrar": si screenBottomBocadillo < panelRect.bottom, el bocadillo está');
+  L(' literalmente por encima del borde del panel = tapado por él. Si aparecen DOS');
+  L(' "edMaximize:inicio" para lo que fueron dos toques del usuario, entonces sí hacen');
+  L(' falta los dos toques de verdad, y hay que mirar por qué el primero no basta.)');
   L('');
   L('── Eventos pointermove CRUDOS recibidos por gesto (antes de cualquier filtro) ──');
   L('Si aquí solo hay 1 por gesto, el dedo se mueve y el navegador NO manda más');
