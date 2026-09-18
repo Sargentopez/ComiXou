@@ -6391,29 +6391,44 @@ function _edFocusOnLayer(la, instant) {
   const objW  = (la.width  || 0.1) * pw;
   const objH  = (la.height || 0.1) * ph;
   const MARGIN = 0.75;
-  // Texto/bocadillo (v40.24): NO encajar la altura real, que crece sin techo
-  // con cada línea nueva y acababa encogiendo la letra hasta ilegible en
-  // bocadillos largos ("el tamaño de lectura debe mantenerse", reportado
-  // por Alberto — no hace falta ver el bocadillo entero, con 2-3 líneas
-  // basta). En su lugar, la altura para efectos de zoom se trata como si
-  // tuviera como mucho REF_LINES líneas — misma fórmula de interlineado que
-  // measure()/resizeToFitText (fontSize*1.2) más el padding — así el zoom
-  // deja de encoger a partir de ahí; el resto de líneas quedan fuera de
-  // vista en vez de hacerse más pequeñas. Con 1-2 líneas (altura real por
-  // debajo del techo) no cambia nada respecto a antes. Solo afecta a texto/
-  // bocadillo — el resto de tipos (imagen, dibujo...) sigue encajando su
-  // altura real, que es lo correcto al seleccionarlos.
+  // Texto/bocadillo (v40.28): el zoom mientras se edita/crea ya NO se basa
+  // en "encajar" nada — siempre es el mismo, el tamaño de lectura ESTÁNDAR
+  // que usa el Editor de Textos en su propia vista de edición (.td-editor,
+  // font-size:1.05rem — ver TD_BODY_SIZE/_tdSanitizePastedHTML en
+  // editor-textdoc.js, que documenta esos 1.05rem exactos). Leído en vivo
+  // contra el font-size raíz actual, no fijado a 16.8px, para no
+  // desincronizarse si ese CSS cambiara algún día. Sea cual sea el
+  // fontSize propio del bocadillo (8 a 120) o su ancho/alto en ese
+  // instante, la cámara se ajusta para que SE VEA a este tamaño — así lo
+  // pidió Alberto: "sea cual sea el tamaño que se aplique al bocadillo
+  // cuando se haga OK, debe verse con este tamaño estándar al crearse o
+  // editarse". El ancho sigue actuando como tope de seguridad (una sola
+  // línea larguísima no debe desbordar la pantalla), nunca la altura — eso
+  // ya lo resuelve _edFollowTextCursor paneando, no encogiendo.
   const _isTextyLa = la.type==='text' || la.type==='bubble';
+  const ED_TEXT_EDIT_STD_PX = 1.05 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+  // Ventana de REF_LINES: ya no decide el zoom (ver arriba) — sigue
+  // decidiendo SOLO el punto de anclaje vertical del paneo más abajo, para
+  // que un bocadillo largo muestre sus últimas líneas en vez de partir por
+  // el centro geométrico del objeto entero.
   const REF_LINES = 3;
   const refH = _isTextyLa ? (REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2) : Infinity;
   const capObjH = Math.min(objH, refH);
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
   const zForH  = (freeH * MARGIN) / Math.max(capObjH, 1);
+  const zForReading = ED_TEXT_EDIT_STD_PX / Math.max(la.fontSize || 16, 1);
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños
-  const targetZ = Math.min(Math.min(zForW, zForH), 4);
+  const targetZ = _isTextyLa
+    ? Math.min(zForReading, zForW, 4)
+    : Math.min(Math.min(zForW, zForH), 4);
   const currentlyFitsW = objW    * edCamera.z <= freeW * MARGIN;
   const currentlyFitsH = capObjH * edCamera.z <= freeH * MARGIN;
-  const newZ = (currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2);
+  // Texto/bocadillo: SIEMPRE el tamaño estándar, sin la excepción de "si ya
+  // cabe no lo toques" — lo que "ya cabía" antes podía ser cualquier zoom
+  // heredado de antes de entrar a editar, no necesariamente el estándar.
+  const newZ = _isTextyLa
+    ? Math.max(targetZ, 0.2)
+    : ((currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2));
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
