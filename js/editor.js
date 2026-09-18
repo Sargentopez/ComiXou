@@ -1364,7 +1364,7 @@ let edPinchCenter0 = null, edPinchCamera0 = null;
 let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
-let _ppKbCollapseDone = false;  // true tras auto-colapsar el panel por teclado+horizontal — no repetir si el usuario lo reabre a mano (v40.21)
+let _ppKbHeaderHideDone = false; // true tras auto-ocultar la cabecera completa (edMinimize) por falta real de espacio en horizontal — no repetir si el usuario la restaura a mano (v40.30, antes solo colapsaba el panel en v40.21)
 let _edTextEditZoomLocked = false; // true en cuanto se teclea el primer carácter de la sesión de edición — a partir de ahí el zoom queda fijo, solo se paniza (v40.25)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
@@ -6345,7 +6345,62 @@ function _ppReadKeyboardH() {
   const probeH = _ppKbProbeEl().getBoundingClientRect().height || 0;
   return Math.max(apiH, probeH);
 }
-const _PP_KB_MIN_H = 80; // px — por debajo de esto, ruido / teclado cerrado (mismo umbral que utils.js); usado en _ppKbSettle para decidir el auto-colapso en horizontal
+
+// Decide si hay que ocultar la cabecera completa (edMinimize) porque, ni
+// siquiera con REF_LINES, el hueco actual llega al tamaño de lectura
+// estándar — y si hace falta, la oculta (v40.30, Alberto: "colapsar el
+// panel no es suficiente... será mejor directamente ocultar toda la
+// cabecera, lo mismo que hace el botón ocultar" — edMinimize ya hace
+// exactamente eso, no hay que reinventarlo). Devuelve true si acaba de
+// ocultarla AHORA MISMO, para que quien llame sepa que debe reencuadrar
+// desde cero (zoom+paneo), no solo panear.
+//
+// A propósito INDEPENDIENTE de _edTextEditZoomLocked: esto no es "el texto
+// creció al escribir" (lo que el bloqueo evita, con razón) — es "ya no hay
+// sitio", y puede volver a pasar cada vez que se reanuda la escritura tras
+// restaurar la cabecera a mano (Alberto: "si se vuelve a tocar el texto,
+// vuelva a ocultarse la cabecera entera"). Por eso _ppKbSettle la llama
+// ANTES de mirar el bloqueo, no después.
+//
+// Comprobado con la geometría real (freeH actual contra lo que pide
+// zForReading), no solo por orientación: "el problema solo existe en
+// móviles... debe comprobarse que sea necesario" (Alberto) — una tablet en
+// horizontal, con mucha más altura disponible, no entra en esta rama
+// aunque esté en horizontal.
+function _edMaybeHideHeaderForTyping(la) {
+  if (!la || !edCanvas) return false;
+  const _isTextyLa = la.type==='text' || la.type==='bubble';
+  if (!_isTextyLa || _ppKbHeaderHideDone || edMinimized) return false;
+  if (window.innerWidth <= window.innerHeight) return false; // solo horizontal
+  const ph = edPageH();
+  const objH = (la.height || 0.1) * ph;
+  const REF_LINES = 3;
+  const capObjH = Math.min(objH, REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2);
+  const ED_TEXT_EDIT_STD_PX = 1.05 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+  const zForReading = ED_TEXT_EDIT_STD_PX / Math.max(la.fontSize || 16, 1);
+  const canvasRect = edCanvas.getBoundingClientRect();
+  const panel = $('edOptionsPanel');
+  const _panelOpen      = panel && panel.classList.contains('open');
+  const _panelCollapsed = panel && panel.classList.contains('panel-collapsed');
+  const _panelHidden    = panel && panel.style.visibility === 'hidden';
+  const panelBottom = (_panelOpen && !_panelCollapsed && !_panelHidden)
+    ? panel.getBoundingClientRect().bottom : canvasRect.top;
+  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+  const freeH = Math.max(freeBottom - panelBottom, 80);
+  const zForHNow = (freeH * 0.75) / Math.max(capObjH, 1);
+  if (zForHNow >= zForReading) return false; // ya hay sitio de sobra (p.ej. tablet)
+  _ppKbHeaderHideDone = true;
+  edMinimize();
+  // Botón de restaurar (Alberto: "debe estar visible en el hueco"):
+  // edMinimize lo deja en edFloatX/edFloatY, que puede ser cualquier sitio
+  // si Alberto lo arrastró antes (incluso bajo el teclado) — para este
+  // disparo automático tiene que estar SÍ o SÍ visible mientras se sigue
+  // escribiendo. Esquina superior izquierda: tras ocultar la cabecera es
+  // el único punto siempre libre de topbar/menú/panel y del propio teclado.
+  const btn = $('edFloatBtn');
+  if (btn) { btn.style.left = '8px'; btn.style.top = '8px'; }
+  return true;
+}
 
 /* ── Centra la cámara en el objeto al abrir panel, dejándolo en el área libre ── */
 function _edFocusOnLayer(la, instant) {
@@ -6353,44 +6408,12 @@ function _edFocusOnLayer(la, instant) {
   if (_edFocusDone) return;
   _edFocusDone = true;
   const pw = edPageW(), ph = edPageH();
-  const canvasRect = edCanvas.getBoundingClientRect();
-  const panel = $('edOptionsPanel');
-  // Panel colapsado (panel-collapsed): no ocupa espacio vertical útil — usar solo
-  // la barra flotante como referencia. Panel abierto y visible: usar su bottom.
-  const _panelOpen       = panel && panel.classList.contains('open');
-  const _panelCollapsed  = panel && panel.classList.contains('panel-collapsed');
-  const panelBottom = (_panelOpen && !_panelCollapsed)
-    ? panel.getBoundingClientRect().bottom : canvasRect.top;
-  // Barras flotantes (edDrawBar / edShapeBar): solo contar si están visibles
-  // y tienen dimensiones reales (evitar valores erróneos durante la transición de collapse).
-  let floatBottom = 0;
-  ['edDrawBar','edShapeBar'].forEach(id => {
-    const bar = $(id);
-    if (!bar || !bar.classList.contains('visible')) return;
-    const r = bar.getBoundingClientRect();
-    // Ignorar si la barra está fuera de la pantalla o tiene tamaño cero
-    if (r.width < 4 || r.height < 4) return;
-    // Solo contar si está por encima del centro del canvas (es una barra superior/lateral)
-    // Una barra posicionada más abajo que el centro del canvas no restringe el espacio libre
-    const canvasMidY = canvasRect.top + canvasRect.height / 2;
-    if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
-  });
-  const freeTop    = Math.max(panelBottom, floatBottom);
-  // Teclado virtual (v40.21): si hay uno abierto (edición de texto/bocadillo
-  // en curso), esa franja no es espacio libre de verdad — de lo contrario el
-  // objeto se centra sobre un área que en pantalla real queda tapada. Lectura
-  // siempre fresca (0 de forma natural cuando no hay edición de texto en
-  // marcha, así que no hace falta condicionar esto al tipo de capa).
-  const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
-  const freeLeft   = canvasRect.left;
-  const freeRight  = canvasRect.right;
-  const freeW = Math.max(freeRight - freeLeft, 80);
-  const freeH = Math.max(freeBottom - freeTop, 80);
   const objCx = edMarginX() + la.x * pw;
   const objCy = edMarginY() + la.y * ph;
   const objW  = (la.width  || 0.1) * pw;
   const objH  = (la.height || 0.1) * ph;
   const MARGIN = 0.75;
+  const _isTextyLa = la.type==='text' || la.type==='bubble';
   // Texto/bocadillo (v40.28): el zoom mientras se edita/crea ya NO se basa
   // en "encajar" nada — siempre es el mismo, el tamaño de lectura ESTÁNDAR
   // que usa el Editor de Textos en su propia vista de edición (.td-editor,
@@ -6405,18 +6428,73 @@ function _edFocusOnLayer(la, instant) {
   // editarse". El ancho sigue actuando como tope de seguridad (una sola
   // línea larguísima no debe desbordar la pantalla), nunca la altura — eso
   // ya lo resuelve _edFollowTextCursor paneando, no encogiendo.
-  const _isTextyLa = la.type==='text' || la.type==='bubble';
   const ED_TEXT_EDIT_STD_PX = 1.05 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
-  // Ventana de REF_LINES: ya no decide el zoom (ver arriba) — sigue
-  // decidiendo SOLO el punto de anclaje vertical del paneo más abajo, para
-  // que un bocadillo largo muestre sus últimas líneas en vez de partir por
-  // el centro geométrico del objeto entero.
+  const zForReading = ED_TEXT_EDIT_STD_PX / Math.max(la.fontSize || 16, 1);
+  // Ventana de REF_LINES: no decide el zoom (ver arriba) — decide SOLO el
+  // punto de anclaje vertical del paneo más abajo, para que un bocadillo
+  // largo muestre sus últimas líneas en vez de partir por el centro
+  // geométrico del objeto entero.
   const REF_LINES = 3;
   const refH = _isTextyLa ? (REF_LINES*(la.fontSize||16)*1.2 + (la.padding||0)*2) : Infinity;
   const capObjH = Math.min(objH, refH);
+
+  // Hueco libre en pantalla — función aparte para poder recalcularlo si
+  // hace falta ocultar la cabecera a media llamada (v40.30, ver más abajo).
+  function computeFree(){
+    const canvasRect = edCanvas.getBoundingClientRect();
+    const panel = $('edOptionsPanel');
+    // Panel colapsado (panel-collapsed) o oculto por edMinimize
+    // (visibility:hidden, que NO quita la clase 'open' — mismo criterio que
+    // optsH en edFitCanvas, v40.30): ninguno de los dos ocupa espacio
+    // vertical útil — usar solo la barra flotante como referencia. Panel
+    // abierto y realmente visible: usar su bottom.
+    const _panelOpen       = panel && panel.classList.contains('open');
+    const _panelCollapsed  = panel && panel.classList.contains('panel-collapsed');
+    const _panelHidden     = panel && panel.style.visibility === 'hidden';
+    const panelBottom = (_panelOpen && !_panelCollapsed && !_panelHidden)
+      ? panel.getBoundingClientRect().bottom : canvasRect.top;
+    // Barras flotantes (edDrawBar / edShapeBar): solo contar si están visibles
+    // y tienen dimensiones reales (evitar valores erróneos durante la transición de collapse).
+    let floatBottom = 0;
+    ['edDrawBar','edShapeBar'].forEach(id => {
+      const bar = $(id);
+      if (!bar || !bar.classList.contains('visible')) return;
+      const r = bar.getBoundingClientRect();
+      // Ignorar si la barra está fuera de la pantalla o tiene tamaño cero
+      if (r.width < 4 || r.height < 4) return;
+      // Solo contar si está por encima del centro del canvas (es una barra superior/lateral)
+      // Una barra posicionada más abajo que el centro del canvas no restringe el espacio libre
+      const canvasMidY = canvasRect.top + canvasRect.height / 2;
+      if (r.bottom <= canvasMidY + 40) floatBottom = Math.max(floatBottom, r.bottom);
+    });
+    const freeTop = Math.max(panelBottom, floatBottom);
+    // Teclado virtual (v40.21): si hay uno abierto (edición de texto/bocadillo
+    // en curso), esa franja no es espacio libre de verdad — de lo contrario el
+    // objeto se centra sobre un área que en pantalla real queda tapada. Lectura
+    // siempre fresca (0 de forma natural cuando no hay edición de texto en
+    // marcha, así que no hace falta condicionar esto al tipo de capa).
+    const freeBottom = canvasRect.bottom - _ppReadKeyboardH();
+    const freeLeft  = canvasRect.left;
+    const freeRight = canvasRect.right;
+    return {
+      canvasRect, freeTop, freeBottom, freeLeft, freeRight,
+      freeW: Math.max(freeRight - freeLeft, 80),
+      freeH: Math.max(freeBottom - freeTop, 80),
+    };
+  }
+  let free = computeFree();
+
+  // Cabecera completa (v40.30): colapsar solo el panel no bastaba en
+  // horizontal (Alberto) — la decisión y la acción viven en
+  // _edMaybeHideHeaderForTyping (más abajo), reutilizable también desde
+  // _ppKbSettle sin depender de _edTextEditZoomLocked.
+  if (_edMaybeHideHeaderForTyping(la)) {
+    free = computeFree(); // topbar/menú/panel ya no cuentan — recalcular con el hueco real
+  }
+  const { canvasRect, freeTop, freeBottom, freeLeft, freeRight, freeW, freeH } = free;
+
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
   const zForH  = (freeH * MARGIN) / Math.max(capObjH, 1);
-  const zForReading = ED_TEXT_EDIT_STD_PX / Math.max(la.fontSize || 16, 1);
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños
   const targetZ = _isTextyLa
     ? Math.min(zForReading, zForW, 4)
@@ -6468,24 +6546,26 @@ function _edFocusOnLayer(la, instant) {
 }
 
 /* ── Reacciona a un cambio de teclado mientras se edita texto/bocadillo
-   (v40.21): en horizontal, panel+teclado no dejan hueco útil de canvas —
-   colapsa el panel una sola vez por sesión de edición (igual que pulsar ▲ a
-   mano) y siempre re-centra la capa con el hueco libre ya actualizado.
-   Llamado desde los reintentos al enfocar #edInlineTextEdit (el teclado
-   puede tardar en reportar su alto real) y desde geometrychange
-   (cambios posteriores, p.ej. girar el móvil a media edición). */
+   (v40.21): re-centra la capa con el hueco libre ya actualizado — incluye
+   decidir si hace falta ocultar la cabecera entera por falta de espacio en
+   horizontal (ver _edFocusOnLayer, v40.30). Llamado desde los reintentos al
+   enfocar #edInlineTextEdit (el teclado puede tardar en reportar su alto
+   real) y desde geometrychange (cambios posteriores, p.ej. girar el móvil a
+   media edición). */
 function _ppKbSettle(la) {
   if (edSelectedIdx < 0 || edLayers[edSelectedIdx] !== la) return; // ya no es la capa activa
   const panel = $('edOptionsPanel');
   if (!panel) return;
-  const kbH = _ppReadKeyboardH();
-  const isLandscape = window.innerWidth > window.innerHeight;
-  const isExpanded = panel.classList.contains('open') && !panel.classList.contains('panel-collapsed');
-  if (!_ppKbCollapseDone && isLandscape && kbH > _PP_KB_MIN_H && isExpanded) {
-    _ppKbCollapseDone = true;
-    panel.classList.add('panel-collapsed');
-    _edPanelTabShow();
-    edFitCanvas();
+  // Ocultar cabecera (v40.30): se comprueba SIEMPRE, incluso con el zoom ya
+  // bloqueado por haber escrito — no es "el texto creció", es "ya no hay
+  // sitio", y puede repetirse cada vez que se reanuda la escritura tras
+  // restaurar la cabecera a mano. Si acaba de ocultarla, el hueco libre
+  // cambió por completo — reencuadrar de cero (zoom+paneo), sin mirar el
+  // bloqueo, en vez de solo panear con el zoom de antes.
+  if (_edMaybeHideHeaderForTyping(la)) {
+    _edFocusDone = false;
+    _edFocusOnLayer(la, true);
+    return;
   }
   // Instantáneo (v40.23): los reintentos [50,200,400,650]ms caen más
   // seguidos que los 220ms de la animación — con la versión animada, un
@@ -21929,7 +22009,7 @@ function edRenderOptionsPanel(mode){
       // antes de que el teclado termine de abrirse/reportar su alto real —
       // mismo patrón de reintentos ya probado en editor-textdoc.js/utils.js
       // para este mismo problema, no fiarse de una sola lectura.
-      _ppKbCollapseDone = false;
+      _ppKbHeaderHideDone = false;
       [50, 200, 400, 650].forEach(ms => setTimeout(() => _ppKbSettle(la), ms));
     } else if(_edInlineTextEditFor){
       _edInlineTextEditEnd();
@@ -22578,6 +22658,20 @@ function edMaximize(keepBar=false){
       _edBarClampToScreen();
       if($('edOptionsPanel')?.classList.contains('panel-collapsed')) _edPanelTabShow();
     });
+  }
+  // Bocadillo/texto en edición (v40.30): si la cabecera se había ocultado
+  // para poder escribir en horizontal, al restaurarla el hueco libre
+  // cambia por completo (vuelve el panel, y al no quedar nada enfocado el
+  // teclado se cierra solo) — reencuadrar de cero para que el bocadillo
+  // siga siendo visible (Alberto), y soltar el guard de auto-ocultar para
+  // que, si se vuelve a tocar el texto y el teclado reabre, pueda volver a
+  // ocultarse sola (Alberto: "si se vuelve a tocar el texto, vuelva a
+  // ocultarse la cabecera entera"). _edFocusOnLayer ya sabe evaluar por su
+  // cuenta si hace falta o no (p. ej. si mientras tanto se giró a vertical).
+  if (_edInlineTextEditFor) {
+    _ppKbHeaderHideDone = false;
+    _edFocusDone = false;
+    _edFocusOnLayer(_edInlineTextEditFor, true);
   }
 }
 // Activa visualmente el modo de edición de nodos (V⟺C) dentro del panel,
