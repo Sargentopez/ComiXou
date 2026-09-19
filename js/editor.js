@@ -22946,10 +22946,17 @@ function edInitFloatDrag(){
     e.preventDefault();
   }
   function onUp(e){
+    // v40.38 (corrige v40.37): onUp está en window (para poder soltar el
+    // arrastre en cualquier punto), así que se dispara con CUALQUIER toque
+    // en toda la app — registrar antes de comprobar "dragging" llenaba el
+    // log de ruido de toques ajenos al botón (escribir, tocar el lienzo...),
+    // con distancias sin sentido, y probablemente empujaba fuera del límite
+    // de 150 entradas los toques reales sobre el botón. Comprobar dragging
+    // ANTES de registrar nada.
+    if(!dragging)return;
     const src=e.changedTouches?e.changedTouches[0]:e;
     const dist=Math.hypot(src.clientX-startX,src.clientY-startY);
-    _edRestoreMark('onUp', {type:e.type, dragging, dist:+dist.toFixed(1), llamaraMaximize:(dragging && dist<8)});
-    if(!dragging)return;
+    _edRestoreMark('onUp', {type:e.type, dist:+dist.toFixed(1), llamaraMaximize:(dist<8)});
     dragging=false;
     // Si apenas se movió, es un click
     if(dist<8)edMaximize();
