@@ -1370,7 +1370,10 @@ let _edTextEditMaxKbH = 0; // altura de teclado "estabilizada" (máximo visto) d
 let _edSuppressAutoHide = false; // true durante la llamada síncrona de edMaximize a _edFocusOnLayer — evita que _edMaybeHideHeaderForTyping vuelva a ocultar la cabecera que se acaba de restaurar, sin depender de que la lectura del teclado ya esté al día (v40.34, corrige v40.33)
 let _edHeaderAutoHidden = false; // true SOLO mientras la cabecera esté oculta porque la ocultó _edMaybeHideHeaderForTyping (falta de sitio al escribir en horizontal) — NO si la ocultó el usuario con OCULTAR. Es lo único que se restaura solo al volver a vertical (v40.41). A diferencia de _ppKbHeaderHideDone, no se reinicia al repintar el panel.
 let _edTextEditLandscape = null; // orientación (innerWidth>innerHeight) para la que se evaluó por última vez la disposición de la edición in situ de texto/bocadillo; null si no hay sesión — ver _edTextEditOnOrientation (v40.41)
-let _edRotateSettleSeq = 0;      // invalida los reintentos de asentamiento de un giro anterior cuando llega otro giro o termina la edición (v40.41)
+let _edTextEditWatchTimer = null; // vigilante (setInterval) activo mientras dura una sesión de edición in situ — ver _edTextEditWatchTick (v40.42)
+let _edRotateSettleSig = '';     // "firma" del hueco libre (ventana, teclado, panel, lienzo, cabecera) con la que se encuadró por última vez tras un giro (v40.42)
+let _edRotateSettleQuiet = 0;    // instante hasta el que, sin cambios, se da por asentado el hueco tras un giro (v40.42)
+let _edRotateSettleHard = 0;     // tope duro del asentamiento tras un giro, cambie o no el hueco (v40.42)
 let _edTextEditKbSettling = false; // true tras un giro hasta la siguiente pulsación: _edStableKbH usa la lectura ACTUAL del teclado en vez del máximo visto, que sería el de la orientación anterior (v40.41)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
@@ -6461,6 +6464,60 @@ function _edHideCheckMark(reason, extra) {
   window._edHideCheckLog.push({ t: Math.round(performance.now()), reason, ...extra });
   if (window._edHideCheckLog.length > 150) window._edHideCheckLog.shift();
 }
+
+// ── DIAGNÓSTICO TEMPORAL (v40.42): giro del dispositivo mientras se escribe ──
+// Para investigar "al girar la cabecera sigue visible / el bocadillo queda
+// tapado" en el móvil real (v40.41 no lo resolvió y desde el ordenador no se
+// puede reproducir el orden ni la temporización reales de los eventos). Solo
+// MIDE y guarda en window._edRotateLog — no cambia ningún comportamiento. Se
+// lee desde el botón de diagnóstico (🩺): registra CADA evento de giro que
+// llega al navegador (llegue o no a la lógica del editor), el estado de la
+// cabecera/panel/teclado en ese instante, y las decisiones de la rutina.
+window._edRotateLog = [];
+function _edCallers(skip) {
+  try {
+    return (new Error().stack || '').split('\n').slice(skip || 2, (skip || 2) + 4)
+      .map(l => (l.match(/at (?:async )?([^ (]+)/) || [, '?'])[1]).join('<');
+  } catch (_) { return '?'; }
+}
+function _edRotateMark(ev, extra) {
+  try {
+    const panel = document.getElementById('edOptionsPanel');
+    const pr = panel ? panel.getBoundingClientRect() : null;
+    const cr = (typeof edCanvas !== 'undefined' && edCanvas) ? edCanvas.getBoundingClientRect() : null;
+    const vv = window.visualViewport;
+    let kbApi = '-', kbProbe = '-';
+    try { if ('virtualKeyboard' in navigator) kbApi = Math.round(navigator.virtualKeyboard.boundingRect.height || 0); } catch (_) {}
+    try { kbProbe = Math.round(_ppKbProbeEl().getBoundingClientRect().height || 0); } catch (_) {}
+    window._edRotateLog.push({
+      t: Math.round(performance.now()), ev,
+      ventana: window.innerWidth + 'x' + window.innerHeight,
+      orient: (screen.orientation && screen.orientation.type) || ('window.orientation=' + window.orientation),
+      vv: vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) : '-',
+      tecladoApi: kbApi, tecladoSonda: kbProbe,
+      sesion: _edInlineTextEditFor ? 1 : 0, land: _edTextEditLandscape === null ? '-' : (_edTextEditLandscape ? 'H' : 'V'),
+      oculta: edMinimized ? 1 : 0, auto: _edHeaderAutoHidden ? 1 : 0, hideDone: _ppKbHeaderHideDone ? 1 : 0,
+      supp: _edSuppressAutoHide ? 1 : 0, settling: _edTextEditKbSettling ? 1 : 0,
+      panel: panel ? ((panel.classList.contains('open') ? 'abierto' : 'cerrado') + (panel.classList.contains('panel-collapsed') ? '+colapsado' : '')
+        + ' vis=' + (panel.style.visibility || 'visible') + ' bottom=' + Math.round(pr.bottom) + ' alto=' + Math.round(pr.height)) : '-',
+      lienzo: cr ? Math.round(cr.top) + '..' + Math.round(cr.bottom) : '-',
+      cam: (typeof edCamera !== 'undefined' && edCamera) ? [edCamera.x, edCamera.y, edCamera.z].map(n => +n.toFixed(1)).join(',') : '-',
+      ...(extra || {})
+    });
+    if (window._edRotateLog.length > 200) window._edRotateLog.shift();
+  } catch (_) {}
+}
+// Eventos de giro CRUDOS (a nivel de módulo, independientes del editor): si
+// aquí aparece un giro pero luego no hay ningún "ROUTINE:giro", el evento
+// llegó y la lógica no actuó; si no aparece nada, el navegador no lo mandó.
+(function _edRotateRawListeners() {
+  const on = (name) => () => { if (typeof edCanvas !== 'undefined' && edCanvas && document.getElementById('editorShell')) _edRotateMark('EVT:' + name); };
+  window.addEventListener('resize', on('resize'));
+  window.addEventListener('orientationchange', on('orientationchange'));
+  try { if (window.visualViewport) window.visualViewport.addEventListener('resize', on('visualViewport-resize')); } catch (_) {}
+  try { if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', on('screen.orientation-change')); } catch (_) {}
+  try { if ('virtualKeyboard' in navigator) navigator.virtualKeyboard.addEventListener('geometrychange', on('geometrychange')); } catch (_) {}
+})();
 function _edMaybeHideHeaderForTyping(la) {
   if (!la || !edCanvas) { _edHideCheckMark('sin-la-o-canvas'); return false; }
   const _isTextyLa = la.type==='text' || la.type==='bubble';
@@ -6718,39 +6775,63 @@ function _ppKbSettle(la, source) {
 }
 
 // Giro del dispositivo MIENTRAS se escribe en un bocadillo/caja de texto
-// (v40.41). Petición de Alberto: en móvil el espacio es muy reducido, por eso
-// al escribir en horizontal se oculta la cabecera con el panel — y esa
-// disposición (vertical: todo visible / horizontal: cabecera y panel fuera)
-// debe cambiar SOLA al girar el dispositivo, en los dos sentidos.
+// (v40.41, rehecho en v40.42). Petición de Alberto: en móvil el espacio es muy
+// reducido, por eso al escribir en horizontal se oculta la cabecera con el
+// panel — y esa disposición (vertical: todo visible / horizontal: cabecera y
+// panel fuera) debe cambiar SOLA al girar el dispositivo, en los dos sentidos.
 //
-// Qué fallaba (reproducido con Playwright, no supuesto): (1) 'orientationchange'
-// hacía edFitCanvas(true) — reencuadrar la PÁGINA entera — también durante la
-// edición, pisando el encuadre de lectura del bocadillo: en horizontal
-// quedaba el borde inferior bajo el teclado y en vertical con el doble del
-// zoom de lectura; (2) nada restauraba la cabecera al volver a vertical.
+// Qué fallaba en v40.40 (reproducido con Playwright, no supuesto): (1)
+// 'orientationchange' hacía edFitCanvas(true) — reencuadrar la PÁGINA entera —
+// también durante la edición, pisando el encuadre de lectura del bocadillo;
+// (2) nada restauraba la cabecera al volver a vertical.
 //
-// Cómo (sin inventar nada nuevo): se reutiliza tal cual la lógica de
-// encuadre que ya usa la apertura de la edición — _edFocusOnLayer decide por
-// geometría real si en horizontal hace falta ocultar la cabecera
-// (_edMaybeHideHeaderForTyping) y centra el bocadillo en el hueco libre al
-// tamaño de lectura; para volver a vertical se reutiliza edMaximize. Solo se
-// restaura si la cabecera la ocultó ESTA lógica automática (_edHeaderAutoHidden);
-// si Alberto la ocultó a mano con OCULTAR, se respeta. El teclado NO se cierra
-// (keepKeyboard): quien sigue escribiendo al girar debe poder seguir.
+// Qué falló en v40.41 (Alberto, dispositivo real: "al girar la cabecera sigue
+// visible… al volver a vertical no puedo ver el bocadillo"): esa versión
+// aplicaba el cambio UNA vez, al llegar un evento de giro, y luego reintentaba
+// durante 650 ms fijos. Depende de que (a) el evento llegue, y a tiempo, (b)
+// las banderas de guarda (_ppKbHeaderHideDone, _edSuppressAutoHide) estén al
+// día, (c) el teclado informe su altura nueva dentro de esos 650 ms — justo lo
+// que los datos reales de este móvil ya habían mostrado poco fiable (ver
+// v40.35: "el teclado alcanza su alto final DESPUÉS de que los reintentos
+// hayan terminado"). Reproducido en emulación fiel al móvil (360×806 ↔ 806×360,
+// táctil): sin eventos → la cabecera no se oculta; banderas atascadas → no se
+// oculta; teclado tardío → el bocadillo queda bajo el teclado. Mismos síntomas.
 //
-// Idempotente: Android puede mandar resize, orientationchange y
-// geometrychange en cualquier orden y varias veces por giro — solo actúa
-// cuando la orientación actual difiere de la última evaluada, así que da igual
-// cuál llegue primero. Llamada desde _edResizeFn y _edOrientFn (más abajo, en
-// EditorView_init). Devuelve true si detectó un giro y lo aplicó.
+// Cómo ahora (mecanismo distinto, no un retoque del anterior):
+//  1. NO se depende de los eventos: un vigilante (_edTextEditWatchTick, cada
+//     150 ms mientras dura la sesión de edición) compara la orientación real
+//     de la ventana con la última evaluada. Los eventos resize/orientationchange
+//     siguen llamando a esta función (llegan antes), pero si no llegan, o
+//     llegan con medidas viejas, el vigilante lo detecta igualmente. Coste:
+//     leer dos números por tic.
+//  2. NO hay ventana fija: tras un giro se reencuadra cada vez que CAMBIA la
+//     "firma" del hueco libre (ventana, teclado, panel, lienzo, cabecera —
+//     _edRotateSig) y se da por asentado cuando lleva 1,5 s sin cambiar (tope
+//     duro 6 s). Cubre el teclado que informa tarde y el panel que termina de
+//     recolocarse después del primer encuadre (transición CSS de 250 ms del
+//     propio panel, re-flujo al cambiar el ancho…).
+//  3. Las guardas se reinician al girar (nueva situación: puede volver a
+//     ocultarse y no debe bloquearla un valor atascado).
+//
+// Se sigue reutilizando la lógica de encuadre ya existente (_edFocusOnLayer /
+// _ppKbSettle — decide por geometría real si en horizontal hace falta ocultar
+// la cabecera y centra el bocadillo al tamaño de lectura) y edMaximize para
+// volver a vertical. Solo se restaura si la cabecera la ocultó ESTA lógica
+// automática (_edHeaderAutoHidden); si Alberto la ocultó a mano con OCULTAR, se
+// respeta. El teclado NO se cierra (keepKeyboard).
+//
+// Idempotente: solo actúa cuando la orientación actual difiere de la última
+// evaluada, así que da igual quién llegue primero (evento o vigilante).
+// Devuelve true si detectó un giro y lo aplicó.
 function _edTextEditOnOrientation(source) {
   const la = _edInlineTextEditFor;
   if (!la || !edCanvas) return false;
   const land = window.innerWidth > window.innerHeight; // mismo criterio que _edMaybeHideHeaderForTyping
   if (_edTextEditLandscape === land) return false;     // ya evaluada para esta orientación
   _edTextEditLandscape = land;
-  // El lienzo debe medir ya la ventana nueva: este evento puede llegar antes
-  // que 'resize' (edFitCanvas es idempotente — sin cambio de tamaño solo
+  _edRotateMark('ROUTINE:giro', { source, a: land ? 'HORIZONTAL' : 'VERTICAL', caller: _edCallers(3) });
+  // El lienzo debe medir ya la ventana nueva: quien llama puede haber llegado
+  // antes que 'resize' (edFitCanvas es idempotente — sin cambio de tamaño solo
   // reaplica estilos y repinta).
   edFitCanvas(false);
   // La altura de teclado "máxima vista" (_edStableKbH) era de la orientación
@@ -6761,25 +6842,77 @@ function _edTextEditOnOrientation(source) {
   // Zoom y encuadre se deciden de nuevo para el hueco nuevo, como al abrir la
   // edición; con la primera pulsación posterior vuelve a bloquearse el zoom.
   _edTextEditZoomLocked = false;
-  const mySeq = ++_edRotateSettleSeq;
+  // Guardas: un giro es una situación nueva. _edSuppressAutoHide solo debe
+  // estar activa durante la llamada síncrona de edMaximize a _edFocusOnLayer;
+  // si una excepción la dejó atascada, bloquearía para siempre la ocultación.
+  // _ppKbHeaderHideDone = "ya se ocultó en esta sesión y no se repite": al
+  // girar a horizontal con la cabecera visible no tiene sentido mantenerla.
+  _edSuppressAutoHide = false;
+  if (land && !edMinimized) _ppKbHeaderHideDone = false;
   if (!land && edMinimized && _edHeaderAutoHidden) {
     // Vertical con la cabecera ocultada automáticamente por falta de sitio en
     // horizontal: mostrarla de nuevo (con su panel) sin cerrar el teclado.
     // edMaximize ya reencuadra el bocadillo por dentro (_edFocusOnLayer).
+    _edRotateMark('ROUTINE:restaura-cabecera');
     edMaximize(false, true);
   } else {
     // Horizontal (puede ocultar la cabecera si ya no cabe) o vertical sin nada
     // que restaurar: solo reencuadrar.
+    _edRotateMark('ROUTINE:reencuadra');
     _edFocusDone = false;
     _edFocusOnLayer(la, true);
   }
-  // El teclado tarda en adoptar su altura de la nueva orientación (mismo
-  // problema y mismos reintentos que al abrir la edición, ver
-  // edRenderOptionsPanel('props')). Solo cuenta el último giro.
-  [50, 200, 400, 650].forEach(ms => setTimeout(() => {
-    if (mySeq === _edRotateSettleSeq) _ppKbSettle(la, 'rotate:' + (source || '?'));
-  }, ms));
+  // Asentamiento: el vigilante seguirá reencuadrando mientras el hueco libre
+  // siga cambiando (teclado que informa tarde, panel que se recoloca…).
+  const now = performance.now();
+  _edRotateSettleHard  = now + 6000;
+  _edRotateSettleQuiet = now + 1500;
+  _edRotateSettleSig   = _edRotateSig();
   return true;
+}
+
+// "Firma" del hueco libre para el escritor: todo lo que, al cambiar, obliga a
+// reencuadrar el bocadillo. Cadena comparable — no se interpreta.
+function _edRotateSig() {
+  const panel = document.getElementById('edOptionsPanel');
+  const cr = edCanvas.getBoundingClientRect();
+  const panelVisible = !!(panel && panel.classList.contains('open') &&
+    !panel.classList.contains('panel-collapsed') && panel.style.visibility !== 'hidden');
+  return [
+    window.innerWidth, window.innerHeight,
+    Math.round(_ppReadKeyboardH()),
+    panelVisible ? Math.round(panel.getBoundingClientRect().bottom) : -1,
+    Math.round(cr.top), Math.round(cr.bottom),
+    edMinimized ? 1 : 0
+  ].join('|');
+}
+
+// Vigilante de la edición in situ (v40.42): ver el comentario de
+// _edTextEditOnOrientation. Un solo temporizador por sesión (arranca en
+// _edInlineTextEditSync, se para en _edInlineTextEditEnd y, por si alguien
+// abandona el editor sin cerrar la sesión, se para solo si el editor ya no está).
+function _edTextEditWatchStart() {
+  _edTextEditWatchStop();
+  _edTextEditWatchTimer = setInterval(_edTextEditWatchTick, 150);
+}
+function _edTextEditWatchStop() {
+  if (_edTextEditWatchTimer) { clearInterval(_edTextEditWatchTimer); _edTextEditWatchTimer = null; }
+}
+function _edTextEditWatchTick() {
+  const la = _edInlineTextEditFor;
+  if (!la || !edCanvas || !document.getElementById('editorShell')) { _edTextEditWatchStop(); return; }
+  // 1) Giro no notificado (o notificado antes de tiempo) por ningún evento.
+  if (_edTextEditOnOrientation('vigilante')) return;
+  // 2) Asentamiento tras un giro: reencuadrar solo si el hueco libre ha cambiado.
+  if (!_edTextEditKbSettling) return;
+  const now = performance.now();
+  if (now > _edRotateSettleHard || now > _edRotateSettleQuiet) return; // ya asentado
+  const sig = _edRotateSig();
+  if (sig === _edRotateSettleSig) return;
+  _edRotateMark('SETTLE:reencuadre', { antes: _edRotateSettleSig, ahora: sig });
+  _ppKbSettle(la, 'settle');
+  _edRotateSettleSig = _edRotateSig(); // tras encuadrar: puede haber ocultado la cabecera
+  _edRotateSettleQuiet = Math.min(performance.now() + 1500, _edRotateSettleHard);
 }
 
 // Mantiene visible el cursor de escritura (aproximado como el borde inferior
@@ -20956,6 +21089,7 @@ function _edInlineTextEditSync(la) {
     // detectar después un giro del dispositivo — ver _edTextEditOnOrientation.
     _edTextEditLandscape = window.innerWidth > window.innerHeight;
     _edTextEditKbSettling = false;
+    _edTextEditWatchStart(); // v40.42: comprueba el estado real cada 150 ms — no depende de que lleguen los eventos de giro
     // Igual que hacía pp-text: al empezar a editar, si el texto actual es
     // el placeholder ("Escribe aquí"), arrancar con el campo vacío en vez
     // de obligar a borrarlo a mano.
@@ -21056,7 +21190,7 @@ function _edInlineTextEditEnd() {
   if (!_edInlineTextEditFor) return;
   _edInlineTextEditFor = null;
   _edTextEditLandscape = null; // v40.41: sin sesión no hay orientación de referencia
-  _edRotateSettleSeq++;        // v40.41: los reintentos de un giro aún pendientes ya no aplican
+  _edTextEditWatchStop();      // v40.42: sin sesión no hace falta vigilar el giro
   _edTextEditKbSettling = false;
   _edTextEditZoomLocked = false; // por simetría — la próxima sesión empieza limpia igualmente al crear el textarea
   $('editorShell')?.classList.remove('ed-typing');
@@ -22861,6 +22995,7 @@ function _edBarClampToScreen(){
 function edMinimize(){
   edMinimized=true;
   _edHeaderAutoHidden=false; // v40.41: por defecto manual (botón OCULTAR); _edMaybeHideHeaderForTyping la marca automática justo después de llamar aquí
+  _edRotateMark('edMinimize', { quien: _edCallers(2) }); // diagnóstico v40.42
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='none';
   if(top)top.style.display='none';
@@ -22922,6 +23057,7 @@ function edMaximize(keepBar=false, keepKeyboard=false){
   });
   edMinimized=false;
   _edHeaderAutoHidden=false; // v40.41: ya no está oculta, sea cual sea el motivo
+  _edRotateMark('edMaximize', { quien: _edCallers(2), keepKeyboard: keepKeyboard ? 1 : 0 }); // diagnóstico v40.42
   // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag)
   // si la edición de nodos (V⟺C) estaba activa en la barra flotante.
   const _wasCurveActiveInBar = $('esb-curve')?.dataset.curveActive === '1';
@@ -44624,6 +44760,28 @@ async function _edRunDiag() {
   L(' medio = el origen no es una carrera entre eventos, es esta única función.)');
   L('');
 
+  // ── GIRO DEL DISPOSITIVO MIENTRAS SE ESCRIBE (temporal, v40.42 — investigando
+  // "al girar la cabecera sigue visible / el bocadillo queda tapado") ──
+  L('── GIRO DEL DISPOSITIVO MIENTRAS SE ESCRIBE (últimas '+(window._edRotateLog?.length||0)+' entradas) ──');
+  L('Cada línea: [hora] EVENTO  ventana · orientación · visualViewport · teclado(api/sonda) · sesión land oculta auto hideDone supp settling · panel · lienzo · cámara');
+  L('EVT:* = evento CRUDO que llegó al navegador (llegue o no a la lógica del editor).');
+  L('ROUTINE:* = decisión de la rutina de giro. SETTLE:reencuadre = el vigilante reencuadró porque el hueco cambió.');
+  L('edMinimize / edMaximize = quién ocultó/restauró la cabecera (campo quien).');
+  (window._edRotateLog||[]).forEach(e => {
+    const base = ['t','ev','ventana','orient','vv','tecladoApi','tecladoSonda','sesion','land','oculta','auto','hideDone','supp','settling','panel','lienzo','cam'];
+    const extra = Object.keys(e).filter(k => !base.includes(k)).map(k => k+'='+(typeof e[k]==='object' ? JSON.stringify(e[k]) : e[k])).join(' ');
+    L('  [t+' + e.t + 'ms] ' + String(e.ev).padEnd(26) + ' ' + e.ventana + ' · ' + e.orient + ' · vv ' + e.vv
+      + ' · kb ' + e.tecladoApi + '/' + e.tecladoSonda
+      + ' · ses=' + e.sesion + ' land=' + e.land + ' oculta=' + e.oculta + ' auto=' + e.auto + ' hideDone=' + e.hideDone + ' supp=' + e.supp + ' settling=' + e.settling
+      + ' · panel ' + e.panel + ' · lienzo ' + e.lienzo + ' · cam ' + e.cam + (extra ? '  ' + extra : ''));
+  });
+  L('(Sin ningún EVT:resize/orientationchange tras girar = el navegador no los mandó.');
+  L(' EVT presentes pero sin "ROUTINE:giro" = ses=0 (no había sesión de edición) o land ya');
+  L(' coincidía con la orientación (medidas viejas). "ROUTINE:giro" sin "OCULTANDO" en la');
+  L(' sección de decisión = mirar cabe-de-sobra/guardas ahí. Un edMaximize con quien=... justo');
+  L(' después de ocultar = algo restauró la cabecera.)');
+  L('');
+
   // ── DECISIÓN DE OCULTAR CABECERA (temporal, investigando por qué no se
   // disparaba con panel+teclado ya sin hueco real) ──
   L('── DECISIÓN DE OCULTAR CABECERA (últimas '+(window._edHideCheckLog?.length||0)+' llamadas) ──');
@@ -44631,7 +44789,7 @@ async function _edRunDiag() {
   L('"OCULTANDO" = disparó edMinimize() en esa llamada. Cualquier otro motivo = no lo hizo.');
   (window._edHideCheckLog||[]).forEach(e => {
     const extra = Object.keys(e).filter(k => k!=='t' && k!=='reason').map(k => k+'='+e[k]).join(' ');
-    L('  ' + e.reason + (extra ? '  '+extra : ''));
+    L('  [t+' + e.t + 'ms] ' + e.reason + (extra ? '  '+extra : ''));   // hora añadida en v40.42 para poder cruzarla con la sección de GIRO
   });
   L('("cabe-de-sobra" con freeH pequeño y zForHNow cerca de zForReading = el');
   L(' umbral está mal calibrado. "ya-oculta-esta-sesion" repetido sin ningún');
