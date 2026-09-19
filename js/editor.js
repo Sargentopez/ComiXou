@@ -6618,7 +6618,27 @@ function _edFocusOnLayer(la, instant) {
   const objBottom = objCy + objH/2;
   const windowCy  = objBottom - capObjH/2;
   const newCamX = camOffX - objCx   * newZ;
-  const newCamY = camOffY - windowCy * newZ;
+  let newCamY = camOffY - windowCy * newZ;
+  // Margen de seguridad forzado (v40.39): visto con datos reales (🩺) que
+  // tras restaurar la cabecera, el borde superior del bocadillo a veces
+  // acababa a 0.3px del borde inferior del panel (289.2 vs panelBottom=
+  // 289.5) — visualmente indistinguible de estar tapado por él, aunque
+  // técnicamente no hubiera solape de capas (Alberto: "el bocadillo... queda
+  // tapado por el panel de propiedades al restaurarse"). En vez de seguir
+  // averiguando por qué el centrado no siempre deja el margen esperado,
+  // esto lo garantiza directamente: pase lo que pase con newCamY de arriba,
+  // el borde superior/inferior real del objeto (con el zoom ya decidido)
+  // nunca queda a menos de PAD del panel ni del teclado.
+  {
+    const _PAD_SAFETY = 20;
+    const _screenTopNow    = canvasRect.top + (objCy - objH/2) * newZ + newCamY;
+    const _screenBottomNow = canvasRect.top + (objCy + objH/2) * newZ + newCamY;
+    if (_screenTopNow < freeTop + _PAD_SAFETY) {
+      newCamY += (freeTop + _PAD_SAFETY) - _screenTopNow;
+    } else if (_screenBottomNow > freeBottom - _PAD_SAFETY) {
+      newCamY -= _screenBottomNow - (freeBottom - _PAD_SAFETY);
+    }
+  }
   const startX = edCamera.x, startY = edCamera.y, startZ = edCamera.z;
   // Modo instantáneo (v40.23): usado mientras se escribe, para recentrar en
   // cada pulsación sin arrastrar una animación de 220ms detrás de otra —
