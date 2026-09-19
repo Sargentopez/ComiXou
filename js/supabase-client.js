@@ -842,6 +842,12 @@ const SupabaseClient = (() => {
       social:         comic.social     || '',
       panel_count:    comic.panels?.length || 0,
       rules:          JSON.stringify(comic.editorData?._rules || []),
+      // v40.46: muestras de color de la obra (columna palette: text con JSON, igual
+      // que rules). Solo se envía si la obra tiene paleta: _upsert usa
+      // resolution=merge-duplicates, que NO toca las columnas ausentes del envío,
+      // así que una obra sin paleta — p.ej. guardada desde una versión anterior de
+      // la app — no pisa con NULL la que ya hubiera en la nube.
+      ...(Array.isArray(comic.editorData?._palette) ? { palette: JSON.stringify(comic.editorData._palette) } : {}),
       // Guardar en nube siempre vuelve la obra a borrador.
       // El admin deberá aprobarla de nuevo si se vuelve a publicar.
       published:      false,
@@ -979,6 +985,12 @@ const SupabaseClient = (() => {
     const work = works[0];
     let _projectRules = [];
     try { _projectRules = work.rules ? JSON.parse(work.rules) : []; } catch(e) { _projectRules = []; }
+    // v40.46: muestras de color de la obra (columna palette, text con JSON). NULL o
+    // ilegible = la obra no tiene paleta en la nube: no se devuelve _palette y el
+    // editor conserva la local o usa la de por defecto (ver my-works.js y
+    // edLoadProject, que además la valida con _edPaletteNormalize).
+    let _projectPalette = null;
+    try { const _pp = work.palette ? JSON.parse(work.palette) : null; if (Array.isArray(_pp)) _projectPalette = _pp; } catch(e) { _projectPalette = null; }
 
     const _panelsRaw = await _get(
       `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
@@ -1133,6 +1145,7 @@ const SupabaseClient = (() => {
       editorData: {
         orientation: pages[0]?.orientation || 'vertical',
         _rules: _projectRules,
+        ...(_projectPalette ? { _palette: _projectPalette } : {}),
         pages,
       },
     };

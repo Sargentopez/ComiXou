@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.43</footer>
+    <footer class="app-version">v40.46</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -340,17 +340,18 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — visible temporalmente (mismo criterio de
-             siempre: se muestra para cada investigación y se vuelve a
-             ocultar al cerrarse). En uso desde v40.33 para la cámara
-             alternando arriba/abajo al escribir en horizontal y el botón de
-             restaurar cabecera que no abría (sección "SEGUIMIENTO DE CÁMARA
-             AL ESCRIBIR" en editor.js, _edRunDiag). Antes, v39.40→v39.44,
-             para animaciones en flujos de texto — ver
-             CARTA_SIGUIENTE_INSTANCIA_v39_43.md. Volver a comentar el
-             <button> de abajo (no borrarlo) cuando esta investigación se
-             cierre. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- Botón de diagnóstico — OCULTO (comentado) desde v40.44, a petición de
+             Alberto al cerrarse la investigación del giro del dispositivo y del
+             botón de restaurar cabecera (v40.41→v40.43). Mismo criterio de
+             siempre: se descomenta para cada investigación y se vuelve a
+             comentar al cerrarse; el <button> NO se borra. Para reactivarlo,
+             quitar los marcadores de comentario de la línea de abajo. El informe (_edRunDiag en
+             editor.js) y sus registros siguen en el código: sección "GIRO DEL
+             DISPOSITIVO MIENTRAS SE ESCRIBE" (v40.42), "SEGUIMIENTO DE CÁMARA AL
+             ESCRIBIR", "DECISIÓN DE OCULTAR CABECERA" y "SECUENCIA DE RESTAURAR".
+             El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
+             nada ni da error. -->
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 

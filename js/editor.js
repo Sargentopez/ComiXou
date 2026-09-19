@@ -1139,6 +1139,15 @@ function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='buck
 // Cuatro canvases independientes, compositan al hacer OK.
 // _edTmp.active: 'pen'|'pencil'|'watercolor'|'bucket'
 let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen' };
+// ── Color de cada herramienta de dibujo (v40.44) ──────────────────────────
+// Petición de Alberto: el color por defecto de la tinta es negro y el del lápiz
+// sanguina, pero SOLO cuando se inicia la edición y mientras no se elija otro.
+// Lo que el usuario elija se mantiene durante toda la edición — aunque cambie de
+// herramienta, use la goma, oculte el panel (barra flotante), cambie de capa o
+// salga de dibujo con OK y vuelva a entrar — hasta que lo cambie él. Cada
+// herramienta guarda el suyo. Se vacía al empezar una edición (EditorView_init).
+const ED_TOOL_COLOR_DEFAULTS = { pen: '#000000', pencil: '#7A2E20' };
+let _edToolColor = {}; // color recordado por herramienta (clave = _edTmp.active)
 // Instantánea del canal alfa de la tinta al ENTRAR a una sesión de dibujo —
 // ver _edDrawInitHistory/_edFreezeDrawLayer/_edAutoSmoothExposedFillEdges.
 // {alpha:Uint8Array, w, h} | null.
@@ -1351,7 +1360,15 @@ const _vcof = {
   dist: 76,           // misma distancia que _cof
   MARGIN: 34,         // radio de detección para cuadrado de arrastre (px pantalla)
 };
-let edColorPalette = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
+// ── Muestras de color (paleta) POR OBRA (v40.45) ──────────────────────────
+// Petición de Alberto: las muestras deben ser siempre las mismas en la obra
+// mientras no se cambien. Hasta v40.44 esta variable era global y NO se guardaba
+// con la obra: se perdía al recargar y se heredaba entre obras abiertas en la
+// misma sesión (verificado). Ahora se guarda en editorData._palette (mismo
+// patrón que las guías: _rules/_ruleNodes), se restaura al abrir la obra y se
+// reinicia al empezar cada obra. Las casillas 0 y 1 (negro/blanco) son fijas.
+const ED_DEFAULT_PALETTE = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
+let edColorPalette = ED_DEFAULT_PALETTE.slice();
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
 let edMenuOpen = null;     // id del dropdown abierto
 let edMinimized = false;
@@ -20741,6 +20758,71 @@ function edCloseOptionsPanel(){
    COLOR PICKER PROPIO (táctil/Android)
    Muestra overlay HSL con sliders al 100% por defecto
    ══════════════════════════════════════════ */
+// Valida una paleta leída de una obra: 10 colores #rrggbb; lo que falte o no sea
+// válido cae al valor por defecto de esa casilla; 0 y 1 siempre negro/blanco.
+function _edPaletteNormalize(arr){
+  const out = ED_DEFAULT_PALETTE.slice();
+  if (Array.isArray(arr)) {
+    for (let i = 2; i < out.length; i++) {
+      if (typeof arr[i] === 'string' && /^#[0-9a-f]{6}$/i.test(arr[i])) out[i] = arr[i].toLowerCase();
+    }
+  }
+  return out;
+}
+// Cambio de una muestra por el usuario (picker, input de color, cuentagotas):
+// se guarda en la paleta y se marca la obra como modificada — cambios a nivel de
+// obra, como las guías; sin esto un cambio SOLO de muestras no contaría como
+// "cambios sin guardar" (ver _edHasUnsavedLocalChanges) y se perdería al salir.
+function _edSetPaletteColor(idx, hex){
+  if (!(idx >= 2 && idx < edColorPalette.length)) return; // 0 y 1: fijas
+  edColorPalette[idx] = hex;
+  if (!window._edLoadingSuppressDirty) {
+    window._edProjectMetaDirtyLocal = true;
+    // v40.46: la paleta también viaja a la nube (columna works.palette): un cambio de
+    // muestras es un cambio de la obra de cara al guardado en la nube, igual que el
+    // título o los créditos (mismo par de banderas que _edApplyProjectMeta). Nivel de
+    // obra, NO de página: no marca ninguna hoja como sucia, así que no obliga a volver
+    // a subir los paneles — saveDraft sube la fila works (con la paleta) en cada
+    // guardado en la nube.
+    window._edProjectMetaDirtyCloud = true;
+  }
+}
+// ¿Está el panel de dibujo abierto (visible o replegado en la barra flotante)?
+// Los modos 'draw', 'eraser' y 'fill' de edRenderOptionsPanel dejan todos
+// dataset.mode='draw'. edMinimize solo oculta el panel (visibility), no le quita
+// 'open', así que con la barra flotante también cuenta como abierto.
+function _edDrawModeActive(){
+  const p = $('edOptionsPanel');
+  return !!(p && p.classList.contains('open') && p.dataset.mode === 'draw');
+}
+// Elección de color del USUARIO en modo dibujo (paleta del panel, barra flotante,
+// picker, cuentagotas, casilla sanguina): fija el color vivo y lo guarda en la
+// ficha de la herramienta activa. Otros subsistemas que escriben edDrawColor por
+// otros motivos (editar una forma o recta seleccionada, degradados…) lo hacen
+// directamente y NO pasan por aquí — así su color no se cuela en la tinta.
+function _edSetDrawColor(hex){
+  edDrawColor = hex;
+  if (_edDrawModeActive()) _edToolColor[_edTmp.active] = hex;
+}
+// Carga en edDrawColor el color de la herramienta activa. Sustituye al antiguo
+// bloque "Defaults por herramienta", que se ejecutaba en CADA repintado del panel
+// y pisaba el color elegido (al elegir la goma, al cambiar de herramienta o de
+// capa, al restaurar el panel tras la barra flotante). Ahora el default solo
+// entra la primera vez que se usa cada herramienta (ficha vacía): el de esa
+// herramienta si lo tiene (tinta negro, lápiz sanguina) o, si no (acuarela,
+// bote), el color actual — como siempre. Desde entonces manda la ficha, que
+// actualiza _edSetDrawColor en cada elección del usuario.
+function _edSyncToolColor(){
+  const t = _edTmp.active;
+  if (_edToolColor[t] === undefined) {
+    _edToolColor[t] = (ED_TOOL_COLOR_DEFAULTS[t] !== undefined) ? ED_TOOL_COLOR_DEFAULTS[t] : edDrawColor;
+  }
+  edDrawColor = _edToolColor[t];
+  // Que el resaltado de la paleta corresponda al color cargado (si está en ella;
+  // sanguina no está: su casilla propia se resalta por el valor del color).
+  const i = edColorPalette.indexOf(edDrawColor);
+  if (i >= 0) edSelectedPaletteIdx = i;
+}
 function _edUpdatePaletteDots(){
   document.querySelectorAll('.op-pal-dot').forEach(d=>{
     const idx=parseInt(d.dataset.colidx);
@@ -21270,7 +21352,13 @@ function edRenderOptionsPanel(mode){
       window._edMinimizedDrawMode = mode;
       const panel=$('edOptionsPanel');
       if(panel){ panel.style.visibility='hidden'; }
+      // v40.44: esta rama sale antes de llegar a la carga del color de la
+      // herramienta (más abajo), y los cambios de herramienta desde la barra
+      // flotante (popup de pinceles) pasan por aquí: sin esto la herramienta nueva
+      // dibujaba con el color de la anterior hasta restaurar el panel.
+      _edSyncToolColor();
       edDrawBarShow();
+      _edbSyncColor(); // el muestrario de la barra debe enseñar el color de la herramienta activa
       return;
     }
     edDrawBarHide();
@@ -21291,6 +21379,10 @@ function edRenderOptionsPanel(mode){
         edActiveTool = 'draw';
         edCanvas.className = 'tool-draw';
         _edDodgeBurnActive = false;
+        // Color de tinta/lápiz (v40.45): también vuelve al default en cada
+        // entrada en dibujo — tras el OK no se mantiene (petición de Alberto),
+        // como el grosor. Dentro de la misma sesión de dibujo sí se conserva.
+        _edToolColor = {};
         // Grosor de línea de tinta siempre a 2px al (re)entrar en dibujo a
         // mano — petición de Alberto: se puede cambiar durante la sesión,
         // pero no debe recordarse de una sesión a la siguiente.
@@ -21303,11 +21395,14 @@ function edRenderOptionsPanel(mode){
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
     // ── Defaults por herramienta ─────────────────────────────────────
-    // Se aplican en cada render del panel: cubre selección directa Y
-    // cualquier cambio de capa mientras la herramienta está activa.
+    // Grosor: se aplica en cada render del panel (cubre selección directa Y
+    // cualquier cambio de capa mientras la herramienta está activa).
     if (_actIsWc || _edDodgeBurnActive) edDrawSize = 20;
-    if (_edTmp.active === 'pencil')      edDrawColor = '#7A2E20'; // lápiz → sanguina por defecto
-    if (_edTmp.active === 'pen')         edDrawColor = '#000000'; // tinta → negro por defecto
+    // Color (v40.44): NO se repone el default en cada render — se carga el
+    // color de la herramienta activa (ver _edSyncToolColor). Antes esto forzaba
+    // negro/sanguina aquí y el color elegido se perdía al cambiar de herramienta,
+    // usar la goma o restaurar el panel de la barra flotante.
+    _edSyncToolColor();
     // ────────────────────────────────────────────────────────────────
     const curSize = isEr ? edEraserSize : edDrawSize;
     const curOpacity = 100; // future: per-tool opacity
@@ -21454,7 +21549,6 @@ function edRenderOptionsPanel(mode){
         } else {
           edDrawOpacity = 100;
         }
-        if(key === 'pencil') edDrawColor = '#7A2E20'; // color por defecto lápiz
         _edSyncFillCursor();
         edCanvas.className = 'tool-fill' + (edFillBrushType==='watercolor'?' tool-watercolor':'');
       }
@@ -21539,7 +21633,7 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
     });
     $('op-pencil-sanguina')?.addEventListener('click', () => {
-      edDrawColor = '#7A2E20';
+      _edSetDrawColor('#7A2E20');
       _edbSyncColor();
       edRenderOptionsPanel('draw');
     });
@@ -21626,8 +21720,8 @@ function edRenderOptionsPanel(mode){
       if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); return; }
       if(window._edIsTouch){
         _edShowColorPicker((hex, final)=>{
-          edDrawColor = hex;
-          if(final){ edColorPalette[edSelectedPaletteIdx] = hex; }
+          _edSetDrawColor(hex);
+          if(final){ _edSetPaletteColor(edSelectedPaletteIdx, hex); }
           _edUpdatePaletteDots();
         });
       } else {
@@ -21639,8 +21733,8 @@ function edRenderOptionsPanel(mode){
     });
     $('op-dcolor')?.addEventListener('input',e=>{
       if(edSelectedPaletteIdx <= 1) return;
-      edDrawColor = e.target.value;
-      edColorPalette[edSelectedPaletteIdx] = edDrawColor;
+      _edSetDrawColor(e.target.value);
+      _edSetPaletteColor(edSelectedPaletteIdx, edDrawColor);
       _edUpdatePaletteDots();
     });
     $('op-dcolor')?.addEventListener('change', ()=>{ window._edEyedropActive=false; edRedraw(); });
@@ -21650,7 +21744,7 @@ function edRenderOptionsPanel(mode){
       dot.addEventListener('click',()=>{
         const idx = parseInt(dot.dataset.colidx);
         edSelectedPaletteIdx = idx;
-        edDrawColor = edColorPalette[idx];
+        _edSetDrawColor(edColorPalette[idx]);
         _edUpdatePaletteDots();
       });
       // Doble tap (táctil) → abre selector de color
@@ -21659,12 +21753,12 @@ function edRenderOptionsPanel(mode){
         e.stopPropagation();
         const idx = parseInt(dot.dataset.colidx);
         edSelectedPaletteIdx = idx;
-        edDrawColor = edColorPalette[idx];
+        _edSetDrawColor(edColorPalette[idx]);
         _edUpdatePaletteDots();
         if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
-          edDrawColor = hex;
-          if (final) { edColorPalette[idx] = hex; }
+          _edSetDrawColor(hex);
+          if (final) { _edSetPaletteColor(idx, hex); }
           _edUpdatePaletteDots();
         }, edColorPalette[idx]);
       });
@@ -21675,12 +21769,12 @@ function edRenderOptionsPanel(mode){
         e.stopPropagation();
         const idx = parseInt(dot.dataset.colidx);
         edSelectedPaletteIdx = idx;
-        edDrawColor = edColorPalette[idx];
+        _edSetDrawColor(edColorPalette[idx]);
         _edUpdatePaletteDots();
         if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
-          edDrawColor = hex;
-          if (final) { edColorPalette[idx] = hex; }
+          _edSetDrawColor(hex);
+          if (final) { _edSetPaletteColor(idx, hex); }
           _edUpdatePaletteDots();
         }, edColorPalette[idx]);
       });
@@ -24784,8 +24878,8 @@ function _edbBuildPalette() {
         if(window._edIsTouch){
           // Android: picker HSL propio (sin cuentagotas)
           _edShowColorPicker((hex, commit) => {
-            edDrawColor = hex;
-            if(commit){ edColorPalette[edSelectedPaletteIdx]=hex; _edUpdatePaletteDots(); }
+            _edSetDrawColor(hex);
+            if(commit){ _edSetPaletteColor(edSelectedPaletteIdx, hex); _edUpdatePaletteDots(); }
             _edbSyncColor();
           });
           _edbClosePalette();
@@ -24795,9 +24889,9 @@ function _edbBuildPalette() {
           const _inp=document.createElement('input'); _inp.type='color'; _inp.value=edDrawColor;
           _inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
           document.body.appendChild(_inp);
-          _inp.addEventListener('input', ev=>{ edDrawColor=ev.target.value; _edbSyncColor(); });
+          _inp.addEventListener('input', ev=>{ _edSetDrawColor(ev.target.value); _edbSyncColor(); });
           _inp.addEventListener('change', ()=>{
-            edColorPalette[edSelectedPaletteIdx]=edDrawColor;
+            _edSetPaletteColor(edSelectedPaletteIdx, edDrawColor);
             _edUpdatePaletteDots(); _edbSyncColor(); _inp.remove();
           });
           _inp.click();
@@ -24807,7 +24901,7 @@ function _edbBuildPalette() {
       const idx = +btn.dataset.colidx;
       // Seleccionar color en el primer tap (y en el segundo si es doble)
       edSelectedPaletteIdx = idx;
-      edDrawColor = edColorPalette[idx];
+      _edSetDrawColor(edColorPalette[idx]);
       _edbSyncColor();
       const mainDot = document.querySelector(`.op-pal-dot[data-colidx="${idx}"]`);
       if (mainDot) mainDot.dispatchEvent(new Event('click'));
@@ -24817,8 +24911,8 @@ function _edbBuildPalette() {
         _edbClosePalette();
         if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
-          edDrawColor = hex;
-          if (final) { edColorPalette[idx] = hex; }
+          _edSetDrawColor(hex);
+          if (final) { _edSetPaletteColor(idx, hex); }
           _edUpdatePaletteDots();
           _edbSyncColor();
         }, edColorPalette[idx]);
@@ -24843,10 +24937,10 @@ function _edbBuildPalette() {
       _edbClosePalette();
       if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
       edSelectedPaletteIdx = idx;
-      edDrawColor = edColorPalette[idx];
+      _edSetDrawColor(edColorPalette[idx]);
       _edShowColorPicker((hex, final) => {
-        edDrawColor = hex;
-        if (final) { edColorPalette[idx] = hex; }
+        _edSetDrawColor(hex);
+        if (final) { _edSetPaletteColor(idx, hex); }
         _edUpdatePaletteDots();
         _edbSyncColor();
       }, edColorPalette[idx]);
@@ -26348,7 +26442,7 @@ async function _edCloudSaveInner() {
       _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
     }
     edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
-    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes } };
+    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes, _palette: edColorPalette.slice() } };
     // También reconstruir panels (renders) si están vacíos
     if (!comic.panels || !comic.panels.length) {
       comic.panels = edPages.map((p, i) => ({
@@ -26939,6 +27033,7 @@ async function _edSaveProjectInner(_keepOverlay){
       pages:_edPages,
       _rules: edRules,
       _ruleNodes: edRuleNodes,
+      _palette: edColorPalette.slice(), // v40.45: muestras de color de la obra
     },
     updatedAt:_savedAt,
     localSavedAt:_savedAt,
@@ -29335,6 +29430,7 @@ async function edLoadProject(id){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
     edRuleNodes = comic.editorData._ruleNodes || [];
+    edColorPalette = _edPaletteNormalize(comic.editorData._palette); // v40.45: muestras de color de la obra (sin _palette → por defecto)
     _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
     _edRuleId     = edRules.reduce((m,r)=>Math.max(m,r.id||0),0); // evitar colisión de IDs
     edPages=(comic.editorData.pages||[]).map((pd, _pi2)=>{
@@ -30802,8 +30898,8 @@ function _edStartEyedrop() {
     if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); return; }
 
     const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2, '0')).join('');
-    edDrawColor = hex;
-    if(edSelectedPaletteIdx > 1) edColorPalette[edSelectedPaletteIdx] = hex;
+    _edSetDrawColor(hex);
+    if(edSelectedPaletteIdx > 1) _edSetPaletteColor(edSelectedPaletteIdx, hex);
     _edUpdatePaletteDots();
     _edbSyncColor();
     edToast(I18n.t('ed_colorCopied'));
@@ -31854,6 +31950,11 @@ function EditorView_init(){
   edCurrentPage = 0;
   edSelectedIdx = -1;
   edHistory     = []; edHistoryIdx = -1; _edSavedHistoryIdx = -1;
+  // v40.45: las muestras de color son de CADA obra — no arrastrar las de la anterior
+  // (hasta v40.44 la paleta global se heredaba entre obras). edLoadProject aplica
+  // después la paleta guardada de esta obra, si la tiene.
+  edColorPalette = ED_DEFAULT_PALETTE.slice();
+  edSelectedPaletteIdx = 0;
   // Pre-pintar el título con lo que ya tiene WorkStore (ligero, síncrono)
   // para evitar el flash de "Sin título" mientras edLoadProject carga async.
   try {

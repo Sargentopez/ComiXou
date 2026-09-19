@@ -1135,6 +1135,14 @@ function _mcRenderList() {
           };
           // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
           if (_idbWrites.length) await Promise.all(_idbWrites);
+          // v40.45: las muestras de color de la obra (editorData._palette) solo se
+          // guardan en local — la nube aún no las lleva. Al sustituir editorData por
+          // lo descargado hay que conservarlas, o las muestras volverían a las de
+          // por defecto sin que nadie las haya cambiado. Los datos locales previos
+          // están en comicToEdit.editorData o, si la nube era más nueva, en
+          // comicToEdit.localEditorData (ver la sincronización de más arriba).
+          const _keepPalette = comicToEdit.editorData?._palette || comicToEdit.localEditorData?._palette;
+          if (_keepPalette && !_edataClean._palette) _edataClean._palette = _keepPalette;
           await WorkStore.save({
             ...comicToEdit,
             cloudOnly: false,
