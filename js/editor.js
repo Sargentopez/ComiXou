@@ -6709,8 +6709,14 @@ function _ppKbSettle(la, source) {
 // el techo de REF_LINES ya existente), y a partir de ahí esta función solo
 // desplaza la cámara lo justo para que ese borde inferior no quede tapado
 // por el teclado ni por el panel — nunca reencuadra el objeto entero.
+//
+// Devuelve true si ha llamado a edRedraw() (porque tuvo que mover la cámara),
+// false si no hacía falta moverla y por tanto NO ha repintado nada (v40.40).
+// Esa distinción es lo que permite al manejador 'input' del textarea
+// garantizar un repintado por pulsación sin duplicarlo cuando ya lo hizo
+// esta función — ver el comentario de v40.40 en ese manejador.
 function _edFollowTextCursor(la, source) {
-  if (!la || !edCanvas) return;
+  if (!la || !edCanvas) return false;
   const pw = edPageW(), ph = edPageH();
   const canvasRect = edCanvas.getBoundingClientRect();
   const panel = $('edOptionsPanel');
@@ -6763,12 +6769,12 @@ function _edFollowTextCursor(la, source) {
       edCamera.y += (freeBottom - PAD) - screenBottom;
     } else {
       _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
-      return;
+      return false; // cámara sin mover → NO se ha repintado
     }
     _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
     _edInlineTextEditReposition();
     edRedraw();
-    return;
+    return true;
   }
   if (screenBottom > freeBottom - PAD) {
     edCamera.y += (freeBottom - PAD) - screenBottom;
@@ -6776,11 +6782,18 @@ function _edFollowTextCursor(la, source) {
     edCamera.y += (freeTop + PAD) - screenBottom;
   } else {
     _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
-    return; // ya visible con el margen pedido — no mover la cámara sin necesidad
+    // Ya visible con el margen pedido — no mover la cámara sin necesidad.
+    // OJO (v40.40): esta salida NO repinta. Es correcto para esta función
+    // (solo se encarga de la cámara), pero quien llame después de haber
+    // cambiado la GEOMETRÍA de la capa (el manejador 'input' del textarea,
+    // que acaba de recalcular width/height con resizeToFitText) debe
+    // repintar por su cuenta cuando reciba false.
+    return false;
   }
   _edFollowMark(source||'?', camYBefore, edCamera.y, screenBottom, freeTop, freeBottom, rawKb, stableKb);
   _edInlineTextEditReposition();
   edRedraw();
+  return true;
 }
 
 
@@ -20789,13 +20802,35 @@ function _edInlineTextEditSync(la) {
       // cámara — así que se comprueba también aquí, no solo por eventos
       // externos. Si acaba de ocultarla, el hueco libre cambió por
       // completo: reencuadrar de cero, no solo panear con el zoom de antes.
+      //
+      // v40.40 — REPINTADO POR PULSACIÓN (bug reportado por Alberto: "el
+      // tamaño del bocadillo no se ajusta al contenido hasta que no se hace
+      // un salto de línea"). Causa raíz, reproducida con Playwright: hasta
+      // v40.22 este manejador terminaba SIEMPRE con
+      // _edInlineTextEditReposition()+edRedraw(); v40.23 lo sustituyó por
+      // _edFocusOnLayer(l,true) (que repintaba de rebote) y v40.25 por
+      // _edFollowTextCursor, que solo repinta cuando tiene que MOVER la
+      // cámara. Con el borde inferior del bocadillo ya visible sale sin
+      // repintar — pero resizeToFitText acaba de cambiar width/height, así
+      // que ni el óvalo del canvas ni el propio <textarea> (que se coloca y
+      // dimensiona desde edRedraw → _edInlineTextEditReposition) reflejaban
+      // el tamaño nuevo. El repintado solo llegaba cuando la cámara tenía
+      // que desplazarse, es decir, con un salto de línea que acercaba el
+      // borde inferior al panel/teclado. Regla: cambiar la geometría de la
+      // capa obliga a repintar en el mismo evento, se mueva o no la cámara.
+      // Una sola vez por pulsación: si la cámara ya repintó, no se repite
+      // (edRedraw recorre todas las capas de la hoja — coste real en Android
+      // de gama baja).
+      let _repainted;
       if (_edMaybeHideHeaderForTyping(l)) {
         _edFocusDone = false;
-        _edFocusOnLayer(l, true);
+        _edFocusOnLayer(l, true); // modo instantáneo: termina siempre en edRedraw()
+        _repainted = true;
       } else {
         _edTextEditZoomLocked = true;
-        _edFollowTextCursor(l, 'input');
+        _repainted = _edFollowTextCursor(l, 'input');
       }
+      if (!_repainted) edRedraw(); // también reposiciona el <textarea> (ver edRedraw)
     });
     // Prevalencia de los tiradores de cola sobre el texto — HISTORIAL (v40.16/
     // v40.17, retirado en v40.22): se intentó dejar pasar el toque/clic hasta
