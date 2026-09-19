@@ -1368,6 +1368,10 @@ let _ppKbHeaderHideDone = false; // true tras auto-ocultar la cabecera completa 
 let _edTextEditZoomLocked = false; // true en cuanto se teclea el primer carácter de la sesión de edición — a partir de ahí el zoom queda fijo, solo se paniza (v40.25)
 let _edTextEditMaxKbH = 0; // altura de teclado "estabilizada" (máximo visto) durante la sesión de escritura — ver _edStableKbH (v40.32)
 let _edSuppressAutoHide = false; // true durante la llamada síncrona de edMaximize a _edFocusOnLayer — evita que _edMaybeHideHeaderForTyping vuelva a ocultar la cabecera que se acaba de restaurar, sin depender de que la lectura del teclado ya esté al día (v40.34, corrige v40.33)
+let _edHeaderAutoHidden = false; // true SOLO mientras la cabecera esté oculta porque la ocultó _edMaybeHideHeaderForTyping (falta de sitio al escribir en horizontal) — NO si la ocultó el usuario con OCULTAR. Es lo único que se restaura solo al volver a vertical (v40.41). A diferencia de _ppKbHeaderHideDone, no se reinicia al repintar el panel.
+let _edTextEditLandscape = null; // orientación (innerWidth>innerHeight) para la que se evaluó por última vez la disposición de la edición in situ de texto/bocadillo; null si no hay sesión — ver _edTextEditOnOrientation (v40.41)
+let _edRotateSettleSeq = 0;      // invalida los reintentos de asentamiento de un giro anterior cuando llega otro giro o termina la edición (v40.41)
+let _edTextEditKbSettling = false; // true tras un giro hasta la siguiente pulsación: _edStableKbH usa la lectura ACTUAL del teclado en vez del máximo visto, que sería el de la orientación anterior (v40.41)
 let _edCropMode     = false;    // true cuando el modo recorte está activo
 let _edCropLayer    = null;     // referencia al layer que se está recortando
 let _edCropPts      = [];       // vértices del polígono de recorte en coords fraccionarias de página
@@ -6394,6 +6398,15 @@ function _ppReadKeyboardH() {
 function _edStableKbH() {
   const raw = _ppReadKeyboardH();
   if (raw < 40) { _edTextEditMaxKbH = 0; return 0; }
+  // v40.41: tras girar el dispositivo el teclado cambia de altura (el
+  // horizontal es más bajo) y su lectura puede llegar DESPUÉS de resize/
+  // orientationchange — la primera lectura tras el giro puede ser aún la de
+  // la orientación anterior. Retener el máximo fijaría ese valor viejo (solo
+  // se suelta al cerrar el teclado), reservando un hueco que ya no existe.
+  // Esa retención sirve para la barra de sugerencias que aparece y desaparece
+  // MIENTRAS SE TECLEA — sin teclear (justo después del giro) no hace falta,
+  // así que hasta la siguiente pulsación se usa la lectura actual tal cual.
+  if (_edTextEditKbSettling) { _edTextEditMaxKbH = 0; return raw; }
   _edTextEditMaxKbH = Math.max(_edTextEditMaxKbH, raw);
   return _edTextEditMaxKbH;
 }
@@ -6488,6 +6501,11 @@ function _edMaybeHideHeaderForTyping(la) {
   _edHideCheckMark('OCULTANDO', {zForHNow:+zForHNow.toFixed(3), zForReading:+zForReading.toFixed(3), freeH:+freeH.toFixed(1), panelBottom:+panelBottom.toFixed(1), canvasBottom:+canvasRect.bottom.toFixed(1)});
   _ppKbHeaderHideDone = true;
   edMinimize();
+  // v40.41: edMinimize() acaba de dejar _edHeaderAutoHidden=false (cualquier
+  // ocultación se considera manual por defecto, p.ej. el botón OCULTAR) —
+  // esta SÍ es automática, y solo las automáticas se restauran solas al
+  // volver a vertical (ver _edTextEditOnOrientation).
+  _edHeaderAutoHidden = true;
   // Botón de restaurar (Alberto: "debe estar visible en el hueco"):
   // edMinimize lo deja en edFloatX/edFloatY, que puede ser cualquier sitio
   // si Alberto lo arrastró antes (incluso bajo el teclado) — para este
@@ -6697,6 +6715,71 @@ function _ppKbSettle(la, source) {
   if (_edTextEditZoomLocked) { _edFollowTextCursor(la, source||'ppKbSettle'); return; }
   _edFocusDone = false;
   _edFocusOnLayer(la, true);
+}
+
+// Giro del dispositivo MIENTRAS se escribe en un bocadillo/caja de texto
+// (v40.41). Petición de Alberto: en móvil el espacio es muy reducido, por eso
+// al escribir en horizontal se oculta la cabecera con el panel — y esa
+// disposición (vertical: todo visible / horizontal: cabecera y panel fuera)
+// debe cambiar SOLA al girar el dispositivo, en los dos sentidos.
+//
+// Qué fallaba (reproducido con Playwright, no supuesto): (1) 'orientationchange'
+// hacía edFitCanvas(true) — reencuadrar la PÁGINA entera — también durante la
+// edición, pisando el encuadre de lectura del bocadillo: en horizontal
+// quedaba el borde inferior bajo el teclado y en vertical con el doble del
+// zoom de lectura; (2) nada restauraba la cabecera al volver a vertical.
+//
+// Cómo (sin inventar nada nuevo): se reutiliza tal cual la lógica de
+// encuadre que ya usa la apertura de la edición — _edFocusOnLayer decide por
+// geometría real si en horizontal hace falta ocultar la cabecera
+// (_edMaybeHideHeaderForTyping) y centra el bocadillo en el hueco libre al
+// tamaño de lectura; para volver a vertical se reutiliza edMaximize. Solo se
+// restaura si la cabecera la ocultó ESTA lógica automática (_edHeaderAutoHidden);
+// si Alberto la ocultó a mano con OCULTAR, se respeta. El teclado NO se cierra
+// (keepKeyboard): quien sigue escribiendo al girar debe poder seguir.
+//
+// Idempotente: Android puede mandar resize, orientationchange y
+// geometrychange en cualquier orden y varias veces por giro — solo actúa
+// cuando la orientación actual difiere de la última evaluada, así que da igual
+// cuál llegue primero. Llamada desde _edResizeFn y _edOrientFn (más abajo, en
+// EditorView_init). Devuelve true si detectó un giro y lo aplicó.
+function _edTextEditOnOrientation(source) {
+  const la = _edInlineTextEditFor;
+  if (!la || !edCanvas) return false;
+  const land = window.innerWidth > window.innerHeight; // mismo criterio que _edMaybeHideHeaderForTyping
+  if (_edTextEditLandscape === land) return false;     // ya evaluada para esta orientación
+  _edTextEditLandscape = land;
+  // El lienzo debe medir ya la ventana nueva: este evento puede llegar antes
+  // que 'resize' (edFitCanvas es idempotente — sin cambio de tamaño solo
+  // reaplica estilos y repinta).
+  edFitCanvas(false);
+  // La altura de teclado "máxima vista" (_edStableKbH) era de la orientación
+  // anterior: el teclado horizontal es más bajo que el vertical y, sin
+  // soltarla, se seguiría reservando el hueco de la otra orientación.
+  _edTextEditMaxKbH = 0;
+  _edTextEditKbSettling = true; // ver _edStableKbH: hasta teclear de nuevo, lectura actual (no máximo)
+  // Zoom y encuadre se deciden de nuevo para el hueco nuevo, como al abrir la
+  // edición; con la primera pulsación posterior vuelve a bloquearse el zoom.
+  _edTextEditZoomLocked = false;
+  const mySeq = ++_edRotateSettleSeq;
+  if (!land && edMinimized && _edHeaderAutoHidden) {
+    // Vertical con la cabecera ocultada automáticamente por falta de sitio en
+    // horizontal: mostrarla de nuevo (con su panel) sin cerrar el teclado.
+    // edMaximize ya reencuadra el bocadillo por dentro (_edFocusOnLayer).
+    edMaximize(false, true);
+  } else {
+    // Horizontal (puede ocultar la cabecera si ya no cabe) o vertical sin nada
+    // que restaurar: solo reencuadrar.
+    _edFocusDone = false;
+    _edFocusOnLayer(la, true);
+  }
+  // El teclado tarda en adoptar su altura de la nueva orientación (mismo
+  // problema y mismos reintentos que al abrir la edición, ver
+  // edRenderOptionsPanel('props')). Solo cuenta el último giro.
+  [50, 200, 400, 650].forEach(ms => setTimeout(() => {
+    if (mySeq === _edRotateSettleSeq) _ppKbSettle(la, 'rotate:' + (source || '?'));
+  }, ms));
+  return true;
 }
 
 // Mantiene visible el cursor de escritura (aproximado como el borde inferior
@@ -20780,6 +20863,7 @@ function _edInlineTextEditSync(la) {
     ta.addEventListener('input', () => {
       const l = _edInlineTextEditFor;
       if (!l) return;
+      _edTextEditKbSettling = false; // v40.41: se vuelve a teclear → _edStableKbH retiene otra vez el máximo (barra de sugerencias)
       l.text = ta.value;
       l.resizeToFitText(edCanvas);
       // v40.25 (corrige v40.23/v40.24): recalcular zoom en cada pulsación
@@ -20868,6 +20952,10 @@ function _edInlineTextEditSync(la) {
   // marcha, que pasa por este mismo punto.
   $('editorShell')?.classList.add('ed-typing');
   if (isNewLayer) {
+    // Orientación con la que arranca la sesión (v40.41): referencia para
+    // detectar después un giro del dispositivo — ver _edTextEditOnOrientation.
+    _edTextEditLandscape = window.innerWidth > window.innerHeight;
+    _edTextEditKbSettling = false;
     // Igual que hacía pp-text: al empezar a editar, si el texto actual es
     // el placeholder ("Escribe aquí"), arrancar con el campo vacío en vez
     // de obligar a borrarlo a mano.
@@ -20967,6 +21055,9 @@ function _edInlineTextEditReposition() {
 function _edInlineTextEditEnd() {
   if (!_edInlineTextEditFor) return;
   _edInlineTextEditFor = null;
+  _edTextEditLandscape = null; // v40.41: sin sesión no hay orientación de referencia
+  _edRotateSettleSeq++;        // v40.41: los reintentos de un giro aún pendientes ya no aplican
+  _edTextEditKbSettling = false;
   _edTextEditZoomLocked = false; // por simetría — la próxima sesión empieza limpia igualmente al crear el textarea
   $('editorShell')?.classList.remove('ed-typing');
   const ta = document.getElementById('edInlineTextEdit');
@@ -22769,6 +22860,7 @@ function _edBarClampToScreen(){
 }
 function edMinimize(){
   edMinimized=true;
+  _edHeaderAutoHidden=false; // v40.41: por defecto manual (botón OCULTAR); _edMaybeHideHeaderForTyping la marca automática justo después de llamar aquí
   const menu=$('edMenuBar'),top=$('edTopbar');
   if(menu)menu.style.display='none';
   if(top)top.style.display='none';
@@ -22818,13 +22910,18 @@ function edMinimize(){
     _edBarClampToScreen();
   });
 }
-function edMaximize(keepBar=false){
+// keepKeyboard (v40.41): restaurar SIN cerrar el teclado. La restauración
+// manual (botón flotante) sigue cerrándolo, como pidió Alberto; la automática
+// al girar a vertical mientras se escribe (_edTextEditOnOrientation) no debe
+// quitarle el teclado a quien sigue escribiendo.
+function edMaximize(keepBar=false, keepKeyboard=false){
   _edRestoreMark('edMaximize:inicio', {
     edMinimizedAntes: edMinimized,
     minimizedDrawMode: window._edMinimizedDrawMode,
     hayEdicionTexto: !!_edInlineTextEditFor,
   });
   edMinimized=false;
+  _edHeaderAutoHidden=false; // v40.41: ya no está oculta, sea cual sea el motivo
   // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag)
   // si la edición de nodos (V⟺C) estaba activa en la barra flotante.
   const _wasCurveActiveInBar = $('esb-curve')?.dataset.curveActive === '1';
@@ -22922,7 +23019,7 @@ function edMaximize(keepBar=false){
   // ocultar la cabecera con normalidad.
   if (_edInlineTextEditFor) {
     _ppKbHeaderHideDone = false;
-    document.getElementById('edInlineTextEdit')?.blur();
+    if (!keepKeyboard) document.getElementById('edInlineTextEdit')?.blur();
     _edTextEditMaxKbH = 0;
     _edSuppressAutoHide = true;
     _edFocusDone = false;
@@ -33371,7 +33468,10 @@ function EditorView_init(){
 
   // ── RESIZE ──
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edResizeFn = () => { edFitCanvas(false); edApplyDeviceClass(); }; // reajustar tamaño + clase de tablet; nunca resetear cámara
+  window._edResizeFn = () => {
+    edFitCanvas(false); edApplyDeviceClass(); // reajustar tamaño + clase de tablet; nunca resetear cámara
+    _edTextEditOnOrientation('resize');       // v40.41: si se está escribiendo en un bocadillo/caja y ha cambiado la orientación, adaptar la disposición
+  };
   window.addEventListener('resize', window._edResizeFn);
 
   // Fit canvas con reintentos hasta que las medidas sean reales
@@ -33546,7 +33646,20 @@ function EditorView_init(){
   // ── FULLSCREEN CANVAS ON ORIENTATION MATCH ──
   edUpdateCanvasFullscreen();
   // Guardar referencia para cleanup en EditorView_destroy
-  window._edOrientFn = () => { setTimeout(()=>{ window._edUserRequestedReset=true; edFitCanvas(true); edApplyDeviceClass(); }, 200); };
+  window._edOrientFn = () => { setTimeout(()=>{
+    // v40.41: escribiendo en un bocadillo/caja de texto NO se reencuadra la
+    // página entera (edFitCanvas(true) → _edCameraReset): eso pisaba el
+    // encuadre de lectura del bocadillo (borde inferior bajo el teclado en
+    // horizontal, doble zoom en vertical). Se ajusta el lienzo a la ventana
+    // sin tocar la cámara y se deja que _edTextEditOnOrientation adapte la
+    // disposición (cabecera/panel/encuadre) a la nueva orientación.
+    if (_edInlineTextEditFor) {
+      edFitCanvas(false); edApplyDeviceClass();
+      _edTextEditOnOrientation('orientationchange');
+      return;
+    }
+    window._edUserRequestedReset=true; edFitCanvas(true); edApplyDeviceClass();
+  }, 200); };
   window.addEventListener('orientationchange', window._edOrientFn);
 
   // Teclado virtual + edición de texto/bocadillo (v40.21): geometrychange
