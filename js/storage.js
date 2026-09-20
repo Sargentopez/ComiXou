@@ -175,6 +175,8 @@ const WorkStore = (() => {
     // 1. localStorage: biblioteca y cualquier clave con el id
     const _bibKey = 'cs_biblioteca_' + id;
     localStorage.removeItem(_bibKey);
+    // v40.49: revisión de la nube en la que se basaba la copia local (ver getCloudRev)
+    try { localStorage.removeItem('cx_cloud_rev_' + id); } catch(_) {}
 
     // 2. IDB biblioteca (cxBiblioteca): clave = cs_biblioteca_{comicId}
     // Usar el singleton _bibDb del editor si está disponible para evitar conflictos
@@ -195,17 +197,23 @@ const WorkStore = (() => {
     // 3. IDB autosave (cxAutosave): clave = {userId}_{comicId}
     const _autosaveKey = _uid + '_' + id;
     try {
-      const _r2 = indexedDB.open('cxAutosave', 1);
+      // v40.49: SIN número de versión. Desde v39.65 el editor abre 'cxAutosave' en
+      // versión 2; pedir aquí la 1 daba VersionError y este borrado no se hacía
+      // nunca (quedaban autoguardados huérfanos de obras ya eliminadas). Sin
+      // versión se abre la que haya. Se cierra la conexión al terminar: una
+      // conexión olvidada bloquearía la próxima actualización de esquema.
+      const _r2 = indexedDB.open('cxAutosave');
       _r2.onsuccess = e => {
+        const db = e.target.result;
         try {
-          const db = e.target.result;
           if (db.objectStoreNames.contains('saves')) {
             const tx = db.transaction('saves', 'readwrite');
             tx.objectStore('saves').delete(_autosaveKey);
             // Compatibilidad: borrar también clave sin prefijo (versiones anteriores)
             tx.objectStore('saves').delete(id);
-          }
-        } catch(_) {}
+            tx.oncomplete = tx.onerror = tx.onabort = () => { try { db.close(); } catch(_) {} };
+          } else { db.close(); }
+        } catch(_) { try { db.close(); } catch(__) {} }
       };
     } catch(_) {}
 
@@ -260,6 +268,25 @@ const WorkStore = (() => {
       if (full) return { ...meta, ...full };
     } catch(e) {}
     return meta;
+  }
+
+  /* ── Revisión de la nube en la que se basa la copia local (v40.49) ──
+     Token de versión (patrón estándar de concurrencia optimista, como el ETag
+     de HTTP): es el `updated_at` de la fila `works` de la nube que esta copia
+     local descargó o subió por última vez. Sirve para saber, por IGUALDAD y no
+     comparando relojes de dispositivos distintos, si OTRO dispositivo ha
+     guardado después. Va en su propia clave de localStorage (no dentro del
+     registro de la obra) para que WorkStore.save() —que reescribe el registro
+     entero desde copias que pueden estar desfasadas— no pueda pisarla. */
+  const _CLOUD_REV_PREFIX = 'cx_cloud_rev_';
+  function getCloudRev(id) {
+    try { return localStorage.getItem(_CLOUD_REV_PREFIX + id) || null; } catch(_) { return null; }
+  }
+  function setCloudRev(id, rev) {
+    try {
+      if (rev) localStorage.setItem(_CLOUD_REV_PREFIX + id, String(rev));
+      else localStorage.removeItem(_CLOUD_REV_PREFIX + id);
+    } catch(_) {}
   }
 
   function createNew(userId, username) {
@@ -565,6 +592,8 @@ const WorkStore = (() => {
     getByUser,
     getPublished,
     migrateAnonToUser,
+    getCloudRev,
+    setCloudRev,
   };
 })();
 

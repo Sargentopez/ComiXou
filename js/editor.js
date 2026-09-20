@@ -1006,6 +1006,31 @@ let edOrientation = 'vertical';
 let edProjectId = null;
 let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'' };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
+const ED_WORKSPACE_NORMAL  = '#c8d4e8'; // color de siempre de la zona de trabajo
+const ED_WORKSPACE_DRAWING = '#ffffff'; // durante dibujo a mano o vectorial (v40.47)
+// ¿Hay una sesión de dibujo a mano o vectorial en curso? edActiveTool NO sirve:
+// al soltar el ratón tras crear una forma vectorial pasa a 'select' aunque la
+// sesión siga abierta hasta el OK — comprobado, con y sin la cabecera oculta. Se
+// deduce de la interfaz de la sesión, derivada del estado real (sin banderas
+// propias que sincronizar). Cada señal cubre un flujo que la otra no:
+//  · el panel de opciones abierto en modo 'draw' (a mano: draw/eraser/fill) o
+//    'shape'/'line' (vectorial; el rectángulo y la elipse se abren en 'line').
+//    Sigue abierto aunque esté replegado en la barra flotante: edMinimize solo
+//    lo oculta con visibility. Cubre crear/ajustar/editar con la cabecera visible;
+//  · una barra flotante de dibujo visible: cubre la sesión vectorial iniciada con
+//    la cabecera ya oculta, donde el panel no llega a abrirse y, tras crear la
+//    forma, edActiveTool ya es 'select' — solo queda la barra.
+// Ambas se apagan al hacer OK (edCloseOptionsPanel / edDeactivateDrawTool /
+// edShapeBarHide / edDrawBarHide).
+function _edInDrawingSession(){
+  const p = document.getElementById('edOptionsPanel');
+  if (p && p.classList.contains('open')) {
+    const m = p.dataset.mode;
+    if (m === 'draw' || m === 'shape' || m === 'line') return true;
+  }
+  return !!(document.getElementById('edShapeBar')?.classList.contains('visible') ||
+            document.getElementById('edDrawBar')?.classList.contains('visible'));
+}
 // Estado herramienta shape
 let _edShapeType  = 'rect';   // 'rect' | 'ellipse'
 let _edShapeStart = null;     // {x,y} inicio drag normalizado
@@ -5429,17 +5454,22 @@ let _edPaintStatic = { canvas: null, ctx: null, valid: false,
 // ctx.shadowBlur es muy costoso en Android — antes se recalculaba en cada
 // redraw, incluso durante un trazo o un drag con muchos eventos por segundo.
 // El resultado solo cambia si cambia el zoom (el radio de sombra depende de
-// edCamera.z) o el tamaño/orientación de página — nunca por el contenido de
-// las capas — así que se cachea en un canvas aparte y se reutiliza mientras
-// esos valores no cambien.
+// edCamera.z), el tamaño/orientación de página o si se pide sombra o no (sh,
+// v40.48) — nunca por el contenido de las capas — así que se cachea en un canvas
+// aparte y se reutiliza mientras esos valores no cambien.
 let _edBgCache = { canvas: null, ctx: null,
-  z: null, x: null, y: null, w: null, h: null, pw: null, ph: null, mx: null, my: null };
-function _edDrawPageBackground(ctx) {
+  z: null, x: null, y: null, w: null, h: null, pw: null, ph: null, mx: null, my: null, sh: null };
+// withShadow=false (v40.48): durante un dibujo a mano o vectorial la zona de
+// trabajo es blanca y la única referencia a la hoja debe ser el marco azul
+// (petición de Alberto), así que no se proyecta sombra sobre ella. La sombra
+// de la barra de herramientas es CSS de esos elementos y no se toca.
+function _edDrawPageBackground(ctx, withShadow = true) {
   const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
   const c = _edBgCache;
   const _valid = c.canvas && c.z===edCamera.z && c.x===edCamera.x && c.y===edCamera.y &&
-                 c.w===cw && c.h===ch && c.pw===pw && c.ph===ph && c.mx===mx && c.my===my;
+                 c.w===cw && c.h===ch && c.pw===pw && c.ph===ph && c.mx===mx && c.my===my &&
+                 c.sh===withShadow;
   if (!_valid) {
     if (!c.canvas || c.w!==cw || c.h!==ch) {
       c.canvas = document.createElement('canvas');
@@ -5451,7 +5481,7 @@ function _edDrawPageBackground(ctx) {
     bctx.clearRect(0,0,cw,ch);
     bctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
     const _lr = 20; // ~20px en workspace = radio de esquina físicamente constante
-    bctx.shadowColor='rgba(0,0,0,0.35)'; bctx.shadowBlur=20/edCamera.z;
+    if (withShadow) { bctx.shadowColor='rgba(0,0,0,0.35)'; bctx.shadowBlur=20/edCamera.z; }
     bctx.fillStyle='#ffffff';
     bctx.beginPath();
     if (bctx.roundRect) {
@@ -5466,7 +5496,7 @@ function _edDrawPageBackground(ctx) {
     bctx.fill();
     bctx.shadowColor='transparent'; bctx.shadowBlur=0;
     c.z=edCamera.z; c.x=edCamera.x; c.y=edCamera.y;
-    c.w=cw; c.h=ch; c.pw=pw; c.ph=ph; c.mx=mx; c.my=my;
+    c.w=cw; c.h=ch; c.pw=pw; c.ph=ph; c.mx=mx; c.my=my; c.sh=withShadow;
   }
   // El cache ya incluye la transformación de cámara horneada en sus píxeles:
   // dibujar en espacio de pantalla (identidad) y restaurar el transform previo.
@@ -5508,13 +5538,25 @@ function _edRenderDrawTmp(ctx) {
 //                   antes de marcar el caché 'before' como reutilizable.
 function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   const cw=ctx.canvas.width, ch=ctx.canvas.height;
+  // ¿Sesión de dibujo a mano o vectorial? UNA sola evaluación por fotograma: manda
+  // tanto el color de la zona de trabajo como la sombra de la hoja (v40.47/v40.48).
+  // El modo 'after' no pinta ninguno de los dos (solo capas por encima).
+  const _drawSession = drawTmpMode !== 'after' && _edInDrawingSession();
 
   if (drawTmpMode !== 'after') {
     // Reset transform → limpiar todo el viewport
     ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible
-    ctx.fillStyle='#c8d4e8';
+    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible.
+    // v40.47 — mientras se CREA o EDITA un dibujo a mano o vectorial la zona de
+    // trabajo (lo que rodea a la hoja) se pinta BLANCA, y vuelve a su color al hacer
+    // OK (petición de Alberto). Se deduce en cada fotograma del estado real de la
+    // sesión (_edInDrawingSession) en vez de guardar una bandera: hay una docena de
+    // sitios que entran y salen de dibujo (menú, edición de un objeto, barra
+    // flotante, OK del panel, OK de la barra…) y todos acaban dejando la interfaz de
+    // dibujo cerrada. Esta función es el único sitio que pinta ese fondo: las cachés
+    // de arrastre y de trazo la llaman, así que heredan el color solas.
+    ctx.fillStyle = _drawSession ? ED_WORKSPACE_DRAWING : ED_WORKSPACE_NORMAL;
     ctx.fillRect(0,0,cw,ch);
   } else {
     // Modo 'after': se pinta encima de contenido ya existente — solo restablecer transform.
@@ -5530,7 +5572,7 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
     // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
     // shadowBlur en cada frame, una de las operaciones más costosas en Android.
-    _edDrawPageBackground(ctx);
+    _edDrawPageBackground(ctx, !_drawSession);
     // ── Transparencia hojas contiguas (onion skin) ──────────────────────────
     // Ayuda de dibujo para animación: fotografía de fondo fija de la hoja
     // anterior y posterior (si las hay), al 50% de opacidad SIEMPRE — no pasa
@@ -26350,6 +26392,47 @@ async function edCloudSave() {
     _edCloudSavingStop();
   }
 }
+/* ── ¿HA GUARDADO OTRO DISPOSITIVO ESTA OBRA EN LA NUBE DESPUÉS DE QUE LA ABRIERA AQUÍ? (v40.50) ──
+   Se llama justo antes de subir (ver _edCloudSaveInner). Sin esta comprobación, guardar en
+   la nube SOBRESCRIBÍA lo que otro dispositivo hubiera subido entre tanto (el editor ya
+   estaba abierto aquí, o se abrió la copia local con el aviso de «sin conexión»), sin avisar.
+   Mismo patrón de concurrencia optimista que la apertura (ver WorkStore.getCloudRev): se
+   compara, por IGUALDAD, el updated_at que tiene AHORA la nube con la revisión en la que se
+   basa lo de este dispositivo (la de su última descarga o subida).
+   Nunca bloquea por sí misma: en la duda (sin revisión anotada, la obra ya no existe en la
+   nube o no se puede consultar) devuelve conflict:false y el guardado sigue como siempre —
+   una comprobación que falla no debe impedir guardar, y la subida ya da su propio error si
+   de verdad no hay red. */
+async function _edCloudConflictCheck(comic) {
+  const res = { conflict: false, reason: '', localRev: null, cloudUpdatedAt: null, error: null };
+  try {
+    res.localRev = (WorkStore.getCloudRev && WorkStore.getCloudRev(comic.id)) || null;
+    if (!res.localRev) {
+      res.reason = 'sin revisión anotada en este dispositivo: no hay base fiable con la que comparar';
+    } else {
+      // fetchWorksByIds refresca el token y lee con cache:'no-store'. El tope de 12 s cubre también el refresco.
+      const rows = await Promise.race([
+        SupabaseClient.fetchWorksByIds([comic.supabaseId]),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout comprobando la nube')), 12000)),
+      ]);
+      const row = rows && rows[0];
+      if (!row) {
+        res.reason = 'la obra no existe en la nube (se creará de nuevo)';
+      } else {
+        res.cloudUpdatedAt = row.updated_at || null;
+        const cloudMs = cxIsoMs(res.cloudUpdatedAt);
+        if (!cloudMs) res.reason = 'la nube no devuelve fecha';
+        else if (cloudMs !== cxIsoMs(res.localRev)) { res.conflict = true; res.reason = 'la nube tiene otra revisión distinta de la de este dispositivo'; }
+        else res.reason = 'misma revisión: nadie más ha guardado desde que se abrió';
+      }
+    }
+  } catch (e) {
+    res.error = String((e && e.message) || e);
+    res.reason = 'no se pudo consultar la nube: se guarda como siempre';
+  }
+  window._edLastCloudSaveCheck = { ts: new Date().toISOString(), supabaseId: comic.supabaseId, choice: null, ...res };
+  return res;
+}
 async function _edCloudSaveInner() {
   // Mostrar el contador INMEDIATAMENTE al tocar el botón — antes de cualquier
   // trabajo previo. En obras pesadas, _edCalcProjectBytes(true) fuerza un
@@ -26484,9 +26567,41 @@ async function _edCloudSaveInner() {
   }
 
   // Asignar supabaseId si aún no tiene
+  const _wasUploadedBefore = !!comic.supabaseId; // v40.50: ¿ya existía la obra en la nube antes de este guardado?
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
     WorkStore.save(comic);
+  }
+
+  // ── v40.50 — ¿otro dispositivo ha guardado esta obra en la nube después de que la abriera aquí? ──
+  // Se pregunta a la nube justo antes de subir (ver _edCloudConflictCheck). Si tiene una
+  // revisión distinta de la de este dispositivo, se avisa en vez de pisarla sin decir nada:
+  //  · Cancelar → no se toca la nube. Lo de aquí ya quedó guardado en local (edSaveProject,
+  //    arriba) y las marcas «pendiente de nube» siguen puestas: no se pierde nada.
+  //  · Sobrescribir → se sube la obra ENTERA (ruta completa), no solo las hojas marcadas: con
+  //    la ruta incremental la nube quedaría como una mezcla de esta copia y la del otro
+  //    dispositivo, y la revisión que se anota al terminar («esta copia es igual a la nube»)
+  //    sería falsa.
+  let _forceFullUpload = false;
+  if (_wasUploadedBefore) {
+    _edSaveOverlayUpdate(I18n.t('mc_checkingCloud'));
+    const _chk = await _edCloudConflictCheck(comic);
+    if (_chk.conflict) {
+      _edSaveOverlayHide(); // el overlay bloqueante (z-index mayor) taparía el diálogo
+      const _overwrite = await new Promise(res => {
+        edConfirm(I18n.t('ed_cloudConflictMsg'), () => res(true), I18n.t('ed_cloudConflictOk'), () => res(false));
+      });
+      window._edLastCloudSaveCheck.choice = _overwrite ? 'sobrescribir' : 'cancelar';
+      if (!_overwrite) { edToast(I18n.t('ed_cloudConflictCancelled'), 6000); return; }
+      _edSaveOverlayShow(I18n.t('ed_uploadingToCloud'));
+      _edSaveOverlayForceOpen = true;
+      _forceFullUpload = true;
+    } else {
+      _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloud'));
+    }
+  } else {
+    window._edLastCloudSaveCheck = { ts: new Date().toISOString(), supabaseId: comic.supabaseId, conflict: false, choice: null,
+      reason: 'obra nunca subida a la nube: primera subida, nada con lo que comparar' };
   }
 
   // Qué páginas hace falta subir de verdad — ver _edPageDirtyCloud (contador
@@ -26496,7 +26611,7 @@ async function _edCloudSaveInner() {
   // coincide con lo que se va a subir (nunca fiarse de índices posicionales
   // en ese caso).
   let _dirtyPageIndices = null;
-  if (!window._edPagesStructureDirtyCloud &&
+  if (!_forceFullUpload && !window._edPagesStructureDirtyCloud &&
       comic.editorData && comic.editorData.pages &&
       comic.editorData.pages.length === edPages.length) {
     _dirtyPageIndices = [];
@@ -26513,7 +26628,14 @@ async function _edCloudSaveInner() {
   _edCloudSavingUpdateBadge();
 
   try {
-    await SupabaseClient.saveDraft(comic, _dirtyPageIndices);
+    // v40.49: revisión de la nube que deja ESTA subida. Se anota en cuanto se
+    // escribe la fila works (callback, antes de subir las hojas: así una subida a
+    // medias o una app cerrada no se toma luego por un cambio hecho desde otro
+    // dispositivo) y otra vez al terminar. Ver WorkStore.getCloudRev.
+    const _saveRes = await SupabaseClient.saveDraft(comic, _dirtyPageIndices, (_rev) => {
+      try { WorkStore.setCloudRev(comic.id, _rev); } catch(_) {}
+    });
+    try { if (_saveRes && _saveRes.updatedAt) WorkStore.setCloudRev(comic.id, _saveRes.updatedAt); } catch(_) {}
     edToast(I18n.t('ed_savedToCloud'));
     // Confirmar limpieza de guardado incremental en la nube SOLO ahora que se
     // sabe que la subida tuvo éxito de verdad — igual que en edSaveProject.
@@ -28757,6 +28879,16 @@ function _edAutosaveKey(id) {
   } catch(_e) { return String(id || edProjectId || 'tmp'); }
 }
 
+// v40.49 — «época» de cada autoguardado. _edAutosaveClear la incrementa; una escritura
+// en curso (_edAutosaveWrite) compara la época que vio al empezar con la actual justo
+// antes de escribir y, si cambió, descarta su snapshot: alguien (guardado explícito,
+// «No guardar», descarga de la nube…) acaba de borrar el autoguardado y ese snapshot ya
+// está OBSOLETO. Sin esto, un autoguardado que empezaba antes de guardar y terminaba
+// después «resucitaba» el temporal ya borrado, y al reabrir la obra se preguntaba por
+// recuperar cambios que en realidad ya estaban guardados.
+const _edAsEpochs = {};
+function _edAsEpoch(key) { return _edAsEpochs[key] || 0; }
+
 let _asDbSingleton = null;
 function _asDb() {
   if (_asDbSingleton) return Promise.resolve(_asDbSingleton);
@@ -28825,6 +28957,17 @@ async function _edAutosaveWrite(immediate) {
   // _edSavedHistoryIdx, que no detectaba cambios hechos en una hoja distinta
   // a la del último guardado).
   if (!_edHasUnsavedLocalChanges()) return;
+  // v40.49 — se capta ANTES de armar el snapshot (que es asíncrono y tarda):
+  //  · obra y época del autoguardado (ver _edAsEpoch): el snapshot se descarta si
+  //    mientras tanto se guardó/borró el autoguardado o se cambió de obra;
+  //  · revisión de la nube en la que se basa lo que hay en pantalla (baseCloudRev):
+  //    al reabrir la obra permite saber si OTRO dispositivo guardó después de que
+  //    esta versión temporal partiera (ver _mcCloudNewerDecision en my-works.js).
+  const _asProjectId0 = edProjectId;
+  const _asKeyEpoch   = _edAutosaveKey(edProjectId);
+  const _asEpoch0     = _edAsEpoch(_asKeyEpoch);
+  let _asBaseRev = null;
+  try { _asBaseRev = (WorkStore.getCloudRev && WorkStore.getCloudRev(edProjectId)) || null; } catch(_) {}
   let snapshot = null;
   try {
     // Incluir biblioteca en el snapshot
@@ -28890,7 +29033,8 @@ async function _edAutosaveWrite(immediate) {
     snapshot = {
       ts: Date.now(),
       pages: _asPages,
-      bib: bibData || null
+      bib: bibData || null,
+      baseCloudRev: _asBaseRev   // v40.49: revisión de la nube de la que partió (null = obra sin revisión conocida)
     };
     // Guardar tamaño del último autosave para diagnóstico (botón 🩺)
     window._edLastAutosaveBytes = _asEstBytes;
@@ -28903,6 +29047,8 @@ async function _edAutosaveWrite(immediate) {
     return;
   }
   if (!snapshot) return;
+  // v40.49 — snapshot obsoleto: mientras se armaba, se guardó/borró el autoguardado o se cambió de obra.
+  if (edProjectId !== _asProjectId0 || _edAsEpoch(_asKeyEpoch) !== _asEpoch0) return;
   // Escritura en IndexedDB — mismo patrón ya establecido en el proyecto para
   // _bibSave (guardado de biblioteca): reintenta UNA vez (con conexión
   // fresca, por si la cacheada quedó en mal estado) antes de darla por
@@ -28913,6 +29059,7 @@ async function _edAutosaveWrite(immediate) {
   const _asKeyFinal = _edAutosaveKey(edProjectId);
   const _doWrite = async () => {
     const db = await _asDb();
+    if (_edAsEpoch(_asKeyEpoch) !== _asEpoch0) return; // v40.49: ver arriba (también cubre el reintento)
     const tx = db.transaction(_AS_STORE, 'readwrite');
     tx.objectStore(_AS_STORE).put(snapshot, _asKeyFinal);
     await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
@@ -28965,6 +29112,8 @@ async function _edAutosaveRead(id) {
 
 async function _edAutosaveClear(id) {
   const _clearId = id || edProjectId;
+  // v40.49: invalidar cualquier escritura en curso de esta obra (ver _edAsEpoch)
+  { const _k = _edAutosaveKey(_clearId); _edAsEpochs[_k] = _edAsEpoch(_k) + 1; }
   try {
     const db = await _asDb();
     await new Promise(res => {
@@ -29362,6 +29511,8 @@ async function edLoadProject(id){
       comicTitle:    comic.title        || '',
       cloudOnly:     comic.cloudOnly    || false,
       cloudNewer:    comic.cloudNewer   || false,
+      autosaveBaseRev: _asSave.baseCloudRev || null,   // v40.49
+      localCloudRev:   (WorkStore.getCloudRev && WorkStore.getCloudRev(id)) || null,
       decision:      _localSavedTs >= _asSave.ts ? 'DESCARTADO' : 'MOSTRADO_DIALOGO',
     };
     if (_localSavedTs >= _asSave.ts) {
@@ -31829,12 +31980,12 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   return null;
 }
 
-function edConfirm(msg, onOk, okLabel){
+function edConfirm(msg, onOk, okLabel, onCancel){  // onCancel (opcional, v40.50): se llama al pulsar Cancelar
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
   const okBtn   = $('edConfirmOk');
   const cancelBtn = $('edConfirmCancel');
-  if(!overlay) { if(window.confirm(msg)) onOk(); return; } // fallback por si el DOM no está listo
+  if(!overlay) { if(window.confirm(msg)) onOk(); else if(onCancel) onCancel(); return; } // fallback por si el DOM no está listo
   msgEl.textContent = msg;
   okBtn.textContent = okLabel || I18n.t('delete');
   _edConfirmCb = onOk;
@@ -31849,6 +32000,7 @@ function edConfirm(msg, onOk, okLabel){
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
     if(exec && _edConfirmCb) _edConfirmCb();
+    else if(!exec && onCancel) onCancel();
     _edConfirmCb = null;
     // Si el modo multiselect sigue activo tras cerrar el modal (ej: el usuario canceló),
     // desactivarlo para que no bloquee el editor
@@ -45189,6 +45341,7 @@ async function _edRunDiag() {
     L('  localSavedTs >= autosaveTs: ' + (_d.localSavedTs >= _d.autosaveTs));
     L('  comic.title al cargar: "' + _d.comicTitle + '"');
     L('  cloudOnly: ' + _d.cloudOnly + ' | cloudNewer: ' + _d.cloudNewer);
+    L('  revisión base del autoguardado: ' + (_d.autosaveBaseRev || '∅ (anterior a v40.49 o obra sin revisión)') + ' | cloudRev local: ' + (_d.localCloudRev || '∅'));
   } else {
     L('Sin decisión registrada (obra no se cargó en esta sesión)');
   }
@@ -45319,6 +45472,16 @@ async function _edRunDiag() {
   // Decisión tomada en my-works.js al pulsar "Editar" para ESTA apertura —
   // permite ver si la biblioteca se sobrescribió desde la nube y por qué,
   // sin depender de lo que Alberto pueda observar en pantalla.
+  L('\n── Última comprobación al guardar en la nube (v40.50) ──');
+  if (window._edLastCloudSaveCheck) {
+    const _cc = window._edLastCloudSaveCheck;
+    L('  ts: ' + _cc.ts + ' | supabaseId: ' + _cc.supabaseId);
+    L('  revisión de este dispositivo: ' + (_cc.localRev || '∅') + ' | updated_at de la nube: ' + (_cc.cloudUpdatedAt || '∅'));
+    L('  resultado: ' + (_cc.conflict ? 'CONFLICTO' : 'sin conflicto') + ' — ' + _cc.reason + (_cc.error ? ' | error: ' + _cc.error : ''));
+    L('  respuesta del usuario: ' + (_cc.choice || '—'));
+  } else {
+    L('  (aún no se ha guardado en la nube en esta sesión)');
+  }
   L('\n── Última decisión al pulsar "Editar" (biblioteca) ──');
   if (window._mcLastEditDecision) {
     const _me = window._mcLastEditDecision;
@@ -45327,6 +45490,13 @@ async function _edRunDiag() {
     L('  cloudOnly: ' + _me.cloudOnly + ' | hasLegacyStrokes: ' + _me.hasLegacyStrokes + ' | hasLocalSaved: ' + _me.hasLocalSaved);
     L('  localSavedAt: ' + (_me.localSavedAt || 'NULL — usando updatedAt: ' + _me.updatedAt));
     L('  cloudNewer: ' + _me.cloudNewer + ' | needsDownload: ' + _me.needsDownload);
+    L('  nube consultada: ' + (_me.cloudChecked ? 'sí' : 'NO') + (_me.cloudCheckError ? ' — ERROR: ' + _me.cloudCheckError : '') +
+      ' | updated_at nube: ' + (_me.cloudUpdatedAt || '∅') + ' | cloudRev local: ' + (_me.cloudRev || '∅') +
+      (_me.revAdopted ? ' (anotada ahora: obra anterior a v40.49)' : ''));
+    L('  temporal: ' + (_me.hasTemp ? 'SÍ (ts ' + (_me.tempTs ? new Date(_me.tempTs).toISOString() : '?') + ', base ' + (_me.tempBaseRev || '∅') + ')' : 'no') +
+      ' | borrado al abrir la de la nube: ' + (_me.tempDiscarded ? 'sí' : 'no'));
+    L('  motivo de la decisión: ' + (_me.decisionReason || '?') +
+      (_me.openedLocalUnverified ? ' | ⚠️ abierta la versión local SIN poder consultar la nube (confirmado por el usuario)' : ''));
     if (_me.bib) {
       const _b = _me.bib;
       L('  rama (solo informativa — desde v34.63 ambas usan la misma comparación): ' + _b.branch);

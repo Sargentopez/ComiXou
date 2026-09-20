@@ -976,279 +976,7 @@ function _mcRenderList() {
         Router.go('reader', { id });
       }
     } else if (action === 'edit') {
-      // Protección anti-doble-tap: en Android touch el evento puede dispararse dos veces
-      if (window._mcEditLock) return;
-      window._mcEditLock = true;
-      setTimeout(() => { window._mcEditLock = false; }, 3000);
-      // Contador bloqueante: se inicia AQUÍ, en el primer tick posible tras el toque,
-      // y bloquea la app hasta que el editor general confirme la carga completa
-      // (ver _cxLoadOverlayHide en EditorView_init, editor.js). Sustituye al toast
-      // que antes solo avisaba de la descarga de la nube — ahora cubre TODA la
-      // apertura, incluidas las obras que no necesitan descargarse.
-      if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
-      const _comicMeta = WorkStore.getById(id);
-      if (!_comicMeta || !_mcOwns(_comicMeta)) {
-        window._mcEditLock = false;
-        if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-        return;
-      }
-      const comicToEdit = WorkStore.getByIdFull
-        ? (await WorkStore.getByIdFull(id))
-        : WorkStore.getById(id);
-      // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
-      // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
-      // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
-      const _hasLegacyStrokes = (comicToEdit.editorData?.pages||[]).some(pg =>
-        (pg.layers||[]).some(l => l.type === 'stroke' && l.x == null)
-      );
-      // Antes de comprobar si la nube tiene una versión más reciente: mirar
-      // primero si hay un autoguardado local pendiente sin descartar
-      // explícitamente — petición de Alberto: "primero debe consultarse si
-      // hay versión temporal, antes de descargar de la nube". Motivo real:
-      // la propia secuencia "guardar local y LUEGO subir a la nube" hace
-      // que el reloj de la nube (updated_at, puesto por Supabase al recibir
-      // la subida) quede casi siempre unos instantes por delante del
-      // guardado local que lo originó — aunque sea EL MISMO guardado, no
-      // una versión más nueva de verdad. Sin esta comprobación: guardar en
-      // la nube, seguir editando, cerrar sin volver a guardar, y reabrir
-      // disparaba una descarga "la nube es más reciente" que sobrescribía
-      // localmente el trabajo más nuevo ANTES de que edLoadProject (ya
-      // dentro del editor) llegara siquiera a preguntar por el
-      // autoguardado. Si existe uno genuinamente más nuevo que el último
-      // guardado local confirmado, ni siquiera se consulta la nube — se deja
-      // pasar tal cual a edLoadProject, que es quien de verdad pregunta.
-      let _hasPendingAutosaveNewer = false;
-      try {
-        const _asPending = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(id) : null;
-        if (_asPending && _asPending.pages && _asPending.pages.length && _asPending.ts) {
-          const _localSavedTsCheck = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0).getTime();
-          _hasPendingAutosaveNewer = _asPending.ts > _localSavedTsCheck;
-        }
-      } catch(_e) { /* si falla la comprobación, seguir con el criterio normal de abajo, sin bloquear la apertura */ }
-
-      // Comprobar si la nube tiene una versión más reciente que la local —
-      // se omite por completo (ni se consulta) si ya hay un autoguardado
-      // pendiente más nuevo, ver arriba.
-      let _cloudNewer = false;
-      if (!_hasPendingAutosaveNewer && comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
-        try {
-          const _cloudMeta = await SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]);
-          if (_cloudMeta && _cloudMeta[0]) {
-            const _cloudDate  = new Date(_cloudMeta[0].updated_at || 0);
-            // Comparar con localSavedAt — cuándo guardó localmente este dispositivo.
-            // Si la nube es más nueva que el último guardado local → descargar.
-            const _localSaved = new Date(comicToEdit.localSavedAt || comicToEdit.updatedAt || 0);
-            _cloudNewer = _cloudDate > _localSaved;
-          }
-        } catch(e) { console.warn('fecha nube:', e); }
-      }
-      // Si localSavedAt es reciente y la nube no es más nueva, confiar en OPFS local
-      // aunque editorData no esté en el índice ligero (puede estar en OPFS)
-      const _hasLocalSaved = !!(comicToEdit.localSavedAt);
-      const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && (
-        comicToEdit.cloudOnly ||
-        (!comicToEdit.editorData?.pages?.length && !_hasLocalSaved) ||
-        _hasLegacyStrokes ||
-        _cloudNewer  // la nube tiene versión más reciente → descargar siempre
-      );
-      // DIAGNÓSTICO v34.60: registrar la decisión al abrir la obra — visible
-      // desde el botón 🩺 del editor (window._mcLastEditDecision). Estos valores
-      // (cloudNewer, timestamps comparados, qué rama de biblioteca se ejecutó)
-      // no son observables directamente por Alberto, de ahí la instrumentación.
-      window._mcLastEditDecision = {
-        ts: new Date().toISOString(),
-        comicId: id,
-        title: comicToEdit.title || '',
-        supabaseId: comicToEdit.supabaseId || null,
-        cloudOnly: comicToEdit.cloudOnly === true,
-        localSavedAt: comicToEdit.localSavedAt || null,
-        updatedAt: comicToEdit.updatedAt || null,
-        hasLegacyStrokes: _hasLegacyStrokes,
-        hasLocalSaved: _hasLocalSaved,
-        hasPendingAutosaveNewer: _hasPendingAutosaveNewer,
-        cloudNewer: _cloudNewer,
-        needsDownload: _needsDownload,
-        bib: null, // se completa más abajo, en la rama de biblioteca que corresponda
-      };
-      if (comicToEdit && _needsDownload) {
-        if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_downloadingCloud'));
-        try {
-          const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
-          // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
-          // conflictos con otras conexiones abiertas a cxAnims
-          const _animIdbSave = (key, data) =>
-            window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve();
-          const _idbWrites = [];
-          const _edataClean = {
-            ...editorData,
-            pages: (editorData.pages || []).map((pg, pi) => ({
-              ...pg,
-              layers: (pg.layers || []).map((l, li) => {
-                // _apngSrc: dataUrl APNG descargado de la nube
-                if (l._apngSrc) {
-                  const lClean = Object.assign({}, l);
-                  delete lClean._animFrames;
-                  delete lClean._animReady;
-                  delete lClean._oc;
-                  if (window._mcIdbAvail !== false) {
-                    // Modo normal: externalizar a IDB y eliminar _apngSrc del editorData
-                    const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
-                    const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
-                    _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
-                    delete lClean._apngSrc;
-                    lClean._pngFramesKey = _idbKey;
-                  } else {
-                    // Modo incógnito: OPFS/IDB tienen cuota insuficiente o no persisten.
-                    // Guardar _apngSrc en store de memoria por comicId+pi+li.
-                    // edLoadProject lo inyectará en el layer antes de deserializar.
-                    if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
-                    if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
-                    const _frameKey = pi + '_' + li;
-                    window._mcIncognitoFrames[comicToEdit.id][_frameKey] = l._apngSrc;
-                    // El layer solo lleva una referencia ligera — el _apngSrc real está en memoria
-                    delete lClean._apngSrc;
-                    lClean._mcIncognitoKey = _frameKey; // marca para reconstrucción
-                  }
-                  return lClean;
-                }
-                // _pngFrames (sistema antiguo): externalizar a IDB
-                if (l._pngFrames) {
-                  if (window._mcIdbAvail === false) {
-                    // Incógnito: guardar en store de memoria
-                    if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
-                    if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
-                    const _fk2 = pi + '_' + li;
-                    window._mcIncognitoFrames[comicToEdit.id][_fk2] = l._pngFrames;
-                    const { _pngFrames, ...lClean } = l;
-                    lClean._mcIncognitoKey = _fk2;
-                    return lClean;
-                  }
-                  const _uid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
-                  const _idbKey = _uid2 + '__' + comicToEdit.id + '_' + pi + '_' + li;
-                  _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
-                  const { _pngFrames, ...lClean } = l;
-                  return { ...lClean, _pngFramesKey: _idbKey };
-                }
-                return l;
-              }),
-            })),
-          };
-          // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
-          if (_idbWrites.length) await Promise.all(_idbWrites);
-          // v40.45: las muestras de color de la obra (editorData._palette) solo se
-          // guardan en local — la nube aún no las lleva. Al sustituir editorData por
-          // lo descargado hay que conservarlas, o las muestras volverían a las de
-          // por defecto sin que nadie las haya cambiado. Los datos locales previos
-          // están en comicToEdit.editorData o, si la nube era más nueva, en
-          // comicToEdit.localEditorData (ver la sincronización de más arriba).
-          const _keepPalette = comicToEdit.editorData?._palette || comicToEdit.localEditorData?._palette;
-          if (_keepPalette && !_edataClean._palette) _edataClean._palette = _keepPalette;
-          await WorkStore.save({
-            ...comicToEdit,
-            cloudOnly: false,
-            cloudNewer: false,
-            // Preservar editorData local existente en localEditorData ANTES de sobreescribir
-            localEditorData: (comicToEdit.editorData?.pages?.length)
-              ? comicToEdit.editorData
-              : (comicToEdit.localEditorData || null),
-            editorData: _edataClean,
-            title:   work.title    || comicToEdit.title,
-            genre:   work.genre    || comicToEdit.genre,
-            navMode: work.nav_mode || comicToEdit.navMode,
-            // Alinear localSavedAt con el instante REAL de guardado del
-            // contenido recién descargado (work.updated_at) — NO con el
-            // instante de la propia descarga.
-            //
-            // BUG REAL CORREGIDO (reportado por Alberto: la app se bloqueó,
-            // cerró la pestaña confiando en el autoguardado, y al reabrir la
-            // obra se cargó sin preguntar y sin ninguno de los cambios
-            // recientes). Antes se usaba new Date().toISOString() aquí — un
-            // timestamp que no describe el CONTENIDO, solo la ACCIÓN de
-            // descargar. edLoadProject descarta el autoguardado sin
-            // preguntar cuando localSavedAt >= autosave.ts (ver su
-            // comentario) — con el timestamp de descarga, CUALQUIER
-            // autoguardado real (de la sesión que se acaba de perder, con
-            // cambios genuinos nunca subidos a la nube) queda marcado como
-            // "más viejo que el disco" solo porque la descarga en sí
-            // ocurrió después, aunque su contenido sea mucho más reciente
-            // que lo que se acaba de descargar. work.updated_at es el
-            // timestamp real del contenido — con eso, un autoguardado
-            // genuinamente más nuevo SIGUE detectándose y preguntándose,
-            // exactamente como pide Alberto: solo se descarta sin preguntar
-            // cuando de verdad no hay nada más reciente que recuperar.
-            localSavedAt: work.updated_at || new Date().toISOString(),
-          });
-          // Justo aquí, lo que se va a cargar en el editor ES exactamente lo
-          // que hay en la nube ahora mismo (se acaba de descargar y escribir
-          // en OPFS) — señal para que edLoadProject pueda tratar también el
-          // guardado en nube como "ya sincronizado" en esta carga, en vez de
-          // forzar siempre una subida completa en el primer guardado en nube
-          // de la sesión. Se consume (se borra) la primera vez que se lee.
-          sessionStorage.setItem('cx_just_synced_cloud', '1');
-          // Decidir la biblioteca: gana quien sea más reciente (ver _mcResolveBiblioteca),
-          // no una heurística ligada a por qué la obra necesitó redescargarse.
-          try {
-            // Backup de seguridad de la biblioteca local actual, por si _edSaveProject
-            // necesita restaurarla (ver su lógica de "_bibCurrentItems===0"). Se
-            // mantiene igual que en versiones anteriores como red de seguridad,
-            // aunque con la comparación de frescura ya no debería hacer falta.
-            const _bibKeyBackup = `cs_biblioteca_${comicToEdit.id}`;
-            const _bibLocalBackupKey = `cs_biblioteca_local_${comicToEdit.id}`;
-            if (!localStorage.getItem(_bibLocalBackupKey)) {
-              const _bibCurrentData = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKeyBackup) : null;
-              if (_bibCurrentData) { try { localStorage.setItem(_bibLocalBackupKey, JSON.stringify(_bibCurrentData)); } catch(e) {} }
-            }
-          } catch(e) {}
-          window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
-          window._mcLastEditDecision.bib.branch = 'needsDownload';
-        } catch(err) {
-          window._mcEditLock = false;
-          if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-          _mcToast(I18n.t('mc_errDownloadCloud') + err.message);
-          return;
-        }
-      }
-
-      // Cuando local es más nueva: no tocar la biblioteca. Ver _mcResolveBiblioteca
-      // — la decisión ya no depende de si esta obra necesitó redescargarse.
-      if (!_needsDownload) {
-        window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
-        window._mcLastEditDecision.bib.branch = 'notNeedsDownload';
-      }
-
-      // El aviso de modo incógnito lo gestiona _edShowIncognitoWarning en editor.js
-
-      // Si se descargó de la nube, borrar el autosave local de esta obra.
-      // Esto garantiza que el editor cargue siempre la versión recién descargada
-      // y nunca ofrezca "recuperar" un autosave de una sesión anterior.
-      if (_needsDownload) {
-        try {
-          const _asUid = (() => {
-            try {
-              const _ss = JSON.parse(localStorage.getItem('cs_session') || 'null');
-              return (_ss && _ss.id) ? String(_ss.id).replace(/[^a-zA-Z0-9_-]/g, '_') : '_anon_';
-            } catch(_) { return '_anon_'; }
-          })();
-          await new Promise(res => {
-            const _asReq = indexedDB.open('cxAutosave', 1);
-            _asReq.onupgradeneeded = ev => ev.target.result.createObjectStore('saves');
-            _asReq.onsuccess = ev => {
-              const _asDb = ev.target.result;
-              try {
-                const tx = _asDb.transaction('saves', 'readwrite');
-                tx.objectStore('saves').delete(_asUid + '_' + id);
-                tx.oncomplete = res;
-                tx.onerror    = res;
-              } catch(_) { res(); }
-            };
-            _asReq.onerror = res;
-          });
-        } catch(_) { /* no crítico — el editor lo descartará por timestamp */ }
-      }
-
-      // Guardar qué proyecto editar y navegar al editor
-      sessionStorage.setItem('cx_edit_id', id);
-      Router.go('editor');
+      _mcOpenWorkForEdit(id);
     } else if (action === 'publish') {
       const comic = WorkStore.getById(id);
       if (!comic) return;
@@ -1416,6 +1144,408 @@ function _mcRenderList() {
   });
 }
 
+/* ── ABRIR UNA OBRA PARA EDITAR (v40.49) ──
+   Un único camino para «Editar» y para «sobrescribir» una obra con el mismo
+   título, de modo que NINGUNA vía abra el editor sin haber consultado la nube.
+   Reglas (petición de Alberto):
+   · La nube se consulta siempre; nunca se abre una versión cacheada sin contrastarla.
+   · Nube más nueva que la temporal/local → se abre la de la nube y se borra la temporal.
+   · Nube inaccesible → sin versión local, error; con ella, aviso y pregunta.
+   · Después, con cambios sin guardar, edLoadProject pregunta si recuperarlos. */
+
+// Milisegundos de una fecha de la nube (0 si falta o no se puede leer). Tolera los
+// formatos de PostgREST: «+00:00» / «Z» / «+00», microsegundos (se recortan a
+// milisegundos, lo que entienden todos los navegadores) y fecha sin zona horaria
+// (columna «timestamp» sin tz → se toma como UTC).
+function _mcIsoMs(v) { return cxIsoMs(v); }   // implementación compartida en utils.js (v40.50)
+
+// ¿La versión de la nube es más nueva que la de este dispositivo? — función pura.
+// Patrón estándar de concurrencia optimista (como ETag / If-Match): se compara la
+// revisión ACTUAL de la nube (works.updated_at) con la revisión en la que se basa
+// lo de este dispositivo, por IGUALDAD. Distinta = alguien (otro dispositivo) ha
+// guardado después. No depende de que los relojes de los dispositivos coincidan
+// ni de que «guardar local y luego subir» deje la nube unos instantes por delante.
+//   · Hay versión temporal con base (baseCloudRev): esa es la revisión de partida.
+//     Se descarta el temporal si la revisión cambió Y la nube es posterior a él.
+//   · Temporal antigua sin base (autoguardada antes de v40.49): solo se pueden
+//     comparar fechas → nube posterior al temporal.
+//   · Sin temporal: se compara con cloudRev (la de la última descarga/subida de
+//     este dispositivo). Obras anteriores a v40.49 aún sin cloudRev: criterio de
+//     siempre (nube posterior al último guardado local) hasta la primera
+//     descarga o subida, que ya la registra.
+function _mcCloudNewerDecision(p) {
+  const cloudMs = _mcIsoMs(p.cloudUpdatedAt);
+  if (!cloudMs) return { newer: false, reason: 'la nube no devuelve fecha' };
+  if (p.hasTemp) {
+    const baseMs = _mcIsoMs(p.tempBaseRev);
+    if (baseMs) {
+      if (cloudMs === baseMs) return { newer: false, reason: 'temporal: la nube no ha cambiado desde que partió' };
+      // La nube cambió desde que partió el temporal. Solo se descarta el temporal si
+      // además la nube es POSTERIOR a él (regla de Alberto: «nube más nueva que la
+      // versión temporal»). Si el temporal es posterior (edición simultánea en dos
+      // dispositivos) no se destruye trabajo más reciente sin preguntar: se ofrece
+      // recuperarlo como siempre. La igualdad de revisión de arriba, en cambio, evita
+      // el falso «nube más nueva» por desfase de relojes o por guardar local y luego subir.
+      return cloudMs > (p.tempTs || 0)
+        ? { newer: true,  reason: 'temporal: la nube ha cambiado desde que partió y es posterior al temporal' }
+        : { newer: false, reason: 'temporal: la nube cambió pero el temporal es posterior (edición simultánea): se ofrece recuperarlo' };
+    }
+    return cloudMs > (p.tempTs || 0)
+      ? { newer: true,  reason: 'temporal sin base: la nube es posterior al temporal (fechas)' }
+      : { newer: false, reason: 'temporal sin base: el temporal es posterior a la nube (fechas)' };
+  }
+  const revMs = _mcIsoMs(p.cloudRev);
+  if (revMs) {
+    return cloudMs !== revMs
+      ? { newer: true,  reason: 'sin temporal: la nube tiene otra revisión distinta de la local' }
+      : { newer: false, reason: 'sin temporal: la nube tiene la misma revisión que lo local' };
+  }
+  const localMs = _mcIsoMs(p.localSavedAt || p.updatedAt);
+  return cloudMs > localMs
+    ? { newer: true,  reason: 'sin revisión guardada: la nube es posterior al último guardado local (fechas)' }
+    : { newer: false, reason: 'sin revisión guardada: lo local es igual o posterior a la nube (fechas)' };
+}
+
+async function _mcOpenWorkForEdit(id) {
+  // Protección anti-doble-tap: en Android touch el evento puede dispararse dos veces
+  if (window._mcEditLock) return;
+  window._mcEditLock = true;
+  setTimeout(() => { window._mcEditLock = false; }, 3000);
+  // Contador bloqueante: se inicia AQUÍ, en el primer tick posible tras el toque,
+  // y bloquea la app hasta que el editor general confirme la carga completa
+  // (ver _cxLoadOverlayHide en EditorView_init, editor.js). Sustituye al toast
+  // que antes solo avisaba de la descarga de la nube — ahora cubre TODA la
+  // apertura, incluidas las obras que no necesitan descargarse.
+  if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
+  const _comicMeta = WorkStore.getById(id);
+  if (!_comicMeta || !_mcOwns(_comicMeta)) {
+    window._mcEditLock = false;
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+    return;
+  }
+  const comicToEdit = WorkStore.getByIdFull
+    ? (await WorkStore.getByIdFull(id))
+    : WorkStore.getById(id);
+  // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
+  // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
+  // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
+  const _hasLegacyStrokes = (comicToEdit.editorData?.pages||[]).some(pg =>
+    (pg.layers||[]).some(l => l.type === 'stroke' && l.x == null)
+  );
+  // ── v40.49 — QUÉ VERSIÓN SE ABRE ───────────────────────────────────
+  // Petición de Alberto: la obra puede haberse continuado en OTRO
+  // dispositivo. Por tanto:
+  //  1) La nube se consulta SIEMPRE antes de abrir (token refrescado y sin
+  //     caché). Nunca se sirve una versión local a ciegas.
+  //  2) Si la nube tiene una versión más nueva que la temporal (autoguardado)
+  //     o que la local, se abre la de la nube y la temporal de este
+  //     dispositivo se BORRA.
+  //  3) Si no, todo sigue igual que antes: con cambios sin guardar,
+  //     edLoadProject pregunta si recuperarlos.
+  //
+  // Hasta v40.48, con un autoguardado más nuevo que el último guardado local
+  // ni siquiera se consultaba la nube (arreglo de v39.65 §3.7a, pensado para
+  // que «la nube parezca siempre unos instantes más nueva» tras guardar en
+  // ella no descartase trabajo): se abría la copia local y se preguntaba por
+  // recuperar aunque otro dispositivo hubiera guardado después.
+  //
+  // «¿La nube es más nueva?» ya no se decide comparando relojes de
+  // dispositivos distintos sino con la revisión de la nube en la que se basa
+  // lo de este dispositivo (WorkStore.getCloudRev) y en la que partió el
+  // autoguardado (baseCloudRev) — ver _mcCloudNewerDecision.
+  let _asPending = null; // autoguardado (versión temporal) válido de esta obra, si lo hay
+  try {
+    const _asRead = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(id) : null;
+    if (_asRead && _asRead.pages && _asRead.pages.length && _asRead.ts) _asPending = _asRead;
+  } catch(_e) { /* sin acceso al autoguardado: se sigue como si no hubiera temporal */ }
+
+  const _hasLocalVersion = !!(comicToEdit.editorData?.pages?.length);
+  let _cloudRow = null;         // fila `works` de la nube (null si la obra no existe allí)
+  let _cloudCheckFailed = null; // Error si NO se ha podido consultar la nube
+  if (comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
+    if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_checkingCloud'));
+    try {
+      // fetchWorksByIds refresca el token y lee con cache:'no-store'. El tope
+      // de 12 s cubre también el refresco, que no tiene tiempo límite propio.
+      const _cm = await Promise.race([
+        SupabaseClient.fetchWorksByIds([comicToEdit.supabaseId]),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout comprobando la nube')), 12000)),
+      ]);
+      _cloudRow = (_cm && _cm[0]) || null;
+    } catch(e) {
+      _cloudCheckFailed = e || new Error('No se pudo consultar la nube');
+      console.warn('fecha nube:', e);
+    }
+    if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_openingWork'));
+  }
+  const _cloudRev = (WorkStore.getCloudRev && WorkStore.getCloudRev(comicToEdit.id)) || null;
+  const _decision = _cloudRow
+    ? _mcCloudNewerDecision({
+        cloudUpdatedAt: _cloudRow.updated_at,
+        cloudRev:       _cloudRev,
+        hasTemp:        !!_asPending,
+        tempTs:         _asPending ? _asPending.ts : 0,
+        tempBaseRev:    _asPending ? _asPending.baseCloudRev : null,
+        localSavedAt:   comicToEdit.localSavedAt,
+        updatedAt:      comicToEdit.updatedAt,
+      })
+    : { newer: false, reason: _cloudCheckFailed ? 'nube-inaccesible'
+                            : (comicToEdit.supabaseId ? 'la-obra-no-existe-en-la-nube' : 'obra-solo-local') };
+  const _cloudNewer = _decision.newer;
+  // Si localSavedAt es reciente y la nube no es más nueva, confiar en OPFS local
+  // aunque editorData no esté en el índice ligero (puede estar en OPFS)
+  const _hasLocalSaved = !!(comicToEdit.localSavedAt);
+  const _needsDownload = comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && !_cloudCheckFailed && (
+    comicToEdit.cloudOnly ||
+    (!comicToEdit.editorData?.pages?.length && !_hasLocalSaved) ||
+    _hasLegacyStrokes ||
+    _cloudNewer  // la nube tiene versión más reciente → descargar siempre
+  );
+  // DIAGNÓSTICO v34.60: registrar la decisión al abrir la obra — visible
+  // desde el botón 🩺 del editor (window._mcLastEditDecision). Estos valores
+  // (cloudNewer, timestamps comparados, qué rama de biblioteca se ejecutó)
+  // no son observables directamente por Alberto, de ahí la instrumentación.
+  window._mcLastEditDecision = {
+    ts: new Date().toISOString(),
+    comicId: id,
+    title: comicToEdit.title || '',
+    supabaseId: comicToEdit.supabaseId || null,
+    cloudOnly: comicToEdit.cloudOnly === true,
+    localSavedAt: comicToEdit.localSavedAt || null,
+    updatedAt: comicToEdit.updatedAt || null,
+    hasLegacyStrokes: _hasLegacyStrokes,
+    hasLocalSaved: _hasLocalSaved,
+    // v40.49 (botón 🩺: «Última decisión al pulsar Editar»)
+    hasTemp: !!_asPending,
+    tempTs: _asPending ? _asPending.ts : null,
+    tempBaseRev: _asPending ? (_asPending.baseCloudRev || null) : null,
+    tempDiscarded: false,          // true si se borra al abrir la de la nube (más abajo)
+    cloudChecked: !!(comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && !_cloudCheckFailed),
+    cloudCheckError: _cloudCheckFailed ? String(_cloudCheckFailed.message || _cloudCheckFailed) : null,
+    cloudUpdatedAt: _cloudRow ? (_cloudRow.updated_at || null) : null,
+    cloudRev: _cloudRev,
+    decisionReason: _decision.reason,
+    openedLocalUnverified: false,  // true si se abrió la local sin poder consultar la nube (confirmado)
+    cloudNewer: _cloudNewer,
+    needsDownload: _needsDownload,
+    bib: null, // se completa más abajo, en la rama de biblioteca que corresponda
+  };
+  // v40.50 — Obra anterior a v40.49 (sin revisión anotada) y la nube NO es más nueva por
+  // fechas: se anota ahora la revisión actual de la nube como base de esta copia. Así el
+  // PRIMER guardado en la nube de cada obra antigua ya queda protegido (ver
+  // _edCloudConflictCheck en editor.js); sin esto la protección solo empezaría tras su
+  // primera descarga o subida. Es la misma conclusión que ya se acaba de tomar por fechas
+  // («lo local es igual o posterior a la nube»): no la empeora.
+  if (_cloudRow && !_cloudRev && !_cloudNewer && _cloudRow.updated_at) {
+    try { WorkStore.setCloudRev(comicToEdit.id, _cloudRow.updated_at); } catch(_) {}
+    window._mcLastEditDecision.revAdopted = true;
+  }
+
+  // ── v40.49 — La nube NO se ha podido consultar ─────────────────────
+  // Petición de Alberto: sin nube y sin versión local no hay nada que abrir
+  // (nunca se sirve una versión cacheada a ciegas). Con versión local se
+  // avisa de que puede estar desactualizada y se pregunta; si acepta, sigue
+  // como siempre (con cambios sin guardar, edLoadProject pregunta si
+  // recuperarlos). Con trazos en formato antiguo la copia local se ve mal y
+  // hace falta la de la nube, así que tampoco se ofrece.
+  if (_cloudCheckFailed) {
+    if (!_hasLocalVersion || _hasLegacyStrokes) {
+      window._mcEditLock = false;
+      if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+      if (_hasLocalVersion) _mcToast(I18n.t('mc_errDownloadCloud') + (_cloudCheckFailed.message || ''));
+      else appAlert(I18n.t('mc_cloudUnreachableNoLocal'));
+      return;
+    }
+    // El contador bloqueante (z-index mayor) taparía el diálogo: ocultarlo.
+    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+    const _openAnyway = await new Promise(res => {
+      appConfirm(I18n.t('mc_cloudUnreachableLocal'), () => res(true),
+                 I18n.t('mc_cloudUnreachableYes'), () => res(false));
+    });
+    if (!_openAnyway) { window._mcEditLock = false; return; }
+    window._mcLastEditDecision.openedLocalUnverified = true;
+    if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
+  }
+
+  if (comicToEdit && _needsDownload) {
+    if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_downloadingCloud'));
+    try {
+      const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
+      // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
+      // conflictos con otras conexiones abiertas a cxAnims
+      const _animIdbSave = (key, data) =>
+        window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve();
+      const _idbWrites = [];
+      const _edataClean = {
+        ...editorData,
+        pages: (editorData.pages || []).map((pg, pi) => ({
+          ...pg,
+          layers: (pg.layers || []).map((l, li) => {
+            // _apngSrc: dataUrl APNG descargado de la nube
+            if (l._apngSrc) {
+              const lClean = Object.assign({}, l);
+              delete lClean._animFrames;
+              delete lClean._animReady;
+              delete lClean._oc;
+              if (window._mcIdbAvail !== false) {
+                // Modo normal: externalizar a IDB y eliminar _apngSrc del editorData
+                const _uid = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+                const _idbKey = l._pngFramesKey || (_uid + '__' + comicToEdit.id + '_' + pi + '_' + li);
+                _idbWrites.push(_animIdbSave(_idbKey, l._apngSrc));
+                delete lClean._apngSrc;
+                lClean._pngFramesKey = _idbKey;
+              } else {
+                // Modo incógnito: OPFS/IDB tienen cuota insuficiente o no persisten.
+                // Guardar _apngSrc en store de memoria por comicId+pi+li.
+                // edLoadProject lo inyectará en el layer antes de deserializar.
+                if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
+                if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
+                const _frameKey = pi + '_' + li;
+                window._mcIncognitoFrames[comicToEdit.id][_frameKey] = l._apngSrc;
+                // El layer solo lleva una referencia ligera — el _apngSrc real está en memoria
+                delete lClean._apngSrc;
+                lClean._mcIncognitoKey = _frameKey; // marca para reconstrucción
+              }
+              return lClean;
+            }
+            // _pngFrames (sistema antiguo): externalizar a IDB
+            if (l._pngFrames) {
+              if (window._mcIdbAvail === false) {
+                // Incógnito: guardar en store de memoria
+                if (!window._mcIncognitoFrames) window._mcIncognitoFrames = {};
+                if (!window._mcIncognitoFrames[comicToEdit.id]) window._mcIncognitoFrames[comicToEdit.id] = {};
+                const _fk2 = pi + '_' + li;
+                window._mcIncognitoFrames[comicToEdit.id][_fk2] = l._pngFrames;
+                const { _pngFrames, ...lClean } = l;
+                lClean._mcIncognitoKey = _fk2;
+                return lClean;
+              }
+              const _uid2 = (() => { try { const _s = JSON.parse(localStorage.getItem('cs_session')||'null'); return (_s&&_s.id)?String(_s.id).replace(/[^a-zA-Z0-9_-]/g,'_'):'_anon_'; } catch(_e){return '_anon_';} })();
+              const _idbKey = _uid2 + '__' + comicToEdit.id + '_' + pi + '_' + li;
+              _idbWrites.push(_animIdbSave(_idbKey, l._pngFrames));
+              const { _pngFrames, ...lClean } = l;
+              return { ...lClean, _pngFramesKey: _idbKey };
+            }
+            return l;
+          }),
+        })),
+      };
+      // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
+      if (_idbWrites.length) await Promise.all(_idbWrites);
+      // v40.45: las muestras de color de la obra (editorData._palette) solo se
+      // guardan en local — la nube aún no las lleva. Al sustituir editorData por
+      // lo descargado hay que conservarlas, o las muestras volverían a las de
+      // por defecto sin que nadie las haya cambiado. Los datos locales previos
+      // están en comicToEdit.editorData o, si la nube era más nueva, en
+      // comicToEdit.localEditorData (ver la sincronización de más arriba).
+      const _keepPalette = comicToEdit.editorData?._palette || comicToEdit.localEditorData?._palette;
+      if (_keepPalette && !_edataClean._palette) _edataClean._palette = _keepPalette;
+      await WorkStore.save({
+        ...comicToEdit,
+        cloudOnly: false,
+        cloudNewer: false,
+        // Preservar editorData local existente en localEditorData ANTES de sobreescribir
+        localEditorData: (comicToEdit.editorData?.pages?.length)
+          ? comicToEdit.editorData
+          : (comicToEdit.localEditorData || null),
+        editorData: _edataClean,
+        title:   work.title    || comicToEdit.title,
+        genre:   work.genre    || comicToEdit.genre,
+        navMode: work.nav_mode || comicToEdit.navMode,
+        // Alinear localSavedAt con el instante REAL de guardado del
+        // contenido recién descargado (work.updated_at) — NO con el
+        // instante de la propia descarga.
+        //
+        // BUG REAL CORREGIDO (reportado por Alberto: la app se bloqueó,
+        // cerró la pestaña confiando en el autoguardado, y al reabrir la
+        // obra se cargó sin preguntar y sin ninguno de los cambios
+        // recientes). Antes se usaba new Date().toISOString() aquí — un
+        // timestamp que no describe el CONTENIDO, solo la ACCIÓN de
+        // descargar. edLoadProject descarta el autoguardado sin
+        // preguntar cuando localSavedAt >= autosave.ts (ver su
+        // comentario) — con el timestamp de descarga, CUALQUIER
+        // autoguardado real (de la sesión que se acaba de perder, con
+        // cambios genuinos nunca subidos a la nube) queda marcado como
+        // "más viejo que el disco" solo porque la descarga en sí
+        // ocurrió después, aunque su contenido sea mucho más reciente
+        // que lo que se acaba de descargar. work.updated_at es el
+        // timestamp real del contenido — con eso, un autoguardado
+        // genuinamente más nuevo SIGUE detectándose y preguntándose,
+        // exactamente como pide Alberto: solo se descarta sin preguntar
+        // cuando de verdad no hay nada más reciente que recuperar.
+        localSavedAt: work.updated_at || new Date().toISOString(),
+      });
+      // v40.49: revisión de la nube en la que se basa lo recién descargado
+      // (ver WorkStore.getCloudRev): la próxima vez, si sigue igual, no ha
+      // guardado nadie más y se puede abrir lo local con seguridad.
+      try { WorkStore.setCloudRev(comicToEdit.id, work.updated_at || null); } catch(_) {}
+      // Justo aquí, lo que se va a cargar en el editor ES exactamente lo
+      // que hay en la nube ahora mismo (se acaba de descargar y escribir
+      // en OPFS) — señal para que edLoadProject pueda tratar también el
+      // guardado en nube como "ya sincronizado" en esta carga, en vez de
+      // forzar siempre una subida completa en el primer guardado en nube
+      // de la sesión. Se consume (se borra) la primera vez que se lee.
+      sessionStorage.setItem('cx_just_synced_cloud', '1');
+      // Decidir la biblioteca: gana quien sea más reciente (ver _mcResolveBiblioteca),
+      // no una heurística ligada a por qué la obra necesitó redescargarse.
+      try {
+        // Backup de seguridad de la biblioteca local actual, por si _edSaveProject
+        // necesita restaurarla (ver su lógica de "_bibCurrentItems===0"). Se
+        // mantiene igual que en versiones anteriores como red de seguridad,
+        // aunque con la comparación de frescura ya no debería hacer falta.
+        const _bibKeyBackup = `cs_biblioteca_${comicToEdit.id}`;
+        const _bibLocalBackupKey = `cs_biblioteca_local_${comicToEdit.id}`;
+        if (!localStorage.getItem(_bibLocalBackupKey)) {
+          const _bibCurrentData = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKeyBackup) : null;
+          if (_bibCurrentData) { try { localStorage.setItem(_bibLocalBackupKey, JSON.stringify(_bibCurrentData)); } catch(e) {} }
+        }
+      } catch(e) {}
+      window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+      window._mcLastEditDecision.bib.branch = 'needsDownload';
+    } catch(err) {
+      window._mcEditLock = false;
+      if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+      _mcToast(I18n.t('mc_errDownloadCloud') + err.message);
+      return;
+    }
+  }
+
+  // Cuando local es más nueva: no tocar la biblioteca. Ver _mcResolveBiblioteca
+  // — la decisión ya no depende de si esta obra necesitó redescargarse.
+  if (!_needsDownload) {
+    if (_cloudCheckFailed) {
+      // Ya se sabe que no hay nube: no gastar otra espera intentando bajar la biblioteca.
+      window._mcLastEditDecision.bib = { action: 'skipped_cloud_unreachable', branch: 'cloudUnreachable' };
+    } else {
+      window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+      window._mcLastEditDecision.bib.branch = 'notNeedsDownload';
+    }
+  }
+
+  // El aviso de modo incógnito lo gestiona _edShowIncognitoWarning en editor.js
+
+  // v40.49 — Se abre la versión de la nube PORQUE ES MÁS NUEVA que la
+  // temporal: la temporal de este dispositivo se BORRA (petición de Alberto),
+  // para no volver a ofrecer recuperarla. Se borra con _edAutosaveClear (la
+  // misma conexión —versión 2— y limpieza de frames «as_» que usa el editor):
+  // el borrado anterior abría 'cxAutosave' en versión 1, daba VersionError y
+  // no hacía nada. Solo se llega aquí si la descarga tuvo éxito (un fallo ya
+  // habría salido con return), y solo cuando el motivo es que la nube es más
+  // nueva: una descarga por otras razones (trazos antiguos…) no descarta
+  // trabajo sin guardar.
+  if (_needsDownload && _cloudNewer && _asPending) {
+    try {
+      if (typeof _edAutosaveClear === 'function') await _edAutosaveClear(id);
+      const _still = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(id) : null;
+      window._mcLastEditDecision.tempDiscarded = !_still;
+    } catch(_) { /* no crítico: edLoadProject lo descartará por fecha */ }
+  }
+
+  // Guardar qué proyecto editar y navegar al editor
+  sessionStorage.setItem('cx_edit_id', id);
+  Router.go('editor');
+}
+
 /* ── NAV Y MODALES ── */
 function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
@@ -1455,8 +1585,10 @@ function _mcCreateProject() {
       if (overwrite) {
         // Sobrescribir: abrir el editor con la obra existente
         _mcCloseModal();
-        sessionStorage.setItem('cx_edit_id', _mcDuplicateWork.id);
-        Router.go('editor');
+        // v40.49: por el MISMO camino que el botón «Editar» (consulta la nube,
+        // versión temporal…). Antes se abría el editor directamente con la copia
+        // local, sin mirar la nube.
+        _mcOpenWorkForEdit(_mcDuplicateWork.id);
       }
       // Si no sobrescribe: el modal de nueva obra sigue abierto para que edite el nombre
     });

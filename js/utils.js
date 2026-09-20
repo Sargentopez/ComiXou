@@ -641,7 +641,7 @@ function _appConfirmGetEl() {
   return el;
 }
 
-function appConfirm(msg, onOk, okLabel) {
+function appConfirm(msg, onOk, okLabel, onCancel) {  // onCancel (opcional, v40.49): se llama al pulsar Cancelar
   const overlay  = _appConfirmGetEl();
   const msgEl    = document.getElementById(`${_APP_CONFIRM_ID}_msg`);
   const okBtn    = document.getElementById(`${_APP_CONFIRM_ID}_ok`);
@@ -656,6 +656,7 @@ function appConfirm(msg, onOk, okLabel) {
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
     if (exec && onOk) onOk();
+    else if (!exec && onCancel) onCancel();
   };
   const onYes = () => close(true);
   const onNo  = () => close(false);
@@ -924,3 +925,17 @@ document.addEventListener('focusout', e => {
    nunca como <img src>: una imagen no hereda color de esta forma. */
 const ICON_UNDO_SVG = '<svg viewBox="0 0 197 183" width="0.85em" height="1em" style="display:inline-block;vertical-align:-0.15em;flex-shrink:0" aria-hidden="true" focusable="false"><g transform="translate(98.132 91.087)"><path d="M -97.132 -0.828 L 2.472 -90.087 L 54.604 -90.087 L -11.247 -25.151 L 96.218 -24.237 L 97.132 24.237 L -11.247 24.237 L 55.061 90.087 L 2.930 89.630 L -97.132 -0.828 Z" fill="currentColor"/></g></svg>';
 const ICON_REDO_SVG = '<svg viewBox="0 0 197 183" width="0.85em" height="1em" style="display:inline-block;vertical-align:-0.15em;flex-shrink:0" aria-hidden="true" focusable="false"><g transform="translate(98.132 91.087)"><path d="M 97.132 -0.828 L -2.472 -90.087 L -54.604 -90.087 L 11.247 -25.151 L -96.218 -24.237 L -97.132 24.237 L 11.247 24.237 L -55.061 90.087 L -2.930 89.630 L 97.132 -0.828 Z" fill="currentColor"/></g></svg>';
+
+/* Milisegundos de una fecha de la nube (0 si falta o no se puede leer). Tolera los
+   formatos de PostgREST: «+00:00» / «Z» / «+00», microsegundos (se recortan a
+   milisegundos, lo que entienden todos los navegadores) y fecha sin zona horaria
+   (columna «timestamp» sin tz → se toma como UTC). Compartida por my-works.js
+   (apertura de obras) y editor.js (guardado en la nube) — v40.50. */
+function cxIsoMs(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  let s = String(v).trim().replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1').replace(/([+-]\d{2})$/, '$1:00');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)) s += 'Z';
+  const t = Date.parse(s);
+  return isNaN(t) ? 0 : t;
+}

@@ -828,11 +828,17 @@ const SupabaseClient = (() => {
   // ── BORRADOR EN NUBE ──────────────────────────────────────
   // Límite razonable: 50MB por obra (data_url de paneles son base64 JPEGs)
   // El campo published=false impide que aparezca en el reader público
-  async function saveDraft(comic, dirtyPageIndices) {
+  // onRevision (opcional, v40.49): se llama con el `updated_at` que ha quedado en la
+  // fila `works` EN CUANTO se escribe, antes de subir las hojas. Así, aunque la
+  // subida de hojas falle a medias o se cierre la app, este dispositivo sabe que
+  // esa revisión de la nube es SUYA (ver WorkStore.setCloudRev) y no la toma por
+  // un cambio hecho desde otro dispositivo.
+  async function saveDraft(comic, dirtyPageIndices, onRevision) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId para guardar borrador');
 
-    await _upsert('works', {
+    const _sentUpdatedAt = new Date().toISOString();
+    const _rows = await _upsert('works', {
       id:             sid,
       title:          comic.title      || '',
       author_name:    comic.author     || comic.username || '',
@@ -852,10 +858,14 @@ const SupabaseClient = (() => {
       // El admin deberá aprobarla de nuevo si se vuelve a publicar.
       published:      false,
       pending_review: false,
-      updated_at:     new Date().toISOString(),
+      updated_at:     _sentUpdatedAt,
     });
+    // _upsert devuelve la fila tal como quedó en la base (return=representation):
+    // se usa ese valor (el que verán los demás dispositivos), no el enviado.
+    const _rev = (Array.isArray(_rows) && _rows[0] && _rows[0].updated_at) || _sentUpdatedAt;
+    if (typeof onRevision === 'function') { try { onRevision(_rev); } catch(_) {} }
     await _uploadPanels(comic, dirtyPageIndices);
-    return { sizeKB: 0 }; // tamaño calculado por Supabase al rechazar si excede límite
+    return { sizeKB: 0, updatedAt: _rev }; // tamaño calculado por Supabase al rechazar si excede límite
   }
 
   async function submitForReview(comic) {
@@ -980,6 +990,8 @@ const SupabaseClient = (() => {
   // como editorData listo para edLoadProject(). El editor las pasa por edDeserLayer
   // sin ninguna conversion — es el mismo formato que guardo edSaveProject.
   async function downloadDraftAsEditorData(supabaseId) {
+    // v40.49: mismo motivo que en fetchWorksByIds — token fresco antes de leer.
+    if (window._authTryRefresh) await window._authTryRefresh();
     const works = await _get(`works?id=eq.${supabaseId}&limit=1&select=*`);
     if (!works || !works.length) throw new Error('Obra no encontrada en la nube');
     const work = works[0];
@@ -1017,9 +1029,19 @@ const SupabaseClient = (() => {
     // Antes era una petición secuencial por página — en obras con muchas hojas
     // eso multiplicaba directamente la latencia de red por el número de hojas.
     // limit=6: margen prudente para no disparar peticiones simultáneas de más.
-    const _layerRowsByPanel = await _sbPoolMap(panels, 6, panel =>
-      _get(`panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`).catch(() => [])
-    );
+    // v40.49: antes cada fallo de esta lectura se tragaba con .catch(() => []) y la
+    // hoja acababa con solo su miniatura (ver el «Fallback» de más abajo) sin avisar:
+    // una descarga degradada que además se daba por buena y sustituía a la copia
+    // local. Ahora se reintenta UNA vez y, si sigue fallando, la descarga entera
+    // FALLA (quien llama muestra el error y no abre nada).
+    const _layerRowsByPanel = await _sbPoolMap(panels, 6, async panel => {
+      const _q = `panel_layers?panel_id=eq.${panel.id}&order=layer_order.asc`;
+      try { return await _get(_q); }
+      catch (_e1) {
+        await new Promise(r => setTimeout(r, 400));
+        return await _get(_q);
+      }
+    });
 
     // Procesar (descomprimir + descargar GIF/APNG) cada capa de cada página.
     // Concurrencia acotada a 3: son binarios potencialmente pesados — lanzar
@@ -1331,6 +1353,11 @@ const SupabaseClient = (() => {
   // Devuelve metadatos básicos de obras por array de supabaseIds (para sync multi-dispositivo)
   async function fetchWorksByIds(ids) {
     if (!ids || !ids.length) return [];
+    // v40.49: refrescar el token ANTES de leer, como ya hacen _upsert/_patch/_delete.
+    // Con el token caducado (PWA abierta más de una hora) la lectura daba 401 y quien
+    // llamaba —el botón «Editar»— lo tragaba en silencio y abría la copia local sin
+    // haber podido comprobar la nube.
+    if (window._authTryRefresh) await window._authTryRefresh();
     const list = ids.join(',');
     const r = await _get(`works?id=in.(${list})&select=id,updated_at,title,genre,nav_mode,published,pending_review,cover_url`);
     return r || [];
