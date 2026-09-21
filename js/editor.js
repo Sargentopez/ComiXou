@@ -958,6 +958,7 @@ let gcpGridVisible = false; // cuadrícula visible en el canvas GCP
 // su uso en _edRenderFrame, y la sincronización del checkbox en edLoadPage.
 let _edOnionPrevSrc = null, _edOnionNextSrc = null;       // page (referencia) ya renderizada en caché
 let _edOnionPrevCanvas = null, _edOnionNextCanvas = null; // canvas cacheado correspondiente
+let _edOnionRedrawQueued = false; // v40.59: ya hay un repintado diferido pendiente tras vaciar la caché (ver _edOnionInvalidatePage)
 let edRules = [];          // array de reglas de la hoja actual
 let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
 let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
@@ -4308,6 +4309,10 @@ function _cxSimpleHash(str) {
 // solo cuesta un poco de tiempo — exactamente lo que ya pasaba antes de este
 // cambio en TODAS las páginas.
 function _edMarkPageDirty(pageOrIdx) {
+  // Onion skin (v40.59): una hoja modificada no puede seguir teniendo su copia antigua como
+  // hoja contigua — también cuando NO es la actual (ver _edOnionInvalidatePage). Va antes del
+  // bloqueo de carga de abajo: vaciar la caché es inocuo aunque el cambio no sea una edición real.
+  _edOnionInvalidatePage((typeof pageOrIdx === 'number') ? edPages[pageOrIdx] : pageOrIdx, true);
   // Mientras la obra se esté cargando (contador bloqueante de my-works
   // activo), nada de lo que ocurra internamente puede ser una edición real
   // del usuario — ya existe un bloqueo que impide tocar nada hasta que
@@ -8340,7 +8345,8 @@ function _edOnionRenderPage(page) {
 
 // Mantiene _edOnionPrevCanvas/_edOnionNextCanvas al día con la hoja anterior
 // y posterior de la ACTUAL (edCurrentPage), regenerando solo cuando la hoja
-// de referencia cambia (comparación por referencia, no por contenido) — así
+// de referencia cambia (comparación por referencia, no por contenido — el CONTENIDO
+// lo cubre _edOnionInvalidatePage, v40.59) — así
 // cubre cualquier vía que pueda alterar qué hoja es la contigua (cambiar de
 // hoja, borrar/reordenar hojas, deshacer...) sin tener que engancharse a
 // cada una de ellas por separado. Se llama desde _edRenderFrame, solo si
@@ -8362,6 +8368,31 @@ function _edOnionRenderPage(page) {
 // escritorio, esto se percibía como la app completamente bloqueada. La
 // comparación por referencia de más arriba sigue siendo síncrona (barata:
 // dos comparaciones) — solo se aplaza la parte cara.
+// ── v40.59 · La caché de arriba solo sabe QUÉ hoja es la contigua (referencia), no
+// si su CONTENIDO ha cambiado desde que se renderizó. Fallo reportado por Alberto:
+// transparencia activada en la hoja 28 → se pasa a la 29 (que no la tiene activada,
+// así que nadie vuelve a llamar a _edOnionSkinEnsure) → se edita la 29 → al volver a
+// la 28, «la 29» seguía siendo la MISMA referencia y se dibujaba la copia vieja, sin
+// los cambios. Regla: una hoja no puede conservar copia en caché a partir del momento
+// en que pasa a poder editarse o se marca como modificada:
+//   · edLoadPage → la hoja a la que se navega (se puede editar desde ya).
+//   · _edMarkPageDirty → cualquier cambio de contenido, también en hojas que NO son la
+//     actual (aplicar a todas las hojas, flujos del Editor de textos, deshacer…).
+// Vaciar la caché es siempre inocuo: _edOnionSkinEnsure la reconstruye (diferida) en el
+// siguiente frame de una hoja que tenga la transparencia activada. Con redraw=true, si
+// la hoja actual la está mostrando ahora mismo, se encola UN repintado para que se
+// reconstruya sin esperar al siguiente gesto.
+function _edOnionInvalidatePage(page, redraw) {
+  if (!page) return;
+  let dropped = false;
+  if (page === _edOnionPrevSrc) { _edOnionPrevSrc = null; _edOnionPrevCanvas = null; dropped = true; }
+  if (page === _edOnionNextSrc) { _edOnionNextSrc = null; _edOnionNextCanvas = null; dropped = true; }
+  if (dropped && redraw && !_edOnionRedrawQueued && edPages[edCurrentPage] && edPages[edCurrentPage]._onionSkinEnabled) {
+    _edOnionRedrawQueued = true;
+    requestAnimationFrame(() => { _edOnionRedrawQueued = false; edRedraw(); });
+  }
+}
+
 function _edOnionSkinEnsure() {
   const prevIdx = edCurrentPage - 1, nextIdx = edCurrentPage + 1;
   const prevPage = edPages[prevIdx] || null;
@@ -8481,6 +8512,9 @@ function edLoadPage(idx){
   }
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  // Onion skin (v40.59): esta hoja pasa a poder editarse — si otra la tenía como contigua en
+  // caché, esa copia queda obsoleta desde ya (ver _edOnionInvalidatePage). edRedraw() va justo después.
+  _edOnionInvalidatePage(edPages[idx]);
   // Onion skin por página: el checkbox debe reflejar el estado de LA HOJA a
   // la que se navega, no arrastrar el de la que se deja (ver edInitRules,
   // _edRenderFrame).
