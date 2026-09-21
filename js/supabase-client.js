@@ -225,7 +225,22 @@ const SupabaseClient = (() => {
     }
   }
 
+  // v40.52 — Renovar el token ANTES de leer, como ya hacen _upsert/_patch/_delete. Con el token
+  // caducado PostgREST responde 401 «JWT expired» AUNQUE los datos sean públicos: la portada
+  // fallaba en su primera carga al abrir la app con la sesión caducada. Si el token es válido (o no
+  // hay sesión) no cuesta nada: _authTryRefresh vuelve al instante. Tope de 6 s: si la renovación
+  // se colgara, se lee igual con lo que haya (el 401 de siempre) en vez de colgar también la lectura.
+  async function _ensureFreshToken() {
+    if (!window._authTryRefresh) return;
+    let t;
+    try {
+      await Promise.race([window._authTryRefresh(), new Promise(r => { t = setTimeout(r, 6000); })]);
+    } catch(_) {}
+    clearTimeout(t);
+  }
+
   async function _get(path) {
+    await _ensureFreshToken();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000); // 8s timeout
     try {

@@ -183,7 +183,7 @@ function AuthView_init() {
       if (!email)    { showError('emailError', I18n.t('errRequired')); valid = false; }
       else if (!isValidEmail(email)) { showError('emailError', I18n.t('errEmail')); valid = false; }
       if (!pass)     { showError('passError', I18n.t('errRequired')); valid = false; }
-      else if (pass.length < 6) { showError('passError', I18n.t('errPassLen')); valid = false; }
+      else if (pass.length < CX_MIN_PASSWORD_LENGTH) { showError('passError', I18n.t('errPassLen')); valid = false; }
       if (pass !== passConf) { showError('passConfError', I18n.t('errPassMatch')); valid = false; }
       if (!valid) return;
 

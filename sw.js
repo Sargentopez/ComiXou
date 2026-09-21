@@ -27,9 +27,12 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v40-51';
+const CACHE = 'comxow-v40-54';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
+// v40.54: la hoja de fuentes se llama «typefaces» (antes usaba el nombre genérico «fonts» + «.css»).
+// El antivirus de Microsoft (nube, detección MalUri.A!cl) marcaba como troyano los ficheros que
+// contenían esa ruta exacta; ver la carta de v40.54. NO volver a ese nombre.
 // JS, CSS y HTML son siempre network-first para garantizar actualizaciones inmediatas
 const STATIC_ASSETS = [
   './icon-192.png',
@@ -53,7 +56,7 @@ const STATIC_ASSETS = [
   './fonts/PatrickHand-Regular.woff2',
   './fonts/PermanentMarker-Regular.woff2',
   './fonts/PressStart2P-Regular.woff2',
-  './fonts/fonts.css',
+  './fonts/typefaces.css',
 ];
 
 self.addEventListener('message', e => {

@@ -429,7 +429,15 @@ const Auth = (() => {
     } catch (_) {}
   }
 
-  _tryRefresh();
+  // v40.52 — UNA sola renovación de arranque, compartida. Antes se lanzaba dos veces (aquí y
+  // más abajo, con el MISMO refresh token) y, sobre todo, nadie esperaba a que terminase: con el
+  // token caducado (app reabierta pasada una hora) la portada y refreshRole() pedían datos con
+  // el token viejo y PostgREST respondía 401 «JWT expired» aunque los datos fueran públicos.
+  // Ahora quien lee espera a esta promesa (ver refreshRole, window._authTryRefresh y _get de
+  // supabase-client.js). _authStartupDone permite no esperar nada una vez terminada.
+  const _startupRefresh = _tryRefresh();
+  window._authStartupRefresh = _startupRefresh.catch(() => {});
+  _startupRefresh.finally(() => { window._authStartupDone = true; });
 
   // ── Validación server-side de la sesión cacheada ───────────────────────────
   // Llama a /auth/v1/user para confirmar que el token sigue siendo válido en Supabase.
@@ -477,7 +485,7 @@ const Auth = (() => {
   }
 
   // Ejecutar validación tras el intento de refresh para no solapar peticiones
-  _tryRefresh().then(() => _validateServerSession());
+  _startupRefresh.then(() => _validateServerSession());
 
   // Si veníamos de un enlace de recuperación de contraseña, completar el login
   // temporal y abrir el modal de "elegir contraseña nueva" en cuanto cargue la página.
@@ -513,6 +521,9 @@ const Auth = (() => {
   // el role ha cambiado de verdad (para que quien llame sepa si merece la
   // pena refrescar algo más, p.ej. el enlace del menú).
   async function refreshRole() {
+    // v40.52: esperar a la renovación de arranque y leer la sesión DESPUÉS. Con el token
+    // caducado esta lectura salía con el token viejo → 401 y el rol no se refrescaba.
+    try { await _startupRefresh; } catch(_) {}
     const s = getSession();
     if (!s || !s.token) return false;
     const profile = await _fetchProfile(s.id, s.token);
@@ -542,7 +553,8 @@ window._authTryRefresh = (function() {
   const SB_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
   function _jwtExp(t) { try { return JSON.parse(atob(t.split('.')[1])).exp || 0; } catch(e) { return 0; } }
   function _expired(t) { if(!t) return true; const e=_jwtExp(t); return e>0 && (e-60)<(Date.now()/1000); }
-  return async function() {
+  let _inflight = null; // v40.52: renovación compartida entre llamadas simultáneas
+  async function _refreshNow() {
     try {
       const s = JSON.parse(localStorage.getItem('cs_session')||'null');
       if (!s || !_expired(s.token)) return; // no expirado, nada que hacer
@@ -561,5 +573,17 @@ window._authTryRefresh = (function() {
         if (data.refresh_token) localStorage.setItem('cs_refresh', data.refresh_token);
       }
     } catch(e) {}
+  }
+  return async function() {
+    // v40.52 — Durante el arranque, esperar a la renovación que YA está en curso (Auth._tryRefresh)
+    // en vez de lanzar otra con el mismo refresh token; tope de 8 s por si algo se colgara.
+    if (window._authStartupRefresh && !window._authStartupDone) {
+      let t;
+      try { await Promise.race([window._authStartupRefresh, new Promise(r => { t = setTimeout(r, 8000); })]); } catch(_) {}
+      clearTimeout(t);
+    }
+    // ...y varias lecturas/escrituras simultáneas con el token caducado comparten UNA sola renovación
+    if (!_inflight) _inflight = _refreshNow().finally(() => { _inflight = null; });
+    return _inflight;
   };
 })();

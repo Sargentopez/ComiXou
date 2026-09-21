@@ -29156,7 +29156,7 @@ function _edAutosaveStop() {
 }
 
 // ── Fuentes de Google Fonts bajo demanda (comxow-storage-worker) ──────────
-// Complementa las fuentes autoalojadas de fonts.css. Cualquier otra familia
+// Complementa las fuentes autoalojadas de typefaces.css. Cualquier otra familia
 // que aparezca en las capas de texto de la obra se intenta cargar de forma
 // dinámica desde el worker, que las cachea en R2 la primera vez que alguien
 // las elige desde el buscador (ver _cxFetchGoogleFont/POST /fonts/fetch,

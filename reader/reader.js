@@ -2285,7 +2285,7 @@ async function _ensureFontsLoaded(panels) {
   // _edFontVariants). Una capa con negrita/cursiva activa dispara una regla
   // @font-face DISTINTA de la variante normal; pedir solo "16px FontName"
   // no garantiza que esa variante concreta llegue a tiempo.
-  // Las que NO estén entre las autoalojadas de fonts.css (elegidas desde el
+  // Las que NO estén entre las autoalojadas de typefaces.css (elegidas desde el
   // buscador de Google Fonts del editor) no tienen ninguna regla @font-face
   // estática que cargar — se piden aparte con _cxLoadExternalFont, que
   // construye su propio FontFace apuntando al worker.
@@ -3150,14 +3150,14 @@ async function _fetchDataUrl(url) {
   });
 }
 
-// fonts.css tal cual, con cada url('XXX.woff2') sustituida por su data: URI
+// typefaces.css tal cual, con cada url('XXX.woff2') sustituida por su data: URI
 // — se incrustan TODAS las fuentes disponibles (no solo las que usa esta
 // obra en concreto) para no depender de enumerar correctamente cada posible
 // campo de fuente (incluidos overrides por tramo de texto enriquecido);
 // ~900KB de más en el archivo final es un margen razonable a cambio de no
 // arriesgarse a que una burbuja se vea con una fuente equivocada.
 async function _buildFontsCssInline() {
-  const fontsUrl = new URL('../fonts/fonts.css', location.href).href;
+  const fontsUrl = new URL('../fonts/typefaces.css', location.href).href;
   let css = await _fetchText(fontsUrl);
   const names = [...new Set([...css.matchAll(/url\('([^']+\.woff2)'\)/g)].map(m => m[1]))];
   const resolved = {};

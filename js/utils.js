@@ -190,14 +190,14 @@ function _pwdSetFormHtml() {
           <div class="pwd-form-group">
             <label class="pwd-form-label" for="pwdNewInput">${I18n.t('newPassword')}</label>
             <div class="pwd-pass-wrap">
-              <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <input type="password" id="pwdNewInput" class="pwd-form-input" autocomplete="new-password" minlength="${CX_MIN_PASSWORD_LENGTH}" required>
               <button type="button" class="pwd-pass-toggle" data-target="pwdNewInput">👁</button>
             </div>
           </div>
           <div class="pwd-form-group">
             <label class="pwd-form-label" for="pwdConfirmInput">${I18n.t('confirmPassword')}</label>
             <div class="pwd-pass-wrap">
-              <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="6" required>
+              <input type="password" id="pwdConfirmInput" class="pwd-form-input" autocomplete="new-password" minlength="${CX_MIN_PASSWORD_LENGTH}" required>
               <button type="button" class="pwd-pass-toggle" data-target="pwdConfirmInput">👁</button>
             </div>
           </div>
@@ -248,7 +248,7 @@ function _bindPwdModalContent(overlay, loggedIn) {
       const pass2 = document.getElementById('pwdConfirmInput').value;
       errEl.textContent = '';
 
-      if (pass1.length < 6) { errEl.textContent = I18n.t('passwordTooShort'); return; }
+      if (pass1.length < CX_MIN_PASSWORD_LENGTH) { errEl.textContent = I18n.t('passwordTooShort'); return; }
       if (pass1 !== pass2)  { errEl.textContent = I18n.t('passwordMismatch'); return; }
 
       const submitBtn = document.getElementById('pwdSubmitBtn');
@@ -939,3 +939,11 @@ function cxIsoMs(v) {
   const t = Date.parse(s);
   return isNaN(t) ? 0 : t;
 }
+
+/* Longitud mínima de contraseña (v40.53). La documentación de Supabase desaconseja menos de 8.
+   Solo se exige al REGISTRARSE y al CAMBIAR/RESTABLECER la contraseña — NUNCA al iniciar sesión:
+   quien ya tiene una de 6 o 7 caracteres debe poder seguir entrando. Si se cambia este número hay
+   que actualizar también los textos errPassLen y passwordTooShort (ES/EN, i18n.js) y el ajuste
+   «Minimum password length» de Authentication → Sign In / Providers → Email en Supabase (el
+   servidor aplica el suyo aunque el cliente se salte la comprobación). */
+const CX_MIN_PASSWORD_LENGTH = 8;
