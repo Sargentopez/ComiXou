@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.55</footer>
+    <footer class="app-version">v40.58</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -572,6 +572,8 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="dd-anim-tutorial" data-i18n="ed_createAnimations">Crear Animación</button>
               <button class="ed-dropdown-item" id="dd-help-draw-tools" data-i18n="ed_drawTools">Herramientas de dibujo</button>
               <button class="ed-dropdown-item" id="dd-help-vector" data-i18n="ed_helpVectorTitle">Dibujo vectorial</button>
+              <button class="ed-dropdown-item" id="dd-help-bubbles" data-i18n="ed_helpBubbleTitle">Bocadillos</button>
+              <button class="ed-dropdown-item" id="dd-help-textbox" data-i18n="ed_helpTextboxTitle">Cajas de texto</button>
             </div>
           </div>
 

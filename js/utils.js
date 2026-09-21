@@ -907,6 +907,73 @@ document.addEventListener('focusout', e => {
   setTimeout(_kbModalAdjust, 50);
 });
 
+/* ══════════════════════════════════════════
+   TECLADO VIRTUAL BAJO LA VENTANA DE AYUDA (v40.58)
+   La ayuda de bocadillos / cajas de texto se abre sola medio segundo después
+   de crear el objeto — justo cuando la edición en el propio lienzo (el
+   textarea in situ del editor) acaba de subir el teclado. Aquí el foco NO
+   está dentro de la ventana de ayuda sino en ese textarea, de modo que
+   _kbModalAdjust (que solo actúa sobre el modal que CONTIENE el campo
+   enfocado) no la toca, y el teclado — que bajo overlays-content flota por
+   encima sin encoger nada — tapaba la parte baja de la ayuda: parte del
+   texto o el enlace «No volver a mostrar esta ayuda».
+
+   Se reutiliza tal cual la lectura de altura de teclado de arriba
+   (_kbModalReadHeight: API VirtualKeyboard + sonda env(keyboard-inset-height),
+   la mayor de las dos) — no se inventa otra. Mientras la ventana está abierta:
+     · padding-bottom del fondo = altura del teclado → la caja se centra
+       verticalmente en el hueco libre POR ENCIMA del teclado (no en la
+       pantalla completa) y el fondo oscuro sigue cubriéndolo todo;
+     · max-height de la caja = ese hueco menos un margen → si no cabe entera
+       se encoge, y su cuerpo (.sc-body, ya overflow-y:auto) hace scroll
+       por dentro; el enlace de «No volver a mostrar» sigue alcanzable.
+   Vale igual en vertical que en horizontal: se recalcula con cada
+   geometrychange, cada resize (giro del móvil) y, como red de seguridad,
+   cada 200 ms mientras siga abierta (el teclado tarda un tiempo variable
+   en terminar de animarse y a veces geometrychange llega antes de que lo
+   haga — el mismo motivo por el que _kbModalAdjust reintenta y sondea).
+   Al cerrarse la ventana, por cualquiera de sus caminos (✕, tocar fuera,
+   «No volver a mostrar»…), el siguiente ciclo detecta que ya no está abierta,
+   deja los estilos como estaban y para el sondeo: no hace falta enganchar
+   cada punto de cierre. Sin teclado (PC, o el móvil sin él) no hace nada.
+   ══════════════════════════════════════════ */
+const _KB_HELP_MARGIN = 16; // px en total (8 arriba + 8 abajo) entre la caja de ayuda y el teclado
+const _KB_HELP_MIN_H  = 88; // px — alto mínimo de la caja (cabecera + una línea): por debajo no sirve de nada encoger más
+let _kbHelpPollTimer = null;
+
+function _kbHelpModalFit() {
+  const modal = document.getElementById('edHelpRefModal');
+  if (!modal) return;
+  const box = modal.querySelector('.sc-box');
+  // Cerrada: no se lee el teclado (ni se crea la sonda) — solo se deja limpio lo que hubiera quedado puesto.
+  const kbH = modal.classList.contains('open') ? _kbModalReadHeight() : 0;
+  if (kbH > _KB_MODAL_MIN_H) {
+    const fullH = modal.clientHeight || window.innerHeight; // el fondo es position:fixed;inset:0 → el padding va dentro, no cambia este alto
+    const maxH  = Math.min(Math.round(fullH * 0.82), Math.max(_KB_HELP_MIN_H, Math.round(fullH - kbH - _KB_HELP_MARGIN))); // 82 % = el max-height de .sc-box sin teclado
+    modal.style.paddingBottom = kbH + 'px';
+    if (box) box.style.maxHeight = maxH + 'px';
+  } else if (modal.style.paddingBottom || (box && box.style.maxHeight)) {
+    modal.style.paddingBottom = '';
+    if (box) box.style.maxHeight = '';
+  }
+}
+
+// Lo llama _edHelpOpenWindow (editor.js) al abrir la ventana: ajusta ya, antes de pintar, y vigila mientras siga abierta.
+function _kbHelpModalWatch() {
+  clearInterval(_kbHelpPollTimer);
+  _kbHelpModalFit();
+  _kbHelpPollTimer = setInterval(() => {
+    _kbHelpModalFit();
+    const m = document.getElementById('edHelpRefModal');
+    if (!m || !m.classList.contains('open')) { clearInterval(_kbHelpPollTimer); _kbHelpPollTimer = null; }
+  }, 200);
+}
+
+if ('virtualKeyboard' in navigator) {
+  try { navigator.virtualKeyboard.addEventListener('geometrychange', _kbHelpModalFit); } catch (_e) { /* ídem: API presente pero rechaza el listener */ }
+}
+window.addEventListener('resize', _kbHelpModalFit);
+
 /* ============================================================
    ICONOS DESHACER/REHACER (SVG vectorial aportado por Alberto)
    ============================================================

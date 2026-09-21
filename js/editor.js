@@ -26253,6 +26253,26 @@ const _edHelpContent = {
     `;
     })()
   },
+  // Bocadillos y cajas de texto: mismo ajuste (Capas → Textos → Inmediatos/Secuenciales, por hoja),
+  // pero la reproducción secuencial no se comporta igual — el bocadillo anterior desaparece
+  // (fade-out) al mostrarse el siguiente, mientras que las cajas ya reveladas se mantienen
+  // (ver _edViewerDrawTextsOnCtx / _drawTexts del lector) — por eso cada una lleva su texto.
+  'bubbles': {
+    title: I18n.t('ed_helpBubbleTitle'),
+    body: `
+      <div>
+        <b>1.</b> ${I18n.t('ed_helpBubbleP1')}
+      </div>
+    `
+  },
+  'textbox': {
+    title: I18n.t('ed_helpTextboxTitle'),
+    body: `
+      <div>
+        <b>1.</b> ${I18n.t('ed_helpTextboxP1')}
+      </div>
+    `
+  },
   'gcp-anim': {
     title: I18n.t('gcp_helpAnimTitle'),
     body: (() => {
@@ -26287,8 +26307,7 @@ const _edHelpContent = {
       <div style="margin-bottom:14px"><b>9.</b> ${I18n.t('gcp_helpAnimP9')}</div>
       <div style="margin-bottom:14px"><b>10.</b> ${I18n.t('gcp_helpAnimP10', { preview: icoPreview })}</div>
       <div style="margin-bottom:14px"><b>11.</b> ${I18n.t('gcp_helpAnimP11', { insert: icoInsert })}</div>
-      <div style="margin-bottom:14px"><b>12.</b> ${I18n.t('gcp_helpAnimP12', { addPath: icoAddPath })}</div>
-      <div><b>13.</b> ${I18n.t('gcp_helpAnimP13')}</div>
+      <div><b>12.</b> ${I18n.t('gcp_helpAnimP12', { addPath: icoAddPath })}</div>
     `;
     })()
   },
@@ -26346,6 +26365,10 @@ function _edHelpOpenWindow(id, showDismiss) {
     }
   }
   $('edHelpRefModal')?.classList.add('open');
+  // Si hay teclado abierto (la ayuda de bocadillos/cajas sale sola medio segundo después
+  // de crear el objeto, cuando su edición en el lienzo acaba de subirlo), la ventana se
+  // encoge y se recoloca en el hueco libre por encima de él — ver _kbHelpModalFit en utils.js.
+  if (typeof _kbHelpModalWatch === 'function') _kbHelpModalWatch();
 }
 
 // Se abre sola al tocar un botón o darse un evento (ej. abrir el panel de
@@ -32524,6 +32547,14 @@ function EditorView_init(){
     edCloseMenus();
     _edHelpShowRef('vector-draw');
   });
+  $('dd-help-bubbles')?.addEventListener('click', () => {
+    edCloseMenus();
+    _edHelpShowRef('bubbles');
+  });
+  $('dd-help-textbox')?.addEventListener('click', () => {
+    edCloseMenus();
+    _edHelpShowRef('textbox');
+  });
   $('dd-help-editor')?.addEventListener('click', () => {
     edCloseMenus();
     _edHelpShowRef('editor');
@@ -32548,8 +32579,11 @@ function EditorView_init(){
       _mEl.addEventListener(evt, e => { e.stopPropagation(); }, { passive: true });
     });
   });
-  $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); });
-  $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); });
+  // Igual que en Herramientas de dibujo / Dibujo vectorial: primero se abre el panel
+  // de la caja/bocadillo recién creado; medio segundo después, su ayuda (si no se ha
+  // desactivado antes para este usuario).
+  $('dd-textbox')?.addEventListener('click', ()=>{ edAddText(); edCloseMenus(); setTimeout(() => edHelpShow('textbox'), 500); });
+  $('dd-bubble')?.addEventListener('click',  ()=>{ edAddBubble(); edCloseMenus(); setTimeout(() => edHelpShow('bubbles'), 500); });
   $('dd-textdoc')?.addEventListener('click', ()=>{ if(typeof edOpenTextDoc==='function') edOpenTextDoc(); });
   $('edFileGallery')?.addEventListener('change', async e=>{
     const _f = e.target.files[0];
