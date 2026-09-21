@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v40-54';
+const CACHE = 'comxow-v40-55';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // v40.54: la hoja de fuentes se llama «typefaces» (antes usaba el nombre genérico «fonts» + «.css»).

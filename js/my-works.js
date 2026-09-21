@@ -213,6 +213,54 @@ function _mcRemoveModal() {
 }
 
 
+/* ── ACCESO A cxAutosave DESDE LA LIMPIEZA DE HUÉRFANOS (v40.55) ─────────
+   La base 'cxAutosave' la crea y mantiene el editor (_asDb, editor.js) y la abre en VERSIÓN 2
+   (la 2 crea el store 'saves' en dispositivos que la tenían en la 1). Desde v39.65 esta limpieza
+   la pedía en versión 1: en un dispositivo con la base ya en v2 daba VersionError, que el
+   onerror tragaba en silencio, y la limpieza NUNCA veía ni borraba los autoguardados de obras
+   que ya no existen. Y en un dispositivo con la base aún en v1, o sin base, abría/creaba una
+   conexión que no cerraba jamás: cuando el editor pedía después la v2 quedaba BLOQUEADO
+   (onblocked → «apertura bloqueada por otra pestaña») y el autoguardado fallaba toda esa sesión.
+   Reglas de esta apertura (patrón estándar de IndexedDB, evento «versionchange»):
+   · SIN número de versión: se abre la que haya. Nunca se pide una concreta.
+   · Si la base NO existe no se crea (esto es solo lectura/limpieza): se aborta la creación en
+     onupgradeneeded (oldVersion === 0) y se devuelve null.
+   · Conexión de vida corta: quien la abre la CIERRA siempre al terminar, y ante «versionchange»
+     se cierra sola, para no bloquear la actualización de esquema del editor. */
+function _mcOpenAutosaveDb() {
+  return new Promise(res => {
+    let req;
+    try { req = indexedDB.open('cxAutosave'); } catch (_) { res(null); return; }
+    req.onupgradeneeded = e => {
+      if (e.oldVersion === 0) { try { e.target.transaction.abort(); } catch (_) {} }
+    };
+    req.onsuccess = e => {
+      const db = e.target.result;
+      db.onversionchange = () => { try { db.close(); } catch (_) {} };
+      res(db);
+    };
+    req.onerror = () => res(null);
+  });
+}
+
+// Borra claves del store 'saves', espera a que termine la transacción y cierra la conexión.
+async function _mcDeleteAutosaveKeys(keys) {
+  if (!keys || !keys.length) return;
+  const db = await _mcOpenAutosaveDb();
+  if (!db) return;
+  try {
+    if (db.objectStoreNames.contains('saves')) {
+      await new Promise(res => {
+        const tx = db.transaction('saves', 'readwrite');
+        const st = tx.objectStore('saves');
+        keys.forEach(k => st.delete(k));
+        tx.oncomplete = tx.onerror = tx.onabort = () => res();
+      });
+    }
+  } catch (_) { /* no crítico: se reintentará en la próxima entrada a Mis obras */ }
+  try { db.close(); } catch (_) {}
+}
+
 /* ── LIMPIEZA DE DATOS HUÉRFANOS ──────────────────────────────────────────
    Busca en OPFS, IDB cxAnims, cxAutosave, cxBiblioteca y localStorage
    datos que no corresponden a ninguna obra del usuario actual.
@@ -358,32 +406,33 @@ async function _mcCheckOrphanData() {
   } catch(_e) {}
 
   // ── 4. IDB cxAutosave: claves {uid}_{comicId} ────────────────────────
+  // v40.55: apertura sin versión y con cierre garantizado (ver _mcOpenAutosaveDb).
   try {
-    const _asOrphans = await new Promise(res => {
-      const req = indexedDB.open('cxAutosave', 1);
-      req.onsuccess = e => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains('saves')) { res([]); return; }
-        const keys = [];
-        const tx  = db.transaction('saves', 'readonly');
-        const cur = tx.objectStore('saves').openCursor();
-        const _prefix = _uid + '_';
-        cur.onsuccess = ev => {
-          const c = ev.target.result;
-          if (!c) { res(keys); return; }
-          const k = String(c.key);
-          if (k.startsWith(_prefix)) {
-            const _comicId = k.slice(_prefix.length);
-            if (_comicId && !_validIds.has(_comicId)) keys.push(k);
-          }
-          c.continue();
-        };
-        cur.onerror = () => res(keys);
-        tx.onerror  = () => res(keys);
-      };
-      req.onerror = () => res([]);
-    });
-    _orphans.autosave = _asOrphans;
+    const _asConn = await _mcOpenAutosaveDb();
+    if (_asConn) {
+      try {
+        if (_asConn.objectStoreNames.contains('saves')) {
+          _orphans.autosave = await new Promise(res => {
+            const keys = [];
+            const tx  = _asConn.transaction('saves', 'readonly');
+            const cur = tx.objectStore('saves').openCursor();
+            const _prefix = _uid + '_';
+            cur.onsuccess = ev => {
+              const c = ev.target.result;
+              if (!c) { res(keys); return; }
+              const k = String(c.key);
+              if (k.startsWith(_prefix)) {
+                const _comicId = k.slice(_prefix.length);
+                if (_comicId && !_validIds.has(_comicId)) keys.push(k);
+              }
+              c.continue();
+            };
+            cur.onerror = () => res(keys);
+            tx.onerror  = () => res(keys);
+          });
+        }
+      } finally { try { _asConn.close(); } catch(_) {} }
+    }
   } catch(_e) {}
 
   // ── 5. localStorage: cs_biblioteca_{comicId} y cs_biblioteca_local_{comicId} ──
@@ -427,17 +476,7 @@ async function _mcCheckOrphanData() {
       } catch(_) {}
     }
     if (_orphans.autosave.length) {
-      try {
-        const _sDb2 = await new Promise(res => {
-          const r = indexedDB.open('cxAutosave', 1);
-          r.onsuccess = e => res(e.target.result);
-          r.onerror = () => res(null);
-        });
-        if (_sDb2 && _sDb2.objectStoreNames.contains('saves')) {
-          const _stx2 = _sDb2.transaction('saves', 'readwrite');
-          _orphans.autosave.forEach(k => _stx2.objectStore('saves').delete(k));
-        }
-      } catch(_) {}
+      try { await _mcDeleteAutosaveKeys(_orphans.autosave); } catch(_) {}   // v40.55
     }
     return; // sin diálogo
   }
@@ -468,22 +507,9 @@ async function _mcCheckOrphanData() {
           });
         } catch(_e) {}
       }
-      // IDB cxAutosave
+      // IDB cxAutosave (v40.55: conexión sin versión, cerrada al terminar)
       if (_orphans.autosave.length) {
-        try {
-          await new Promise(res => {
-            const req = indexedDB.open('cxAutosave', 1);
-            req.onsuccess = e => {
-              const db = e.target.result;
-              if (!db.objectStoreNames.contains('saves')) { res(); return; }
-              const tx = db.transaction('saves', 'readwrite');
-              const st = tx.objectStore('saves');
-              _orphans.autosave.forEach(k => st.delete(k));
-              tx.oncomplete = res; tx.onerror = res;
-            };
-            req.onerror = res;
-          });
-        } catch(_e) {}
+        try { await _mcDeleteAutosaveKeys(_orphans.autosave); } catch(_e) {}
       }
       // IDB cxBiblioteca
       if (_orphans.bib.length) {
