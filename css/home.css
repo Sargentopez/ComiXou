@@ -214,6 +214,63 @@
   .work-row-title { font-size: 1rem; }
 }
 
+/* ── FICHAS EN DOS COLUMNAS (v40.51) — Index (Home) y Mis obras ──────────
+   Cuando hay sitio para dos fichas SIN que ninguna cambie de altura, el
+   listado pasa a dos columnas, ordenado por FILAS: obra1 obra2 / obra3 obra4 /…
+   · Umbral (1100 px de ventana): el contenido más ancho de una ficha (autor
+     largo + género + páginas, o la fila «Leer · Editar · En revisión ·
+     Retirar · Comparte · ✕») ocupa ≈340 px; con padding (2×24), miniatura
+     (88) y hueco (16) cada ficha necesita ≈490 px. A 1100 px el contenedor
+     (máx. --max-w = 1200, menos una barra de scroll de hasta 17 px) da ≥540 px
+     por columna: ninguna ficha se ajusta a más líneas que en una columna, es
+     decir, conserva la misma altura. Por debajo, NADA cambia (una columna).
+   · Rejilla (grid) y no columnas CSS (column-count): la rejilla reparte por
+     filas (1 2 / 3 4), column-count lo haría por columnas (1 2 arriba, 3 4 en
+     la otra columna).
+   · align-items:start → cada ficha conserva SU altura natural (no se estira
+     a la de su vecina de fila).
+   · Scroll intacto: no se toca ningún overflow ni el JS del scroll infinito.
+     En Home la rejilla va en cada lote (.work-batch), de modo que la altura
+     que mide _homeUnloadBatch ya incluye las dos columnas y el centinela
+     sigue siendo un bloque normal debajo de los lotes. Los lotes son de 20
+     obras (par), así que cada lote empieza siempre en una fila nueva.
+   · El separador vertical va como border-left de las fichas de la columna
+     derecha (no como línea absoluta): así no aparece en celdas vacías (última
+     ficha impar, mensaje de «sin obras») y no altera ninguna altura. */
+@media (min-width: 1100px) {
+  .work-batch,
+  #mcContent {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  /* Lo que no es una ficha (aviso de login de invitados, mensaje de «sin obras») ocupa las dos columnas */
+  #mcContent > :not(.work-row) { grid-column: 1 / -1; }
+
+  /* Columna derecha = hijos pares (en Home el lote solo contiene fichas) */
+  .work-batch > .work-row:nth-child(even),
+  #mcContent > .work-row:nth-child(even) { border-left: 1px solid var(--gray-300); }
+  /* Con el aviso de invitados como primer hijo, la paridad se desplaza */
+  #mcAnonBanner ~ .work-row:nth-child(even) { border-left: 0; }
+  #mcAnonBanner ~ .work-row:nth-child(odd)  { border-left: 1px solid var(--gray-300); }
+
+  /* La línea superior de la primera fila (.work-row:first-child) debe cubrir sus dos fichas */
+  .work-batch > .work-row:first-child + .work-row,
+  #mcContent > .work-row:first-child + .work-row { border-top: 1px solid var(--gray-300); }
+}
+/* Ruta degradada del Index (sin Supabase, ver _homeRenderLocalFallback): las fichas
+   cuelgan directamente de #worksGrid, sin lotes. :has() va en reglas aparte: si el
+   navegador no lo soporta solo se pierde esto, no el resto de arriba. */
+@media (min-width: 1100px) {
+  #worksGrid:has(> .work-row) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+  #worksGrid > .work-row:nth-child(even) { border-left: 1px solid var(--gray-300); }
+  #worksGrid > .work-row:first-child + .work-row { border-top: 1px solid var(--gray-300); }
+}
+
 /* ── BADGE DE GÉNERO ── */
 .genre-badge {
   display: inline-block;
