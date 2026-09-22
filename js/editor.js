@@ -16531,6 +16531,60 @@ function _edDrawClearHistory(){
   // — la instantánea de entrada ya no aplica a la próxima sesión que se abra.
   _edInkBaselineAlpha = null;
 }
+// ── Convertir en relleno (v40.60) ──────────────────────────────────────────
+// Botón «Convertir en relleno» del panel de dibujo a mano (solo con tinta o lápiz
+// activos): los trazos de esa capa pasan a la capa de RELLENO y la de origen queda
+// vacía, hasta que se hagan trazos nuevos. Trabaja sobre los canvases temporales de
+// la sesión (_edTmp), igual que «🗑 vaciar capa»: al pulsar OK, _edTmpComposite los
+// vuelca a las capas reales del grupo (fill → watercolor → pencil → tinta).
+//   · NO sustituye el relleno: los trazos se pintan ENCIMA de lo que ya hubiera en
+//     _edTmp.bucket (drawImage en source-over, sin borrar nada antes) — el relleno
+//     previo sigue intacto por debajo.
+//   · Reversible: _edDrawPushHistory() antes (por si algún cambio aún no estuviera en
+//     el historial; no duplica si ya estaba) y después. Los botones ↶/↷ del panel y de
+//     la barra flotante restauran de una vez los dos canvases — la instantánea incluye
+//     pen/pencil/watercolor/bucket. Tras OK, el deshacer global lo cubre como parte del
+//     resto de la sesión.
+//   · Lápiz: se anula _preEditCanvas de la PencilLayer real. Si no, al pulsar OK
+//     _cropGroupLayer vería el lápiz vacío y «restauraría» el contenido anterior a la
+//     edición — los trazos ya convertidos reaparecerían duplicados en el lápiz. Mismo
+//     motivo y mismo arreglo que «🗑 vaciar capa».
+//   · Tinta: se repone a «vacía» la instantánea de tinta de entrada
+//     (_edInkBaselineAlpha). Si no, al pulsar OK _edAutoSmoothExposedFillEdges tomaría
+//     la tinta que acaba de pasar al relleno por tinta BORRADA y suavizaría el contorno
+//     de esos trazos, que ya son relleno.
+//   · Se invalida el estado de dodge/burn (_dbOriginMap): el contenido del canvas cambia.
+function _edConvertLayerToFill() {
+  const key = _edTmp.active;
+  if (key !== 'pen' && key !== 'pencil') return;
+  const src = _edTmp[key], dst = _edTmp.bucket;
+  if (!src?._canvas || !dst?._canvas) return;
+  // ¿Hay algo que convertir? Mismo criterio de «vacío» que al congelar (alfa > 10).
+  if (!StrokeLayer._boundingBox(src._canvas)) { edToast(I18n.t('op_toFillEmpty')); return; }
+  _edDrawPushHistory();
+  const w = src._canvas.width, h = src._canvas.height;
+  dst._ctx.save();
+  dst._ctx.setTransform(1, 0, 0, 1, 0, 0);
+  dst._ctx.globalAlpha = 1;
+  dst._ctx.globalCompositeOperation = 'source-over';
+  dst._ctx.drawImage(src._canvas, 0, 0);
+  dst._ctx.restore();
+  src._ctx.clearRect(0, 0, w, h);
+  if (key === 'pencil') {
+    const _page = edPages[edCurrentPage];
+    const _draw = _page?.layers.find(l => l.type === 'draw');
+    const _uid  = _draw && (_draw._uid || _draw._fillLayerId);
+    const _realPencil = _uid ? _page.layers.find(l => l.type === 'pencil' && l._drawLayerId === _uid) : null;
+    if (_realPencil) _realPencil._preEditCanvas = null;
+  } else if (_edInkBaselineAlpha) {
+    _edInkBaselineAlpha = { alpha: new Uint8Array(_edInkBaselineAlpha.w * _edInkBaselineAlpha.h), w: _edInkBaselineAlpha.w, h: _edInkBaselineAlpha.h };
+  }
+  _dbOriginMap = new WeakMap();
+  _edFCL('Convertir en relleno: capa=' + key + ' → bucket (' + w + '×' + h + ')');
+  _edDrawPushHistory();
+  edRedraw();
+  edToast(I18n.t('op_toFillDone'));
+}
 function _edDrawInitHistory(){
   const page = edPages[edCurrentPage]; if(!page) return;
   // Log de creación: nueva sesión, log limpio (ver window._edFCLog / botón 🩺)
@@ -21467,6 +21521,7 @@ function edRenderOptionsPanel(mode){
     }
     const _actIsWc     = _edTmp.active === 'watercolor';
     const _actIsBucket = _edTmp.active === 'bucket';
+    const _actIsInkOrPencil = _edTmp.active === 'pen' || _edTmp.active === 'pencil'; // v40.60: «Convertir en relleno» solo con tinta o lápiz
     const isFill = edActiveTool === 'fill';
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
@@ -21501,6 +21556,7 @@ function edRenderOptionsPanel(mode){
       style="flex-shrink:0;border:none;border-radius:6px;padding:3px 6px;font-size:1.2rem;cursor:pointer;background:${isEr?'rgba(0,0,0,.12)':'transparent'};opacity:${isEr?1:0.5}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIyMSIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDIxIDIwIj4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCVUFBQUFVQ0FZQUFBQmlTM1l6QUFBRUZVbEVRVlI0QWJTU2YweVVkUnpIUDkvbkYyZUFRQndKaG9hRnpybXhydkZqSWJVd0NZMVowOHdMYTVXTmlVNjNhblBKeWorNldFd2JZTG1BbEJoSktjZWdXb1dMTUptaXN3NEZzZFdKRUwrRy9EZzhQZTdoemp1T2U1N24yK2Q1NEc0bVRQL1I3ejd2NzgvUDkvVjlQOS92dzhBREtQY0xxbkxDQXY3VVFhQi8xN2ErSGxpckZRUktZYjQ5Q202V1VGck1sNkF0ekZiazlEZmJkTC9YRjBTOGtMb3gzT3ZOangwZmYxUC9WM04ycU1rMEJ6NDF1MmZPUW1BZU1nMlJrWjJkMnlJKy85NlNVMXgxcWlObDdZWFJyS3phZjFOVG12czM1RjA4VmwwZHR0dHFYU1VFTjl6V21jOHBhVy9QNSt0KzJ5ZHMzblNpNGcvTDJBOFpxdzJQSC8vdUU2R3o0eWd4bXd2NXJWdGZYQ2ZMUWtGYVd1L1BPZzR5NFk1eUo1UlFDdXoyN1QrK3VtTEZ4NTBaejZUa1hteXJwZ1VmdkVVTWhrUW1SaC9KR1o1Y3poY1Y3aEI2dWhvV3ZQM0crZ1NmVEtxUTJZcGFpTkxpZGlpVG1RbHNlQ2o3NVVDL3A3S2liRTljVmVWSHNIaXhucWlaRklCZ0FZWVF3SU1aUVFpTEtDa3RXbXF4RkI0QmdDZFFjU2d0Z3REdzhKQU41ODZScnVUVXBKeXVLM1U2NDVZc29LQVFoQUVnbGlVTTVUZ09XSTRIeW9TRFFxTVl4MFRQQXAxQTlnTkFMNjQ5aXEwV0twVG5lYWJNNTVNT0YzMjZ3LzlyWTBsb2RGUUVTeFdLbHJTY21Rb2RFcUpENkRKMEdnWDJHMVlReFI1MEx1T1JNQ3BKVXV4TUlvQUtyWStMMVNkZEd6eXRmLy9kM0NVY3h6K003b2pxTHBDazlVa0lBaDhEV2RhQi9mb2xFSjFYaWFKTWc5MCtPWUo1eWFpbEtDMVVxS0htNkh0SlFFUUVSZkU0UzdCUXdoQVU2eUhNd2dGQzlFRFlKZUNibG1IYzFncWkySTJmTDlIMjltRzZOcnZVaVh0T29BNmd0RkNoTGxHOEh1RndkTE1UNGhDbmdCNFlMZ0ZZUGhFNElaSGgrV1VQRWVZUmNMdWN4R1pySmE3SmJnQkZocnE2RHVtZHZLK244ZEhLa2JRSEZRd1Y2bTVwK2VlTUludXA0K2Jmek9CQU16aWRJMERJSWxSTWlDUXhNUTY4dnh2MlA0SHQ3c09OTWhRZlBLa2MrT3lYY1J6a3hNZkhmNHV0eXNGbUp0VEI1YktLbHFpZVhwdGRsdjNFTDdueG5pNFF1OTFDRkVVaEhxK05jVGc2WWNvM1JtWEpUL04zMWpqckd5em5FeEpDVmlQaS9QRHdzQmRiQlJVTUZib2JQK0hZcGxmSzlXWnptNkkrdVNTSklEcXQ0UEdNd0sxYi9mZzRMdHJkUFVvem55L3U2N295L0ZOTnpjYjFmWDNlYTBpWlJzMEpGWXFQRFFkNUh0S0tTNXJhc3RlVjJxOTJqZUhKVTVUUVVhcElOK254MmpZd3Z2YVZIMys5eXNPVkwrMDBHaHRVZDNOZ2dRa1Zxdlg5ZnJoVVcwdWZGU2M5aDNKZlB6THhkUG8rMTFQSlJ2dktWWG4waTBNbnorcjF3c3ZwNlN2TEVUaXZPdzB5V3dXaDZ0aG9CSG52WG1tLzJieDVrY3ZsZm01d2NHUkxkSFRJOHFhbWpLeGR1ejQ4MWRqWTRWSHo3cVgvUWRWa2t3a1VkQ09qODh1U0JHZUhoc1QrTld2T1NDYVRDYTlFemJpMy9nTUFBUC8vREM3b1R3QUFBQVpKUkVGVUF3QlRnYWc0d2ZFMDZnQUFBQUJKUlU1RXJrSmdnZz09IiB4PSIwIiB5PSIwIiB3aWR0aD0iMjEiIGhlaWdodD0iMjAiLz4KPC9zdmc+" width="21" height="20" style="image-rendering:pixelated;vertical-align:middle"/></button>
     <button id="op-color-erase-btn"
       style="flex-shrink:0;border:1.5px solid ${window._edColorEraseReady?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${window._edColorEraseReady?'var(--black)':'transparent'};color:${window._edColorEraseReady?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="${I18n.t('op_eraseColorTitle')}">${I18n.t('op_eraseColorBtn')}</button>
+    ${_actIsInkOrPencil ? `<button id="op-to-fill-btn" style="flex-shrink:0;border:1.5px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:var(--gray-600);white-space:nowrap" title="${I18n.t('op_toFillTitle')}">${I18n.t('op_toFillBtn')}</button>` : ''}
     ${_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-fill-gradient" style="flex-shrink:0;border:1.5px solid ${_edFillGradActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edFillGradActive?'var(--black)':'transparent'};color:${_edFillGradActive?'var(--white)':'var(--gray-600)'};white-space:nowrap" title="${I18n.t('op_applyGradientTitle')}">${I18n.t('ed_gradientTitle')}</button><button id="op-fill-smooth" style="flex-shrink:0;border:1.5px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:var(--gray-600);white-space:nowrap" title="${I18n.t('op_smoothFillTitle')}">${I18n.t('op_smoothBtn')}</button>` : ''}
 
   </div>
@@ -21678,6 +21734,8 @@ function edRenderOptionsPanel(mode){
         _edDrawPushHistory(); edRedraw();
       }, I18n.t('ed_clearBtn'));
     });
+    // Convertir en relleno (v40.60) — solo existe con tinta o lápiz activos (ver _actIsInkOrPencil).
+    $('op-to-fill-btn')?.addEventListener('click', () => { _edConvertLayerToFill(); });
     $('op-tool-pen')?.addEventListener('click',()=>{
       _edDodgeBurnActive = false;
       _edTmp.active='pen'; edDrawBrushType='pen';
