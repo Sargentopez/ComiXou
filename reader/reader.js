@@ -4769,8 +4769,20 @@ function _resetCredits() {
 }
 
 function _creditsClick() {
-  // Recargar la obra desde el principio — la forma más simple y fiable
-  window.location.reload();
+  // v40.61 — Petición de Alberto: NO recargar la página (window.location.reload()
+  // volvía a descargar toda la obra) — la obra ya está entera en memoria
+  // (RS.panels/RS.images), así que basta con navegar a la hoja 0. Se usa la MISMA
+  // vía que cualquier botón "ir a hoja X" del autor o la barra de hojas
+  // (_navGoToPanelLocked → _rGoToPanel): reinicia textStep, fadeAlpha, el zoom
+  // (_rzReset, dentro de _resizeCanvas) y las animaciones de esa hoja
+  // (_resetPanelAnims) — funciona igual en modo fixed que en scroll horizontal/
+  // vertical. _render() ya limpia créditos (_resetCredits/_hideCreditsButtons) en
+  // cuanto detecta que el panel destino no es el de créditos, así que no hay que
+  // llamarlo aparte. El resto de hojas quedan igual de "primera lectura" que la 0:
+  // cada navegación (avanzar/retroceder/saltar) ya reinicia SIEMPRE la hoja de
+  // llegada a frame 0 — ver el comentario de RZ más arriba — así que no hace falta
+  // reiniciarlas todas de golpe aquí, solo la que se visita.
+  _navGoToPanelLocked(0);
 }
 
 
