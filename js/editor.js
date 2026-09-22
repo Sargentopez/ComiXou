@@ -6745,18 +6745,50 @@ function _edFocusOnLayer(la, instant) {
 
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
   const zForH  = (freeH * MARGIN) / Math.max(capObjH, 1);
-  // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños
-  const targetZ = _isTextyLa
-    ? Math.min(zForReading, zForW, 4)
-    : Math.min(Math.min(zForW, zForH), 4);
+  // v40.62 — Alberto: el tamaño de lectura estándar (arriba, zForReading) es
+  // correcto cuando el espacio es muy limitado — un móvil con el teclado virtual
+  // abierto — pero en un PC sin teclado virtual, o con espacio de sobra aunque
+  // haya teclado (tablet), achicaba innecesariamente los bocadillos de fuente
+  // grande (p.ej. fontSize 30 por defecto → zForReading≈0.56, la mitad de su
+  // tamaño real en la hoja) y agrandaba los de fuente pequeña, aunque hubiera
+  // sitio de sobra para verlos tal cual se ven en la hoja. "Tal cual se ven en
+  // la hoja" = SIN aplicar ningún ajuste: si al zoom que ya había (normalmente
+  // el de encajar la hoja entera, heredado de antes de entrar a editar) el
+  // bocadillo ya cabe, no tocarlo — exactamente la misma regla que usan el
+  // resto de capas (ver el "else" de más abajo), no una nueva.
+  //
+  // "Espacio suficiente" (petición literal): que quepan 4 líneas AL TAMAÑO
+  // ELEGIDO del bocadillo (no al estándar) en el hueco libre actual — cubre a
+  // la vez "sin teclado virtual" (freeH grande de por sí, PC o teclado externo)
+  // y "con teclado virtual pero con hueco" (tablet): es el mismo freeH ya
+  // calculado arriba (que ya descuenta _edStableKbH()), así que no hace falta
+  // ninguna detección de dispositivo aparte. PC_REF_LINES=4 es fijo (no depende
+  // de cuántas líneas tenga el bocadillo ahora mismo) — igual que REF_LINES=3
+  // más arriba, es un umbral de "cabría con comodidad", no lo que ya hay
+  // escrito. Multiplicar por edCamera.z (no dejarlo en unidades de página) es
+  // el mismo criterio que currentlyFitsW/H de aquí abajo: pasarlo a los mismos
+  // px de pantalla que freeH.
+  const PC_REF_LINES = 4;
+  const naturalRefH = PC_REF_LINES * (la.fontSize || 16) * 1.2 + (la.padding || 0) * 2;
+  const _hasEnoughSpace = (naturalRefH * edCamera.z) <= (freeH * MARGIN);
+  // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños.
+  // Con espacio suficiente, texto/bocadillo usa la MISMA fórmula que el resto de
+  // capas (fit por ancho/alto, sin el tamaño estándar) — solo en el caso
+  // estrecho (móvil) se sigue normalizando a zForReading, sin cambios.
+  const targetZ = (!_isTextyLa || _hasEnoughSpace)
+    ? Math.min(zForW, zForH, 4)
+    : Math.min(zForReading, zForW, 4);
   const currentlyFitsW = objW    * edCamera.z <= freeW * MARGIN;
   const currentlyFitsH = capObjH * edCamera.z <= freeH * MARGIN;
-  // Texto/bocadillo: SIEMPRE el tamaño estándar, sin la excepción de "si ya
-  // cabe no lo toques" — lo que "ya cabía" antes podía ser cualquier zoom
-  // heredado de antes de entrar a editar, no necesariamente el estándar.
-  const newZ = _isTextyLa
-    ? Math.max(targetZ, 0.2)
-    : ((currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2));
+  // Con espacio suficiente (incluido "no texty"): si ya cabe al zoom actual, no
+  // tocarlo — así se ve "tal cual en la hoja", el zoom heredado de antes de
+  // editar. Sin espacio suficiente (texto/bocadillo en móvil): SIEMPRE el
+  // tamaño estándar, sin esa excepción — comportamiento existente intacto, lo
+  // que "ya cabía" antes podía ser cualquier zoom heredado, no necesariamente
+  // el estándar.
+  const newZ = (!_isTextyLa || _hasEnoughSpace)
+    ? ((currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2))
+    : Math.max(targetZ, 0.2);
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
