@@ -6745,90 +6745,49 @@ function _edFocusOnLayer(la, instant) {
 
   const zForW  = (freeW * MARGIN) / Math.max(objW, 1);
   const zForH  = (freeH * MARGIN) / Math.max(capObjH, 1);
-  // v40.62 — Alberto: el tamaño de lectura estándar (arriba, zForReading) es
-  // correcto cuando el espacio es muy limitado — un móvil con el teclado virtual
-  // abierto — pero en un PC sin teclado virtual, o con espacio de sobra aunque
-  // haya teclado (tablet), achicaba innecesariamente los bocadillos de fuente
-  // grande (p.ej. fontSize 30 por defecto → zForReading≈0.56, la mitad de su
-  // tamaño real en la hoja) y agrandaba los de fuente pequeña, aunque hubiera
-  // sitio de sobra para verlos tal cual se ven en la hoja. "Tal cual se ven en
-  // la hoja" = SIN aplicar ningún ajuste: si al zoom que ya había (normalmente
-  // el de encajar la hoja entera, heredado de antes de entrar a editar) el
-  // bocadillo ya cabe, no tocarlo — exactamente la misma regla que usan el
-  // resto de capas (ver el "else" de más abajo), no una nueva.
-  //
-  // "Espacio suficiente" (petición literal): que quepan 4 líneas AL TAMAÑO
-  // ELEGIDO del bocadillo (no al estándar) en el hueco libre actual — cubre a
-  // la vez "sin teclado virtual" (freeH grande de por sí, PC o teclado externo)
-  // y "con teclado virtual pero con hueco" (tablet): es el mismo freeH ya
-  // calculado arriba (que ya descuenta _edStableKbH()), así que no hace falta
-  // ninguna detección de dispositivo aparte. PC_REF_LINES=4 es fijo (no depende
-  // de cuántas líneas tenga el bocadillo ahora mismo) — igual que REF_LINES=3
-  // más arriba, es un umbral de "cabría con comodidad", no lo que ya hay
-  // escrito.
-  //
-  // v40.63 — FIX de un fallo de la v40.62 (Alberto: en móvil horizontal el
-  // texto salía diminuto, mucho más que en vertical, con el MISMO bocadillo).
-  // ANTES esta comparación multiplicaba naturalRefH (unidades de página) por
-  // edCamera.z, razonando —mal— que había que pasarlo a los mismos px de
-  // pantalla que freeH, igual que currentlyFitsW/H de aquí abajo. El fallo:
-  // edCamera.z es el zoom de "encajar la hoja ENTERA en pantalla"
-  // (_edCameraReset: min(availW/pw, availH/ph)), y la página es vertical (alta
-  // y estrecha) mientras que un móvil TUMBADO es una pantalla baja y ancha —
-  // encajar una hoja alta en una pantalla baja obliga a alejar mucho la
-  // cámara, así que ahí edCamera.z YA es minúsculo por sí solo, sin que nadie
-  // haga nada raro. Multiplicar por ese edCamera.z diminuto metía un número
-  // pequeño en la comparación aunque el hueco libre real (freeH) fuera tan
-  // apretado como en vertical (ver v40.48 §2.1: en horizontal freeH puede
-  // quedar en ~73–80 px) — _hasEnoughSpace salía verdadera por pura
-  // coincidencia numérica, se mantenía el zoom heredado (ese mismo
-  // edCamera.z minúsculo) en vez de aplicar zForReading, y el texto se veía
-  // muchísimo más pequeño que en vertical.
-  //
-  // AHORA: naturalRefH (unidades de página) se compara DIRECTAMENTE contra
-  // freeH (px de pantalla), sin pasar por edCamera.z. Válido porque pw/ph YA
-  // son, de por sí, una referencia de tamaño de pantalla — pw=360 coincide
-  // adrede con el ancho real de un móvil de referencia (v40.48 §2.1) — así
-  // que "1 unidad de página = 1 px real" ya es el tamaño natural de
-  // referencia; no hace falta reescalarlo por el zoom concreto de encajar la
-  // página ENTERA de cada caso, que es precisamente lo que dependía de la
-  // orientación. currentlyFitsW/H de aquí abajo SÍ deben seguir
-  // multiplicando por edCamera.z: ahí la pregunta es otra ("¿cabe el objeto
-  // YA, al zoom que hay ahora?"), no "¿hay sitio de sobra en abstracto?".
+  // v40.62/v40.63 — Alberto: el tamaño de lectura estándar (zForReading, arriba) existe
+  // para cuando el espacio es limitado por un teclado virtual — pero en PC achicaba de
+  // más los bocadillos de fuente grande y, en el intento anterior de arreglar esto,
+  // también podía tocar el zoom sin que hubiera teclado (p.ej. una fuente muy pequeña
+  // en PC se ampliaba aunque cupiera de sobra a su tamaño real). Regla final, tal cual
+  // la dio Alberto: "el zoom no se toca en PC en ningún caso, solo si existe teclado
+  // virtual" — es decir, TODO este sistema (tamaño de lectura, umbral de 4 líneas,
+  // ampliar si el heredado se queda corto) solo entra en juego cuando _edStableKbH()>0.
+  // Sin teclado virtual, texto/bocadillo se comporta EXACTAMENTE como cualquier otra
+  // capa (el "else" de más abajo): si ya cabe al zoom heredado, no se toca; si no cabe,
+  // se amplía o encoge lo justo para que quepa — sin ninguna referencia a zForReading.
+  const _hasVirtualKeyboard = _edStableKbH() > 0;
+  // "Espacio suficiente" con teclado virtual (petición literal): que quepan 4 líneas AL
+  // TAMAÑO ELEGIDO del bocadillo (no al estándar) en el hueco libre actual, ya reducido
+  // por el teclado. PC_REF_LINES=4 es fijo (no depende de cuántas líneas tenga el
+  // bocadillo ahora mismo) — igual que REF_LINES=3 más arriba, es un umbral de "cabría
+  // con comodidad", no lo que ya hay escrito. naturalRefH (unidades de página) se
+  // compara DIRECTAMENTE contra freeH (px de pantalla) sin pasar por edCamera.z: pw/ph
+  // YA son, de por sí, una referencia de tamaño de pantalla — pw=360 coincide adrede
+  // con el ancho real de un móvil de referencia (v40.48 §2.1) — así que "1 unidad de
+  // página = 1 px real" ya es el tamaño natural; escalarlo por edCamera.z metía el zoom
+  // (a veces diminuto por la orientación: una página vertical encajada en una pantalla
+  // horizontal alarga poco la cámara) como si fuera la referencia, y el umbral se
+  // superaba por pura coincidencia numérica aunque el hueco real fuera igual de
+  // apretado que en vertical — el bug que reportó Alberto.
   const PC_REF_LINES = 4;
   const naturalRefH = PC_REF_LINES * (la.fontSize || 16) * 1.2 + (la.padding || 0) * 2;
-  const _hasEnoughSpace = naturalRefH <= (freeH * MARGIN);
+  const _hasEnoughSpace = !_hasVirtualKeyboard || (naturalRefH <= (freeH * MARGIN));
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños.
-  // Con espacio suficiente, texto/bocadillo usa la MISMA fórmula que el resto de
-  // capas (fit por ancho/alto, sin el tamaño estándar) — solo en el caso
-  // estrecho (móvil) se sigue normalizando a zForReading, sin cambios.
   const targetZ = (!_isTextyLa || _hasEnoughSpace)
     ? Math.min(zForW, zForH, 4)
     : Math.min(zForReading, zForW, 4);
   const currentlyFitsW = objW    * edCamera.z <= freeW * MARGIN;
   const currentlyFitsH = capObjH * edCamera.z <= freeH * MARGIN;
-  // Con espacio suficiente (incluido "no texty"): si ya cabe al zoom actual, no
-  // tocarlo — así se ve "tal cual en la hoja", el zoom heredado de antes de
-  // editar. Sin espacio suficiente (texto/bocadillo en móvil): SIEMPRE el
-  // tamaño estándar, sin esa excepción — comportamiento existente intacto, lo
-  // que "ya cabía" antes podía ser cualquier zoom heredado, no necesariamente
-  // el estándar.
-  //
-  // v40.63 (2ª vuelta) — el arreglo de _hasEnoughSpace de más arriba no bastaba:
-  // con fuente pequeña (8-20) en móvil horizontal, naturalRefH SÍ cabe de sobra
-  // en freeH (correcto: hay hueco real para 4 líneas a tamaño natural), pero el
-  // zoom HEREDADO (edCamera.z, el de encajar la hoja entera) sigue siendo el
-  // mismo diminuto de siempre en horizontal — y como a ESE zoom el objeto
-  // "cabe" trivialmente (es minúsculo), la rama de "no tocarlo" lo dejaba tal
-  // cual: diminuto otra vez, con espacio de sobra sin aprovechar. Añadido
-  // _isTextyLa && edCamera.z < zForReading como condición EXTRA para descartar
-  // "no tocarlo": si el zoom heredado ya es, de por sí, más pequeño que el
-  // estándar de lectura, no vale conservarlo aunque "quepa" — se pasa a
-  // targetZ (con espacio de sobra, el ancho/alto real: agranda hasta llenar
-  // el hueco, nunca por debajo del estándar). No afecta a capas no-texto (ahí
-  // "no tocarlo" nunca comparó contra zForReading, ver más arriba) ni al caso
-  // sin espacio suficiente (ese ya usaba siempre targetZ, sin esta rama).
-  const _inheritedTooSmall = _isTextyLa && edCamera.z < zForReading;
+  // Sin teclado virtual: _hasEnoughSpace es siempre true (arriba) y _inheritedTooSmall
+  // siempre false — así que esta rama queda igual que la de "no texty": si ya cabe, no
+  // tocarlo, sin ninguna comparación con zForReading. Con teclado virtual y espacio de
+  // sobra: si el zoom heredado YA es menor que zForReading (posible en horizontal, ver
+  // arriba), no basta con que el objeto "quepa" a ese zoom tan pequeño — se pasa a
+  // targetZ (con espacio de sobra: el ajuste por ancho/alto real, nunca por debajo del
+  // estándar). Sin espacio suficiente (teclado virtual y poco hueco): SIEMPRE el
+  // tamaño estándar — comportamiento de siempre, intacto.
+  const _inheritedTooSmall = _isTextyLa && _hasVirtualKeyboard && edCamera.z < zForReading;
   const newZ = (!_isTextyLa || _hasEnoughSpace)
     ? ((!_inheritedTooSmall && currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2))
     : Math.max(targetZ, 0.2);
