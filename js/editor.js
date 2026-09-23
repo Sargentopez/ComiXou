@@ -21026,6 +21026,13 @@ function _hslToHex(h,s,l){
 // En táctil (Android) abre el picker HSL propio; en PC abre el selector nativo.
 // Detecta táctil via window._edIsTouch, que se actualiza con cualquier pointerdown real.
 function _edPickColor(e, initialHex, onInput, onCommit){
+  // esb-color/esb-fill llaman aquí directamente (edb-color pasa antes por
+  // _edbTogglePalette, que ya cierra los demás popups) — cerrar cualquier
+  // otro selector de las barras flotantes antes de abrir este. No afecta a
+  // la edición de un swatch de la paleta: esa vía llama a
+  // _edShowColorPicker directamente, nunca a esta función (ver el orden
+  // deliberado "abrir picker, cerrar paleta después" en _edbBuildPalette).
+  _edbCloseAllPopovers();
   const _isTouch = e.pointerType==='touch' || window._edIsTouch===true;
   if(_isTouch){
     const _savedSel=edSelectedIdx, _savedCol=edDrawColor;
@@ -24491,7 +24498,10 @@ function edInitDrawBar() {
     if (pop.classList.contains('open') && pop._anchor === anchorBtn) {
       _edbCloseBrushPop(); return;
     }
-    _edbCloseBrushPop();
+    // Cierra este Y CUALQUIER OTRO popup de las barras flotantes (paleta,
+    // grosor, offset, tipo de forma, opacidad/curva) antes de reconstruir —
+    // nunca deben quedar dos abiertos a la vez (petición de Alberto).
+    _edbCloseAllPopovers();
 
     // Construir items
     const bar = $('edDrawBar');
@@ -24587,6 +24597,11 @@ function edInitDrawBar() {
       window._edbBrushPopOutsideHandler = null;
     }
   }
+  // Expuesta globalmente: _edbCloseAllPopovers (fuera de este closure) la
+  // necesita para cerrar este popup al abrirse cualquier otro selector de
+  // las barras flotantes (paleta, grosor, offset, tipo de forma, opacidad/
+  // curva) — nunca dos abiertos a la vez (petición de Alberto).
+  window._edbCloseBrushPop = _edbCloseBrushPop;
 
   // Diálogo "¿En qué capa quieres dibujar?" con dos botones de acción.
   // onCancel: callback opcional al cerrar sin elegir (click en fondo oscuro).
@@ -24898,8 +24913,7 @@ function edInitDrawBar() {
   document.addEventListener('pointerdown', e => {
     const pop = $('edb-size-pop');
     if (pop && pop.style.display === 'flex' && !pop.contains(e.target) && e.target.id !== 'edb-pen-size' && e.target.id !== 'edb-eraser-size' && e.target.id !== 'esb-size'){
-      pop.style.display = 'none';
-      pop._esbMode = false;
+      _edbCloseSizePop();
     }
   }, { passive: true });
 
@@ -24908,11 +24922,17 @@ function edInitDrawBar() {
   $('edb-redo')?.addEventListener('click', () => edDrawRedo());
 
   // ── Cursor offset (T18) — botón único con popover ──
+  function _edbCloseOffsetPop() {
+    const pop = $('edb-offset-pop');
+    if (pop) pop.style.display = 'none';
+  }
+  // Expuesta globalmente: la necesita _edbCloseAllPopovers (fuera de este closure).
+  window._edbCloseOffsetPop = _edbCloseOffsetPop;
   function _edbOpenOffsetPop() {
     const pop = $('edb-offset-pop');
     if(!pop) return;
     const isOpen = pop.style.display === 'flex';
-    if(isOpen){ pop.style.display = 'none'; return; }
+    if(isOpen){ _edbCloseOffsetPop(); return; }
     // Si offset activo → desactivar directamente sin abrir el popover
     if(_edCursorOffset){
       _cofSetOn(false);
@@ -24920,6 +24940,8 @@ function edInitDrawBar() {
       _edOffsetHide();
       return;
     }
+    // Cerrar cualquier otro popup de las barras flotantes antes de abrir este.
+    _edbCloseAllPopovers();
     // Posicionar igual que edb-size-pop: al lado de la barra con más espacio
     pop.style.display = 'flex';
     pop.style.left = '-9999px'; pop.style.top = '-9999px';
@@ -24968,7 +24990,7 @@ function edInitDrawBar() {
     const pop = $('edb-offset-pop');
     if(pop && pop.style.display === 'flex' &&
        !pop.contains(e.target) && e.target.id !== 'edb-offset'){
-      pop.style.display = 'none';
+      _edbCloseOffsetPop();
     }
   }, { passive: true });
 
@@ -24984,17 +25006,26 @@ function _edbTogglePalette() {
   const pop = $('edb-palette-pop');
   if (!pop) return;
   if (pop.classList.contains('open')) { _edbClosePalette(); return; }
+  _edbCloseAllPopovers();
   _edbBuildPalette();
   _edbPositionPalette();
   pop.classList.add('open');
-  // Cerrar al tocar fuera
+  // Cerrar al tocar fuera. NO usar {once:true}: con la paleta permaneciendo
+  // abierta tras elegir un color (petición de Alberto — deja tiempo a tocar
+  // después el botón arcoíris para afinarlo), el primer toque DENTRO de la
+  // paleta (un swatch) también dispararía este listener una vez y lo
+  // autoeliminaría sin cerrar nada (el target está dentro, así que el if de
+  // abajo no cierra) — dejando la paleta sin forma de cerrarse al tocar
+  // fuera después. Vive hasta que _edbClosePalette() lo quita explícitamente
+  // (ella sola, por cualquier vía: este mismo listener, otro botón de la
+  // barra, ocultarse la barra, o el botón arcoíris antes de abrir su picker).
   setTimeout(() => {
     window._edbPaletteClose = e => {
       if (!e.target.closest('#edb-palette-pop') && !e.target.closest('#edb-color')) {
         _edbClosePalette();
       }
     };
-    document.addEventListener('pointerdown', window._edbPaletteClose, { once: true });
+    document.addEventListener('pointerdown', window._edbPaletteClose);
   }, 0);
 }
 
@@ -25005,14 +25036,12 @@ function _edbClosePalette() {
   $('edb-palette-pop')?.classList.remove('open');
   if (_edbDblTapTimer) { clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; }
   _edbDblTapIdx = -1;
-  // Cancelar explícitamente el listener pendiente de "clic fuera cierra"
-  // (window._edbPaletteClose, ver _edbTogglePalette) — normalmente ya se
-  // autoelimina solo ({once:true}) al primer pointerdown, pero si esta
-  // función se llama por otra vía (p.ej. el botón arcoíris cerrándola antes
-  // de abrir su propio picker) sin que ese pointerdown haya llegado a
-  // dispararlo, quedaría huérfano esperando el SIGUIENTE toque en cualquier
-  // parte — incluido uno dentro del picker recién abierto — y podría acabar
-  // cerrando algo que no le corresponde. Quitarlo aquí lo hace inofensivo.
+  // Quitar el listener de "clic fuera cierra" (window._edbPaletteClose, ver
+  // _edbTogglePalette) — ya no se autoelimina solo (no lleva {once:true}:
+  // debe seguir vivo mientras la paleta reciba toques dentro de sí misma),
+  // así que esta es la ÚNICA vía por la que se desengancha, sea cual sea el
+  // motivo del cierre (tocar fuera, otro botón de la barra, ocultarse la
+  // barra, o el botón arcoíris cerrándola antes de abrir su propio picker).
   if (window._edbPaletteClose) {
     document.removeEventListener('pointerdown', window._edbPaletteClose);
     window._edbPaletteClose = null;
@@ -25086,12 +25115,18 @@ function _edbBuildPalette() {
         }, edColorPalette[idx]);
         return;
       }
-      // Primer tap: retardar el cierre 200ms para dar margen al doble tap
+      // Primer tap: NO cierra la paleta (petición de Alberto — puede querer
+      // tocar después el botón arcoíris para afinar el color recién
+      // elegido). El timer se conserva solo para la ventana de detección
+      // del doble tap de arriba (editar este swatch) — pasado ese plazo sin
+      // un segundo tap, simplemente se desarma sin cerrar nada. La paleta
+      // se cierra por las otras vías: tocar fuera de ella (ver
+      // window._edbPaletteClose en _edbTogglePalette), tocar otro botón de
+      // la barra (_edbCloseAllPopovers) u ocultarse la barra (edDrawBarHide).
       clearTimeout(_edbDblTapTimer);
       _edbDblTapIdx = idx;
       _edbDblTapTimer = setTimeout(() => {
         _edbDblTapIdx = -1; _edbDblTapTimer = null;
-        _edbClosePalette();
       }, _edDoubleTapMs);
     });
     // Doble click (PC) → mismo efecto que doble tap en táctil
@@ -25261,12 +25296,41 @@ function _edUpdateDrawInfo() {
 // slider) para que "funcione igual" en ambas, pedido por Alberto. En modo
 // vectorial el rango baja hasta 0px (grosor invisible es un valor válido
 // para un shape/line), a diferencia del lápiz/goma que nunca bajan de 1.
+function _edbCloseSizePop() {
+  const pop = $('edb-size-pop');
+  if (pop) { pop.style.display = 'none'; pop._esbMode = false; }
+}
+
+// Cierra TODOS los selectores/popups flotantes de edDrawBar y edShapeBar —
+// llamada al principio de cada función que abre uno de ellos, para que
+// nunca queden dos abiertos y solapados a la vez (petición de Alberto:
+// "cuando se toque un botón de la barra flotante, debe cerrarse cualquier
+// selector previo al mostrarse el último"). Cada función de apertura ya
+// comprueba su PROPIO estado antes de llegar aquí — si el mismo botón se
+// toca dos veces seguidas, esa función cierra y sale antes de llamar a
+// esto, así que el toggle de "tocar de nuevo para cerrar" no se rompe.
+// edb-size-pop es COMPARTIDO entre edDrawBar (grosor lápiz/goma) y
+// edShapeBar (esb-size) — cerrarlo aquí cubre ambas barras a la vez.
+// _edbCloseBrushPop/_edbCloseOffsetPop/_esbClosePop/_esbHideSlider viven en
+// closures distintos (edInitDrawBar/edInitShapeBar/EditorView_init) y se
+// exponen a window justo donde se declaran, mismo patrón ya usado en este
+// archivo para _esbSyncTool/_esbShowSlider.
+function _edbCloseAllPopovers() {
+  _edbClosePalette();
+  window._edbCloseBrushPop?.();
+  _edbCloseSizePop();
+  window._edbCloseOffsetPop?.();
+  window._esbClosePop?.();
+  window._esbHideSlider?.();
+}
+
 function _edbOpenSizePop(btn, opts) {
   const pop = $('edb-size-pop');
   if (!pop) return;
   const isVec = !!(opts && opts.vector);
   const isOpen = pop.style.display === 'flex';
-  if (isOpen) { pop.style.display = 'none'; pop._esbMode = false; return; }
+  if (isOpen) { _edbCloseSizePop(); return; }
+  _edbCloseAllPopovers();
   if (isVec) {
     pop._esbMode = true;
     const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
@@ -25812,6 +25876,7 @@ function edInitShapeBar() {
     if(!bar||!panel||!sl) return;
     // Si ya está el mismo modo activo, cerrar
     if(panel.style.display!=='none' && panel._mode===mode){ panel.style.display='none'; panel._mode=null; return; }
+    _edbCloseAllPopovers();
     panel._mode=mode;
     sl.min=minVal; sl.max=maxVal; sl.value=curVal;
     const isHoriz=bar.classList.contains('horiz');
@@ -25843,6 +25908,8 @@ function edInitShapeBar() {
     sl._onInput=onInput; sl._onChange=onChange;
   }
   function _esbHideSlider(){ const p=$('esb-slider-panel'); if(p){p.style.display='none';p._mode=null;} }
+  // Expuesta globalmente: la necesita _edbCloseAllPopovers (fuera de este closure).
+  window._esbHideSlider = _esbHideSlider;
   // Expuesta globalmente: _esbActivateCurveUI (fuera de este closure) la
   // necesita para poder abrir el control de curvatura también al restaurar
   // el estado de nodos desde el panel (ver edShapeBarShow), no solo al
@@ -32889,8 +32956,11 @@ function EditorView_init(){
     _esbPopEl.style.display='none';
     document.removeEventListener('pointerdown', window._esbPopClose);
   }
+  // Expuesta globalmente: la necesita _edbCloseAllPopovers (fuera de este closure).
+  window._esbClosePop = _esbClosePop;
   function _esbTogglePop(){
     if(_esbPopEl.style.display!=='none'){ _esbClosePop(); return; }
+    _edbCloseAllPopovers();
     _esbMarkActivePop();
     const bar=$('edShapeBar'), btn=$('esb-shapes');
     if(!bar||!btn) return;
