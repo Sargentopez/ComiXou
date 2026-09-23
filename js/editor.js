@@ -42160,7 +42160,22 @@ function _gcpMergeLayersToImage(items, cb, opts) {
 
     const finalImg = new Image();
     finalImg.onload = () => {
-      const imgLayer = new ImageLayer(finalImg, Math.max(0,Math.min(1,_nx)), Math.max(0,Math.min(1,_ny)), normW/scale);
+      // BUG real (desde el origen de esta función, arreglado aquí): _nx/_ny
+      // se recortaban a [0,1] con Math.max(0,Math.min(1,...)) — viola la
+      // regla ya establecida dos veces en el proyecto (_edRelayoutLayersForOrientation,
+      // _adaptGcp en v38.02): un objeto puede quedar legítima e intencionadamente
+      // parcial o totalmente fuera de la página, y su posición nunca debe
+      // recortarse a [0,1]. _gcpVectorToImage (la función hermana, justo
+      // debajo) ya usaba la.x/la.y sin recortar — esta era la única asimetría
+      // entre ambas. Efecto real: un dibujo a mano (StrokeLayer, con o sin
+      // relleno/acuarela/lápiz) cuyo centro real cae fuera del lienzo se
+      // colocaba pegado al borde (x=0 o x=1) en vez de en su posición real —
+      // reportado por Alberto como "el dibujo se queda dentro cuando debería
+      // quedar fuera". Verificado con Playwright contra la función real: un
+      // trazo con x=-0.8 (bien fuera por la izquierda) daba x=0 con el
+      // recorte; sin él, x≈-0.8 como debe ser — ver
+      // /home/claude/work/pw2/test_clamp_bug.py de esta sesión.
+      const imgLayer = new ImageLayer(finalImg, _nx, _ny, normW/scale);
       imgLayer.height = normH/scale;
       imgLayer.src = dataUrl;
       imgLayer._keepSize = true;
