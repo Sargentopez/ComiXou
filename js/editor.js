@@ -41964,17 +41964,42 @@ function _gcpRenderLayersDropdown(dd) {
 // misma hoja, ver comentario en _gcpCpBuildFromRange).
 //
 // Pasada 1 (aproximada): la MISMA imagen ya dibujada se reescala a un canvas
-// pequeño (como mucho ~220px de lado — proporción fija según cuál sea el
-// lado mayor del original) y se escanea ESE, no el original — hasta ~250×
-// menos píxeles que recorrer. Pasada 2 (precisa): el resultado aproximado,
-// con un margen generoso (redondeo de escala + posible pérdida de detalle al
-// reducir), delimita una zona pequeña — solo esa zona se vuelve a leer a
-// resolución completa con el MISMO criterio pixel a pixel de siempre. El
-// resultado final es idéntico a un recorrido completo (incluida cualquier
-// rareza ya existente de los límites, p. ej. un contenido de una sola
-// columna de ancho sigue dando x1<=x0 igual que antes) — el atajo está solo
-// en CUÁNTOS píxeles hace falta mirar, no en el criterio de qué cuenta como
-// contenido.
+// pequeño (como mucho ~400px de lado — proporción fija según cuál sea el
+// lado mayor del original) y se escanea ESE, no el original. Pasada 2
+// (precisa): el resultado aproximado, con un margen generoso, delimita una
+// zona pequeña — solo esa zona se vuelve a leer a resolución completa.
+//
+// BUG real (v40.09–v40.64, arreglado aquí): la pasada 1 reutilizaba el MISMO
+// umbral alpha>10 que la pasada 2 — pero esa pasada lee píxeles ya
+// PROMEDIADOS por drawImage() al reducir de escala (cada píxel pequeño es una
+// mezcla de ~(1/scale)² píxeles originales), no píxeles reales. Un trazo fino
+// (StrokeLayer/dibujo congelado convertido a objeto, o el borde de una capa
+// semitransparente) que sobresale del lienzo se diluye: p. ej. una franja de
+// 2px de alto con alpha=51/255 dentro de una celda de ~14×14px de la pasada
+// aproximada promedia a alpha≈7 — por DEBAJO de 10 — así que esa celda no se
+// contaba como contenido, aunque a resolución real SÍ lo era (alpha=51 >
+// 10). El resultado: la pasada 1 devolvía un borde más adentro del real, la
+// pasada 2 solo releía esa zona ya recortada, y la parte fuera de ella se
+// perdía en silencio — la causa de los recortes reportados por Alberto en
+// "Convertir hojas en animación" (parciales, dependientes del grosor/opacidad
+// real del trazo en cada hoja, por eso parecían aleatorios). Verificado con
+// Playwright contra un caso reconstruido (trazo de 1-2px sobresaliendo del
+// lienzo, opacidad constante por encima de 10): la versión anterior perdía
+// hasta 329px de contenido real; ver /home/claude/work/pw/test_bbox_fix.py
+// de esta sesión si hace falta reproducirlo.
+//
+// Arreglo: la pasada 1 usa un umbral casi nulo (>0, "no completamente
+// transparente") — solo para decidir la zona CANDIDATA a releer, nunca para
+// decidir qué cuenta como contenido final. El criterio real (alpha>10) se
+// aplica intacto, sin cambios, en la pasada 2 sobre píxeles reales sin
+// promediar — igual que siempre. Como la pasada 1 ya no puede diluir
+// contenido real por debajo de su propio umbral (cualquier resto de alpha
+// tras promediar sigue siendo >0 salvo que el original ya fuera
+// prácticamente invisible), la zona candidata SIEMPRE incluye el borde real,
+// y el margen (pensado para el redondeo de escala, no para esta dilución)
+// sigue cumpliendo su función original sin tener que ensancharse sin límite.
+// `imageSmoothingQuality: 'high'` asegura un promediado de área real (no un
+// atajo de baja calidad que podría saltarse píxeles) al reducir de escala.
 //
 // Es la única función de esta zona que SÍ se comparte entre las dos
 // funciones de "fotografiar a imagen" (el resto de su código de tamaño de
@@ -41985,11 +42010,11 @@ function _gcpRenderLayersDropdown(dd) {
 // tamaños) solo multiplicaría el riesgo de que una de las dos copias
 // divergiera con un bug sutil de redondeo.
 function _gcpFindAlphaBbox(ctx, w, h) {
-  const _scan = (data, rw, rh, ox, oy) => {
+  const _scan = (data, rw, rh, ox, oy, threshold) => {
     let x0 = rw, y0 = rh, x1 = 0, y1 = 0;
     for (let y = 0; y < rh; y++) {
       for (let x = 0; x < rw; x++) {
-        if (data[(y * rw + x) * 4 + 3] > 10) {
+        if (data[(y * rw + x) * 4 + 3] > threshold) {
           if (x < x0) x0 = x; if (x > x1) x1 = x;
           if (y < y0) y0 = y; if (y > y1) y1 = y;
         }
@@ -41997,9 +42022,11 @@ function _gcpFindAlphaBbox(ctx, w, h) {
     }
     return { x0: x0 + ox, y0: y0 + oy, x1: x1 + ox, y1: y1 + oy };
   };
-  const _fullScan = () => _scan(ctx.getImageData(0, 0, w, h).data, w, h, 0, 0);
+  // Umbral oficial de "contenido visible" (pasada 2, y pasada única si el
+  // canvas ya es pequeño) — SIN CAMBIOS respecto al comportamiento de siempre.
+  const _fullScan = () => _scan(ctx.getImageData(0, 0, w, h).data, w, h, 0, 0, 10);
 
-  const MAX_COARSE = 220; // lado máx. de la copia reducida para la pasada 1
+  const MAX_COARSE = 400; // lado máx. de la copia reducida para la pasada 1
   const scale = Math.min(1, MAX_COARSE / Math.max(w, h));
   if (scale >= 1) {
     // Canvas ya pequeño (no ocurre con los tamaños actuales de esta app,
@@ -42012,30 +42039,31 @@ function _gcpFindAlphaBbox(ctx, w, h) {
   const small = document.createElement('canvas');
   small.width = cw; small.height = ch;
   const sctx = small.getContext('2d');
+  sctx.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in sctx) sctx.imageSmoothingQuality = 'high';
   sctx.drawImage(ctx.canvas, 0, 0, w, h, 0, 0, cw, ch);
-  const coarse = _scan(sctx.getImageData(0, 0, cw, ch).data, cw, ch, 0, 0);
+  // Umbral >0 (no 10): esta pasada lee píxeles YA PROMEDIADOS por el
+  // downscale — cualquier resto de alpha, por diluido que esté, basta para
+  // marcar la celda como "posible contenido, a confirmar en la pasada 2".
+  const coarse = _scan(sctx.getImageData(0, 0, cw, ch).data, cw, ch, 0, 0, 0);
   small.width = 0; small.height = 0; // liberar el backing store cuanto antes (Android)
   if (coarse.x1 < coarse.x0 || coarse.y1 < coarse.y0) {
-    // La pasada aproximada no encontró nada — pero reducir de escala puede
-    // diluir por debajo del umbral de alpha un contenido real MUY fino (p.ej.
-    // una línea de 1px de ancho) que sí está presente a resolución completa.
-    // Confirmado con un caso de prueba real antes de dar esto por bueno (ver
-    // bench/correctness.js, caso "columna_1px") — nunca asumir "vacío" solo
-    // por la pasada aproximada: repetir el escaneo completo antes de
-    // concluirlo. Caso raro en la práctica (un objeto real creado a
-    // propósito casi nunca es enteramente invisible o de 1px de grosor), así
-    // que perder aquí el atajo no cuesta nada en el caso común.
+    // La pasada aproximada no encontró NI RASTRO de nada (ni siquiera
+    // alpha>0) — solo puede pasar con un canvas realmente vacío, dado el
+    // umbral casi nulo de arriba. Se repite el escaneo completo de todos
+    // modos como red de seguridad, nunca asumir "vacío" solo por la pasada
+    // aproximada.
     return _fullScan();
   }
   // Margen generoso al traducir a resolución completa: redondeo de la
   // reducción de escala + posible pérdida de 1-2px de detalle al reducir.
-  const margin = Math.ceil(1 / scale) + 4;
+  const margin = Math.ceil(1 / scale) + 8;
   const fx0 = Math.max(0, Math.floor(coarse.x0 / scale) - margin);
   const fy0 = Math.max(0, Math.floor(coarse.y0 / scale) - margin);
   const fx1 = Math.min(w - 1, Math.ceil((coarse.x1 + 1) / scale) + margin);
   const fy1 = Math.min(h - 1, Math.ceil((coarse.y1 + 1) / scale) + margin);
   const fw = fx1 - fx0 + 1, fh = fy1 - fy0 + 1;
-  return _scan(ctx.getImageData(fx0, fy0, fw, fh).data, fw, fh, fx0, fy0);
+  return _scan(ctx.getImageData(fx0, fy0, fw, fh).data, fw, fh, fx0, fy0, 10);
 }
 
 function _gcpMergeLayersToImage(items, cb, opts) {
