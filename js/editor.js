@@ -4360,6 +4360,22 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   // colateral disparaba el aviso SIEMPRE al salir, incluso en una obra
   // recién creada e intacta.
   '#edBackBtn',
+  // BUG CORREGIDO — Alberto: la barra flotante "ir a hoja" (#edPageJumpToggle/
+  // #edPageJumpBar/#edPageJumpSlider/#edPageJumpScrim, ver _edSetupPageJumpBar)
+  // se añadió DESPUÉS de la corrección original de #edPagePrev/#edPageNext de
+  // arriba, y se quedó fuera de esta lista por descuido — es el mismo bug
+  // reapareciendo por una vía nueva, no uno distinto. Resultado: abrir el
+  // selector y/o arrastrar su slider para VER otras hojas (sin editar nada)
+  // marcaba como sucia cada hoja por la que se pasaba, igual que si se
+  // hubiera dibujado en ella. Con obras de muchas hojas esto no solo
+  // disparaba el aviso de "cambios sin guardar" sin haber cambiado nada:
+  // también obligaba a edCloudSave a resubir de verdad (reserializar capas y,
+  // si las hay, binarios GIF/APNG) cada hoja visitada de más en el siguiente
+  // guardado en nube, en vez de solo las realmente editadas — ver
+  // _uploadPanels/_uploadOnePanel en supabase-client.js. Se excluye el
+  // contenedor #edPageJumpBar entero (no solo el slider) para cubrir también
+  // su etiqueta interna y cualquier control que se añada dentro en el futuro.
+  '#edPageJumpToggle', '#edPageJumpBar', '#edPageJumpScrim',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
