@@ -10471,10 +10471,26 @@ function edPinchMove(e) {
   }
 }
 function edPinchEnd() {
+  // BUG CORREGIDO — Alberto: "¿el zoom con gestos ensucia las hojas?". El
+  // ratón (rueda/Ctrl+rueda, ver window._edWheelFn) nunca lo hace — no pasa
+  // por pointerdown, así que _edInteractionTick ni se entera. Pero un pinch
+  // de 2 dedos en táctil SÍ dispara 2 tics del contador de interacción de
+  // la hoja actual (uno por cada dedo al tocar — _edInteractionTick, fase
+  // de CAPTURA, dispara ANTES de que este código sepa si el gesto va a
+  // acabar siendo cámara o edición de un objeto). Cuando resulta ser solo
+  // cámara — pan/zoom del lienzo, sin objeto ni multiselección de por
+  // medio, los mismos casos en los que abajo NO se llega a llamar
+  // edPushHistory()/_edShapePushHistory() — esos 2 tics son puro falso
+  // positivo y hay que deshacerlos, igual que edCloudSave resta su propia
+  // instantánea del contador en vez de darla por perdida (ver su
+  // comentario). Si el pinch SÍ editó algo, el flag explícito de
+  // edPushHistory ya deja la hoja sucia por su cuenta — no hace falta
+  // tocar el contador en ese caso.
+  let _pinchWasRealEdit = false;
   if(window._edPinchMulti && edMultiSel.length){
     // Recalcular bbox tras el gesto de grupo
     _msRecalcBbox();
-    if(window._edMoved) edPushHistory();
+    if(window._edMoved) { edPushHistory(); _pinchWasRealEdit = true; }
     window._edPinchMulti = null;
   }
   // Objeto individual: si se escaló/rotó con pinch, guardar en historial
@@ -10483,6 +10499,7 @@ function edPinchEnd() {
     if(edPinchScale0._isLineLayer){
       // LineLayer en construcción — historial vectorial
       _edShapePushHistory();
+      _pinchWasRealEdit = true;
     } else {
       const _peLa = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
       if(_peLa){
@@ -10494,7 +10511,19 @@ function edPinchEnd() {
         } else {
           edPushHistory();
         }
+        _pinchWasRealEdit = true;
       }
+    }
+  }
+  if(!_pinchWasRealEdit){
+    // Pinch puramente de cámara: deshacer los 2 tics (uno por dedo) — ver
+    // comentario de cabecera. Los flags explícitos (_dirtyLocal/_dirtyCloud)
+    // nunca se tocaron en este caso, así que solo hace falta corregir el
+    // contador. Math.max(0, ...) por seguridad: nunca dejarlo negativo.
+    const _pep = edPages[edCurrentPage];
+    if(_pep){
+      if(typeof _pep._dirtyCountLocal === 'number') _pep._dirtyCountLocal = Math.max(0, _pep._dirtyCountLocal - 2);
+      if(typeof _pep._dirtyCountCloud === 'number') _pep._dirtyCountCloud = Math.max(0, _pep._dirtyCountCloud - 2);
     }
   }
   // syncFill en pinch individual — cubierto por onEnd

@@ -756,18 +756,6 @@ const SupabaseClient = (() => {
 
     if (!panels.length) return;
 
-    // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
-    // coverDataUrl (con el texto horneado, ver edRenderPage(page,withText) y
-    // edSaveProject en editor.js) si existe — obras guardadas antes de este
-    // cambio no lo tienen, panels[0].dataUrl sigue de respaldo.
-    const _firstDataUrl = comic.coverDataUrl || panels[0]?.dataUrl || null;
-    if (_firstDataUrl) {
-      const _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
-      if (_coverUrlResult) {
-        await _patch('works', `id=eq.${comic.supabaseId}`, { cover_url: _coverUrlResult }).catch(() => {});
-      }
-    }
-
     // ── ¿Podemos subir SOLO las páginas marcadas sucias? ──────────────────
     // dirtyPageIndices lo calcula edCloudSave a partir de _dirtyCloud por
     // página — viene como array cuando NO ha habido cambios estructurales
@@ -777,6 +765,10 @@ const SupabaseClient = (() => {
     // coincide (obra nunca subida, o cualquier inconsistencia), caemos a la
     // ruta completa de siempre en vez de arriesgar índices que no signifiquen
     // lo mismo que la última vez.
+    //
+    // Se calcula ANTES de la portada (justo abajo) porque la portada necesita
+    // saber si esto va a acabar siendo una subida incremental de verdad, y
+    // cuáles páginas están sucias exactamente — ver el porqué en su comentario.
     let _incrementalOk = Array.isArray(dirtyPageIndices);
     let _panelIdByOrder = null;
     if (_incrementalOk) {
@@ -791,6 +783,30 @@ const SupabaseClient = (() => {
         for (const i of dirtyPageIndices) {
           if (_panelIdByOrder[i] == null) { _incrementalOk = false; break; }
         }
+      }
+    }
+
+    // Subir thumbnail de la primera hoja (best-effort, no bloquea el guardado)
+    // coverDataUrl (con el texto horneado, ver edRenderPage(page,withText) y
+    // edSaveProject en editor.js) si existe — obras guardadas antes de este
+    // cambio no lo tienen, panels[0].dataUrl sigue de respaldo.
+    //
+    // BUG CORREGIDO — Alberto: medición propia (navegar a la hoja 23 con la
+    // barra "ir a hoja", mover solo una imagen ahí, guardar en nube: 20s para
+    // una única hoja realmente sucia). Antes de este cambio, la portada se
+    // resubía SIEMPRE en toda subida a la nube — reescalarla a JPEG y
+    // volver a subirla — aunque la hoja 1 (de la que sale) no hubiera
+    // cambiado desde el último guardado. Ahora se salta cuando ya sabemos
+    // con certeza (_incrementalOk, arriba) que esto es una subida
+    // incremental de verdad y la hoja 1 no está entre las sucias. Si
+    // _incrementalOk es false (subida completa, o la obra nunca se subió a
+    // la nube) se sigue subiendo siempre, exactamente igual que antes.
+    const _skipCoverUpload = _incrementalOk && !dirtyPageIndices.includes(0);
+    const _firstDataUrl = comic.coverDataUrl || panels[0]?.dataUrl || null;
+    if (_firstDataUrl && !_skipCoverUpload) {
+      const _coverUrlResult = await _thumbUpload(comic.supabaseId, _firstDataUrl).catch(() => null);
+      if (_coverUrlResult) {
+        await _patch('works', `id=eq.${comic.supabaseId}`, { cover_url: _coverUrlResult }).catch(() => {});
       }
     }
 
