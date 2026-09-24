@@ -761,6 +761,14 @@ body.ed-scale-tablet {
   display: flex; align-items: center; justify-content: center;
   color: #fff; font-weight: 900; text-shadow: 0 0 2px #000;
 }
+/* Cuentagotas dentro de la paleta (junto al botón arcoíris) — toma una
+   muestra del lienzo y la aplica a la muestra seleccionada de la paleta. */
+.edb-pal-eyedrop {
+  background: rgba(255,255,255,.08) !important;
+  border-color: rgba(255,255,255,.3) !important;
+  font-size: calc(0.7rem * var(--edb-scale, 1));
+  display: flex; align-items: center; justify-content: center;
+}
 
 /* Muestras de color del panel de dibujo a mano (op-pal-dot) y botón arcoíris (op-custom-color-btn):
    evita que el doble-tap dispare el zoom nativo del navegador en vez de abrir el picker de color. */

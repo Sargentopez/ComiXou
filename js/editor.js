@@ -24830,10 +24830,22 @@ function edInitDrawBar() {
     _edbTogglePalette();
   });
 
-  // ── Cuentagotas en barra flotante ──
-  $('edb-eyedrop')?.addEventListener('pointerup', e => {
+  // ── Opacidad de dibujo — slider adjunto a la barra (mismo panel y mecánica
+  // que esb-opacity de la barra vectorial, ver _esbShowSlider; a cambio del
+  // cuentagotas, que ahora vive dentro de la paleta — ver _edbBuildPalette).
+  $('edb-opacity')?.addEventListener('click', e => {
     e.stopPropagation();
-    _edStartEyedrop();
+    window._esbShowSlider?.('drawOpacity', 1, 100, edDrawOpacity,
+      v => {
+        edDrawOpacity = v;
+        // Sincronizar los controles equivalentes del panel completo si están abiertos
+        const _osl = $('op-dopacity'); if (_osl) _osl.value = v;
+        const _onum = $('op-draw-opacity-num'); if (_onum) _onum.value = v;
+        _edUpdateDrawInfo();
+      },
+      () => {},
+      'edDrawBar'
+    );
   });
 
   // ── Grosor: abre panel anclado SIEMPRE AL LADO de la barra flotante ──
@@ -25060,9 +25072,23 @@ function _edbBuildPalette() {
     `<button class="edb-pal-dot${c === edDrawColor ? ' current' : ''}"
       data-colidx="${i}" style="background:${c}" title="${c}"></button>`
   ).join('') +
-  `<button class="edb-pal-dot edb-pal-custom" data-custom="1" title="Color personalizado">+</button>`;
+  `<button class="edb-pal-dot edb-pal-custom" data-custom="1" title="Color personalizado">+</button>` +
+  `<button class="edb-pal-dot edb-pal-eyedrop" data-i18n-title="ed_eyedropTool" title="Cuentagotas">💧</button>`;
+
+  // Cuentagotas: toma una muestra del lienzo y la aplica a la muestra
+  // seleccionada de la paleta (misma lógica ya existente en _edStartEyedrop,
+  // vía edSelectedPaletteIdx — antes se activaba desde un botón aparte en la
+  // barra principal; ahora vive aquí para poder elegir un color Y afinarlo
+  // con la gota sin salir de esta ventana, a petición de Alberto). No es un
+  // '.edb-pal-dot' de selección de color: manejador propio, no entra en el
+  // bucle de swatches de abajo.
+  pop.querySelector('.edb-pal-eyedrop')?.addEventListener('pointerup', e => {
+    e.stopPropagation();
+    _edStartEyedrop();
+  });
 
   pop.querySelectorAll('.edb-pal-dot').forEach(btn => {
+    if (btn.classList.contains('edb-pal-eyedrop')) return;
     btn.addEventListener('pointerup', e => {
       e.stopPropagation();
       if (btn.dataset.custom) {
@@ -25537,6 +25563,7 @@ function edDrawBarHide() {
   const _bp = $('edb-brush-pop'); if (_bp) { _bp.style.display = 'none'; _bp._anchor = null; }
   const _sp = $('edb-size-pop');  if (_sp) _sp.style.display = 'none';
   const _op = $('edb-offset-pop'); if (_op) _op.style.display = 'none';
+  window._esbHideSlider?.(); // edb-opacity reutiliza este panel, compartido con la barra vectorial
   window._edbPopItemTouched = false;
   _edOffsetHide();
 }
@@ -25871,8 +25898,15 @@ function edInitShapeBar() {
 
 
   // ── Helper: posicionar y mostrar slider adjunto a edShapeBar ──
-  function _esbShowSlider(mode, minVal, maxVal, curVal, onInput, onChange){
-    const bar=$('edShapeBar'); const panel=$('esb-slider-panel'); const sl=$('esb-slider-input');
+  // barId: qué barra usar para orientación/posición del panel (por defecto
+  // edShapeBar, para no romper las llamadas existentes de esta barra).
+  // edb-opacity (edDrawBar, ver edInitDrawBar) pasa 'edDrawBar' explícito —
+  // el panel (esb-slider-panel) y su mecánica se REUTILIZAN tal cual
+  // (mismo patrón ya usado para edb-size-pop, compartido entre ambas
+  // barras); sin este parámetro, el panel se habría posicionado siempre
+  // junto a edShapeBar aunque quien lo abriera fuera edDrawBar.
+  function _esbShowSlider(mode, minVal, maxVal, curVal, onInput, onChange, barId = 'edShapeBar'){
+    const bar=$(barId); const panel=$('esb-slider-panel'); const sl=$('esb-slider-input');
     if(!bar||!panel||!sl) return;
     // Si ya está el mismo modo activo, cerrar
     if(panel.style.display!=='none' && panel._mode===mode){ panel.style.display='none'; panel._mode=null; return; }
@@ -25910,6 +25944,25 @@ function edInitShapeBar() {
   function _esbHideSlider(){ const p=$('esb-slider-panel'); if(p){p.style.display='none';p._mode=null;} }
   // Expuesta globalmente: la necesita _edbCloseAllPopovers (fuera de este closure).
   window._esbHideSlider = _esbHideSlider;
+  // BUG real (desde el origen de esb-slider-panel, arreglado aquí): a
+  // diferencia de TODOS los demás popups de ambas barras (paleta, pincel,
+  // grosor, offset, tipo de forma — cada uno con su propio cierre por toque
+  // fuera), este panel nunca tuvo uno. Solo se cerraba al tocar de nuevo su
+  // propio botón (toggle) o al abrir otro popup distinto (_edbCloseAllPopovers,
+  // desde dentro de _esbShowSlider) — tocar el lienzo, otro botón sin popup
+  // propio (deshacer, rehacer, cuentagotas...) o cualquier otro sitio lo
+  // dejaba abierto indefinidamente. Reportado por Alberto en esb-opacity;
+  // como edb-opacity (edInitDrawBar) reutiliza este MISMO panel, heredaba el
+  // mismo fallo. Mismo patrón que edb-size-pop: listener permanente
+  // registrado una sola vez aquí (no en cada apertura), que comprueba el
+  // estado actual del panel en cada toque.
+  document.addEventListener('pointerdown', e => {
+    const panel = $('esb-slider-panel');
+    if (panel && panel.style.display === 'flex' && !panel.contains(e.target) &&
+        e.target.id !== 'esb-opacity' && e.target.id !== 'esb-curve' && e.target.id !== 'edb-opacity') {
+      _esbHideSlider();
+    }
+  }, { passive: true });
   // Expuesta globalmente: _esbActivateCurveUI (fuera de este closure) la
   // necesita para poder abrir el control de curvatura también al restaurar
   // el estado de nodos desde el panel (ver edShapeBarShow), no solo al
@@ -42982,6 +43035,15 @@ async function _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx){
     if(window._gcpCpExcludedCount > 0){
       edToast(I18n.t('ed_animRangeExcluded', { count: window._gcpCpExcludedCount }));
     }
+    // Activar la previsualización de inmediato al terminar de montarse y
+    // abrirse el editor de animaciones — petición de Alberto, SOLO para la
+    // animación recién creada por esta conversión automática. No toca
+    // gcpOpen() en sí (compartida con "Editar" una animación existente y con
+    // el menú "Editor de animaciones") — al vivir la llamada aquí, dentro de
+    // esta función exclusiva de la conversión hojas→animación, el resto de
+    // accesos al editor de animaciones quedan intactos sin necesidad de
+    // ningún indicador aparte que distinga "por qué" se abrió.
+    _gcpPreview();
   } catch(e) {
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
     console.warn('_gcpCpBuildFromRangeConfirmed:', e);
