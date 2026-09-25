@@ -4463,6 +4463,23 @@ function _edInteractionTick(e) {
   if (_target === document.body || _target === document.documentElement) return;
   const p = edPages[edCurrentPage];
   if (!p) return;
+  // Registro de diagnóstico (v40.82 — investigación en curso del falso
+  // positivo de "cambios sin guardar" tras "Convertir hojas en animación":
+  // el hueco de #edAnimRangeModal (v40.81) redujo el conteo pero no lo dejó
+  // en 0, y sin saber QUÉ elemento exacto sigue colándose no hay forma de
+  // seguir cerrando el hueco sin adivinar — ver "REGISTRO DE CONTEO" en el
+  // diagnóstico, _edRunDiag). Cola corta (últimos 30): cada entrada anota
+  // el elemento que SÍ contó (no está en _ED_TICK_EXCLUDE_SELECTOR) y sobre
+  // qué página. No se guarda en disco, solo en memoria de esta sesión.
+  window._edTickLog = window._edTickLog || [];
+  window._edTickLog.push({
+    t: Date.now(),
+    page: edCurrentPage,
+    tag: _target.tagName || '?',
+    id: _target.id || '',
+    cls: (typeof _target.className === 'string' ? _target.className : '').slice(0, 60),
+  });
+  if (window._edTickLog.length > 30) window._edTickLog.shift();
   p._dirtyCountLocal = (p._dirtyCountLocal || 0) + 1;
   p._dirtyCountCloud = (p._dirtyCountCloud || 0) + 1;
 }
@@ -45597,6 +45614,21 @@ async function _edRunDiag() {
     L('  edCurrentPage: ' + edCurrentPage);
     L('  Flags estructurales — local: ' + window._edPagesStructureDirtyLocal + ' | nube: ' + window._edPagesStructureDirtyCloud);
     L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud);
+    // REGISTRO DE CONTEO (v40.82, ver _edInteractionTick): los últimos toques
+    // que SÍ incrementaron el contador de interacción — es decir, los que NO
+    // coincidieron con ningún selector de _ED_TICK_EXCLUDE_SELECTOR. Si una
+    // página quedó con cont>0 sin haber editado nada de verdad, esta lista
+    // dice EXACTAMENTE qué elemento (tag/id/clase) se coló, para añadirlo a
+    // la lista de exclusión sin tener que adivinar.
+    const _tickLog = window._edTickLog || [];
+    L('  Últimos toques contados (' + _tickLog.length + '/30) — el/los que NO deberían haber contado son la pista:');
+    if (!_tickLog.length) {
+      L('    (vacío — no se ha contado ningún toque todavía en esta sesión)');
+    } else {
+      _tickLog.forEach(e => {
+        L('    hoja=' + e.page + ' <' + e.tag + (e.id ? ' id="' + e.id + '"' : '') + (e.cls ? ' class="' + e.cls + '"' : '') + '>');
+      });
+    }
     const _pageFingerprints = [];
     for (let _pi = 0; _pi < edPages.length; _pi++) {
       const p = edPages[_pi];
