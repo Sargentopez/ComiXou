@@ -4442,6 +4442,40 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   // (que arranca al pulsar "Crear animación ✓") tampoco toca edPages/edLayers,
   // solo construye estado interno de GCP (ver el bloque anterior).
   '#edAnimRangeModal',
+  // BUG CORREGIDO (v40.83 — mismo hueco raíz descubierto con el "REGISTRO DE
+  // CONTEO" de v40.82: reproduciendo la secuencia, el toque sobre el propio
+  // "Convertir hojas en animación..." — #dd-convertPages, DENTRO de
+  // #edMenuBar según el HTML — seguía contando). Causa real: edToggleMenu()
+  // (la función que abre CUALQUIER desplegable del menú superior: Insertar/
+  // Dibujar/Escribir/Animar/Selección/…) hace `document.body.appendChild(dd)`
+  // sobre el propio <div class="ed-dropdown"> al abrirlo — "mover el
+  // dropdown a body para escapar de cualquier overflow/stacking context"
+  // (comentario original, ver edToggleMenu) — el mismo patrón que ya usan
+  // los modales (#edAnimRangeModal y compañía) y que GCP usa para sus
+  // propios desplegables (_gcpOrigParent). Efecto secundario no previsto:
+  // en cuanto el usuario TOCA un elemento dentro de un desplegable ya
+  // abierto, ese elemento ha dejado de ser descendiente de #edMenuBar en el
+  // DOM real — la exclusión de #edMenuBar (v40.79) nunca llegó a cubrir
+  // ningún toque DENTRO de un desplegable abierto, solo los botones
+  // superiores (Insertar ▾, Animar ▾…) que nunca se mueven. Para las
+  // acciones que sí crean/modifican contenido (dd-gallery, dd-addpage,
+  // _sel-delete…) esto era inofensivo — marcan sucio por su cuenta, como ya
+  // se revisó en v40.79 — pero para #dd-convertPages (y por el mismo
+  // motivo #dd-animEditor: solo abre GCP, no modifica nada) era el hueco
+  // real. Arreglo de raíz en vez de ir añadiendo botones sueltos: excluir
+  // por la CLASE del propio panel (.ed-dropdown), que no cambia al mover el
+  // elemento de sitio — cubre tanto el desplegable en su posición original
+  // como ya reparentado a body, y también sus submenús anidados
+  // (.ed-dropdown-submenu/.ed-submenu viajan con su padre).
+  '.ed-dropdown',
+  // NOTA (v40.84): hasta v40.83 había aquí una entrada '#_appConfirmModal'
+  // para el botón "Continuar" del aviso "vas a convertir muchas hojas..."
+  // (appConfirm() disparado desde _gcpCpBuildFromRange con rangos grandes).
+  // Ese aviso se ha quitado por petición de Alberto (ver el comentario junto
+  // a _gcpCpBuildFromRange, editor.js) — sin ningún appConfirm() restante en
+  // editor.js, la entrada ya no protegía nada real, así que se retira en vez
+  // de dejarla como excepción muerta (un futuro uso legítimo de appConfirm()
+  // dentro del editor merece revisión propia, no heredar esta exclusión).
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
@@ -43251,43 +43285,27 @@ function _gcpCpFlattenPrepared(prepped){
 }
 
 // Construye la animación a partir del rango de hojas [fromIdx, toIdx]
-// (0-based, ambos incluidos). Puerta previa (v40.09): cuenta cuántos
-// objetos hay en el rango — recorrido barato, _gcpCpCollectPageUnits no
-// dibuja nada — y si son muchos, avisa ANTES de empezar en vez de que el
-// usuario descubra a mitad de proceso que iba a tardar. Umbral elegido a
-// partir de la medición real con Playwright (ver bench de esta entrega):
-// ~72 objetos (24 hojas de la prueba) tardaban 2.3s ya optimizados en un
-// equipo de escritorio rápido — en un Android de gama baja (varias veces
-// más lento en canvas/JS) eso son ya varios segundos reales, así que 45
-// objetos de margen deja pasar sin aviso las conversiones cortas de verdad
-// y avisa antes de rangos grandes como el que reportó Alberto (21 hojas con
-// dibujo a mano — justo el caso que debía avisar). Si con uso real hiciera
-// falta afinarlo, es esta única constante.
-const _GCP_CP_LARGE_RANGE_UNITS = 45;
+// (0-based, ambos incluidos).
+// BUG CORREGIDO / QUITADO (v40.84 — petición explícita de Alberto): hasta
+// v40.83 había una puerta previa (v40.09) que contaba los objetos del rango
+// y, si eran muchos, avisaba con "vas a convertir X hojas..." antes de
+// empezar (ver #edAnimRangeModal/#_appConfirmModal más arriba, en
+// _ED_TICK_EXCLUDE_SELECTOR — ese aviso era justo la otra mitad del falso
+// positivo de "cambios sin guardar" recién cerrado). Alberto: el propio
+// modal de rango ya deja ver cuántas hojas se han elegido (campos "Hoja
+// inicial"/"Hoja final"), y el overlay bloqueante que sigue (más abajo, con
+// su contador de segundos) ya trae su propio botón Cancelar real — el
+// aviso previo era redundante. Se pasa directo a _gcpCpBuildFromRangeConfirmed.
 function _gcpCpBuildFromRange(fromIdx, toIdx){
-  const total = (toIdx - fromIdx) + 1;
-  let _units = 0;
-  for(let fi = 0; fi < total; fi++){
-    const pageIdx = fromIdx + fi;
-    const page = edPages[pageIdx];
-    if(!page) continue;
-    const liveLayers = (pageIdx === edCurrentPage) ? edLayers : page.layers;
-    _units += _gcpCpCollectPageUnits({ layers: liveLayers }).length;
-  }
-  if(_units > _GCP_CP_LARGE_RANGE_UNITS){
-    appConfirm(
-      I18n.t('ed_animRangeLargeWarn', { pages: total, units: _units }),
-      () => _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx),
-      I18n.t('ed_animRangeLargeContinue')
-    );
-    return;
-  }
   _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx);
 }
 
-// Trabajo real, ya sin la puerta previa — separado de _gcpCpBuildFromRange
-// para que el aviso de arriba pueda esperar la confirmación del usuario
-// (appConfirm es de callback, no de promesa) sin anidar todo lo demás dentro.
+// Trabajo real. Hasta v40.83 vivía separado de _gcpCpBuildFromRange para que
+// la puerta previa (ya quitada, ver el comentario de arriba) pudiera esperar
+// la confirmación del usuario sin anidar todo lo demás dentro — se mantiene
+// como función aparte porque _gcpCpBuildFromRange sigue siendo el nombre que
+// llama edConfirmAnimRangeModal() y al que se refieren otros comentarios
+// (p.ej. junto a #edAnimRangeModal en _ED_TICK_EXCLUDE_SELECTOR).
 // Procesa las hojas EN SECUENCIA (no todas en paralelo) para no disparar
 // demasiadas operaciones de canvas a la vez en un móvil Android (plataforma
 // principal de la app) — y, desde v40.09, TAMBIÉN sus objetos uno a uno
