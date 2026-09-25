@@ -27097,6 +27097,10 @@ async function _edCloudSaveInner() {
     // dispositivo) y otra vez al terminar. Ver WorkStore.getCloudRev.
     const _saveRes = await SupabaseClient.saveDraft(comic, _dirtyPageIndices, (_rev) => {
       try { WorkStore.setCloudRev(comic.id, _rev); } catch(_) {}
+    }, (_donePages, _totalPages) => {
+      // v40.78 — petición de Alberto: mostrar en la pantalla de bloqueo
+      // cuántas hojas se están subiendo, no solo el texto genérico fijo.
+      _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloudProgress', { done: _donePages, total: _totalPages }));
     });
     try { if (_saveRes && _saveRes.updatedAt) WorkStore.setCloudRev(comic.id, _saveRes.updatedAt); } catch(_) {}
     edToast(I18n.t('ed_savedToCloud'));

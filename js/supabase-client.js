@@ -743,7 +743,7 @@ const SupabaseClient = (() => {
     } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
   }
 
-  async function _uploadPanels(comic, dirtyPageIndices) {
+  async function _uploadPanels(comic, dirtyPageIndices, onProgress) {
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
     // Usar editorData.pages como fuente de verdad para las capas
     const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
@@ -813,10 +813,20 @@ const SupabaseClient = (() => {
     if (_incrementalOk) {
       // ── RUTA INCREMENTAL: solo tocar páginas realmente sucias ──────────
       if (dirtyPageIndices.length === 0) return; // nada cambió desde el último guardado en la nube
+      // v40.78 — petición de Alberto: mostrar en la pantalla de bloqueo
+      // cuántas hojas se están subiendo. _done se incrementa DESPUÉS de cada
+      // hoja (no antes): con concurrencia 3, varias pueden estar en vuelo a
+      // la vez, así que "iniciada" no es lo mismo que "terminada" — contar
+      // solo lo ya terminado evita que el número salte hacia atrás o se
+      // adelante a lo que de verdad ha llegado a Supabase.
+      const _totalPages = dirtyPageIndices.length;
+      let _donePages = 0;
       await _sbPoolMap(dirtyPageIndices, 3, async (i) => {
         const existingId = _panelIdByOrder[i];
         await _cleanupPanelFiles(existingId);
         await _uploadOnePanel(comic, edPages, panels[i], i, existingId);
+        _donePages++;
+        if (typeof onProgress === 'function') { try { onProgress(_donePages, _totalPages); } catch(_) {} }
       });
       return;
     }
@@ -853,7 +863,15 @@ const SupabaseClient = (() => {
     // mismo criterio que en la descarga — suficiente para no ir página a
     // página en serie, pero sin lanzar todas las imágenes/GIFs/APNG de una
     // obra pesada a la vez (riesgo de pico de memoria en Android).
-    await _sbPoolMap(panels, 3, (p, i) => _uploadOnePanel(comic, edPages, p, i, null));
+    // v40.78 — mismo progreso que la ruta incremental, ver el comentario
+    // junto a _donePages más arriba.
+    const _totalPagesFull = panels.length;
+    let _donePagesFull = 0;
+    await _sbPoolMap(panels, 3, async (p, i) => {
+      await _uploadOnePanel(comic, edPages, p, i, null);
+      _donePagesFull++;
+      if (typeof onProgress === 'function') { try { onProgress(_donePagesFull, _totalPagesFull); } catch(_) {} }
+    });
   }
 
   // ── BORRADOR EN NUBE ──────────────────────────────────────
@@ -864,7 +882,7 @@ const SupabaseClient = (() => {
   // subida de hojas falle a medias o se cierre la app, este dispositivo sabe que
   // esa revisión de la nube es SUYA (ver WorkStore.setCloudRev) y no la toma por
   // un cambio hecho desde otro dispositivo.
-  async function saveDraft(comic, dirtyPageIndices, onRevision) {
+  async function saveDraft(comic, dirtyPageIndices, onRevision, onProgress) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId para guardar borrador');
 
@@ -895,7 +913,7 @@ const SupabaseClient = (() => {
     // se usa ese valor (el que verán los demás dispositivos), no el enviado.
     const _rev = (Array.isArray(_rows) && _rows[0] && _rows[0].updated_at) || _sentUpdatedAt;
     if (typeof onRevision === 'function') { try { onRevision(_rev); } catch(_) {} }
-    await _uploadPanels(comic, dirtyPageIndices);
+    await _uploadPanels(comic, dirtyPageIndices, onProgress);
     return { sizeKB: 0, updatedAt: _rev }; // tamaño calculado por Supabase al rechazar si excede límite
   }
 
