@@ -6365,8 +6365,17 @@ function edAddPage(jumpToNewPage = true){
   edToast(I18n.t('ed_pageAdded'));
 }
 
-/* ── Icono candado al tocar objeto bloqueado ── */
-function _edShowLockIcon(la) {
+/* ── Icono candado al tocar objeto bloqueado ──
+   Tocar el candado MIENTRAS está visible lo abre y desbloquea el objeto (o
+   grupo) sobre el que se muestra — ver _edUnlockFromLockIcon. El elemento
+   pasa a pointer-events:auto (antes 'none', simple feedback visual) y su
+   propio pointerdown se absorbe en edOnStart vía el guard gemelo de
+   #edContextMenu/#edFloatBtn (misma técnica ya probada ahí: un early-return
+   por e.target.closest('#id') — depender solo de stopPropagation() en el
+   propio elemento no basta, ver los comentarios de esos dos guards), dejando
+   pasar únicamente el 'click' nativo posterior con el que se resuelve la
+   acción real. */
+function _edShowLockIcon(la, unlockRef) {
   if(!la || !edCanvas) return;
   const pw = edPageW(), ph = edPageH();
   const wsCx = edMarginX() + la.x * pw;
@@ -6380,9 +6389,14 @@ function _edShowLockIcon(la) {
   if(!el){
     el = document.createElement('div');
     el.id = '_edLockIcon';
-    el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;font-size:2rem;transform:translate(-50%,-50%);transition:opacity .3s;text-shadow:0 2px 8px rgba(0,0,0,.5)';
+    // width/height 44px + flex-center: área táctil cómoda (mismo criterio que
+    // el resto de controles táctiles de la app) sin agrandar el glifo en sí
+    // (sigue a font-size:2rem, centrado dentro de la caja).
+    el.style.cssText = 'position:fixed;pointer-events:auto;z-index:9999;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:2rem;line-height:1;transform:translate(-50%,-50%);transition:opacity .3s;text-shadow:0 2px 8px rgba(0,0,0,.5);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none';
     document.body.appendChild(el);
+    el.addEventListener('click', e => { e.stopPropagation(); _edUnlockFromLockIcon(); });
   }
+  el._lockUnlockRef = unlockRef || la;
   el.textContent = '🔒';
   el.style.left = px + 'px';
   el.style.top  = py + 'px';
@@ -6401,8 +6415,12 @@ function _edShowLockIcon(la) {
 // promoción automática por movimiento (ver edOnMove); en PC, umbral de píxeles
 // (mismo patrón que el lápiz de tableta, _edPenDragThreshold) al no existir
 // ambigüedad de pinch con ratón.
-function _edLockTapOrRubberBand(lockTarget, c, e, isTouch) {
-  window._edPendingLockTap = { target: lockTarget };
+// unlockRef: capa REAL a desbloquear si se toca el candado (lockTarget puede
+// ser un centroide sintético solo para posicionar el icono — ver el caso de
+// grupo en edOnStart). Por defecto, la propia lockTarget.
+function _edLockTapOrRubberBand(lockTarget, c, e, isTouch, unlockRef) {
+  const _unlockRef = unlockRef || lockTarget;
+  window._edPendingLockTap = { target: lockTarget, unlockRef: _unlockRef };
   if (isTouch) {
     clearTimeout(window._edRbTouchTimer);
     window._edPendingRbC = { nx: c.nx, ny: c.ny };
@@ -6411,10 +6429,10 @@ function _edLockTapOrRubberBand(lockTarget, c, e, isTouch) {
       window._edPendingRbC = null;
       const _plt = window._edPendingLockTap; window._edPendingLockTap = null;
       if (!window._edActivePointers || window._edActivePointers.size !== 1) return;
-      if (_plt) { _edShowLockIcon(_plt.target); edRedraw(); }
+      if (_plt) { _edShowLockIcon(_plt.target, _plt.unlockRef); edRedraw(); }
     }, 120);
   } else {
-    window._edPendingLockClick = { target: lockTarget, nx: c.nx, ny: c.ny, clientX: e.clientX, clientY: e.clientY };
+    window._edPendingLockClick = { target: lockTarget, unlockRef: _unlockRef, nx: c.nx, ny: c.ny, clientX: e.clientX, clientY: e.clientY };
   }
 }
 function _edShowLockIconDraw(dl) {
@@ -6429,7 +6447,50 @@ function _edShowLockIconDraw(dl) {
   }
   const cx = found ? ((minX+maxX)/2 - edMarginX()) / pw : 0.5;
   const cy = found ? ((minY+maxY)/2 - edMarginY()) / ph : 0.5;
-  _edShowLockIcon({x:cx, y:cy, width:0.1, height:0.1});
+  _edShowLockIcon({x:cx, y:cy, width:0.1, height:0.1}, dl);
+}
+
+// Tocar el candado CERRADO mientras está visible: desbloquea el objeto (o,
+// si pertenece a un grupo, todo el grupo — igual que el candado del panel de
+// capas) y muestra el candado ABIERTO un tiempo mínimo antes de desvanecerse,
+// como confirmación visual. Mismo efecto/propagación que los candados ya
+// existentes: para capas stroke/draw, se propaga a las sub-capas
+// fill/pencil/watercolor vinculadas por _uid/_fillLayerId (ver pp-lock en el
+// panel de propiedades y los botones de candado de editor-layers.js).
+function _edUnlockFromLockIcon() {
+  const el = $('_edLockIcon');
+  if(!el) return;
+  const ref = el._lockUnlockRef;
+  if(!ref) return;
+  const targets = ref.groupId
+    ? _edGroupMemberIdxs(ref.groupId).map(i => edLayers[i]).filter(Boolean)
+    : [ref];
+  const wasLocked = targets.some(l => l.locked);
+  if(wasLocked){
+    targets.forEach(la => {
+      la.locked = false;
+      if(la.type==='stroke' || la.type==='draw'){
+        const uid = la._uid || la._fillLayerId;
+        if(uid){
+          edLayers.forEach(l => {
+            if((l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===uid) l.locked = false;
+          });
+        }
+      }
+    });
+    edPushHistory();
+    edRedraw();
+    // Refrescar el panel de capas si está abierto (mismo guard ya usado tras
+    // otros cambios de estado de capa hechos fuera de editor-layers.js).
+    if(typeof _lyRender==='function' && document.getElementById('edLayersOverlay')){
+      _lyRender();
+    }
+  }
+  el.textContent = '🔓';
+  el.style.opacity = '1';
+  el.style.display = '';
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(()=>{ el.style.opacity='0'; setTimeout(()=>{ el.style.display='none'; }, 300); }, 1000);
 }
 
 /* ── Teclado virtual durante la edición in situ de texto/bocadillo (v40.21) ──
@@ -9818,12 +9879,18 @@ function _edPositionContextMenu(menu, cx, cy){
 function _edOpenObjectContextMenu(hitIdx, clientX, clientY){
   const menu = $('edContextMenu'); if(!menu) return;
   const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnProps = $('ctx-props'), btnPaste = $('ctx-paste');
-  if(!btnCopy || !btnEdit || !btnProps || !btnPaste) return;
+  const btnLock = $('ctx-lock'), btnDelete = $('ctx-delete');
+  if(!btnCopy || !btnEdit || !btnProps || !btnPaste || !btnLock || !btnDelete) return;
   const _singleUngrouped = edSelectedIdx>=0 && !edLayers[edSelectedIdx]?.groupId;
   btnCopy.style.display  = '';
   btnEdit.style.display  = _singleUngrouped ? '' : 'none';
   btnProps.style.display = '';
   btnPaste.style.display = 'none';
+  // Bloquear/Eliminar: disponibles para objeto suelto Y para grupo (a
+  // diferencia de Editar) — mismo criterio que "Panel de propiedades",
+  // ver _edCtxTriggerLock/_edCtxTriggerDelete más abajo.
+  btnLock.style.display   = '';
+  btnDelete.style.display = '';
   window._edCtxTargetIdx = _singleUngrouped ? edSelectedIdx : -1;
   // Panel propiedades: SIEMPRE el objeto realmente pulsado (hitIdx), sea
   // suelto o miembro de un grupo — _edHandleDoubleTap (mismo mecanismo que
@@ -9844,11 +9911,14 @@ function _edOpenEmptyContextMenu(nx, ny, clientX, clientY){
   if(!window._edClipboardInternal) return;
   const menu = $('edContextMenu'); if(!menu) return;
   const btnCopy = $('ctx-copy'), btnEdit = $('ctx-edit'), btnProps = $('ctx-props'), btnPaste = $('ctx-paste');
-  if(!btnCopy || !btnEdit || !btnProps || !btnPaste) return;
+  const btnLock = $('ctx-lock'), btnDelete = $('ctx-delete');
+  if(!btnCopy || !btnEdit || !btnProps || !btnPaste || !btnLock || !btnDelete) return;
   btnCopy.style.display = 'none';
   btnEdit.style.display = 'none';
   btnProps.style.display = 'none';
   btnPaste.style.display = '';
+  btnLock.style.display   = 'none';
+  btnDelete.style.display = 'none';
   window._edCtxPastePos = { x: nx, y: ny };
   menu.classList.add('open');
   menu._origParent = menu._origParent || menu.parentNode;
@@ -9951,6 +10021,66 @@ function _edCtxTriggerEdit(idx){
   if(_btnId) $(_btnId)?.click();
 }
 
+// "Bloquear objeto" del menú contextual — idx es SIEMPRE el objeto
+// realmente pulsado (hitIdx), agrupado o no (mismo criterio que "Panel de
+// propiedades", ver _edCtxPropsTargetIdx en _edOpenObjectContextMenu). Si
+// pertenece a un grupo, bloquea el grupo completo — mismo efecto y
+// propagación a sub-capas fill/pencil/watercolor vinculadas por
+// _uid/_fillLayerId que ya usan el candado del panel de propiedades
+// (pp-lock) y los del panel de capas (editor-layers.js). Un objeto YA
+// bloqueado nunca llega hasta aquí (_edCtxHitTest los excluye — invariante
+// "nunca seleccionable"), así que esta acción es siempre "bloquear".
+function _edCtxTriggerLock(idx){
+  const la = edLayers[idx]; if(!la) return;
+  const targets = la.groupId
+    ? _edGroupMemberIdxs(la.groupId).map(i => edLayers[i]).filter(Boolean)
+    : [la];
+  targets.forEach(l => {
+    l.locked = true;
+    if(l.type==='stroke' || l.type==='draw'){
+      const uid = l._uid || l._fillLayerId;
+      if(uid){
+        edLayers.forEach(sl => {
+          if((sl.type==='fill'||sl.type==='pencil'||sl.type==='watercolor') && sl._drawLayerId===uid) sl.locked = true;
+        });
+      }
+    }
+  });
+  // Recién bloqueado: nunca debe quedar seleccionado (mismo invariante de
+  // arriba). edDrawSel no comprueba .locked, solo edSelectedIdx — sin este
+  // reseteo, los handles de selección seguirían dibujándose sobre un objeto
+  // que ya no debe poder tocarse.
+  _msClear();
+  edSelectedIdx = -1;
+  edActiveTool = 'select'; edCanvas.className = '';
+  edPushHistory();
+  edRedraw();
+  // Refrescar el panel de capas si está abierto (mismo guard ya usado en
+  // _edUnlockFromLockIcon tras otros cambios de .locked hechos fuera de
+  // editor-layers.js).
+  if(typeof _lyRender==='function' && document.getElementById('edLayersOverlay')){
+    _lyRender();
+  }
+}
+
+// "Eliminar" del menú contextual — idx es el objeto realmente pulsado.
+// Objeto suelto: misma acción que Supr/el botón ✕ del panel de propiedades
+// (edDeleteSelected + confirmación, ya deja el borrado en el historial de
+// deshacer). Grupo: reutiliza tal cual "✕ Eliminar selección" del menú
+// Seleccionar (_sel-delete) — edMultiSel ya contiene los miembros del grupo
+// en este punto (ver _edShowContextMenu/_edShowContextMenuTouch), así que
+// simular su clic aplica exactamente la misma lógica (con su propia
+// confirmación) sin duplicarla aquí.
+function _edCtxTriggerDelete(idx){
+  const la = edLayers[idx]; if(!la) return;
+  if(la.groupId){
+    $('_sel-delete')?.click();
+  } else {
+    edSelectedIdx = idx;
+    edConfirm(I18n.t('ed_confirmDeleteThisObject'), () => { edDeleteSelected(); });
+  }
+}
+
 function edInitContextMenu(){
   $('ctx-copy')?.addEventListener('click', ()=>{
     edCloseMenus();
@@ -9971,6 +10101,18 @@ function edInitContextMenu(){
     // 'text-props' según el tipo. No usa el parámetro "e" (evento), por
     // eso se puede invocar aquí sin uno real.
     _edHandleDoubleTap(idx);
+  });
+  $('ctx-lock')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    const idx = window._edCtxPropsTargetIdx;
+    if(idx==null || idx<0 || !edLayers[idx]) return;
+    _edCtxTriggerLock(idx);
+  });
+  $('ctx-delete')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    const idx = window._edCtxPropsTargetIdx;
+    if(idx==null || idx<0 || !edLayers[idx]) return;
+    _edCtxTriggerDelete(idx);
   });
   $('ctx-paste')?.addEventListener('click', async ()=>{
     edCloseMenus();
@@ -12193,6 +12335,13 @@ function edOnStart(e){
   // por completo, dejando pasar solo su propio pointerdown/touchstart y el
   // 'click' que dispara edMaximize() (ver edInitFloatDrag).
   if(e.target && e.target.closest && e.target.closest('#edFloatBtn')) return;
+  // Candado flotante sobre un objeto/grupo bloqueado (ver _edShowLockIcon):
+  // mismo patrón que los dos guards de arriba — absorber aquí por completo
+  // el pointerdown para que no se reinterprete como un toque sobre el objeto
+  // bloqueado en esas coordenadas (que solo volvería a mostrar el candado
+  // cerrado), dejando pasar solo el 'click' con el que el propio icono
+  // resuelve el desbloqueo.
+  if(e.target && e.target.closest && e.target.closest('#_edLockIcon')) return;
   // Botón secundario del ratón (clic derecho): lo gestiona en exclusiva el
   // menú contextual propio — nunca debe iniciar selección/arrastre normal
   // aquí, para no decidir qué queda seleccionado antes de que ese menú
@@ -14130,7 +14279,7 @@ function edOnStart(e){
         const _gidxsL = _edGroupMemberIdxs(_fla.groupId);
         const _gcx = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.x||0),0) / _gidxsL.length;
         const _gcy = _gidxsL.reduce((s,i)=>s+(edLayers[i]?.y||0),0) / _gidxsL.length;
-        _edLockTapOrRubberBand({x:_gcx, y:_gcy, width:0.1, height:0.1}, c, e, _isTouch);
+        _edLockTapOrRubberBand({x:_gcx, y:_gcy, width:0.1, height:0.1}, c, e, _isTouch, _fla);
       } else {
         _edLockTapOrRubberBand(_fla, c, e, _isTouch);
       }
@@ -15448,7 +15597,7 @@ function edOnEnd(e){
     const _plc = window._edPendingLockClick;
     window._edPendingLockClick = null;
     const _plt = window._edPendingLockTap; window._edPendingLockTap = null;
-    _edShowLockIcon(_plt ? _plt.target : _plc.target);
+    _edShowLockIcon(_plt ? _plt.target : _plc.target, _plt ? _plt.unlockRef : _plc.unlockRef);
     edRedraw();
   }
   // Limpiar el puntero del mapa de activos SIEMPRE, antes de cualquier return prematuro.
@@ -15633,7 +15782,7 @@ function edOnEnd(e){
     // fue un tap simple y rápido — mostrar el candado ahora, no perderlo.
     if (window._edPendingLockTap) {
       const _pltEnd = window._edPendingLockTap; window._edPendingLockTap = null;
-      _edShowLockIcon(_pltEnd.target);
+      _edShowLockIcon(_pltEnd.target, _pltEnd.unlockRef);
       edRedraw();
     }
   }
@@ -26978,11 +27127,35 @@ async function _edCloudSaveInner() {
     await _edAutosaveClear(edProjectId);
     // Guardar en nube siempre vuelve la obra a borrador (published=false en Supabase).
     // El admin deberá aprobarla de nuevo. Limpiar estado local incondicionalmente.
-    const _comicAfter = WorkStore.getById(edProjectId);
+    //
+    // v40.77: getByIdFull (no getById) y reescritura de editorData.pages a
+    // propósito — este bloque antes usaba getById, que NUNCA trae editorData
+    // (ver _stripHeavy en storage.js), así que WorkStore.save() se limitaba a
+    // tocar el índice ligero y OMITÍA la escritura en OPFS. Ahora hace falta
+    // escribir editorData de verdad: es la única forma de que
+    // _dirtyCloud/_dirtyCountCloud (recién puestos a "limpio" arriba, solo en
+    // memoria) sobrevivan a cerrar y reabrir la app — ver el porqué completo
+    // junto a _pageSer._dirtyCloud en _edSaveProjectInner (CAUSA RAÍZ del
+    // guardado de 136s: sin esto, el primer guardado en nube de cada sesión
+    // siempre subía la obra entera, por diseño desde v34.34).
+    const _comicAfter = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : WorkStore.getById(edProjectId);
     if (_comicAfter) {
+      if (_comicAfter.editorData && Array.isArray(_comicAfter.editorData.pages) &&
+          _comicAfter.editorData.pages.length === edPages.length) {
+        _comicAfter.editorData.pages.forEach((pd, i) => {
+          pd._dirtyCloud = edPages[i]._dirtyCloud;
+          pd._dirtyCountCloud = edPages[i]._dirtyCountCloud;
+        });
+        _comicAfter.editorData._structureDirtyCloud = false;
+      }
+      // Si no coinciden en número (cambio estructural justo durante la subida),
+      // no se toca editorData — se deja tal cual está en disco (conservador:
+      // el próximo guardado en nube seguirá subiendo la obra entera, igual que
+      // hasta ahora) en vez de arriesgar índices que no signifiquen lo mismo.
+      //
       // cloudSavedAt marca el momento exacto de la última subida exitosa a la nube.
       // Se usa en my-works para saber si hay cambios locales sin subir antes de publicar.
-      WorkStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
+      await WorkStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
     // Sincronizar biblioteca con la nube — solo si su contenido cambió de
@@ -27300,6 +27473,11 @@ async function _edSaveProjectInner(_keepOverlay){
                        p._cachedPanelLocal && p._cachedSerLocal &&
                        p._cachedSerLocal.layers.length === p.layers.length;
     if (_canReuse) {
+      // v40.77: refrescar el estado "sucio para nube" en la caché reutilizada
+      // antes de persistirla — ver más abajo (_edPages.push del camino sin
+      // caché) por qué hace falta guardar esto en disco y no solo en memoria.
+      p._cachedSerLocal._dirtyCloud = p._dirtyCloud;
+      p._cachedSerLocal._dirtyCountCloud = p._dirtyCountCloud;
       panels.push(p._cachedPanelLocal);
       _edPages.push(p._cachedSerLocal);
       continue;
@@ -27416,6 +27594,20 @@ async function _edSaveProjectInner(_keepOverlay){
       _pageLayers.push(_sl);
     }
     const _pageSer = {layers:_pageLayers,textLayerOpacity:p.textLayerOpacity??1,textMode:p.textMode||'sequential',orientation:p.orientation||_savedOrient2};
+    // v40.77 — CAUSA RAÍZ del guardado en nube de 136s (obra abierta, hoja 16,
+    // mover una imagen, guardar): _dirtyCloud/_dirtyCountCloud SOLO vivían en
+    // memoria (edPages[i]), nunca en lo que se escribe a disco. Al reabrir la
+    // obra (edLoadProject), el contador de nube se dejaba SIN establecer para
+    // TODAS las páginas salvo que la obra se acabara de redescargar de la nube
+    // — así que el PRIMER guardado en nube de cada sesión subía la obra entera
+    // siempre, por diseño (ver carta v34_34, "pendiente, Alberto no lo pidió
+    // aún"), y los 3 arreglos anteriores (v40.72-74) solo podían ayudar al
+    // segundo guardado en adelante dentro de la misma sesión. Persistir aquí
+    // el valor VIVO de p._dirtyCloud/_dirtyCountCloud (se restaura en
+    // edLoadProject) permite que incluso el primer guardado de la sesión sea
+    // incremental de verdad si la página ya estaba sincronizada con la nube.
+    _pageSer._dirtyCloud = p._dirtyCloud;
+    _pageSer._dirtyCountCloud = p._dirtyCountCloud;
     _edPages.push(_pageSer);
     _freshlySerialized.push({ page: p, panel: _panelSer, ser: _pageSer, counterSnapshot: _counterSnapshot });
   }
@@ -27470,6 +27662,9 @@ async function _edSaveProjectInner(_keepOverlay){
       _rules: edRules,
       _ruleNodes: edRuleNodes,
       _palette: edColorPalette.slice(), // v40.45: muestras de color de la obra
+      // v40.77: persistir también el flag ESTRUCTURAL de nube (añadir/borrar/
+      // reordenar hojas) — ver el porqué junto a _pageSer._dirtyCloud, arriba.
+      _structureDirtyCloud: !!window._edPagesStructureDirtyCloud,
     },
     updatedAt:_savedAt,
     localSavedAt:_savedAt,
@@ -29775,18 +29970,32 @@ async function edLoadProject(id){
   // forzando guardado completo local incluso en el primer guardado tras
   // abrir la obra.
   //
-  // Cloud, por defecto, se deja conservador (true / sin establecer por
-  // página): no hay garantía de que el local recién cargado ya coincida con
-  // lo que hay en Supabase — pudiste guardar localmente en una sesión
-  // anterior sin llegar a guardar en nube. EXCEPCIÓN: si my-works.js acaba
-  // de descargar esta obra de la nube (señal cx_just_synced_cloud, puesta
-  // justo después de escribir la descarga en OPFS), en ESE instante concreto
-  // lo local SÍ coincide con la nube con total certeza — se puede tratar
-  // también el guardado en nube como sincronizado en esta carga.
+  // Cloud: no hay garantía de que el local recién cargado ya coincida con lo
+  // que hay en Supabase — pudiste guardar localmente en una sesión anterior
+  // sin llegar a guardar en nube. EXCEPCIÓN 1: si my-works.js acaba de
+  // descargar esta obra de la nube (señal cx_just_synced_cloud, puesta justo
+  // después de escribir la descarga en OPFS), en ESE instante concreto lo
+  // local SÍ coincide con la nube con total certeza. EXCEPCIÓN 2 (v40.77): si
+  // el guardado local anterior dejó constancia en disco de que YA estaba
+  // sincronizado con la nube (comic.editorData._structureDirtyCloud === false
+  // / pd._dirtyCloud por página, ver más abajo), confiar en ese dato — es lo
+  // que permite guardado incremental real incluso en el primer guardado de
+  // la sesión. Sin ninguna de las dos señales (obra guardada con una versión
+  // anterior de la app, o nunca subida a la nube), se mantiene el
+  // comportamiento de siempre: conservador, sube todo.
   const _justSyncedCloud = sessionStorage.getItem('cx_just_synced_cloud') === '1';
   sessionStorage.removeItem('cx_just_synced_cloud'); // consumir — solo vale para esta carga
   window._edPagesStructureDirtyLocal = false;
-  window._edPagesStructureDirtyCloud = !_justSyncedCloud;
+  // v40.77: si un guardado local anterior (de ESTA u OTRA sesión) ya dejó
+  // constancia en disco de que la estructura estaba sincronizada con la nube
+  // (comic.editorData._structureDirtyCloud === false), confiar en ese dato en
+  // vez de asumir siempre lo peor — es lo que permite que el guardado
+  // incremental en nube funcione también en el primer guardado de la sesión.
+  // Obras guardadas con una versión anterior de la app no tienen este campo
+  // (undefined) → se comportan exactamente igual que antes (conservador).
+  window._edPagesStructureDirtyCloud = _justSyncedCloud ? false :
+    (comic.editorData && typeof comic.editorData._structureDirtyCloud === 'boolean'
+      ? comic.editorData._structureDirtyCloud : true);
   // Mismo criterio que las dos líneas de arriba, aplicado a edProjectMeta
   // (ver _edApplyProjectMeta/_edHasUnsavedLocalChanges): recién cargada,
   // coincide por definición con OPFS; con la nube, conservador salvo que se
@@ -29873,6 +30082,12 @@ async function edLoadProject(id){
       // lo persistido — no fiarse de índices por posición hasta el próximo
       // guardado real, que reflejará la estructura verdadera.
       window._edPagesStructureDirtyLocal = true;
+      // v40.77: forzar también sucio en NUBE — el flag persistido leído más
+      // arriba (comic.editorData._structureDirtyCloud) describe lo que había
+      // en disco ANTES de sustituir las páginas por este autoguardado nunca
+      // subido; dejarlo en false aquí arriesgaría un guardado incremental con
+      // índices que no significan lo mismo que en la nube.
+      window._edPagesStructureDirtyCloud = true;
       // Restaurar biblioteca si estaba en el snapshot
       if (_asSave.bib) {
         try { _bibSave(_asSave.bib); } catch(_) {}
@@ -29952,13 +30167,26 @@ async function edLoadProject(id){
         if (_panelFromDisk) _newPage._cachedPanelLocal = _panelFromDisk;
         // Contador local arranca en 0 tras cargar — nada se ha tocado
         // todavía en esta sesión y lo que se acaba de leer ES lo que hay en
-        // OPFS. El contador de nube se deja SIN establecer por defecto — no
-        // hay garantía de que este dispositivo y la nube estén sincronizados
-        // en este instante (ver nota más arriba sobre _dirtyCountCloud) —
-        // EXCEPTO si se acaba de descargar de la nube (_justSyncedCloud),
-        // en cuyo caso lo local coincide con la nube con total certeza.
+        // OPFS. El contador de nube: si se acaba de descargar de la nube
+        // (_justSyncedCloud) coincide con total certeza; si no, se restaura
+        // (v40.77, más abajo) lo que el guardado local anterior dejó
+        // persistido en pd._dirtyCloud — y si ni eso hay (obra de una
+        // versión anterior de la app, o nunca subida), se deja SIN
+        // establecer por defecto, que _edPageDirtyCloud trata como "sucia".
         _newPage._dirtyCountLocal = 0;
-        if (_justSyncedCloud) { _newPage._dirtyCloud = false; _newPage._dirtyCountCloud = 0; }
+        if (_justSyncedCloud) {
+          _newPage._dirtyCloud = false; _newPage._dirtyCountCloud = 0;
+        } else if (typeof pd._dirtyCloud === 'boolean') {
+          // v40.77: restaurar el estado de sincronización con la nube que
+          // dejó persistido el guardado local anterior (ver _pageSer arriba,
+          // en _edSaveProjectInner) — permite que el guardado incremental en
+          // nube funcione también en el PRIMER guardado en nube de esta
+          // sesión, no solo a partir del segundo. Si pd no trae este campo
+          // (obra guardada con una versión anterior de la app), se deja SIN
+          // establecer — mismo comportamiento conservador que había antes.
+          _newPage._dirtyCloud = pd._dirtyCloud;
+          _newPage._dirtyCountCloud = pd._dirtyCountCloud || 0;
+        }
       } else {
         // Migración legacy o autoguardado recuperado: SIEMPRE hace falta
         // guardar esta página, tanto local como en nube.
