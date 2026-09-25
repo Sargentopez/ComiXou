@@ -1,4 +1,4 @@
-/* Comxow/COMXOW,  creada por A. Gavina Costero  2026, contacto@comxow.com */
+/* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /*
  * Librerías y código de terceros utilizados en este proyecto:
  *
@@ -4424,6 +4424,24 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   // cada id de GCP uno a uno, son varias decenas): todo lo que usa este
   // subsistema lleva el prefijo "gcp"/"_gcp" de forma consistente.
   '[id^="gcp"]', '[id^="_gcp"]',
+  // BUG CORREGIDO (v40.81 — mismo reporte de Alberto que el de arriba,
+  // #edMenuBar/GCP, pero un hueco que ese arreglo no cerró del todo: quedó
+  // confirmado con el diagnóstico "INTEGRIDAD DE PÁGINAS" — reproduciendo
+  // exactamente "Convertir hojas en animación → detener → cerrar → no
+  // guardar → salir", la página activa quedó con cont=4 en vez de 0, con
+  // todos los demás flags en false). #edAnimRangeModal es la ventana previa
+  // a abrir GCP (elegir hoja inicial/final del rango a convertir, ver
+  // edOpenAnimRangeModal/edConfirmAnimRangeModal) — es un <div> HERMANO de
+  // #edMenuBar en el HTML (ver el comentario junto a #edSaveChoiceModal más
+  // arriba: los modales de este editor NO cuelgan dentro de la barra de
+  // menús), así que la exclusión de #edMenuBar nunca lo cubrió, y sus ids
+  // (edArFrom/edArTo/edArCancel/edArOk) tampoco llevan prefijo "gcp"/"_gcp"
+  // por no ser parte todavía del editor de animaciones en sí. Se excluye la
+  // ventana entera, mismo criterio que #edSaveChoiceModal/#edHelpRefModal:
+  // elegir el rango o cancelar no modifica nada — _gcpCpBuildFromRange(Confirmed)
+  // (que arranca al pulsar "Crear animación ✓") tampoco toca edPages/edLayers,
+  // solo construye estado interno de GCP (ver el bloque anterior).
+  '#edAnimRangeModal',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
