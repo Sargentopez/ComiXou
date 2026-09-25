@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.84</footer>
+    <footer class="app-version">v40.92</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -344,22 +344,28 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — REACTIVADO en v40.80 para investigar el falso
+        <!-- Botón de diagnóstico — OCULTO de nuevo en v40.85 (petición de Alberto),
+             cerrada la investigación para la que se reactivó en v40.80: el falso
              positivo de "cambios sin guardar" al salir tras usar "Convertir hojas
-             en animación" y descartar sin guardar (reportado por Alberto). Estuvo
-             oculto (comentado) desde v40.44, cuando se cerró la investigación
-             anterior (giro del dispositivo / botón de restaurar cabecera,
-             v40.41→v40.43). Mismo criterio de siempre: se descomenta para cada
-             investigación y se vuelve a comentar al cerrarse; el <button> NO se
-             borra. Para desactivarlo de nuevo, volver a envolverlo en marcadores
-             de comentario. El informe (_edRunDiag en editor.js) y sus registros
-             siguen en el código: sección "GIRO DEL DISPOSITIVO MIENTRAS SE
-             ESCRIBE" (v40.42), "SEGUIMIENTO DE CÁMARA AL ESCRIBIR", "DECISIÓN DE
-             OCULTAR CABECERA", "SECUENCIA DE RESTAURAR" e "INTEGRIDAD DE
-             PÁGINAS" (esta última es la relevante para la investigación actual).
-             El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hacía
-             nada ni daba error mientras estuvo oculto. -->
+             en animación" y descartar sin guardar. Causa raíz encontrada y
+             corregida en v40.83 (reparenting de los dropdowns del menú a
+             document.body, ver _ED_TICK_EXCLUDE_SELECTOR en editor.js), con
+             limpieza adicional en v40.84. Antes de esta ronda había estado oculto
+             desde v40.44 (investigación de giro del dispositivo / botón de
+             restaurar cabecera, v40.41→v40.43). Mismo criterio de siempre: se
+             descomenta para cada investigación y se vuelve a comentar al
+             cerrarse; el <button> NO se borra. Para reactivarlo, volver a sacarlo
+             de estos marcadores de comentario. El informe (_edRunDiag en
+             editor.js) y sus registros siguen en el código: secciones "GIRO DEL
+             DISPOSITIVO MIENTRAS SE ESCRIBE" (v40.42), "SEGUIMIENTO DE CÁMARA AL
+             ESCRIBIR", "DECISIÓN DE OCULTAR CABECERA", "SECUENCIA DE RESTAURAR" e
+             "INTEGRIDAD DE PÁGINAS" — esta última incluye desde v40.82 el
+             "REGISTRO DE CONTEO" (window._edTickLog), la herramienta que permitió
+             encontrar la causa raíz de la investigación v40.80→v40.83.
+             El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
+             nada ni da error mientras esté oculto.
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 

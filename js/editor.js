@@ -1202,6 +1202,56 @@ function _edFCCanvasInfo(c, ctx){
     return c.width + 'x' + c.height + ' px_opacos=' + px;
   } catch(e) { return c.width + 'x' + c.height + ' (getImageData error: ' + e.message + ')'; }
 }
+// Recuento de píxeles opacos, para comprobaciones (-1 = sin canvas / error).
+function _edFCOpaqueCount(c, ctx){
+  if (!c) return -1;
+  try {
+    const d = (ctx || c.getContext('2d')).getImageData(0, 0, c.width, c.height).data;
+    let px = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 10) px++;
+    return px;
+  } catch(e) { return -1; }
+}
+// v40.91 — INCIDENTES PERSISTENTES: Alberto reporta que el fallo de
+// relleno/acuarela huérfanos tras OK es intermitente y no lo puede reproducir
+// a voluntad. window._edFCLog por sí solo no sirve para eso: se limpia en
+// cada apertura de sesión de dibujo (_edDrawInitHistory), así que si la
+// sesión que falla no es la ÚLTIMA que se abrió antes de mirar el 🩺, su
+// rastro ya se sobrescribió. _edFCFlagIncident() guarda una COPIA completa
+// del log de la sesión sospechosa en localStorage (sobrevive a cerrar la
+// app/PWA, a diferencia de una variable en memoria) en el momento exacto en
+// que el propio código detecta la situación anómala — no hace falta que
+// Alberto note nada ni abra el diagnóstico justo después. Cap de 8 incidentes
+// (los más recientes) para no crecer sin límite.
+function _edFCFlagIncident(reason){
+  try {
+    const _incident = { reason, at: new Date().toISOString(), log: (window._edFCLog || []).slice() };
+    let _list = [];
+    try { _list = JSON.parse(localStorage.getItem('_edFCIncidents') || '[]'); } catch(_e) { _list = []; }
+    _list.push(_incident);
+    if (_list.length > 8) _list = _list.slice(-8);
+    localStorage.setItem('_edFCIncidents', JSON.stringify(_list));
+  } catch(_e) {}
+}
+// v40.92 — VALIDACIÓN PRE-CONGELADO: a petición de Alberto, en vez de seguir
+// cazando con logs un fallo raro y no reproducible a voluntad, se comprueba
+// de forma activa —justo antes de congelar el dibujo (OK)— que el grupo de
+// capas (fill/pencil/watercolor enlazadas al draw layer por _drawLayerId)
+// esté realmente bien formado, y no solo que los campos de id existan.
+// Devuelve {ok, reason}. "ok:false" cubre tanto el caso de un id sin
+// asignar como el caso "desacoplado": el id está puesto pero ninguna capa
+// real de ese tipo lo referencia (la capa se perdió o quedó huérfana).
+function _edValidateDrawLayerGroup(dl, page){
+  if (!dl) return { ok:false, reason:'dl inexistente' };
+  const uid = dl._uid || dl._fillLayerId;
+  if (!uid) return { ok:false, reason:'dl sin _uid ni _fillLayerId (grupo sin identificador)' };
+  const missing = [];
+  if (dl._fillLayerId       && !page.layers.some(l => l.type==='fill'       && l._drawLayerId===uid)) missing.push('fill');
+  if (dl._pencilLayerId     && !page.layers.some(l => l.type==='pencil'     && l._drawLayerId===uid)) missing.push('pencil');
+  if (dl._watercolorLayerId && !page.layers.some(l => l.type==='watercolor' && l._drawLayerId===uid)) missing.push('watercolor');
+  if (missing.length) return { ok:false, reason:'capa(s) referenciada(s) por id pero no encontrada(s) en la página: ' + missing.join(', ') + ' (uid=' + uid + ')' };
+  return { ok:true, reason:'ok' };
+}
 
 // ── Serialización de _buttonAction ──────────────────────────────────────────
 const _edSerLayerOrig = edSerLayer;
@@ -1298,10 +1348,38 @@ function _edTmpProxy() {
 function _edTmpComposite() {
   const page = edPages[edCurrentPage]; if (!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
-  const fl      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===dl._uid) : null;
-  const pencilL = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===dl._uid) : null;
-  const wcL     = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===dl._uid) : null;
+  // BUGFIX v40.90: buscar por (dl._uid || dl._fillLayerId), igual que el resto
+  // de la app (ver _edGetOrCreateDrawLayer/toDrawLayer) — si dl._uid llegó
+  // vacío, dl._fillLayerId sigue siendo el id real del grupo. Buscar solo por
+  // dl._uid perdía en silencio el contenido de bucket/pencil/watercolor de
+  // toda la sesión (nunca se volcaba a ninguna capa real).
+  const _uid    = dl._uid || dl._fillLayerId;
+  const fl      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uid) : null;
+  const pencilL = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uid) : null;
+  const wcL     = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uid) : null;
 
+  // DIAGNÓSTICO v40.90: _edTmpComposite() no dejaba ningún rastro en el log —
+  // era el punto más directo donde un temporal con contenido podía no
+  // volcarse a ninguna capa real (real no encontrada, o encontrada pero sin
+  // canvas) y hasta ahora quedaba invisible. Registrar los 3 casos posibles
+  // por capa: real no encontrada / real encontrada pero temporal vacío / volcado.
+  const _tmpDiag = (label, realLa, tmpLa) => {
+    const _tmpHas = tmpLa?._canvas ? _edFCCanvasInfo(tmpLa._canvas, tmpLa._ctx) : 'sin _edTmp.' + label;
+    if (!realLa) return label + ': capa real NO ENCONTRADA (temporal: ' + _tmpHas + ')';
+    if (!tmpLa?._canvas) return label + ': capa real OK pero sin canvas temporal que volcar';
+    return label + ': volcado temporal(' + _tmpHas + ') → real ' + _edFCCanvasInfo(realLa._canvas, realLa._ctx) + ' [antes de volcar]';
+  };
+  _edFCL('_edTmpComposite() — ' + _tmpDiag('bucket', fl, _edTmp.bucket) + ' | ' + _tmpDiag('watercolor', wcL, _edTmp.watercolor) + ' | ' + _tmpDiag('pencil', pencilL, _edTmp.pencil));
+  // v40.91 — INCIDENTE AUTOMÁTICO: si un temporal tiene contenido real
+  // (píxeles opacos) y su capa real correspondiente no se encontró, ESE es
+  // exactamente el mecanismo de "relleno/acuarela que desaparece tras OK" —
+  // guardar el log de esta sesión aunque Alberto no lo note ahora mismo.
+  for (const [_lbl, _realLa, _tmpLa] of [['bucket', fl, _edTmp.bucket], ['watercolor', wcL, _edTmp.watercolor], ['pencil', pencilL, _edTmp.pencil]]) {
+    if (!_realLa && _tmpLa?._canvas && _edFCOpaqueCount(_tmpLa._canvas, _tmpLa._ctx) > 0) {
+      _edFCL('*** INCIDENTE: ' + _lbl + ' tenía contenido en _edTmp pero su capa real NO se encontró — se va a perder al congelar ***');
+      _edFCFlagIncident('_edTmpComposite: ' + _lbl + ' con contenido sin capa real vinculada');
+    }
+  }
   // FillLayer: solo bucket (bote de pintura)
   if (fl && _edTmp.bucket?._canvas)      { fl._ctx.drawImage(_edTmp.bucket._canvas,    0, 0); }
   // WatercolorLayer: solo watercolor (pincel acuarela)
@@ -1310,6 +1388,7 @@ function _edTmpComposite() {
   if (pencilL && _edTmp.pencil?._canvas) { pencilL._ctx.drawImage(_edTmp.pencil._canvas, 0, 0); }
   // DrawLayer: solo pen (estilógrafo)
   if (_edTmp.pen?._canvas)               { dl._ctx.drawImage(_edTmp.pen._canvas, 0, 0); }
+  _edFCL('_edTmpComposite() — tras volcar: fill=' + _edFCCanvasInfo(fl?._canvas, fl?._ctx) + ' | watercolor=' + _edFCCanvasInfo(wcL?._canvas, wcL?._ctx) + ' | pencil=' + _edFCCanvasInfo(pencilL?._canvas, pencilL?._ctx));
 }
 
 // Cargar las 4 capas reales en los canvases temporales al entrar a editar.
@@ -1317,9 +1396,14 @@ function _edTmpComposite() {
 function _edTmpLoadFromLayers() {
   const page = edPages[edCurrentPage]; if (!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
-  const fl      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===dl._uid) : null;
-  const pencilL = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===dl._uid) : null;
-  const wcL     = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===dl._uid) : null;
+  // BUGFIX v40.90: mismo fallback que _edTmpComposite (ver comentario ahí) —
+  // sin él, al reeditar un stroke antiguo sin _uid, el fill real nunca se
+  // cargaba en _edTmp.bucket (la sesión empezaba con el relleno "vacío"
+  // aunque el objeto sí lo tuviera) y tampoco se limpiaba de la capa real.
+  const _uid    = dl._uid || dl._fillLayerId;
+  const fl      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uid) : null;
+  const pencilL = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uid) : null;
+  const wcL     = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uid) : null;
 
   // DrawLayer real → pen
   if (dl._canvas && _edTmp.pen) {
@@ -3383,7 +3467,18 @@ class StrokeLayer extends BaseLayer {
     // pueda redirigir al FillLayer en lugar de pintar el DrawLayer
     if (this._fillLayerId) {
       dl._fillLayerId = this._fillLayerId;
-      dl._uid = this._uid;
+      // BUGFIX v40.90: si this._uid no existe (stroke antiguo/creado antes de
+      // que _uid existiera como campo), NO copiar undefined — heredar
+      // _fillLayerId como _uid. Copiar this._uid a ciegas dejaba dl._uid en
+      // undefined mientras dl._fillLayerId seguía apuntando al grupo real:
+      // todo el pipeline de congelado (_edTmpComposite/_edTmpLoadFromLayers/
+      // _edFreezeDrawLayer) busca las sub-capas por _drawLayerId===dl._uid,
+      // así que con dl._uid vacío nunca las encontraba — relleno/lápiz/
+      // acuarela quedaban huérfanos en page.layers (desacoplados) y su
+      // contenido de la sesión de edición se perdía en silencio (relleno
+      // "invisible" tras OK). Ver _edGetOrCreateDrawLayer para el mismo
+      // arreglo en el otro punto donde se puede introducir el desajuste.
+      dl._uid = this._uid || this._fillLayerId;
       dl._fromStroke = true;
     }
     return dl;
@@ -16996,11 +17091,29 @@ function _edGetOrCreateDrawLayer(){
     // T9: DrawLayer ya existe — usarlo en su posición actual sin moverlo
     edLayers = page.layers;
     const dlIdx = page.layers.indexOf(dl);
-    // Asegurar uid
-    if (!dl._uid) dl._uid = 'dl_' + Date.now().toString(36);
+    // Asegurar uid — BUGFIX v40.90: si dl._fillLayerId ya enlaza con un grupo
+    // real (p.ej. dl viene de StrokeLayer.toDrawLayer() reeditando un stroke
+    // antiguo sin _uid), recuperar ESE id en vez de generar uno aleatorio
+    // nuevo. Generar uno nuevo aquí desincroniza dl._uid de dl._fillLayerId
+    // para el resto de la sesión — todas las búsquedas de sub-capas por
+    // _drawLayerId===dl._uid dejan de encontrar el fill/lápiz/acuarela real
+    // (quedan huérfanos y desacoplados, y su contenido se pierde al congelar).
+    if (!dl._uid) dl._uid = dl._fillLayerId || ('dl_' + Date.now().toString(36));
 
     // Crear FillLayer vinculado si no existe
-    if (!dl._fillLayerId) {
+    // DIAGNÓSTICO v40.90: si este bloque (o los dos siguientes) se dispara
+    // MÁS DE UNA VEZ en la misma sesión de dibujo, es la prueba de que la
+    // capa real se está recreando en blanco a media sesión — señal directa
+    // de "se inserta sin terminar de construir". _edFCL lo deja registrado
+    // cada vez que ocurre, con conteo de veces que ya llevaba _edTmp.bucket.
+    // v40.92: la condición ya no mira solo si falta el id — también repara
+    // el caso "desacoplado" (el id está puesto pero ninguna FillLayer real
+    // lo referencia, p.ej. porque se perdió del array de capas). Antes este
+    // bloque solo actuaba si dl._fillLayerId era falsy, así que ese caso no
+    // se reparaba nunca, ni siquiera llamando de nuevo a esta función.
+    const _flExists = dl._fillLayerId && page.layers.some(l => l.type==='fill' && l._drawLayerId===dl._uid);
+    if (!_flExists) {
+      const _flWasOrphan = !!dl._fillLayerId;
       dl._fillLayerId = dl._uid;
       const fl = new FillLayer();
       fl._drawLayerId = dl._uid;
@@ -17008,9 +17121,22 @@ function _edGetOrCreateDrawLayer(){
       _wsCanvas(fl);
       page.layers.splice(dlIdx, 0, fl);
       edLayers = page.layers;
+      _edFCL('_edGetOrCreateDrawLayer: FillLayer (re)creada en dl EXISTENTE (dl._uid=' + dl._uid + ', ' +
+        (_flWasOrphan ? 'id ya estaba puesto pero SIN capa real — DESACOPLADA' : 'id no estaba puesto') + ') — ' +
+        (window._edDrawSessionActive ? 'SESIÓN YA ACTIVA — posible recreación a media sesión' : 'sesión aún no marcada activa') +
+        ' | _edTmp.bucket en ese momento: ' + _edFCCanvasInfo(_edTmp?.bucket?._canvas, _edTmp?.bucket?._ctx));
+      // v40.91 — INCIDENTE AUTOMÁTICO: este bloque solo debería dispararse al
+      // REEDITAR un stroke antiguo sin _fillLayerId — en una sesión de dibujo
+      // NUEVO, dl._fillLayerId ya quedó fijado de una vez en la rama "no
+      // existe" (más abajo) y este backfill nunca debería hacer falta. Que se
+      // dispare aquí es en sí mismo la anomalía a capturar.
+      _edFCFlagIncident('_edGetOrCreateDrawLayer: backfill de FillLayer en dl ya existente (dl._uid=' + dl._uid + ', ' + (_flWasOrphan ? 'desacoplada' : 'id ausente') + ')');
     }
-    // Crear PencilLayer vinculado si no existe
-    if (!dl._pencilLayerId) {
+    // Crear PencilLayer vinculado si no existe (v40.92: idem, cubre también
+    // el caso desacoplado, no solo el id ausente)
+    const _pcExists = dl._pencilLayerId && page.layers.some(l => l.type==='pencil' && l._drawLayerId===dl._uid);
+    if (!_pcExists) {
+      const _pcWasOrphan = !!dl._pencilLayerId;
       dl._pencilLayerId = dl._uid;
       const pencilL = new PencilLayer();
       pencilL._drawLayerId = dl._uid;
@@ -17021,9 +17147,16 @@ function _edGetOrCreateDrawLayer(){
       const insertPencil = flIdx >= 0 ? flIdx + 1 : page.layers.indexOf(dl);
       page.layers.splice(insertPencil, 0, pencilL);
       edLayers = page.layers;
+      _edFCL('_edGetOrCreateDrawLayer: PencilLayer (re)creada en dl EXISTENTE (dl._uid=' + dl._uid + ', ' +
+        (_pcWasOrphan ? 'id ya estaba puesto pero SIN capa real — DESACOPLADA' : 'id no estaba puesto') + ') — ' +
+        (window._edDrawSessionActive ? 'SESIÓN YA ACTIVA — posible recreación a media sesión' : 'sesión aún no marcada activa') +
+        ' | _edTmp.pencil en ese momento: ' + _edFCCanvasInfo(_edTmp?.pencil?._canvas, _edTmp?.pencil?._ctx));
+      _edFCFlagIncident('_edGetOrCreateDrawLayer: backfill de PencilLayer en dl ya existente (dl._uid=' + dl._uid + ', ' + (_pcWasOrphan ? 'desacoplada' : 'id ausente') + ')');
     }
-    // Crear WatercolorLayer vinculado si no existe
-    if (!dl._watercolorLayerId) {
+    // Crear WatercolorLayer vinculado si no existe (v40.92: idem)
+    const _wcExists = dl._watercolorLayerId && page.layers.some(l => l.type==='watercolor' && l._drawLayerId===dl._uid);
+    if (!_wcExists) {
+      const _wcWasOrphan = !!dl._watercolorLayerId;
       dl._watercolorLayerId = dl._uid;
       const wcL = new WatercolorLayer();
       wcL._drawLayerId = dl._uid;
@@ -17034,6 +17167,11 @@ function _edGetOrCreateDrawLayer(){
       const insertWc = flIdx2 >= 0 ? flIdx2 + 1 : page.layers.indexOf(dl);
       page.layers.splice(insertWc, 0, wcL);
       edLayers = page.layers;
+      _edFCL('_edGetOrCreateDrawLayer: WatercolorLayer (re)creada en dl EXISTENTE (dl._uid=' + dl._uid + ', ' +
+        (_wcWasOrphan ? 'id ya estaba puesto pero SIN capa real — DESACOPLADA' : 'id no estaba puesto') + ') — ' +
+        (window._edDrawSessionActive ? 'SESIÓN YA ACTIVA — posible recreación a media sesión' : 'sesión aún no marcada activa') +
+        ' | _edTmp.watercolor en ese momento: ' + _edFCCanvasInfo(_edTmp?.watercolor?._canvas, _edTmp?.watercolor?._ctx));
+      _edFCFlagIncident('_edGetOrCreateDrawLayer: backfill de WatercolorLayer en dl ya existente (dl._uid=' + dl._uid + ', ' + (_wcWasOrphan ? 'desacoplada' : 'id ausente') + ')');
     }
     return dl;
   }
@@ -18128,28 +18266,21 @@ function _edShowGradientDialog() {
     const palBtn = e.target.closest('.egd-pal');
     if (palBtn) { _setColor(+palBtn.dataset.which, palBtn.dataset.col); return; }
 
-    // Cuentagotas
+    // Cuentagotas — reutiliza _edStartEyedrop, el mismo sistema que usa el
+    // resto del editor: mientras muestrea fuerza _edEyedropActive (opacidad
+    // 100% y el pipeline de fill/paint se autoinhibe, ver esa bandera en
+    // edRedraw y en el flood fill) y solo entonces lee el píxel. La versión
+    // anterior tenía su propia implementación que no activaba esa bandera:
+    // el cuentagotas leía el lienzo con la transparencia puesta y el mismo
+    // toque, al no estar blindado, también disparaba el relleno normal.
     const eyeBtn = e.target.closest('.egd-eye');
     if (eyeBtn) {
       const which = +eyeBtn.dataset.which;
       overlay.style.display = 'none';
-      edToast(I18n.t('ed_tapColorToUse'));
-      const ac = new AbortController();
-      const sig = { signal: ac.signal };
-      function sampleGrad(clientX, clientY) {
-        ac.abort();
-        const rect = edCanvas.getBoundingClientRect();
-        const scaleX = edCanvas.width / rect.width;
-        const scaleY = edCanvas.height / rect.height;
-        const cx = Math.round((clientX - rect.left) * scaleX);
-        const cy = Math.round((clientY - rect.top) * scaleY);
-        const px = edCanvas.getContext('2d').getImageData(cx, cy, 1, 1).data;
-        if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); overlay.style.display = 'flex'; return; }
-        const hex = '#' + [px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
-        _setColor(which, hex);
-        overlay.style.display = 'flex';
-      }
-      edCanvas.addEventListener('pointerdown', ev => { ev.preventDefault(); sampleGrad(ev.clientX, ev.clientY); }, { once:true, signal:ac.signal });
+      _edStartEyedrop(
+        hex => _setColor(which, hex),
+        () => { overlay.style.display = 'flex'; }
+      );
       return;
     }
 
@@ -20917,12 +21048,43 @@ function _edFreezeAllDrawLayers(){
 
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
-  const dlIdx = page.layers.findIndex(l => l.type === 'draw');
+  let dlIdx = page.layers.findIndex(l => l.type === 'draw');
 
   if(dlIdx < 0) return;
   const dl = page.layers[dlIdx];
-  _edFCL('=== _edFreezeDrawLayer: inicio (OK) — dl._uid=' + (dl._uid||'none') +
-    ' | bucket ANTES de suavizar: ' + _edFCCanvasInfo(_edTmp.bucket?._canvas, _edTmp.bucket?._ctx));
+  // v40.92 — VALIDACIÓN + REINTENTO PRE-CONGELADO: petición explícita de
+  // Alberto tras confirmar que el fallo (relleno/acuarela que desaparece o
+  // queda "desacoplado" del dibujo) es raro, ocurre solo con dibujos NUEVOS
+  // y no lo puede reproducir a voluntad. En vez de seguir persiguiéndolo con
+  // más diagnóstico pasivo, se comprueba aquí mismo —justo antes de
+  // compositar y congelar, con el grupo de capas tal y como quedó al acabar
+  // de dibujar— que fill/pencil/watercolor estén realmente enlazadas a este
+  // draw layer. Si no lo están, se reinicia el proceso de formación del
+  // grupo (_edGetOrCreateDrawLayer(), que localiza este MISMO dl por ser el
+  // único type==='draw' de la página y repara in situ — ver v40.92 en esa
+  // función) y se vuelve a validar antes de seguir. dlIdx se resincroniza
+  // porque la reparación puede insertar capas delante de dl y desplazar su
+  // posición en page.layers (dlIdx se usa más abajo para sustituir dl por el
+  // StrokeLayer congelado).
+  let _dgCheck = _edValidateDrawLayerGroup(dl, page);
+  if (!_dgCheck.ok) {
+    _edFCL('*** VALIDACIÓN PRE-CONGELADO FALLIDA: ' + _dgCheck.reason + ' — reiniciando formación del grupo de capas ***');
+    _edFCFlagIncident('_edFreezeDrawLayer: validación pre-congelado fallida (' + _dgCheck.reason + ') — reintentando formación');
+    _edGetOrCreateDrawLayer();
+    dlIdx = page.layers.indexOf(dl);
+    _dgCheck = _edValidateDrawLayerGroup(dl, page);
+    _edFCL(_dgCheck.ok
+      ? 'VALIDACIÓN PRE-CONGELADO: reparación correcta tras reintento, continuando'
+      : ('*** VALIDACIÓN PRE-CONGELADO: SIGUE FALLANDO TRAS REINTENTO (' + _dgCheck.reason + ') — se continúa de todas formas para no bloquear al usuario ***'));
+  }
+  // DIAGNÓSTICO v40.90: antes solo se registraba el estado de _edTmp.bucket
+  // (relleno) al entrar — Alberto reportó el mismo fallo también con acuarela,
+  // y ese canvas nunca quedaba en el log. Registrar los 3 temporales por igual
+  // para que el próximo repro (con cualquiera de los dos) quede capturado.
+  _edFCL('=== _edFreezeDrawLayer: inicio (OK) — dl._uid=' + (dl._uid||'none') + ' | dl._fillLayerId=' + (dl._fillLayerId||'none') +
+    ' | bucket ANTES de suavizar: ' + _edFCCanvasInfo(_edTmp.bucket?._canvas, _edTmp.bucket?._ctx) +
+    ' | pencil: ' + _edFCCanvasInfo(_edTmp.pencil?._canvas, _edTmp.pencil?._ctx) +
+    ' | watercolor: ' + _edFCCanvasInfo(_edTmp.watercolor?._canvas, _edTmp.watercolor?._ctx));
   // Suavizado automático de la tinta borrada durante la sesión (ver
   // _edDrawInitHistory para la instantánea de entrada) — SOLO al congelar,
   // no en cada trazo del borrador (pedido explícito de Alberto: por si se
@@ -20946,9 +21108,15 @@ function _edFreezeDrawLayer(){
     _edTmpComposite();
   }
   {
+    // DIAGNÓSTICO v40.90: idem — antes solo comprobaba FillLayer tras compositar.
+    // Ampliado a pencil/watercolor para cubrir el caso reportado con acuarela.
     const _uidChk = dl._uid || dl._fillLayerId;
-    const _flChk = _uidChk ? page.layers.find(l => l.type==='fill' && l._drawLayerId===_uidChk) : null;
-    _edFCL('tras _edTmpComposite(): FillLayer real ' + (_flChk ? ('encontrado — ' + _edFCCanvasInfo(_flChk._canvas, _flChk._ctx)) : 'NO ENCONTRADO (uid buscado: ' + _uidChk + ')'));
+    const _flChk = _uidChk ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uidChk) : null;
+    const _pcChk = _uidChk ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uidChk) : null;
+    const _wcChk = _uidChk ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uidChk) : null;
+    _edFCL('tras _edTmpComposite(): FillLayer real ' + (_flChk ? ('encontrado — ' + _edFCCanvasInfo(_flChk._canvas, _flChk._ctx)) : 'NO ENCONTRADO (uid buscado: ' + _uidChk + ')') +
+      ' | PencilLayer real ' + (_pcChk ? ('encontrado — ' + _edFCCanvasInfo(_pcChk._canvas, _pcChk._ctx)) : 'NO ENCONTRADO') +
+      ' | WatercolorLayer real ' + (_wcChk ? ('encontrado — ' + _edFCCanvasInfo(_wcChk._canvas, _wcChk._ctx)) : 'NO ENCONTRADO'));
   }
   const bb = StrokeLayer._boundingBox(dl._canvas);
   _edFCL('bbox de la tinta (dl._canvas): ' + (bb ? ('x='+bb.x+' y='+bb.y+' w='+bb.w+' h='+bb.h) : 'null (tinta vacía)'));
@@ -21038,9 +21206,18 @@ function _edFreezeDrawLayer(){
   // Todas las capas usan canvas workspace (ED_CANVAS_W×H).
   // El bbox union engloba el contenido visible de todas para que los handlers
   // sean idénticos y sus centros coincidan perfectamente.
-  const _flFreeze      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===dl._uid) : null;
-  const _pencilFreeze  = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===dl._uid) : null;
-  const _wcFreeze      = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===dl._uid) : null;
+  // BUGFIX v40.90: mismo fallback (dl._uid || dl._fillLayerId) que ya usa la
+  // RAMA TINTA VACÍA un poco más abajo (_uid0) — esta rama principal se había
+  // quedado con el buscar-solo-por-_uid antiguo. Con dl._uid ausente (stroke
+  // reeditado sin ese campo, ver toDrawLayer/_edGetOrCreateDrawLayer) estas
+  // tres búsquedas fallaban: el bbox union se calculaba sin contar el fill/
+  // lápiz/acuarela real, y _cropGroupLayer nunca los recortaba ni los volvía
+  // a enlazar al nuevo StrokeLayer — quedaban huérfanos en page.layers,
+  // desacoplados del stroke (no se mueven/rotan ya con él).
+  const _uidFreeze     = dl._uid || dl._fillLayerId;
+  const _flFreeze      = dl._fillLayerId       ? page.layers.find(l => l.type==='fill'       && l._drawLayerId===_uidFreeze) : null;
+  const _pencilFreeze  = dl._pencilLayerId     ? page.layers.find(l => l.type==='pencil'     && l._drawLayerId===_uidFreeze) : null;
+  const _wcFreeze      = dl._watercolorLayerId ? page.layers.find(l => l.type==='watercolor' && l._drawLayerId===_uidFreeze) : null;
   const _fpw = edPageW(), _fph = edPageH();
   const _mx = edMarginX(), _my = edMarginY();
 
@@ -21062,7 +21239,10 @@ function _edFreezeDrawLayer(){
   }
   const _uW = Math.max(1, _uX1 - _uX0);
   const _uH = Math.max(1, _uY1 - _uY0);
+  // DIAGNÓSTICO v40.90: ampliado con bbox de pencil/watercolor (antes solo fill).
   _edFCL('bbox fill: ' + (_bbFill ? ('x='+_bbFill.x+' y='+_bbFill.y+' w='+_bbFill.w+' h='+_bbFill.h) : 'null') +
+    ' | bbox pencil: ' + (_bbPencil ? ('x='+_bbPencil.x+' y='+_bbPencil.y+' w='+_bbPencil.w+' h='+_bbPencil.h) : 'null') +
+    ' | bbox watercolor: ' + (_bbWatercolor ? ('x='+_bbWatercolor.x+' y='+_bbWatercolor.y+' w='+_bbWatercolor.w+' h='+_bbWatercolor.h) : 'null') +
     ' | bbox union: x=' + _uX0 + ' y=' + _uY0 + ' w=' + _uW + ' h=' + _uH);
 
   // Propiedades comunes en fracciones de página (centro del bbox union)
@@ -21098,9 +21278,13 @@ function _edFreezeDrawLayer(){
   if(dl._watercolorLayerId) sl._watercolorLayerId = dl._watercolorLayerId;
 
   // ── Helper: recortar una capa del grupo al bbox union ─────────────────────
+  // DIAGNÓSTICO v40.90: el registro (_edFCL) estaba condicionado a _isFillLa,
+  // así que pencil/watercolor pasaban por aquí completamente en silencio — con
+  // el fallo reportado también en acuarela, ese blind spot había que cerrarlo.
+  // _laLabel identifica cuál de las 3 es, para leerlo igual de claro en el log.
   function _cropGroupLayer(la, refId) {
     if (!la) return;
-    const _isFillLa = (la === _flFreeze);
+    const _laLabel = (la === _flFreeze) ? 'fill' : (la === _pencilFreeze) ? 'pencil' : (la === _wcFreeze) ? 'watercolor' : '?';
     la._drawLayerId = sl._uid || refId;
     la._srcCanvas = null; la._previewSx = null; la._previewSy = null;
     const _crop = document.createElement('canvas');
@@ -21115,7 +21299,16 @@ function _edFreezeDrawLayer(){
       } catch(e) {}
       return false;
     })();
-    if (_isFillLa) _edFCL('_cropGroupLayer(fill): _hasPixels=' + _hasPixels + ' | _preEditCanvas=' + (la._preEditCanvas ? 'sí' : 'no') + ' | recorte ' + _edFCCanvasInfo(_crop));
+    _edFCL('_cropGroupLayer(' + _laLabel + '): fuente ' + _edFCCanvasInfo(la._canvas, la._ctx) + ' | _hasPixels=' + _hasPixels + ' | _preEditCanvas=' + (la._preEditCanvas ? 'sí' : 'no') + ' | recorte ' + _edFCCanvasInfo(_crop));
+    // v40.91 — INCIDENTE AUTOMÁTICO: la fuente (capa real, ya compositada por
+    // _edTmpComposite antes de llegar aquí) tenía contenido, pero el recorte
+    // al bbox union salió vacío — el contenido existía y se perdió AQUÍ, en
+    // el paso de recorte/posicionamiento (coords _uX0/_uY0/_uW/_uH mal
+    // calculadas respecto a donde está realmente el contenido de esta capa).
+    if (!_hasPixels && !la._preEditCanvas && _edFCOpaqueCount(la._canvas, la._ctx) > 0) {
+      _edFCL('*** INCIDENTE: ' + _laLabel + ' tenía contenido en la capa real ANTES de recortar, pero el recorte al bbox union salió vacío ***');
+      _edFCFlagIncident('_cropGroupLayer(' + _laLabel + '): contenido perdido en el recorte al bbox union');
+    }
     if (!_hasPixels && la._preEditCanvas) {
       // El temporal estaba vacío (no se usó esa herramienta en la reedición):
       // restaurar el canvas pre-edición tal como estaba.
@@ -21127,7 +21320,7 @@ function _edFreezeDrawLayer(){
       la.x = la._preEditX; la.y = la._preEditY;
       la.width = la._preEditW; la.height = la._preEditH;
       la.rotation = la._preEditRot;
-      if (_isFillLa) _edFCL('_cropGroupLayer(fill): restaurado _preEditCanvas (recorte vacío)');
+      _edFCL('_cropGroupLayer(' + _laLabel + '): restaurado _preEditCanvas (recorte vacío)');
     } else {
       la._canvas = _crop;
       la._ctx    = _crop.getContext('2d');
@@ -21137,7 +21330,7 @@ function _edFreezeDrawLayer(){
       la.x = _uCx; la.y = _uCy;
       la.width = _uFw; la.height = _uFh;
       la.rotation = 0;
-      if (_isFillLa) _edFCL('_cropGroupLayer(fill): usado el recorte tal cual — resultado final: ' + _edFCCanvasInfo(la._canvas, la._ctx));
+      _edFCL('_cropGroupLayer(' + _laLabel + '): usado el recorte tal cual — resultado final: ' + _edFCCanvasInfo(la._canvas, la._ctx));
     }
     // Limpiar snapshot
     la._preEditCanvas = null; la._preEditX = null; la._preEditY = null;
@@ -22485,7 +22678,7 @@ function edRenderOptionsPanel(mode){
         ${la.groupId
           ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>`
           : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>`}
-        <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">🔒</button>
+        <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100)" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">${la.locked?'🔒':'🔓'}</button>
         <button id="pp-ok-bottom" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
       </div>`;
     panel.classList.add('open');
@@ -22519,7 +22712,7 @@ function edRenderOptionsPanel(mode){
       }
       edPushHistory();
       const _btn3=$('pp-lock');
-      if(_btn3){ _btn3.style.opacity=_la3.locked?'1':'0.4'; _btn3.title=_la3.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn'); }
+      if(_btn3){ _btn3.textContent=_la3.locked?'🔒':'🔓'; _btn3.title=_la3.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn'); }
     });
     $('pp-path-btn')?.addEventListener('click',()=>{
       const _pidx=edSelectedIdx; if(_pidx<0) return;
@@ -22598,8 +22791,8 @@ function edRenderOptionsPanel(mode){
         ${_edGrpPathRowHtml(la)}
           <button class="op-btn danger" id="pp-grp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
           <button class="op-btn" id="pp-grp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>
-          <button class="op-btn" id="pp-grp-mirror" title="${I18n.t('op_mirrorTitle')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>
-          <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?I18n.t('ly_unlockGroup'):I18n.t('ly_lockGroup')}" style="flex-shrink:0;background:var(--gray-100);opacity:${_grpAllLocked?'1':'0.4'};border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">🔒</button>
+          <button class="op-btn" id="pp-grp-mirror" title="${I18n.t('op_mirrorTitle')}" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}<span>${I18n.t('op_mirrorLabel')}</span></button>
+          <button class="op-btn" id="pp-grp-lock" title="${_grpAllLocked?I18n.t('ly_unlockGroup'):I18n.t('ly_lockGroup')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.82rem;cursor:pointer">${_grpAllLocked?'🔒':'🔓'}</button>
           <button class="op-btn" id="pp-grp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>
           <button id="pp-grp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>
         </div>`;
@@ -22822,7 +23015,7 @@ function edRenderOptionsPanel(mode){
         // Actualizar visual del botón sin rerenderizar todo el panel
         const btn = $('pp-grp-lock');
         if(btn){
-          btn.style.opacity = newLocked ? '1' : '0.4';
+          btn.textContent = newLocked ? '🔒' : '🔓';
           btn.title = newLocked ? I18n.t('ly_unlockGroup') : I18n.t('ly_lockGroup');
         }
         edToast(newLocked ? I18n.t('ed_groupLocked') : I18n.t('ed_groupUnlocked'));
@@ -23036,8 +23229,8 @@ function edRenderOptionsPanel(mode){
       ${_isRichText ? '' : (la.groupId
         ? `<button class="op-btn" id="pp-ungroup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('ed_ungroup')}</button>`
         : `<button class="op-btn" id="pp-dup" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.78rem;cursor:pointer">${I18n.t('op_duplicateBtn')}</button>`)}
-      ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="${I18n.t('op_mirrorBtnTitle')}" style="flex-shrink:0;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}</button>`:''}
-      <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100);opacity:${la.locked?'1':'0.4'}" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">🔒</button>
+      ${(!_isTextBubble)?`<button class="op-btn" id="pp-mirror" title="${I18n.t('op_mirrorBtnTitle')}" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;font-weight:900;font-size:.78rem;cursor:pointer">${_ED_MIRROR_ICON}<span>${I18n.t('op_mirrorLabel')}</span></button>`:''}
+      <button id="pp-lock" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:4px 8px;font-weight:900;font-size:.82rem;cursor:pointer;background:var(--gray-100)" title="${la.locked?I18n.t('op_unlockBtn'):I18n.t('op_lockBtn')}">${la.locked?'🔒':'🔓'}</button>
       ${_isTextBubble
         ? `<button id="op-panel-collapse" title="${I18n.t('op_minimizePanelTitle')}" style="background:var(--yellow);border:1.5px solid var(--black);font-weight:900;border-radius:6px;padding:4px 8px;font-size:.82rem;cursor:pointer;flex-shrink:0">▲</button>`
         : `<button id="pp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 10px;font-weight:900;font-size:.82rem;cursor:pointer;flex-shrink:0">✓ OK</button>`}
@@ -23162,8 +23355,8 @@ function edRenderOptionsPanel(mode){
       edPushHistory();
       const _btn = $('pp-lock');
       if(_btn){
-        _btn.style.opacity = _la.locked ? '1' : '0.4';
-        _btn.title = _la.locked ? 'Desbloquear' : 'Bloquear';
+        _btn.textContent = _la.locked ? '🔒' : '🔓';
+        _btn.title = _la.locked ? I18n.t('op_unlockBtn') : I18n.t('op_lockBtn');
       }
     });
     // ── Desplegable "Fuente" del panel de propiedades (v40.12) ──────────
@@ -31676,7 +31869,7 @@ function _isBackSide(endX, endY) {
 }
 
 
-function _edStartEyedrop() {
+function _edStartEyedrop(onPick, onDone) {
   const canvas = edCanvas;
   if (!canvas) return;
 
@@ -31709,14 +31902,21 @@ function _edStartEyedrop() {
     window._edEyedropActive = false;
     edRedraw();
 
-    if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); return; }
+    if (px[3] < 10) { edToast(I18n.t('ed_noColorAtPoint')); if (onDone) onDone(); return; }
 
     const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2, '0')).join('');
-    _edSetDrawColor(hex);
-    if(edSelectedPaletteIdx > 1) _edSetPaletteColor(edSelectedPaletteIdx, hex);
-    _edUpdatePaletteDots();
-    _edbSyncColor();
+    // onPick opcional: quien llama quiere el color en otro sitio que no es el
+    // color de dibujo global (p.ej. un stop de degradado) — ver _edShowGradientDialog.
+    if (onPick) {
+      onPick(hex);
+    } else {
+      _edSetDrawColor(hex);
+      if(edSelectedPaletteIdx > 1) _edSetPaletteColor(edSelectedPaletteIdx, hex);
+      _edUpdatePaletteDots();
+      _edbSyncColor();
+    }
     edToast(I18n.t('ed_colorCopied'));
+    if (onDone) onDone();
   }
 
   canvas.addEventListener('pointerup', e => {
@@ -31730,6 +31930,7 @@ function _edStartEyedrop() {
       ac.abort(); canvas.style.cursor = '';
       window._edEyedropActive = false; edRedraw();
       edToast(I18n.t('ed_eyedropCanceled'));
+      if (onDone) onDone();
     }
   }, { ...sig, once: true });
 }
@@ -38278,7 +38479,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
     <div class="op-row" style="margin-top:2px;justify-content:space-between;gap:4px">
       <button class="op-btn danger" id="gcppp-del" style="flex:1">${I18n.t('op_deleteBtnX')}</button>
       <button class="op-btn" id="gcppp-dup" style="flex:1">${I18n.t('op_duplicateBtn')}</button>
-      <button class="op-btn" id="gcppp-mirror" title="${I18n.t('gcp_mirrorHorizTitle')}" style="flex-shrink:0">${_ED_MIRROR_ICON}</button>
+      <button class="op-btn" id="gcppp-mirror" title="${I18n.t('gcp_mirrorHorizTitle')}" style="flex:1">${_ED_MIRROR_ICON}<span>${I18n.t('op_mirrorLabel')}</span></button>
       <button id="gcppp-ok" style="background:var(--black);color:var(--white);border:none;border-radius:18px;padding:6px 14px;font-family:var(--font-body);font-weight:900;font-size:.78rem;cursor:pointer;flex-shrink:0">✓ OK</button>
     </div>`;
 
@@ -45542,12 +45743,36 @@ async function _edRunDiag() {
   // diagnóstico justo después, sin dibujar nada más entre medias, para que
   // este log muestre exactamente esa sesión y ninguna otra.
   L('');
-  L('── LOG DE CREACIÓN (relleno que desaparece) ──');
+  L('── LOG DE CREACIÓN (relleno que desaparece) — última sesión abierta ──');
   if (window._edFCLog && window._edFCLog.length) {
     window._edFCLog.forEach(l => L('  ' + l));
   } else {
     L('  (vacío — no se ha abierto ninguna sesión de dibujo todavía)');
   }
+  L('');
+
+  // ── INCIDENTES AUTOMÁTICOS (v40.91): el fallo de relleno/acuarela
+  // huérfanos es intermitente y Alberto no lo puede reproducir a voluntad, así
+  // que el log de "última sesión" de arriba normalmente ya no es el de la
+  // sesión que falló (se sobrescribe en cada sesión de dibujo posterior).
+  // _edFCFlagIncident() (ver _edTmpComposite/_edGetOrCreateDrawLayer/
+  // _cropGroupLayer) guarda aquí, en localStorage, una copia COMPLETA del log
+  // de cualquier sesión donde el propio código detectó la situación anómala
+  // en el momento — sobrevive a abrir sesiones nuevas y a cerrar la app.
+  L('── INCIDENTES AUTOMÁTICOS DETECTADOS (persisten aunque se cierre la app) ──');
+  try {
+    const _incList = JSON.parse(localStorage.getItem('_edFCIncidents') || '[]');
+    if (_incList.length) {
+      L('  ' + _incList.length + ' incidente(s) guardado(s):');
+      _incList.forEach((_inc, _ii) => {
+        L('');
+        L('  ── Incidente ' + (_ii+1) + '/' + _incList.length + ' — ' + _inc.at + ' — ' + _inc.reason + ' ──');
+        (_inc.log || []).forEach(l => L('    ' + l));
+      });
+    } else {
+      L('  (ninguno — no se ha detectado la situación anómala desde que existe este registro)');
+    }
+  } catch(_incErr) { L('  Error leyendo incidentes guardados: ' + (_incErr.message || _incErr)); }
   L('');
 
   // ── INTEGRIDAD DE GRUPOS (investigación: borrar grupo original afecta al
