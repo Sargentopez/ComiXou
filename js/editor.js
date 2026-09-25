@@ -4332,11 +4332,15 @@ function _edMarkPagesStructureDirty() {
 }
 // Elementos donde un tap/click NUNCA puede modificar el contenido de la obra
 // — se excluyen del contador de interacción. Deliberadamente es una lista
-// CORTA y de exclusión (no de inclusión): cualquier botón de menú que NO
-// esté aquí sigue contando, porque podría crear/mover/eliminar contenido
-// (reordenar capas, añadir hoja, crear una animación, borrar de la
-// biblioteca...) y no tengo forma de estar seguro de cuáles son inofensivos
-// sin revisar cada uno. Ante la duda, contar.
+// de exclusión (no de inclusión): cualquier botón de menú que NO esté aquí
+// sigue contando, porque podría crear/mover/eliminar contenido (reordenar
+// capas, añadir hoja, crear una animación, borrar de la biblioteca...) y no
+// tengo forma de estar seguro de cuáles son inofensivos sin revisar cada
+// uno. Ante la duda, contar. Un contenedor entero (p. ej. #edMenuBar o el
+// subsistema GCP) solo entra en esta lista cuando CADA acción real dentro
+// de él ya marca sucio por su propio camino explícito (edPushHistory/
+// _edMarkPageDirty/_edMarkPagesStructureDirty) — nunca por bloque, sin
+// revisar — ver los comentarios junto a cada entrada.
 const _ED_TICK_EXCLUDE_SELECTOR = [
   '#edPagePrev', '#edPageNext',   // navegar entre hojas para verlas, no las modifica
   '.ed-nav-page-btn',             // miniaturas del navegador desplegable de páginas — mismo motivo
@@ -4376,6 +4380,50 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   // contenedor #edPageJumpBar entero (no solo el slider) para cubrir también
   // su etiqueta interna y cualquier control que se añada dentro en el futuro.
   '#edPageJumpToggle', '#edPageJumpBar', '#edPageJumpScrim',
+  // BUG CORREGIDO (v40.79 — Alberto: "la navegación por los menús con el
+  // botón de las esquinas también está marcando las hojas en Android").
+  // #edFloatBtn es el botón ☰ flotante en la esquina que muestra/oculta
+  // #edMenuBar (ver edMinimize/edMaximize); #edMenuBar es la barra de menús
+  // completa (Insertar/Dibujar/Escribir/Animar/Selección/…) con sus
+  // desplegables .ed-dropdown anidados dentro — ninguno de los dos estaba
+  // aquí, así que abrir/cerrar/recorrer un menú sin tocar nada ensuciaba la
+  // hoja activa igual que #edPageJumpBar (arriba).
+  //
+  // A diferencia de #edPageJumpBar, #edMenuBar SÍ contiene botones que crean
+  // o modifican contenido de verdad (insertar imagen, añadir hoja, agrupar,
+  // eliminar selección, crear animación...) — justo el caso que el comentario
+  // de cabecera de esta lista ("no tengo forma de estar seguro de cuáles son
+  // inofensivos sin revisar cada uno") advertía no excluir a la ligera. Se
+  // revisaron: CADA acción real del menú (dd-gallery, dd-camera, dd-paste,
+  // dd-textbox, dd-bubble, dd-addpage, dd-delpage, _sel-group/_sel-ungroup/
+  // _sel-merge/_sel-delete/_sel-bib-save, dd-rule-add/dd-rule-clear, etc.)
+  // llama edPushHistory()/_edMarkPageDirty()/_edMarkPagesStructureDirty()
+  // explícitamente al ejecutarse — nunca dependen de este contador como único
+  // aviso. Excluir el contenedor entero solo quita el conteo REDUNDANTE de
+  // abrir/cerrar/mirar el menú; las ediciones reales que ocurren dentro
+  // siguen marcando la hoja igual, por su propio camino explícito.
+  '#edFloatBtn', '#edMenuBar',
+  // BUG CORREGIDO (v40.79 — Alberto: "tampoco se deben marcar las hojas al
+  // crearse una animación automática, salvo que se inserte el resultado en
+  // la obra"). El editor de animaciones (GCP: "Convertir hojas en
+  // animación"/"Editor de Animaciones", #gcpShell y todo lo que cuelga de
+  // él — topbar, menú, canvas propio, popups de guardar/interpolar/etc.,
+  // algunos sacados deliberadamente del árbol de #editorShell por z-index,
+  // ver el comentario junto a #gcpInterpModal en views.js) tiene su PROPIO
+  // historial independiente (_gcpPushHistory/_gcpUndo/_gcpRedo) y su propio
+  // flag _gcpDirty — nada de lo que se toca ahí dentro (arrastrar un frame,
+  // ajustar velocidad, previsualizar, cancelar…) toca edLayers/edPages
+  // todavía. Sin excluirlo, cualquier toque dentro de GCP ensuciaba la hoja
+  // que estuviera activa en el editor general por debajo, aunque el usuario
+  // acabara descartando la animación sin insertar nada.
+  // Solo al pulsar "Insertar en el canvas" (o "Actualizar animación" al
+  // reeditar una ya insertada) se toca edLayers de verdad — ver
+  // _gcpSaveToLib en editor.js, que llama a edPushHistory() en ese momento,
+  // sobre la hoja que esté activa en ESE instante (_edMarkPageDirty vía
+  // edPushHistory) — ninguna otra. Selector por prefijo (en vez de listar
+  // cada id de GCP uno a uno, son varias decenas): todo lo que usa este
+  // subsistema lleva el prefijo "gcp"/"_gcp" de forma consistente.
+  '[id^="gcp"]', '[id^="_gcp"]',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
