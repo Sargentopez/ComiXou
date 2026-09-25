@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.79</footer>
+    <footer class="app-version">v40.80</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -344,18 +344,22 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — OCULTO (comentado) desde v40.44, a petición de
-             Alberto al cerrarse la investigación del giro del dispositivo y del
-             botón de restaurar cabecera (v40.41→v40.43). Mismo criterio de
-             siempre: se descomenta para cada investigación y se vuelve a
-             comentar al cerrarse; el <button> NO se borra. Para reactivarlo,
-             quitar los marcadores de comentario de la línea de abajo. El informe (_edRunDiag en
-             editor.js) y sus registros siguen en el código: sección "GIRO DEL
-             DISPOSITIVO MIENTRAS SE ESCRIBE" (v40.42), "SEGUIMIENTO DE CÁMARA AL
-             ESCRIBIR", "DECISIÓN DE OCULTAR CABECERA" y "SECUENCIA DE RESTAURAR".
-             El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
-             nada ni da error. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+        <!-- Botón de diagnóstico — REACTIVADO en v40.80 para investigar el falso
+             positivo de "cambios sin guardar" al salir tras usar "Convertir hojas
+             en animación" y descartar sin guardar (reportado por Alberto). Estuvo
+             oculto (comentado) desde v40.44, cuando se cerró la investigación
+             anterior (giro del dispositivo / botón de restaurar cabecera,
+             v40.41→v40.43). Mismo criterio de siempre: se descomenta para cada
+             investigación y se vuelve a comentar al cerrarse; el <button> NO se
+             borra. Para desactivarlo de nuevo, volver a envolverlo en marcadores
+             de comentario. El informe (_edRunDiag en editor.js) y sus registros
+             siguen en el código: sección "GIRO DEL DISPOSITIVO MIENTRAS SE
+             ESCRIBE" (v40.42), "SEGUIMIENTO DE CÁMARA AL ESCRIBIR", "DECISIÓN DE
+             OCULTAR CABECERA", "SECUENCIA DE RESTAURAR" e "INTEGRIDAD DE
+             PÁGINAS" (esta última es la relevante para la investigación actual).
+             El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hacía
+             nada ni daba error mientras estuvo oculto. -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
