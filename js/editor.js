@@ -5071,6 +5071,25 @@ function edFitCanvas(resetCamera){
   // Si el panel está colapsado (panel-collapsed), su altura efectiva es 0 aunque tenga 'open'
   const _optsCollapsed = opts && opts.classList.contains('panel-collapsed');
   const optsH = (opts && opts.classList.contains('open') && !_optsCollapsed && opts.style.visibility !== 'hidden') ? opts.getBoundingClientRect().height : 0;
+  // v40.94 — cuánto ha cambiado optsH desde la última vez (para separarlo
+  // más abajo de otros cambios de altura, p.ej. minimizar la cabecera — ver
+  // ahí). window._edPrevOptsH persiste entre llamadas, igual que _edWinW/
+  // _edWinH un poco más abajo; undefined en la primera llamada = sin dato
+  // previo, se trata como "sin cambio" (igual criterio que _windowItselfResized).
+  const _deltaOpts = (window._edPrevOptsH !== undefined) ? (optsH - window._edPrevOptsH) : 0;
+  window._edPrevOptsH = optsH;
+  // v40.94 — rectificación de Alberto: en PC/tablet el paneo de más abajo
+  // (por el panel de propiedades) solo debe ocurrir la PRIMERA vez, al
+  // empezar de verdad a editar (panel cerrado del todo → abierto).
+  // Colapsar, descolapsar o cerrar el panel en PC/tablet NO debe mover la
+  // cámara — "SE queda la camara como este... [el usuario] puede haber
+  // hecho otros zoom o zoom out también. Debe mantenerse." Para eso se
+  // necesita distinguir "cerrado→abierto" (arranque real) de "colapsado→
+  // descolapsado" (mismo 'open' de antes, solo cambia panel-collapsed):
+  // por eso se mira 'open' a solas aquí, ignorando _optsCollapsed.
+  const _panelTrulyOpen = !!(opts && opts.classList.contains('open'));
+  const _panelJustStarted = (window._edPrevPanelTrulyOpen === false) && _panelTrulyOpen === true;
+  window._edPrevPanelTrulyOpen = _panelTrulyOpen;
   if(menu && !edMinimized) menu.style.top = topH + 'px';
   if(opts) opts.style.top = (topH + menuH) + 'px';
   const totalBarsH = topH + menuH + optsH;
@@ -5114,10 +5133,35 @@ function edFitCanvas(resetCamera){
         _savedCam.x += (newW - _prevW) / 2;
         _savedCam.y += (newH - _prevH) / 2;
       } else {
-        // Panel de opciones abriéndose/cerrándose (no cambia el ancho de
-        // ventana, ver arriba) — comportamiento EXISTENTE, sin tocar: ancla
-        // el borde INFERIOR del contenido visible, no el centro.
-        _savedCam.y -= (_prevH - newH); // negativo si crece (panel cierra), positivo si encoge (panel abre)
+        // Cambio de LAYOUT sin resize real de ventana — puede venir del
+        // panel de propiedades (optsH) y/o de otras barras (topH/menuH,
+        // p.ej. ocultar/restaurar cabecera). (_prevH-newH) es el cambio
+        // TOTAL de alto; _deltaOpts (arriba) es la parte de ese cambio que
+        // corresponde solo al panel. Se compensan por separado:
+        //
+        // - Resto de barras (topH/menuH): comportamiento EXISTENTE, sin
+        //   tocar — ancla el borde INFERIOR del contenido visible.
+        //
+        // - Panel de propiedades (optsH): v40.94, petición explícita de
+        //   Alberto, luego rectificada para PC/tablet. edCanvas.style.top
+        //   ya se desplaza exactamente optsH al abrir/cerrar/colapsar (ver
+        //   más abajo), así que NO compensar aquí es lo que hace que el
+        //   CONTENIDO se desplace, en página, esa misma altura — sin tocar
+        //   el zoom en ningún momento. Cuánto de eso se deja sin compensar
+        //   depende del dispositivo (edGetDeviceClass(), ya existente):
+        //   - MÓVIL: no se compensa NUNCA — simétrico, abajo al abrir,
+        //     arriba al cerrar/colapsar, en cualquier transición (ahí sí
+        //     hay riesgo real de que el panel tape la zona de interés).
+        //   - PC/TABLET: no hay ese riesgo, así que solo se deja sin
+        //     compensar la transición "cerrado→abierto" real
+        //     (_panelJustStarted, arriba) — el arranque de la edición.
+        //     Colapsar, descolapsar o cerrar el panel compensan del todo
+        //     (comportamiento EXISTENTE de ancla de borde), de modo que la
+        //     cámara "queda como esté" — incluyendo cualquier zoom/pan
+        //     manual que el usuario haya hecho mientras tanto.
+        const _skipOptsCompensation = (edGetDeviceClass() === 'phone') ? true : _panelJustStarted;
+        const _deltaOptsToSkip = _skipOptsCompensation ? _deltaOpts : 0;
+        _savedCam.y -= (_prevH - newH) - _deltaOptsToSkip;
       }
     }
   }
@@ -7062,24 +7106,34 @@ function _edFocusOnLayer(la, instant) {
   const PC_REF_LINES = 4;
   const naturalRefH = PC_REF_LINES * (la.fontSize || 16) * 1.2 + (la.padding || 0) * 2;
   const _hasEnoughSpace = !_hasVirtualKeyboard || (naturalRefH <= (freeH * MARGIN));
+  // v40.94 — petición explícita de Alberto: al editar/seleccionar CUALQUIER
+  // objeto (abrir su panel de propiedades, o recentrar tras colapsar/
+  // descolapsar — _edRefocusAfterCollapse), la cámara ya NO recalcula zoom
+  // ni recentra sobre el objeto para "hacerlo caber" bajo el panel — eso
+  // ahora lo hace edFitCanvas con un simple paneo (ver ahí), sin tocar el
+  // zoom nunca.
+  //
+  // La decisión de si queda algo por hacer se basa en `instant`, NO en
+  // _isTextyLa — a propósito: los 5 call-sites que pasan instant=true son
+  // SIEMPRE los del seguimiento
+  // de cursor mientras se ESCRIBE en el <textarea> in situ de texto/
+  // bocadillo (input, _ppKbSettle, cambios de teclado/orientación — ver
+  // _edInlineTextEditFor más arriba) — ahí SÍ debe seguir recalculando
+  // posición (windowCy) en cada pulsación para no perder el cursor de
+  // vista, aunque el zoom siga sin tocarse (eso ya era así, v40.25: "el
+  // zoom se decide una sola vez... y a partir de aquí queda bloqueado").
+  // Todos los demás call-sites (primera selección de CUALQUIER objeto —
+  // texto incluido, ya que seleccionar un texto/bocadillo activa su edición
+  // in situ igual que antes — y el recentrado tras colapsar/descolapsar)
+  // pasan instant sin definir: no hay nada más que hacer aquí — edFitCanvas
+  // ya paneó lo necesario por la altura del panel (ver ahí); no re-centrar
+  // ni animar nada.
+  if (!instant) return;
+  // A partir de aquí, instant===true siempre (ver arriba) — seguimiento de
+  // cursor mientras se escribe, comportamiento sin cambios respecto a antes.
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños.
-  const targetZ = (!_isTextyLa || _hasEnoughSpace)
-    ? Math.min(zForW, zForH, 4)
-    : Math.min(zForReading, zForW, 4);
-  const currentlyFitsW = objW    * edCamera.z <= freeW * MARGIN;
-  const currentlyFitsH = capObjH * edCamera.z <= freeH * MARGIN;
-  // Sin teclado virtual: _hasEnoughSpace es siempre true (arriba) y _inheritedTooSmall
-  // siempre false — así que esta rama queda igual que la de "no texty": si ya cabe, no
-  // tocarlo, sin ninguna comparación con zForReading. Con teclado virtual y espacio de
-  // sobra: si el zoom heredado YA es menor que zForReading (posible en horizontal, ver
-  // arriba), no basta con que el objeto "quepa" a ese zoom tan pequeño — se pasa a
-  // targetZ (con espacio de sobra: el ajuste por ancho/alto real, nunca por debajo del
-  // estándar). Sin espacio suficiente (teclado virtual y poco hueco): SIEMPRE el
-  // tamaño estándar — comportamiento de siempre, intacto.
-  const _inheritedTooSmall = _isTextyLa && _hasVirtualKeyboard && edCamera.z < zForReading;
-  const newZ = (!_isTextyLa || _hasEnoughSpace)
-    ? ((!_inheritedTooSmall && currentlyFitsW && currentlyFitsH) ? edCamera.z : Math.max(targetZ, 0.2))
-    : Math.max(targetZ, 0.2);
+  const targetZ = Math.min(zForReading, zForW, 4);
+  const newZ = Math.max(targetZ, 0.2);
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
@@ -24878,6 +24932,14 @@ function edInitDrawBar() {
   let _drag = false, _sx = 0, _sy = 0, _sl = 0, _st = 0, _longTimer = null;
   let _edbDragLocked = false;   // true durante drag: bloquea clicks de botones
   let _edbPid = null;           // pointerId capturado
+  // v40.92: snapshot de edActiveTool==='eraser' tomado en pointerdown de
+  // edb-pen/edb-eraser, ANTES de que ese mismo pointerdown cambie de
+  // herramienta. Petición de Alberto: el primer toque que pasa de trazo a
+  // goma (o de goma a trazo) debe solo cambiar de herramienta, sin abrir el
+  // popup de opciones (tipo de capa / sub-capa a borrar); solo un toque
+  // estando YA en esa herramienta debe abrir el popup. Ver uso en los
+  // handlers 'pointerup' de edb-pen y edb-eraser, más abajo.
+  let _edbPreTapWasEraser = false;
 
   function _edbStartDrag(e) {
     _drag = true;
@@ -25164,6 +25226,8 @@ function edInitDrawBar() {
   // pointerdown solo para cambio inmediato de cursor (sin activar popup)
   $('edb-pen')?.addEventListener('pointerdown', e => {
     e.stopPropagation();
+    // v40.92: capturar ANTES de mutar edActiveTool más abajo — ver declaración de _edbPreTapWasEraser
+    _edbPreTapWasEraser = (edActiveTool === 'eraser');
     // Cambio inmediato de cursor al tocar el botón de dibujo
     if (_edTmp.active === 'watercolor') {
       edFillBrushType='watercolor'; edDrawOpacity=7; edDrawSize=20;
@@ -25180,6 +25244,8 @@ function edInitDrawBar() {
   }, { passive: false });
   $('edb-eraser')?.addEventListener('pointerdown', e => {
     e.stopPropagation();
+    // v40.92: capturar ANTES de mutar edActiveTool más abajo — ver declaración de _edbPreTapWasEraser
+    _edbPreTapWasEraser = (edActiveTool === 'eraser');
     // Al activar el borrador: limpiar el target persistente para que el borrador
     // actúe siempre sobre la capa activa actual (_edTmp.active), no la de antes.
     window._edEraserLayer = null;
@@ -25215,6 +25281,15 @@ function edInitDrawBar() {
       edRenderOptionsPanel('draw');
       _edbSyncTool();
     };
+
+    // v40.92 — petición de Alberto: si este toque viene de la goma (primer
+    // toque para volver a trazo), solo cambiar de herramienta y NO abrir el
+    // popup de tipo de capa. Solo se abre el popup si YA se estaba en
+    // trazo/relleno y se vuelve a tocar el mismo botón.
+    if (_edbPreTapWasEraser) {
+      _activateLastDrawTool();
+      return;
+    }
 
     // Abrir popup — sin activación inmediata de edActiveTool para que el cursor
     // permanezca visible mientras el popup está abierto.
@@ -25288,6 +25363,15 @@ function edInitDrawBar() {
       edRenderOptionsPanel('eraser');
       _edbSyncTool();
     };
+
+    // v40.92 — petición de Alberto: si este toque viene de trazo/relleno
+    // (primer toque para pasar a goma), solo activar la goma y NO abrir el
+    // popup de sub-capa a borrar. Solo se abre el popup si YA se estaba en
+    // goma y se vuelve a tocar el mismo botón.
+    if (!_edbPreTapWasEraser) {
+      _activateEraser();
+      return;
+    }
 
     // Popup del eraser: las 4 sub-capas.
     // IMPORTANTE: las acciones solo cambian window._edEraserLayer (target del borrado),
