@@ -5824,16 +5824,19 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Reset transform → limpiar todo el viewport
     ctx.setTransform(1,0,0,1,0,0);
     ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — más claro para que la cuadrícula sea visible.
-    // v40.47 — mientras se CREA o EDITA un dibujo a mano o vectorial la zona de
-    // trabajo (lo que rodea a la hoja) se pinta BLANCA, y vuelve a su color al hacer
-    // OK (petición de Alberto). Se deduce en cada fotograma del estado real de la
-    // sesión (_edInDrawingSession) en vez de guardar una bandera: hay una docena de
-    // sitios que entran y salen de dibujo (menú, edición de un objeto, barra
-    // flotante, OK del panel, OK de la barra…) y todos acaban dejando la interfaz de
-    // dibujo cerrada. Esta función es el único sitio que pinta ese fondo: las cachés
-    // de arrastre y de trazo la llaman, así que heredan el color solas.
-    ctx.fillStyle = _drawSession ? ED_WORKSPACE_DRAWING : ED_WORKSPACE_NORMAL;
+    // Fondo workspace (toda la pantalla) — SIEMPRE su color normal aquí.
+    // v40.47 pintaba TODA la pantalla blanca mientras se CREA o EDITA un dibujo
+    // a mano o vectorial. v40.95 — corrección de Alberto: eso era engañoso,
+    // porque sugería que se podía dibujar en cualquier parte de esa zona
+    // blanca, cuando en realidad solo se puede dibujar dentro del área de
+    // trabajo fija (ED_CANVAS_W×ED_CANVAS_H — ver su definición arriba, es el
+    // tamaño real del canvas interno de DrawLayer/FillLayer/etc.) que rodea la
+    // hoja. Así que aquí SIEMPRE se pinta el color normal para toda la
+    // pantalla, y más abajo (tras aplicar la cámara, con la hoja ya en curso)
+    // se repinta blanca SOLO esa área realmente dibujable — el resto (fuera
+    // de ED_CANVAS_W×H, solo visible con mucho zoom-out o paneo) se queda con
+    // el azul de siempre, que es lo que corresponde a una zona no dibujable.
+    ctx.fillStyle = ED_WORKSPACE_NORMAL;
     ctx.fillRect(0,0,cw,ch);
   } else {
     // Modo 'after': se pinta encima de contenido ya existente — solo restablecer transform.
@@ -5846,6 +5849,17 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   const page=edPages[edCurrentPage]; if(!page) return false;
 
   if (drawTmpMode !== 'after') {
+    // v40.95 — sesión de dibujo activa: pintar BLANCA solo el área realmente
+    // dibujable (el workspace fijo ED_CANVAS_W×ED_CANVAS_H en el que trabajan
+    // DrawLayer/FillLayer/PencilLayer/WatercolorLayer — su origen (0,0) es
+    // exactamente este mismo origen de coordenadas de mundo, ya con la cámara
+    // aplicada, así que no hace falta ningún desplazamiento). Fuera de ese
+    // rectángulo se deja el azul normal ya pintado arriba — ahí no se puede
+    // dibujar, así que ya no aparenta que se pueda.
+    if (_drawSession) {
+      ctx.fillStyle = ED_WORKSPACE_DRAWING;
+      ctx.fillRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    }
     // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
     // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
     // shadowBlur en cada frame, una de las operaciones más costosas en Android.
