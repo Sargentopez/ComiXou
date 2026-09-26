@@ -23132,6 +23132,14 @@ function edRenderOptionsPanel(mode){
       $('pp-grp-path-speed')?.addEventListener('change', () => { edPushHistory(); });
       $('pp-grp-ok')?.addEventListener('click',()=>{
         edCloseOptionsPanel();
+        // v40.99 — faltaba: a diferencia del resto de cierres de panel (draw,
+        // shape, line), este OK no reencuadraba el canvas en absoluto — se
+        // quedaba con el tamaño/posición de cuando el panel aún estaba
+        // abierto hasta que algo ajeno (p.ej. redimensionar la ventana) lo
+        // corrigiera. edFitCanvas() (sin reset) aplica la misma norma que
+        // draw/shape/line: la cámara se queda como esté, solo se ajusta el
+        // canvas al hueco que deja el panel al cerrarse.
+        edFitCanvas();
         // Restaurar selección del grupo
         const idxs = _edGroupMemberIdxs(gid);
         if(idxs.length>1){
@@ -23517,7 +23525,13 @@ function edRenderOptionsPanel(mode){
         });
         edPushHistory();
       }
-      edCloseOptionsPanel(); _edResetCameraToFit();
+      // v40.99 — unificado con el OK de draw/shape/line: la cámara se queda
+      // como esté (edFitCanvas sin reset), en vez del reencuadre duro de
+      // antes (_edResetCameraToFit, que recentraba y reajustaba el zoom
+      // como el botón de la lupa en cada OK). Nota: este 'pp-ok' nunca
+      // corresponde a texto/bocadillo — ese tipo usa 'op-panel-collapse'
+      // en su lugar (ver el pie de panel más arriba); no toca su código.
+      edCloseOptionsPanel(); edFitCanvas();
     });
     $('pp-td-edit')?.addEventListener('click',()=>{
       const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;

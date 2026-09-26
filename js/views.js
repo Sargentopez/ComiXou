@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.98</footer>
+    <footer class="app-version">v41.00</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
