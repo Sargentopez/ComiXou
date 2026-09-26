@@ -22268,6 +22268,18 @@ function edRenderOptionsPanel(mode){
     // ── Selector de capa destino ──
     // ── Selectores de capa temporal ──
     const _activateTmpLayer = (key, toolActive, brushType, fillType, opacity) => {
+      // v40.98 — petición de Alberto: si la goma estaba activa ANTES de
+      // cambiar de capa aquí, debe seguir activa en la capa NUEVA. La goma
+      // es agnóstica al tipo de capa (ver edStartPaint: "Borrador: mantiene
+      // la capa activa actual") — así que "goma de la capa nueva" es
+      // simplemente reactivarla al final, ya sobre el _edTmp.active recién
+      // asignado más abajo. Si en cambio lo que estaba activo era iluminar/
+      // oscurecer (_edDodgeBurnActive), NO se hereda nada especial para
+      // ese caso: como dodge/burn ya se resetea siempre a continuación y el
+      // resto de esta función deja la capa nueva en modo trazo/relleno
+      // normal, el resultado ya es "se activa el trazo por defecto" sin
+      // código adicional — _wasEraser da false ahí (edActiveTool era 'fill').
+      const _wasEraser = (edActiveTool === 'eraser');
       // Resetear dodge/burn al cambiar a cualquier herramienta desde el panel.
       // Antes faltaba este reset — si el usuario venía de iluminar/oscurecer,
       // _edDodgeBurnActive quedaba true con edActiveTool='draw', lo que hacía
@@ -22297,7 +22309,15 @@ function edRenderOptionsPanel(mode){
         _edSyncFillCursor();
         edCanvas.className = 'tool-fill' + (edFillBrushType==='watercolor'?' tool-watercolor':'');
       }
-      edRenderOptionsPanel('draw');
+      if(_wasEraser){
+        // Restaurar la goma, ya sobre la capa nueva (_edTmp.active de arriba)
+        // — mismo criterio que op-tool-eraser (opacidad 100%, tool-eraser).
+        edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
+        edDrawOpacity = 100;
+        edRenderOptionsPanel('eraser');
+      } else {
+        edRenderOptionsPanel('draw');
+      }
     };
     $('op-tmp-pen')?.addEventListener('click',()=>{
       _activateTmpLayer('pen','draw','pen');
@@ -28152,6 +28172,16 @@ function edRenderPage(page, withText){
   const _textTypes = new Set(['text', 'bubble']);
   page.layers.forEach(l => {
     if (!l || _textTypes.has(l.type)) return;
+    // v40.96 — petición de Alberto: las capas ocultas (l.hidden, ver el ojo
+    // del panel de capas) no deben aparecer en la miniatura de índice/Mis
+    // obras — igual que ya hace _pgRenderThumbLive (panel "Hojas") y que ya
+    // respeta el lienzo normal del editor (_edRenderFrame). Para draw/stroke
+    // con fill/pencil/watercolor vinculados no hace falta comprobarlo aparte
+    // en cada uno: el toggle de grupo (editor-layers.js) siempre propaga el
+    // mismo hidden a la capa madre Y a sus vinculadas, y estas solo se
+    // dibujan más abajo DENTRO de la rama 'draw'/'stroke' de esta misma capa
+    // — este único return ya las excluye a todas si la capa madre está oculta.
+    if (l.hidden) return;
     if (l.type === 'image') { l.draw(ctx, full); return; }
     if (l.type === 'gif')   { l.draw(ctx); return; }
     if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // dibujadas con stroke/draw vinculado
@@ -28204,7 +28234,8 @@ function edRenderPage(page, withText){
   if (withText) {
     ctx.save();
     ctx.globalAlpha = page.textLayerOpacity ?? 1;
-    page.layers.forEach(l => { if (l && _textTypes.has(l.type)) l.draw(ctx, full); });
+    // v40.96 — mismo criterio que arriba: un texto/bocadillo oculto tampoco se hornea en la miniatura.
+    page.layers.forEach(l => { if (l && _textTypes.has(l.type) && !l.hidden) l.draw(ctx, full); });
     ctx.restore();
   }
   // Recortar zona de la página del canvas de trabajo
@@ -34671,6 +34702,42 @@ function EditorView_init(){
         e.preventDefault(); edDeleteSelected();
       }
       return;
+    }
+    // Flechas (PC): mover la CÁMARA durante edición de dibujo a mano o
+    // vectorial (petición de Alberto, v40.97). Mientras el panel de
+    // propiedades está abierto en modo 'draw' (a mano: draw/eraser/fill) o
+    // 'shape'/'line' (vectorial), el bloque de "mover objeto seleccionado"
+    // de aquí abajo NO actúa porque exige el panel CERRADO (_panelOpen) — así
+    // que hasta ahora las flechas no hacían nada en absoluto en este caso, ni
+    // siquiera con un objeto seleccionado (el propio que se está editando).
+    // Arrow = 40px pantalla | Shift+Arrow = 200px pantalla — mismo criterio
+    // de paso variable con Shift que el resto de atajos de flecha de este
+    // archivo, aplicado a paneo en vez de a nudge de objeto. edCamera.x/y ya
+    // están en px de pantalla (sin normalizar), así que no hace falta
+    // convertir con edPageW/edPageH/zoom como sí hace el nudge de abajo.
+    // Mismo signo que el paneo por rueda/trackpad de más arriba en este
+    // archivo (edCamera.x -= e.deltaX / edCamera.y -= e.deltaY): flecha
+    // derecha/abajo = cámara avanza hacia la derecha/abajo del área de
+    // trabajo, el contenido se desplaza visualmente a la izquierda/arriba —
+    // mismo helper de redibujado por rAF que ese paneo continuo (pensado
+    // exactamente para gestos de cámara repetidos, como la repetición de
+    // tecla al mantenerla pulsada), no edRedraw() directo. Ver también
+    // Ayuda ▾ Atajos de teclado.
+    if(!window._edIsTouch && !ctrl &&
+       (e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight')){
+      const _peP = $('edOptionsPanel');
+      const _peMode = _peP?.dataset.mode || '';
+      if(_peP && _peP.classList.contains('open') && ['draw','shape','line'].includes(_peMode)){
+        e.preventDefault();
+        const _peStep = e.shiftKey ? 200 : 40; // px pantalla
+        if(e.key==='ArrowLeft')  edCamera.x += _peStep;
+        if(e.key==='ArrowRight') edCamera.x -= _peStep;
+        if(e.key==='ArrowUp')    edCamera.y += _peStep;
+        if(e.key==='ArrowDown')  edCamera.y -= _peStep;
+        _edRedrawCameraThrottled();
+        _edScrollbarsUpdate();
+        return;
+      }
     }
     // Flechas (PC): mover objeto(s) seleccionado(s) — estándar Figma/Illustrator/Photoshop
     // Arrow = 1px pantalla | Shift+Arrow = 10px pantalla

@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v40.95</footer>
+    <footer class="app-version">v40.98</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -1031,6 +1031,8 @@ Router.register('editor', {
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_zoomIn">Zoom acercar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd data-i18n="sc_wheelUp">Rueda ↑</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_zoomOut">Zoom alejar</span><span class="sc-keys"><kbd>Ctrl</kbd><kbd data-i18n="sc_wheelDown">Rueda ↓</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_panCanvas">Desplazar canvas</span><span class="sc-keys"><kbd data-i18n="sc_wheel">Rueda</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="sc_panDrawArrows">Mover cámara al editar dibujo/forma</span><span class="sc-keys"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></span></div>
+          <div class="sc-row"><span class="sc-desc" data-i18n="sc_panDrawArrowsFast">Mover cámara más rápido al editar dibujo/forma</span><span class="sc-keys"><kbd>Shift</kbd><kbd>↑↓←→</kbd></span></div>
           <div class="sc-row"><span class="sc-desc" data-i18n="sc_switchPageNoSel">Pasar de hoja (sin nada seleccionado)</span><span class="sc-keys"><kbd>←</kbd><kbd>→</kbd></span></div>
 
           <div class="sc-section" data-i18n="sc_gcpSection">Editor de animaciones (GCP)</div>
