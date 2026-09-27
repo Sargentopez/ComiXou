@@ -812,11 +812,21 @@ const SUPABASE_KEY = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 // El escalado para ocupar la pantalla lo hace CSS (canvas.style.width/height)
 const ED_PAGE_W = 360;
 const ED_PAGE_H = 780;
-// El workspace del editor es 5×ancho × 3×alto del panel vertical
-// Necesario para reproducir el tamaño de las burbujas de cola "thought"
-const ED_CANVAS_MIN = Math.min(ED_PAGE_W * 5, ED_PAGE_H * 3); // 1800
-const ED_CANVAS_W = ED_PAGE_W * 5; // 1800 - workspace completo
-const ED_CANVAS_H = ED_PAGE_H * 3; // 2340 - workspace completo
+// El workspace del editor es 7.5×ancho × 3×alto del panel vertical
+// v41.02 — ancho ampliado +50% (era ED_PAGE_W*5=1800); debe coincidir siempre
+// con ED_CANVAS_W de js/editor.js (misma cifra, definida por separado porque
+// reader/reader.js es una implementación paralela — ver codebase-invariants).
+const ED_CANVAS_W = ED_PAGE_W * 7.5; // 2700 - workspace completo
+const ED_CANVAS_H = ED_PAGE_H * 3;   // 2340 - workspace completo, sin cambios
+// Referencia de tamaño para la cola de viñetas "thought" SIN bitmap horneado
+// (obras antiguas sin renderDataUrl — ver el fallback vectorial en _drawBubble
+// más abajo). Antes de v41.02 esta referencia SE CALCULABA como
+// Math.min(ED_CANVAS_W, ED_CANVAS_H) y por pura coincidencia daba 1800 (el
+// mínimo lo marcaba el ancho). Al ampliar el ancho, ese mínimo pasaría a
+// marcarlo el alto (2340) y la cola de viñetas antiguas se vería un 30% más
+// grande de un día para otro sin que la obra haya cambiado. Se congela aquí a
+// su valor histórico — NO recalcular a partir de ED_CANVAS_W/ED_CANVAS_H.
+const ED_TAIL_LEGACY_REF = 1800;
 
 // ── ESTADO ──────────────────────────────────────────────────
 // Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
@@ -3888,8 +3898,9 @@ function _drawBubble(ctx, t, pw, ph, alpha) {
     });
     if (maxDist === 0) maxDist = Math.min(w,h)*0.4;
     ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0,0,maxDist,0,Math.PI*2); ctx.fill();
-    // Cola de pensamiento: burbujas pequeñas — misma referencia que el editor (workspace completo)
-    const canvasSize = ED_CANVAS_MIN * scale;
+    // Cola de pensamiento: burbujas pequeñas — tamaño histórico fijo (ver
+    // ED_TAIL_LEGACY_REF arriba), independiente del ancho actual del workspace.
+    const canvasSize = ED_TAIL_LEGACY_REF * scale;
     const thoughtTailEnd = (tailEnds && tailEnds[0]) || {x:-0.4, y:0.6};
     [0.09,0.055,0.03].forEach((r, i) => {
       const f = 1 - i * 0.3;

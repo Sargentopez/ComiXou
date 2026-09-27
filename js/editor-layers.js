@@ -665,7 +665,7 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
         }
         ctx.drawImage(l._canvas, dx, dy, dw, dh);
       } else if (l.type==='shape'||l.type==='line') {
-        const ED_W = typeof ED_CANVAS_W!=='undefined'?ED_CANVAS_W:1800;
+        const ED_W = typeof ED_CANVAS_W!=='undefined'?ED_CANVAS_W:2700; // v41.02: era 1800
         const ED_H = typeof ED_CANVAS_H!=='undefined'?ED_CANVAS_H:2340;
         const aux = document.createElement('canvas');
         aux.width=ED_W; aux.height=ED_H;
@@ -2072,7 +2072,7 @@ function _lyDrawShapeThumb(canvas, la) {
 
   // Usar el render real (la.draw) en un canvas workspace auxiliar para ambos tipos,
   // igual que con LineLayer — garantiza fidelidad exacta con cornerRadii y V/C
-  const ED_W = typeof ED_CANVAS_W !== 'undefined' ? ED_CANVAS_W : 1800;
+  const ED_W = typeof ED_CANVAS_W !== 'undefined' ? ED_CANVAS_W : 2700; // v41.02: era 1800
   const ED_H = typeof ED_CANVAS_H !== 'undefined' ? ED_CANVAS_H : 2340;
   const pw = typeof edPageW === 'function' ? edPageW() : 360;
   const ph = typeof edPageH === 'function' ? edPageH() : 780;

@@ -1574,9 +1574,16 @@ let edMultiBbox = null;
 // Ratio 6:13 (≈2.167) cabe sin corte en OPPO A38 (720×1612, útil ~720×1588)
 const ED_PAGE_W  = 360;   // ancho del lienzo en orientación vertical
 const ED_PAGE_H  = 780;   // alto  del lienzo en orientación vertical (ratio 6:13)
-// ── Canvas de trabajo: 5× ancho y 3× alto del lienzo vertical ──
-const ED_CANVAS_W = ED_PAGE_W * 5;  // 1800
-const ED_CANVAS_H = ED_PAGE_H * 3;  // 2340
+// ── Canvas de trabajo: 7.5× ancho y 3× alto del lienzo vertical ──
+// v41.02 — ancho ampliado +50% a petición de Alberto (era ED_PAGE_W*5=1800).
+// El lienzo (ED_PAGE_W/H) y el resto de la app no cambian: edMarginX/edMarginY
+// (justo debajo) recentran el lienzo dentro de este workspace más ancho, y todo
+// el contenido se guarda como fracción del lienzo — por eso las obras ya
+// creadas se siguen viendo exactamente igual, solo con más margen alrededor.
+// Ver codebase-invariants para el resto de sitios que dependían de esta cifra
+// (fallbacks de editor-layers.js, referencia de cola de viñeta en reader.js).
+const ED_CANVAS_W = ED_PAGE_W * 7.5;  // 2700
+const ED_CANVAS_H = ED_PAGE_H * 3;    // 2340 (sin cambios — solo se amplía el ancho)
 
 const $ = id => document.getElementById(id);
 
@@ -8747,7 +8754,7 @@ function _edOnionRenderPage(page) {
 //
 // El render en sí (_edOnionRenderPage) se difiere con requestAnimationFrame
 // en vez de ejecutarse aquí mismo — desde que onion skin cubre el área de
-// trabajo completa (1800×2340, no solo la página) es demasiado costoso para
+// trabajo completa (2700×2340, no solo la página) es demasiado costoso para
 // hacerlo síncrono en mitad de un cambio de hoja real: edLoadPage() llama a
 // edRedraw()→_edRenderFrame()→_edOnionSkinEnsure() de forma SÍNCRONA, así
 // que sin diferir esto, borrar una hoja (edDeletePage → edPages.splice →
@@ -9491,7 +9498,7 @@ function _edDuplicateGroup(gid) {
       _processedUids.add(_uid);
       const _npid = _edGenUid();
       // Clonar stroke
-      const slCopy = edDeserLayer(edSerLayer(la));
+      const slCopy = edDeserLayer(edSerLayer(la, true));
       if (!slCopy) return;
       slCopy.groupId = newGid;
       slCopy.x += 0.03; slCopy.y += 0.03;
@@ -9527,7 +9534,7 @@ function _edDuplicateGroup(gid) {
       copies.push(slCopy);
     } else if (la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor') {
       // Otros tipos sin sub-capas (image, shape, line, text, bubble)
-      const copy = edDeserLayer(edSerLayer(la));
+      const copy = edDeserLayer(edSerLayer(la, true));
       if (copy) {
         copy.groupId = newGid; copy.x += 0.03; copy.y += 0.03;
         delete copy._fusionId;
@@ -9619,7 +9626,7 @@ function edDuplicateSelected(){
   const _pencilOrig  = _uidOrig ? edLayers.find(l=>l.type==='pencil'     && l._drawLayerId===_uidOrig) : null;
   const _wcOrig      = _uidOrig ? edLayers.find(l=>l.type==='watercolor' && l._drawLayerId===_uidOrig) : null;
   // Serializar y deserializar la capa principal
-  const serialized = edSerLayer(la);
+  const serialized = edSerLayer(la, true);
   if(!serialized) return;
   const copy = edDeserLayer(serialized, edOrientation);
   if(!copy) return;
@@ -9776,10 +9783,10 @@ function _edBuildClipboardPayload(){
     if(_uid){
       ['fill','watercolor','pencil'].forEach(t => {
         const sub = edLayers.find(l => l.type===t && l._drawLayerId===_uid);
-        if(sub){ const s = edSerLayer(sub); if(s) items.push(s); }
+        if(sub){ const s = edSerLayer(sub, true); if(s) items.push(s); }
       });
     }
-    const ser = edSerLayer(la); if(ser) items.push(ser);
+    const ser = edSerLayer(la, true); if(ser) items.push(ser);
   });
   if(!items.length) return null;
 
@@ -29018,7 +29025,16 @@ function _edCloneLinePoint(p){
   return np;
 }
 
-function edSerLayer(l){
+// v40.99→v41 — skipCompress=true: para clonados EN MEMORIA dentro de la misma
+// sesión (duplicar, portapapeles copiar/pegar, reflejar/duplicar en GCP) —
+// nunca para un guardado real a disco/nube. Bug reportado por Alberto: la
+// copia (y el duplicado) de una imagen perdía calidad porque _edCompressImageSrc
+// (pensada para "ahorrar espacio en localStorage" al GUARDAR) se aplicaba
+// también al clonar en memoria, donde no hace ninguna falta — cada guardado
+// real sigue comprimiendo por su cuenta, sin cambios, así que el ahorro de
+// espacio en disco no se pierde; solo se evita re-comprimir de más antes de
+// que el usuario llegue a guardar nada.
+function edSerLayer(l, skipCompress){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
     const _f={type:'fill', dataUrl:l.toDataUrlFull(), _isFull:true,
@@ -29044,7 +29060,8 @@ function edSerLayer(l){
     return _g;
   }
   if(l.type==='image'){
-    const compressedSrc = _edCompressImageSrc(l.src || (l.img ? l.img.src : ''));
+    const _rawSrc = l.src || (l.img ? l.img.src : '');
+    const compressedSrc = skipCompress ? _rawSrc : _edCompressImageSrc(_rawSrc);
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l._blendMode) _r._blendMode=l._blendMode;
@@ -31827,7 +31844,7 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
-// Canvas de trabajo reutilizable para edUpdateViewer — evita crear 1800x2340 en cada frame.
+// Canvas de trabajo reutilizable para edUpdateViewer — evita crear 2700x2340 en cada frame.
 // Se crea una sola vez y se reutiliza mientras el visor esté abierto (crítico en Android).
 let _edViewerFullCanvas = null;
 let _edViewerFullCtx    = null;
@@ -32107,7 +32124,7 @@ function edOpenCamera(onCapture) {
       _edCameraStream.getTracks().forEach(t => t.stop());
       _edCameraStream = null;
     }
-    // Resolución ideal = doble del lienzo (1800×2340 → ×2 = 3600×4680)
+    // Resolución ideal = doble del lienzo (2700×2340 → ×2 = 5400×4680)
     navigator.mediaDevices.getUserMedia({
       video: { facingMode: facing, width: { ideal: ED_CANVAS_W * 2 }, height: { ideal: ED_CANVAS_H * 2 } },
       audio: false
@@ -38716,7 +38733,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
 
   // Reflejar — crea objeto nuevo reflejado, el original no cambia
   document.getElementById('gcppp-mirror')?.addEventListener('click', () => {
-    const newLa = edDeserLayer(edSerLayer(la), edOrientation);
+    const newLa = edDeserLayer(edSerLayer(la, true), edOrientation);
     if (!newLa) return;
     newLa._gcpName = (la._gcpName || '') + ' reflejo';
     // Aplicar reflejo sobre la copia según su tipo
@@ -38847,7 +38864,7 @@ function _gcpDuplicateSelected(laIdx) {
   const idx = laIdx !== undefined ? laIdx : window._gcpSelIdx;
   const la = window._gcpLayers[idx];
   if (!la) return;
-  const newLa = edDeserLayer(edSerLayer(la), edOrientation);
+  const newLa = edDeserLayer(edSerLayer(la, true), edOrientation);
   if (!newLa) return;
   newLa.x += 0.03; newLa.y += 0.03;
   newLa._gcpName = (la._gcpName || '') + ' copia';
