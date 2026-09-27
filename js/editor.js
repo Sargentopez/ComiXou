@@ -9517,7 +9517,13 @@ function _edDuplicateGroup(gid) {
       _processedUids.add(_uid);
       const _npid = _edGenUid();
       // Clonar stroke
-      const slCopy = edDeserLayer(edSerLayer(la, true));
+      // v41.06 — BUGFIX (hallazgo colateral durante la auditoría de integridad
+      // de capas pedida por Alberto): faltaba pasar edOrientation, a
+      // diferencia de edDuplicateSelected (que sí lo hace). edDeserLayer sin
+      // este segundo argumento cae a 'vertical' por defecto — en una página
+      // en horizontal, el canvas del stroke duplicado se reconstruía con las
+      // dimensiones de página cambiadas, deformando/estirando el trazo.
+      const slCopy = edDeserLayer(edSerLayer(la, true), edOrientation);
       if (!slCopy) return;
       slCopy.groupId = newGid;
       slCopy.x += 0.03; slCopy.y += 0.03;
@@ -9553,7 +9559,9 @@ function _edDuplicateGroup(gid) {
       copies.push(slCopy);
     } else if (la.type !== 'fill' && la.type !== 'pencil' && la.type !== 'watercolor') {
       // Otros tipos sin sub-capas (image, shape, line, text, bubble)
-      const copy = edDeserLayer(edSerLayer(la, true));
+      // v41.06 — BUGFIX: mismo fallo de edOrientation ausente que en el
+      // clonado del stroke, justo arriba — ver comentario allí.
+      const copy = edDeserLayer(edSerLayer(la, true), edOrientation);
       if (copy) {
         copy.groupId = newGid; copy.x += 0.03; copy.y += 0.03;
         delete copy._fusionId;
@@ -21580,17 +21588,35 @@ function _edSyncToolColor(){
     _edToolColor[t] = (ED_TOOL_COLOR_DEFAULTS[t] !== undefined) ? ED_TOOL_COLOR_DEFAULTS[t] : edDrawColor;
   }
   edDrawColor = _edToolColor[t];
-  // Que el resaltado de la paleta corresponda al color cargado (si está en ella;
-  // sanguina no está: su casilla propia se resalta por el valor del color).
+  // edSelectedPaletteIdx ya NO decide qué muestra se marca como "seleccionada"
+  // (v41.05 — ver _edUpdatePaletteDots y el punto equivalente del template del
+  // panel: el aro ahora compara por VALOR, edColorPalette[idx]===edDrawColor,
+  // así que si el color cargado no está en la paleta, correctamente NO se
+  // resalta ninguna muestra, en vez de dejar marcada la de la herramienta
+  // anterior). Aquí solo se mantiene como "slot objetivo" del botón de color
+  // personalizado (qué casilla sobrescribe al elegir un color con el cuentagotas
+  // arcoíris) cuando el color cargado SÍ coincide con alguna muestra existente.
   const i = edColorPalette.indexOf(edDrawColor);
   if (i >= 0) edSelectedPaletteIdx = i;
 }
 function _edUpdatePaletteDots(){
+  // v41.05 — BUGFIX Alberto: "en la muestra se veía el color negro, pero al
+  // aplicar el bote de pintura ha pintado naranja". El aro de "seleccionado"
+  // comparaba por ÍNDICE (edSelectedPaletteIdx), que puede quedar obsoleto:
+  // _edSyncToolColor() solo lo actualiza `if (i>=0)` (cuando edDrawColor SÍ
+  // está en edColorPalette) — si la herramienta activa usa un color que no
+  // está en la paleta (p.ej. lápiz → sanguina #7A2E20 por defecto, o
+  // cualquier color personalizado que no se haya guardado en un slot),
+  // edSelectedPaletteIdx se queda apuntando al slot de la herramienta
+  // anterior (p.ej. negro), que se marca como "seleccionado" aunque NO sea
+  // edDrawColor. Comparar por VALOR (igual que ya hacía correctamente la
+  // paleta de la barra flotante en _edbBuildPalette, c===edDrawColor) hace
+  // que el aro sea siempre fiel al color que realmente se va a aplicar.
   document.querySelectorAll('.op-pal-dot').forEach(d=>{
     const idx=parseInt(d.dataset.colidx);
     d.style.background=edColorPalette[idx];
-    d.style.borderColor = idx === edSelectedPaletteIdx ? 'var(--black)' : 'var(--gray-300)';
-    d.style.borderWidth = idx === edSelectedPaletteIdx ? '3px' : '2px';
+    d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
+    d.style.borderWidth = edColorPalette[idx] === edDrawColor ? '3px' : '2px';
     // Slots 0 y 1 son fijos (negro/blanco) — cursor indicativo
     if(idx <= 1){
       d.style.cursor='default';
@@ -22229,7 +22255,7 @@ function edRenderOptionsPanel(mode){
     </div>
 
   </div>
-  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="${I18n.t('ed_customColorTitle')}">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => '<button class="op-pal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:'+(i===edSelectedPaletteIdx?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+c+'"></button>'+(i===0&&_edTmp.active==='pencil'?'<button id="op-pencil-sanguina" style="width:22px;height:22px;border-radius:50%;background:#7A2E20;border:'+(edDrawColor==='#7A2E20'?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+I18n.t('op_darkSanguineTitle')+'"></button>':'')).join('')}\n    ${window._edIsTouch && !_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="38" height="14" style="image-rendering:pixelated;vertical-align:middle"/></button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_leftHanded')}</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltLeft')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_rightHanded')}</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltRight')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch ? `
+  <!-- SEP H -->\n  <div style="height:1px;background:var(--gray-300);width:100%"></div>\n  <!-- FILA PALETA -->\n  ${!isEr ? `<div id="op-color-palette" style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;flex-wrap:wrap">\n    <div style="position:relative;display:flex;align-items:center;flex-shrink:0"><button id="op-custom-color-btn" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;position:relative" title="${I18n.t('ed_customColorTitle')}">🎨<input type="color" id="op-dcolor" value="${edDrawColor}" style="width:0;height:0;opacity:0;position:absolute;pointer-events:none"></button></div>\n    <button id="op-eyedrop-btn" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:0.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>\n    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>\n    ${edColorPalette.map((c,i) => '<button class="op-pal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:'+(c===edDrawColor?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+c+'"></button>'+(i===0&&_edTmp.active==='pencil'?'<button id="op-pencil-sanguina" style="width:22px;height:22px;border-radius:50%;background:#7A2E20;border:'+(edDrawColor==='#7A2E20'?'3px solid var(--black)':'2px solid var(--gray-300)')+';cursor:pointer;flex-shrink:0;padding:0" title="'+I18n.t('op_darkSanguineTitle')+'"></button>':'')).join('')}\n    ${window._edIsTouch && !_actIsBucket ? `<div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div><button id="op-offset-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;cursor:pointer;white-space:nowrap;background:${_edCursorOffset?'var(--black)':'transparent'};color:${_edCursorOffset?'var(--white)':'var(--gray-700)'}"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIgdmlld0JveD0iMCAwIDkwIDM0Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFGb0FBQUFpQ0FZQUFBRGYyYzZ1QUFBUDBVbEVRVlI0QWV5YUNYaE8xN3JIMzcyL1JDWkR6U2ROcFpXMjVxS1VLcHFXVzl4YlhPWDB0Tm9ldDZhVGxCcVBLY1FVQkEyQ2tsSVVOVk96b0VKRmhncmF0SlRUUXgyVUkyaU1TU1F5ZmQrK3YvY3ozRVM1RWlYNm5PZmtlZi9mR3ZZYS8rdGQ2MzMzMmpIbDMzK0ZZc0FTc1lIUzRDWFFCdnducUFMY2dlMXVqVDFNb2wzbzFBT1VBbVZCT1ZDMlZLbFNwZm5UdkJLa3ZZQ1djU04wQlRyUWh6a211cmcvZ1VSWFVJWGFFZUJINHJ2dElwdkFWdUtIeWRzUFJoS3ZCblF1SlA5UEh1U2tsTmpIeXBZdDYxT3NXTEZxSGg0ZWJSOS8vUEdSMWF0WGovVHo4enZtNit1YlZMVnExWjhxVmFyMHpSTlBQTEc5WnMyYXl5dFhyaHp1NCtNVFhMRml4UjdVNjFpeVpNbFdycTZ1RFJpZW43dTdlMlhnUzc1UDhlTEZ5NU5YRXJpREJ6bG1tcnUzUUZ3eFNuVUFVYmtpZ1JkRi92QVBFcnRCTFBoUnhQaEZwR3FXeUVnUldRcmVvSTZPbCtoMSthMkRWbkxMbFNoUm9wck5abXNKZ1NHUSttWHQyclcvZitXVlY1WjM3ZHExLy9qeDQ1c3VYNzY4MUpvMWE0b3RXYktrelB6NTg1K2VQbjE2Z3pGanhyUU9EZzRPNk4yNzkrQk9uVHFGdG0zYk5vSTZLeHMxYXJTcmJ0MjYvNmhWcTlhaE9uWHE3SG4yMldlM1ZLbFNaVGFMTklqRmVxdDgrZkpOMlJIUGVYdDdWK2VaWDQwYU5mN0Fnbm95SFFNOExHbEl3ek96Ulo3OGxzaGZEVVA4YmFhOENsNERUVUVYOGpid0xGbWtIbG8raGVnZklWdDNMRkdSK3lGYXlhM2c1ZVZWQjNKYlAvbmtrME1oWkV2ejVzMDNCQVlHZHA4MGFWS3R6WnMzdTIvZHV0VnQ3Tml4Ym0rODhZWTBiTmhRWG5qaEJTY2FOR2dnelpvMWt3NGRPa2kzYnQxa3lKQWhydFR4WExCZ1FZbU5HemNXajQyTmRVOU1URFMyYmR2bXljSjRUNTA2dGZidzRjUGI5K3paTStqTk45Lzg1TFhYWHR2aTcrLy9kZVBHamJmVnIxOS9FWXM2Z1lWNEJ6UjQ1cGxuOUFoeVR1eEIvVUNXYW5NSW1sd3VrVVo3bUlZc0FSQks2cnFrRW13anJ5ZUVUekJFVG9oVWNvZ01KcnN1OWZVNExCVFJwYW40UEdpSE52V3ZWNi9lNHRkZmYzMWw5KzdkZTB5Y09QR3BxS2dvRndqeFJDdWxRb1VLRkx0L01VMVR5cFFwSXhBbmFMaTBiOS9lNk5Pbmo4dVVLVk84bGkxYjVyVjY5ZW9TczJmUHJqUnMyTEFtN0pyTzdkcTErNWlGWE13eDAwWkVsQmlDL01LRURlQUMzSUFIS0E1S0FUVnM1UWdyQUcvd0JQQUZsY0hUdFBJS2FINlZuekRJL0FITkpYcEh1VXp1SE1hK0VyS3ZpRlFqK1JkUUN0eVRhTlg0aWhSc2hoRUxSQnNubzZFTG1Gd2Z0bjBOTk02TjBLTkpreVkwVGFraUVoY1hGeWxYcnB3ODk5eHowcUpGQytuWHI1OG5xT0ppbXBQMnVycDJoYUIzYjBDMzc5c2FaMmlkUUdmUURRU0FIcUFYNkF2K0NnYUJJQkFNOUt3TklSd0hRcWd2U3ZUTy80ZGt5amtsazkrbGxOTXpISzMrTDVMbHdGMkp0cm03dS90aTFOcFhxRkJoQU50MUd1UUdCd1VGdmZqcHA1OTZjcjU2dG1yVnlvYnhFc01vVW81MXpIY0VTaUM1MmRtVnkrVG16b0lZTlVpS3p5bXNXSHdqbkV1b1hzTTB3akNnUkk0aUhBb0dnajdnQTZDTG9RdlRrZmhMUUpSQUpWdmo5OElST0RsT29Sd1IzZHFWaVA2S2FGZklyWVZ4Nnd6Qkl6QlFFM3YxNnRWNzFLaFIxVUpDUW9wenJucVJiOU90clpWL1R6aDY5S2k0V0ZaYW1zZ1d4clVHZkFFaXdWcXdITndrZXo3eGVXQU9tQTArQVRQQngwQVhJSnh3TXRDRm1FZzRBNGdYUHo0V1MwaFlFRWxGL3pDS1dyUzQvcGo2QTlUQU5lVjRHTXgySE5tbFM1ZXhHS25PUTRjT3JUeGd3QUQzcGsyYkZvTjhpajFZc1JqNGdmMzdKUzR1VHZidDJ5Y0hEaHlRdzRjUHkrWExsMFdmWldkbnk3VnIxK1RxMWF1U2twSWlGeTllbE9Ua1pEbDc5cXljUG4xYVRwNDhLVXB3VEV5TXpKdzVNKzFhV3RxbktaWVZ6QnhWUTM4cmdtNjJRM2hRMldwWFFKNjFyQTlsTVJiWVVEbXJyQ25SM2hpUlVMUVZXelo4eU9qUm8vKzdmLy8rM25nUUxsaDFtNmVuZWs1YTlNRWpKeWRIRXIvN1RyWnMyaVNyVjYyU0pZc1d5Ynk1YzYySW1UUHRJMGVNc0JpSGZlREFnVGtzZWhhTGZtM0VpQkZYMlYwcElTRWhsL0Jvem84Yk4rNWNXRmpZaVlpSWlLOGlJeU5ERHljbGhUY1RPUUF4UjhFeGNBS2NCUDhFU2VBc1NBWVh3Q1Z3QmFqeVhTWE1BSmtnRytRQ3FCSWhUQmVSQ0Zod2RFSXgvQjNPYkxMdUx2NlVxOHBqdEhjL3dUK0JtQmlXR3MvWHJkc2RvL1pxUUVCQWlUWnQycmc5OWRSVGd1dW16eDhxOUFqQ2tBcDlpditMTDByamV2V2tVWjA2OHJTUGo1RjE5V3JLd3Zueko4eWJONjh6cmwrWGhRc1hkbG04ZUhHM0pVdVdkRis1Y3VWZlZxMWFGWUQzRVloLy9tRjBkUFNRNDhlUHo4ckl5RkR0dVRjVGhaL1ZPcHZJaWpyVUd3bUpmd1FsaWQ4dUVDdk5lUFloaStFandpa21uMUhtQ2hEbWFwYXZXYU9HQys2YW14bzN6U3dxc01oU3RXcFZlYWxKRTJtRXIvMWkvZnJTdUdGRHc3OXhZK1B0OXUzZFB1amE5WEdPajJVY0g4dkJTbzZRVldEMWxTdFgxb0wxWUNQSHpOWUxGeTZvaTZ2dTdNTWErbmthSG9lVC9sa1RrWXh4RUJuaGNFZ0FZUXVJVlhJN0V2K0l2SThJL1VWU3VWZFlRSjNOSUJNNGlmYXFXTDY4cVlsSEJkTm1jNTdKTi90bnV4cGxIbnZNdlU3dDJpK1M1N1RhaEk5TUdJL3VraU1NWUN6bmJtOHVQR0xmdENSbk9DUlBnOWdaSUpTNCtwWFBpM3pQTWFQdTRWVEtuN2xSVjB5TWptZVowcVZOaC8yR2plUnBVUXR1bWRnNXIvUDI2MkRnYUN3N1Z2UitJKytqUnhLSE1BYzRTZWZMUVRjSWI4ZnhNSXkza2xrUXUyNjdJYWVHRzNKb3ZBZ2k2dG1vYmJoRnFoTHQ1ZUhwYVRwUWV4b29jbEdDMHk5ZGt0djd6OHJNZEVUdDJzWDlqZndzdjZNL3lMNEc5SDFrTzhPYUNZWWZGT2tkWXBpUjh3ekRaN1RJWXp6UEFib0w1T2FmbnRGZW5oNGVwaU5YUFpHYjJVVVRabVZreU9Velp5UWpKVVU0TzI1MW1wdWJhKzNldCs5OGZFSkNDSm40L2Z6K3pnUWkxVE5KSTd6VVZpUXB5WEJFY1JpZnRreFRYOW05YngrdWFyUW5iNEdtVmNRYXJVZlZ3czgra3hadDIwcmJqaDJsNTRBQk1qNDhYRWFNSDIvdk8zVG8yYUNSSTkvRGQvN3E5Z0gvYnROMitSNWY4S2dsMXN1TThWZDJSWTJndTd1Ym0wMG5Ub0VpRTlObWsvYmM3SDArZTdhTURRNlcxcTFhU2RuU3BXWDNuajNHK3NqSUpoZFRVbll5R0s0TCtDMjhvR2pPdDk0cWJObkJoczNZbFJmazZSbUt5KzA4LzQzQ04zL0hHcWNzdTZWamRxWDk1cFFvQTI2SjZXS3plZUl6RzQ1SFlBeExsQ29sRmJucHExT3JsclJ1MlZJQ3UzU1JoWFBtR0x4QVRibzF3c0pIUEtqU3hUQ01OWVpwN0VmRHhvZ2w5Y0h6TjFDUHZMZDVGZ241VVdLVExwVDNBYXAwQkw5SmpsRTcyVEtzaG9SbHdTMHhiUzR1N3E3Y2hqMEtvZzIwV296OEN1WHI0eVBwNmVtNi9aU3dXd010UUVTSktvY2VoMEZpaEJpaWJaeUExSTh0aC9WbjBQSUcrTTVuQlVINlBsRERzSXpKYU9CWTJxOEYxTXNodUcvNUcvM3k5bW5Vb3dXOVZpYTRMdlJodXJ1NHVzb2pJZm8ya25WSXVkZHRoUnJBYTVvdUJHb3l5Ym1HR084UkhvVFVYcUNaT0VRdjREZlF6dDRiaUNWdkJtN3RuOUM4dnM2eVlyMXJHSVlhM2hjbzg2dnZmZVFWVk02eGNGaDIwUmZIZk8yWWhtRzRjWHlJbzRpOURpWXEyWGdkZVJkWWZlZk5PM1k0T0RwMkZYUm1OOHFWUlpNSE14Y3V4bzBObHQxNm4vd1ZJTytIRUpKNVJPU0MyR1VwWlVNaE94NjBwTDVxZGcxSzZlNGdLTFNVWWw0ZTdCUjkvYzdueHBrMDdpUTZKeXRMN0VWSXRpNXNOamR6MW5VTmxvek1USW5iczhjeExqUTBNU2twYVZRaHB1aEcyWGZSNVA5Z2dydnh4d2VRL2pzb3FFUkI5bWlJamdVdnMyQjZGMTJtb0pWdksxZVcrbnFqcWtUcnJyejFXRmZPRFdQb0pEbWQ2OG1pSUR1ZGE4KzlDUWtTdld1WDRDdEx3amZmV0R0aVlwTDdEeG15TmVuczJmNk1UdS9OQ1Fva05URnFmNkprRHRxazl3czZTWktGa25qSURvZm9BNmFZUFNDckE3WGRRV0dsT292OU9PUFFOMGk5OWJ0Vlh6WGFYWWxXelZLaUZicWxIeVRoZEN3T3ZKb2N0RGFUcS9tTDU4N0oxOXhCNzlpNVUzYkd4a3JjN3QyTzhJaUluYitjUC84aEk5T3YrQVFGRWh1a3ZNN2txcUhSbTZueE5jaW5TYVFMS3RzdHV6WE5FaXNKc2tkUTZXMVFHTExMWS9CYU1JN1NuUDM2d1VGdkVtbml1cGlRNEdiYWJNNlVrMnhlaDFQUG41ZXJoRnlrU3pia09DREpXYUNBUDdUcHZMdlFvMEhiU0w5eVJkSXVYSkJVa01MRnZZMGpxb1cvdjd6L3pqdE92UGZXVzZhZnI2OEhIMlBQRmJDTG04V2U0T2hyeE9RWXV1TkxNdFVRRWR5M3JJRG95Y0JobU1ab1d0SFBXUlVKN3lVVldmQk9sbGl0bVBzUmNZajYwL2x1RTAxRHBOZzFqSkxkc29SQjh5WnNpUktVempHU0NpbHBrSzdFSzFHYXA2L0xtV3o5elBSMHlRc2xORU1KNVN2SXpUck9ldFRYdE5ibGp0bTVBUFFwRmNxWGx5ZDlmWjN3OGZZMm52SHplL1VsUHorWGU4M290dWROME9hcVRPNTc4ZytCKzlWbXF0NFFoM3dDWWFHa3NpQTcyTFNaWTRpM0FPcEpFT1FUZFVGclFuSlhRd3pkalZtTVpSRWxUb0I4WW1McGR5NVl0T2hZMkxScDZST21UblZzMmJFajY2Zmp4KzJwYlBGc0RHUVdoTjRpRUkxVXd2TVNxQ1RlaEdyc1ZjbzRkME5xcXVnUnBEZHpxRnUrVHUrVXdNWE05SERUL3dTNDA5TTc1cFZrcXpabGd0NXMxUmhLNkFVVXdXOFdoemprYzh0aGZVUkxGeUN1R3paZ1BHU09GSnY4bVR3bHZUNWhhL0tHOGl5TU1lZ1g5VFRxVENGL1BjaW56YVRGdE52dDRTdldyT205WU9uU0FOQnZ5YXBWMCtjdFhyeGgycXhaUDNMdmtCWTZaWXA5MDdadE9VZVBIWE9rUUw1Nko3a3NnSjYzZWFHRXFpZkJ3TFRkUW1IUHQ5L2FqLy84ODRMRU0yY0tvNUZWSWJnbTJwY0VNUWwwV05DUDFCUzlwMlJSNGd1SUd3Q0pIN05yWEFrL3dFY2VoWlpQZ054d3dsRHlBbmpteDBrUVIxbTlIdFdQd3ZydkhWVFBMMlpxYXVyUjgrZlBiK1Z0YkJsZkwrYkV4TVdGZjdGMjdmQlY2OVlGcmxpOSt0MjFrWkhkVnF4ZEcvckovUGtyeDRhRi9lM0RRWU15cDgyZW5aMlFtR2puUHNLeURDTi9pL2RJNVhBK1grSzI3dGlKRTQ3NHZYdnRpMWFzeUdDaDF4ODRkR2h1WW1KaVlZaE90dXpXRGlhb1g3Ri9wRnM3ZUpDaUN4ZmpjRGpDNktPWElVWTRpQlpEenRDSkNjSDYxam1lWjRFT3UyTWtlWkhncmpiQzVHRmUwWlg4SlRzNysrOThJb3JQeXNxS1BIZnUzTEpkc2JFek4yN2VIQno1NVpmdmI0bUthcmQreTVhK00rZk1tVHMwSk9UQS93UUdadllOQ2tyZkdCV1ZkZlRrU2JuQ1VaT09BYjNHRit3TU5QOEM1L2FSNDhjZEc5a1Y3SkNzQWNPSG53NmRQSG43akxselo2emR0S2tmMnR6aHU0TUhnMDZkT25VeTcwQUtFRDlObVRsZ0NiZ0lIcGFvZ1k2SDhPbGdESXM3RVBSazV3NFNoK2psVkN3ZDZ4MUhCdUZkNVhhaTcxUlF0ZXhpWm1ibUNhNHRFM056YzdmemlYOHg1SWZFeHNlL0U3ZDc5OHRSMGRFQnN5QnVXRWhJWk05Ky9mWUg5dXQzR0J3SjZOUG5oNzZEQis4SW1UQmgzdWZMbGdYRnhjZTNqVXRJYUwxMSsvWVB2bGkzYnZ6S05Xc1diTmk4T2VyWXNXTjZrVjVZamRUeXZ6QmdKVm5qUkIrcWFEKzZ1RC9SQzNmOW9tTldyU2Q1YnlrSTBiZTNZcEdoenZpNXRMUzB3ems1T2Q5eS9Dejc0ZENoUWJzVEV0ckd4TWMvSHgwVFUvMnI2T2hxMGJHeGRYYkZ4YlVnTDNEUHZuM2hSMCtjMko2Y25Qd0RDNll2Sk1rMzJ0SDJpUDVyeS84Q0FBRC8vL0Y4NUo4QUFBQUdTVVJCVkFNQWkwVVBya3lkaDE4QUFBQUFTVVZPUks1Q1lJST0iIHg9IjAiIHk9IjAiIHdpZHRoPSI5MCIgaGVpZ2h0PSIzNCIvPgo8L3N2Zz4=" width="38" height="14" style="image-rendering:pixelated;vertical-align:middle"/></button><div id="op-offset-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_leftHanded')}</span><button id="op-offset-pop-l" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltLeft')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="15" y1="4" x2="7" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_rightHanded')}</span><button id="op-offset-pop-r" style="border:1px solid var(--gray-300);border-radius:6px;padding:4px 6px;background:transparent;cursor:pointer;" title="${I18n.t('ed_tiltRight')}"><svg width="22" height="28" viewBox="0 0 22 28"><line x1="7" y1="4" x2="15" y2="24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div></div>` : ''}\n  </div>` : ''}\n  ${isEr && window._edIsTouch ? `
   <!-- SEP H --><div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA CURSOR BORRADOR -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%;position:relative">
@@ -28766,6 +28792,7 @@ function edMergeSelected(){
 
   /* ── helper: finalizar inserción ── */
   function _finishMerge(newLayer){
+    if(!newLayer) return; // caso defensivo — ver mtype==='stroke'/'draw' (v41.06)
     // Insertar en la posición de la capa más alta seleccionada
     // para respetar el orden Z respecto a capas intermedias no seleccionadas.
     let insertAt = idxs[idxs.length - 1];
@@ -28774,9 +28801,26 @@ function edMergeSelected(){
       edLayers.splice(_ri, 1);
       if(_ri < insertAt) insertAt--;
     }
-    edLayers.splice(Math.min(insertAt, edLayers.length), 0, newLayer);
+    insertAt = Math.min(insertAt, edLayers.length);
+    // v41.06 — mismo contrato que _edApplyCrop→_finish: si newLayer trae
+    // sub-capas vinculadas (objeto stroke/draw unido con relleno/acuarela/
+    // lápiz propios), insertarlas junto a él en el orden correcto
+    // fill → watercolor → pencil → stroke, en vez de insertar solo newLayer.
+    const _nf  = newLayer._newFill;       delete newLayer._newFill;
+    const _np  = newLayer._newPencil;     delete newLayer._newPencil;
+    const _nwc = newLayer._newWatercolor; delete newLayer._newWatercolor;
+    if (_nf || _np || _nwc) {
+      const _subs = [];
+      if (_nf)  _subs.push(_nf);
+      if (_nwc) _subs.push(_nwc);
+      if (_np)  _subs.push(_np);
+      edLayers.splice(insertAt, 0, ..._subs, newLayer);
+      edSelectedIdx = insertAt + _subs.length;
+    } else {
+      edLayers.splice(insertAt, 0, newLayer);
+      edSelectedIdx = insertAt;
+    }
     edPages[edCurrentPage].layers = edLayers;
-    edSelectedIdx = Math.min(insertAt, edLayers.length - 1);
     _msClear();
     edActiveTool = 'select';
     if(edCanvas) edCanvas.className = '';
@@ -28915,39 +28959,55 @@ function edMergeSelected(){
   }
 
   if(mtype === 'stroke' || mtype === 'draw'){
-    // Compositar todo en un único canvas respetando el orden Z de capas.
-    // Para cada capa (de inferior a superior): fill → pencil → watercolor → stroke.
-    // Esto garantiza que una capa superior nunca quede por debajo de una inferior.
-    const wcCombined = document.createElement('canvas');
-    wcCombined.width = ED_CANVAS_W; wcCombined.height = ED_CANVAS_H;
-    const ctxC = wcCombined.getContext('2d');
+    // v41.06 — BUGFIX Alberto: "TODAS LAS CAPAS SE HAN UNIDO EN LA CAPA DE
+    // TINTA". Esta rama componía fill+pencil+watercolor+stroke de TODOS los
+    // objetos seleccionados en un ÚNICO canvas plano y creaba SOLO un
+    // StrokeLayer nuevo con ese canvas combinado — las sub-capas originales
+    // se borraban de edLayers sin recrearse como capas independientes. El
+    // "dibujo a mano unificado" perdía la separación entre relleno, acuarela,
+    // lápiz y tinta: todo pasaba a ser, en la práctica, un único bitmap de
+    // tinta (exactamente el síntoma reportado). Fix: compositar cada TIPO de
+    // sub-capa por separado (todos los fill entre sí, todos los watercolor
+    // entre sí, etc. — nunca mezclando tipos entre ellos) y crear una capa
+    // nueva POR TIPO que tenga contenido real, todas vinculadas al mismo
+    // _uid nuevo y recortadas al mismo bbox unión para quedar perfectamente
+    // registradas entre sí — mismo criterio que ya usan _edFreezeDrawLayer y
+    // _edApplyCropDraw (únicos otros puntos del código que reconstruyen este
+    // grupo de 4 capas), reutilizado aquí en vez de inventar un mecanismo
+    // nuevo: orden fill → watercolor → pencil → stroke.
+    const W = ED_CANVAS_W, H = ED_CANVAS_H;
+    const _mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
+    const fillCanvas = _mkCanvas(), wcCanvas = _mkCanvas(), pencilCanvas = _mkCanvas(), strokeCanvas = _mkCanvas();
+    const fillCtx = fillCanvas.getContext('2d'), wcCtx = wcCanvas.getContext('2d'),
+          pencilCtx = pencilCanvas.getContext('2d'), strokeCtx = strokeCanvas.getContext('2d');
 
     for(const la of layers){
       const _uid = la._uid || la._fillLayerId;
-      // 1. Fill de esta capa primero (más abajo dentro de la capa)
+      // Fill de esta capa
       const _fl = _uid ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _uid) : null;
       if(_fl && _fl._canvas){
-        ctxC.save(); ctxC.globalAlpha = _fl.opacity ?? 1;
-        _fl.draw(ctxC); ctxC.restore();
+        fillCtx.save(); fillCtx.globalAlpha = _fl.opacity ?? 1;
+        _fl.draw(fillCtx); fillCtx.restore();
       }
-      // 2. Pencil de esta capa
-      const _pl = _uid ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _uid) : null;
-      if(_pl && _pl._canvas){
-        ctxC.save(); ctxC.globalAlpha = _pl.opacity ?? 1;
-        _pl.draw(ctxC); ctxC.restore();
-      }
-      // 3. Watercolor de esta capa
+      // Watercolor de esta capa
       const _wl = _uid ? edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _uid) : null;
       if(_wl && _wl._canvas){
-        ctxC.save(); ctxC.globalAlpha = _wl.opacity ?? 1;
-        _wl.draw(ctxC); ctxC.restore();
+        wcCtx.save(); wcCtx.globalAlpha = _wl.opacity ?? 1;
+        _wl.draw(wcCtx); wcCtx.restore();
       }
-      // 4. Stroke/draw de esta capa (encima del fill)
-      ctxC.save(); ctxC.globalAlpha = la.opacity ?? 1;
-      la.draw(ctxC); ctxC.restore();
+      // Pencil de esta capa
+      const _pl = _uid ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _uid) : null;
+      if(_pl && _pl._canvas){
+        pencilCtx.save(); pencilCtx.globalAlpha = _pl.opacity ?? 1;
+        _pl.draw(pencilCtx); pencilCtx.restore();
+      }
+      // Stroke/draw de esta capa
+      strokeCtx.save(); strokeCtx.globalAlpha = la.opacity ?? 1;
+      la.draw(strokeCtx); strokeCtx.restore();
     }
 
-    // Eliminar sub-capas vinculadas (fill, pencil, watercolor) de edLayers
+    // Eliminar sub-capas vinculadas (fill, pencil, watercolor) de edLayers —
+    // su contenido ya quedó compositado por tipo arriba.
     for(const la of layers){
       const _uid = la._uid || la._fillLayerId;
       if(!_uid) continue;
@@ -28962,9 +29022,74 @@ function edMergeSelected(){
       }
     }
 
-    // Crear nuevo StrokeLayer con el canvas combinado (bbox calculado automáticamente)
-    const newSL = new StrokeLayer(wcCombined);
-    newSL._uid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
+    // Bbox unión de las 4 capas combinadas — mismo criterio que
+    // _edFreezeDrawLayer: las 4 capas resultantes comparten una única
+    // posición/tamaño para quedar perfectamente registradas entre sí
+    // (moverán/rotarán juntas como un solo objeto).
+    const _bbFill   = StrokeLayer._boundingBox(fillCanvas);
+    const _bbWc     = StrokeLayer._boundingBox(wcCanvas);
+    const _bbPencil = StrokeLayer._boundingBox(pencilCanvas);
+    const _bbStroke = StrokeLayer._boundingBox(strokeCanvas);
+    const _bbs = [_bbFill, _bbWc, _bbPencil, _bbStroke].filter(Boolean);
+    if(_bbs.length === 0){
+      // Defensivo: ningún tipo tenía contenido real (no debería ocurrir si
+      // _edMergeableTypes ya exigió objetos válidos) — no crear nada vacío.
+      _finishMerge(null);
+      return;
+    }
+    let _uX0=Infinity, _uY0=Infinity, _uX1=-Infinity, _uY1=-Infinity;
+    for(const _b of _bbs){
+      _uX0 = Math.min(_uX0, _b.x); _uY0 = Math.min(_uY0, _b.y);
+      _uX1 = Math.max(_uX1, _b.x + _b.w); _uY1 = Math.max(_uY1, _b.y + _b.h);
+    }
+    const _uW = Math.max(1, _uX1 - _uX0), _uH = Math.max(1, _uY1 - _uY0);
+    const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+    const _cx = (_uX0 + _uW/2 - mx) / pw, _cy = (_uY0 + _uH/2 - my) / ph;
+    const _fw = _uW / pw, _fh = _uH / ph;
+    const _newUid = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
+
+    // Recorta un canvas combinado al bbox unión y crea la capa del tipo dado
+    // (null si ese tipo no tenía contenido en ninguno de los objetos unidos).
+    const _cropToUnion = (srcCanvas, bb, LayerClass, prefix) => {
+      if(!bb) return null;
+      const crop = document.createElement('canvas');
+      crop.width = _uW; crop.height = _uH;
+      crop.getContext('2d').drawImage(srcCanvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+      const gl = new LayerClass();
+      gl._canvas = crop; gl._ctx = crop.getContext('2d');
+      gl._isWorkspaceCanvas = false;
+      gl._bboxOriginX = _uX0; gl._bboxOriginY = _uY0;
+      gl.x = _cx; gl.y = _cy; gl.width = _fw; gl.height = _fh; gl.rotation = 0;
+      gl._drawLayerId = _newUid;
+      gl._uid = prefix + _newUid;
+      return gl;
+    };
+    const newFill   = _cropToUnion(fillCanvas,   _bbFill,   FillLayer,       'fl_');
+    const newWc     = _cropToUnion(wcCanvas,     _bbWc,     WatercolorLayer, 'wc_');
+    const newPencil = _cropToUnion(pencilCanvas, _bbPencil, PencilLayer,     'pencil_');
+
+    // Capa de tinta recortada al MISMO bbox unión (no a su propio bbox
+    // individual) para quedar alineada con las sub-capas — StrokeLayer(canvas)
+    // recortaría por su cuenta a SU PROPIO bbox si se le pasara el canvas
+    // completo, así que se construye "a mano", igual que hace
+    // _edFreezeDrawLayer con el StrokeLayer final.
+    const strokeCrop = document.createElement('canvas');
+    strokeCrop.width = _uW; strokeCrop.height = _uH;
+    strokeCrop.getContext('2d').drawImage(strokeCanvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+    const newSL = new StrokeLayer(document.createElement('canvas')); // canvas vacío → placeholder, se sobreescribe a continuación
+    newSL._canvas = strokeCrop; newSL._ctx = strokeCrop.getContext('2d');
+    newSL.x = _cx; newSL.y = _cy; newSL.width = _fw; newSL.height = _fh; newSL.rotation = 0;
+    newSL._bboxOriginX = _uX0; newSL._bboxOriginY = _uY0;
+    newSL._uid = _newUid;
+    if(newFill)   newSL._fillLayerId       = _newUid;
+    if(newWc)     newSL._watercolorLayerId = _newUid;
+    if(newPencil) newSL._pencilLayerId     = _newUid;
+    // _finishMerge reconoce _newFill/_newPencil/_newWatercolor (mismo
+    // contrato que usa _edApplyCrop→_finish) e inserta las sub-capas junto a
+    // la capa principal en el orden correcto.
+    if(newFill)   newSL._newFill       = newFill;
+    if(newWc)     newSL._newWatercolor = newWc;
+    if(newPencil) newSL._newPencil     = newPencil;
 
     _finishMerge(newSL);
     return;
