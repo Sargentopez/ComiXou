@@ -17347,10 +17347,17 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   const W = FW, H = FH;
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
 
+  // v41.07 — BUGFIX Alberto: el umbral de 128 (50% opacidad) clasificaba
+  // tinta deliberadamente semitransparente (p.ej. opacidad de tinta al
+  // 30-40%) como "no es tinta", así que el relleno se colaba por ella y
+  // acababa llenando todo el canvas. La tinta debe limitar el relleno
+  // mientras sea VISIBLE, con independencia de su opacidad — mismo umbral de
+  // "contenido visible" (>10) que ya usa el resto del código para esto
+  // (ver StrokeLayer._boundingBox).
   const fd = new Uint8Array(W * H * 4);
   for(let i=0; i<W*H; i++){
     const pi=i*4, a=orig[pi+3];
-    if(a >= 128){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    if(a > 10){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
     else { fd[pi]=0; fd[pi+1]=0; fd[pi+2]=0; fd[pi+3]=0; }
   }
 
@@ -17587,10 +17594,14 @@ function edFloodFill(nx, ny){
   const fillImageData = fillCtx.createImageData(fw, fh);
   const fd = fillImageData.data;
 
+  // v41.07 — BUGFIX Alberto: umbral bajado de 128 (50% opacidad) a 10 — la
+  // tinta debe limitar el relleno con independencia de su opacidad, mientras
+  // sea visible. Ver comentario completo en _edFloodFillOnLayer (mismo bug,
+  // mismo criterio de fix).
   for(let i=0; i<fw*fh; i++){
     const pi=i*4, a=orig[pi+3];
     if(a===255){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
-    else if(a>=128){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    else if(a>10){ fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
     else { fd[pi]=0; fd[pi+1]=0; fd[pi+2]=0; fd[pi+3]=0; }
   }
 
@@ -18164,11 +18175,15 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   const inkData = iCtx.getImageData(0, 0, fw, fh).data;
   const orig = cCtx.getImageData(0, 0, fw, fh).data;
 
-  // ── Binarizar: ≥128 alpha → barrera opaca; resto → vacío transparente ─────
+  // ── Binarizar: >10 alpha (visible) → barrera opaca; resto → vacío
+  // transparente. v41.07 — BUGFIX Alberto: antes el umbral era 128 (50%
+  // opacidad), así que tinta semitransparente no limitaba el degradado —
+  // mismo bug y mismo criterio de fix que edFloodFill/_edFloodFillOnLayer,
+  // aplicado aquí para que las tres herramientas se comporten igual. ─────
   const fd = new Uint8Array(fw * fh * 4);
   for (let i = 0; i < fw * fh; i++) {
     const pi=i*4, a=orig[pi+3];
-    if (a >= 128) { fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
+    if (a > 10) { fd[pi]=orig[pi]; fd[pi+1]=orig[pi+1]; fd[pi+2]=orig[pi+2]; fd[pi+3]=255; }
   }
 
   // ── Flood fill de UN SOLO origen: el PRIMER punto de toque (ax,ay) ────────
@@ -18193,7 +18208,7 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
 
   if (ax >= 0 && ax < fw && ay >= 0 && ay < fh) {
     const sIdx = ay * fw + ax;
-    if (inkData[sIdx*4+3] < 128) { // el primer punto no es tinta → sembrar
+    if (inkData[sIdx*4+3] <= 10) { // el primer punto no es tinta → sembrar (v41.07: umbral 10, no 128 — ver binarización arriba)
       const tR=fd[sIdx*4], tG=fd[sIdx*4+1], tB=fd[sIdx*4+2], tA=fd[sIdx*4+3];
       filled[sIdx] = 1;
       const stack = [];
