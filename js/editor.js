@@ -1786,9 +1786,28 @@ function edWorldToScreen(wx, wy){
   return { x: wx * edCamera.z + edCamera.x,
            y: wy * edCamera.z + edCamera.y };
 }
+// Zoom mínimo permitido: el nivel en el que TODA la zona de trabajo cabe en
+// el viewport actual — mismo cálculo ("workZoom") que ya usaban
+// edZoomResetBtn/gcpZoomResetBtn como destino al pulsar "ajustar" estando
+// en zoom completo (ver más abajo). v41.03 — Alberto: "no tiene sentido que
+// pueda reducirme más una vez se muestra todo el espacio de trabajo". Antes
+// el suelo de zoom era un 0.05 fijo y arbitrario en los 3 sitios donde un
+// gesto en vivo cambia edCamera.z (rueda vía edZoomAt, pinch del editor
+// general, pinch del GCP); ahora los tres piden este valor, que se
+// recalcula en cada gesto porque depende del tamaño real del canvas visible
+// (cambia con el tamaño de ventana o con paneles abiertos/cerrados) y de si
+// el gesto ocurre dentro del GCP (canvas y contexto propios) o del editor
+// general — mismo criterio que ya usa esta función un poco más abajo para
+// decidir si además hay que refrescar el GCP.
+function _edMinCameraZoom(){
+  const _gcpOn = window._gcpActive && typeof gcpCanvas !== 'undefined' && gcpCanvas;
+  const _cv = _gcpOn ? gcpCanvas : (typeof edCanvas !== 'undefined' ? edCanvas : null);
+  if(!_cv) return 0.05; // defensivo: sin canvas aún, conserva el suelo antiguo
+  return Math.min(_cv.width / ED_CANVAS_W, _cv.height / ED_CANVAS_H);
+}
 // Zoom hacia un punto de pantalla (sx,sy), con factor multiplicativo
 function edZoomAt(sx, sy, factor){
-  const newZ = Math.min(Math.max(edCamera.z * factor, 0.05), 8);
+  const newZ = Math.min(Math.max(edCamera.z * factor, _edMinCameraZoom()), 8);
   const fReal = newZ / edCamera.z;
   edCamera.x = sx - (sx - edCamera.x) * fReal;
   edCamera.y = sy - (sy - edCamera.y) * fReal;
@@ -10892,7 +10911,7 @@ function edPinchMove(e) {
     const _haySeleccion = !_edVectorFreehandGesture() && !_edCropMode && !_edMotionPathMode
       && ((edActiveTool==='multiselect' && edMultiSel.length) || edSelectedIdx >= 0 || !!_edLineLayer);
     if(_haySeleccion) return; // con selección activa, el pinch no mueve la cámara
-    const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, 0.05), 8);
+    const newZ = Math.min(Math.max(edPinchCamera0.z * ratio, _edMinCameraZoom()), 8);
     edCamera.x = ctr.x - (edPinchCenter0.x - edPinchCamera0.x) / edPinchCamera0.z * newZ;
     edCamera.y = ctr.y - (edPinchCenter0.y - edPinchCamera0.y) / edPinchCamera0.z * newZ;
     edCamera.z = newZ;
@@ -39061,7 +39080,7 @@ function _gcpHandleMove(e) {
       }
     } else {
       // Sin objeto → mover cámara (zoom + pan solidario)
-      const newZ = Math.min(Math.max(_gcpPinchCam0.z * ratio, 0.05), 8);
+      const newZ = Math.min(Math.max(_gcpPinchCam0.z * ratio, _edMinCameraZoom()), 8);
       edCamera.x = midX - (_gcpPinchMidX - _gcpPinchCam0.x) / _gcpPinchCam0.z * newZ;
       edCamera.y = midY - (_gcpPinchMidY - _gcpPinchCam0.y) / _gcpPinchCam0.z * newZ;
       edCamera.z = newZ;
