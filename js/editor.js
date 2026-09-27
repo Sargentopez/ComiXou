@@ -22338,6 +22338,12 @@ function edRenderOptionsPanel(mode){
       if(_wasEraser){
         // Restaurar la goma, ya sobre la capa nueva (_edTmp.active de arriba)
         // — mismo criterio que op-tool-eraser (opacidad 100%, tool-eraser).
+        // v41.04 — BUGFIX (ver op-tool-eraser más abajo): limpiar también aquí
+        // window._edEraserLayer. El usuario acaba de elegir explícitamente
+        // "borrar esta capa" al tocar el botón de capa (op-tmp-pen/pencil/wc/
+        // bucket), así que esa elección debe ganar siempre a cualquier target
+        // explícito más antiguo dejado por el popup de la barra flotante.
+        window._edEraserLayer = null;
         edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
         edDrawOpacity = 100;
         edRenderOptionsPanel('eraser');
@@ -22432,6 +22438,17 @@ function edRenderOptionsPanel(mode){
     });
     $('op-tool-eraser')?.addEventListener('click', () => {
       _edDodgeBurnActive = false;
+      // v41.04 — BUGFIX Alberto: "estoy borrando la acuarela con la goma de
+      // tinta". window._edEraserLayer (target explícito de un borrado anterior
+      // elegido desde el popup de la barra flotante) sobrevivía al cambiar de
+      // capa activa desde ESTE panel, porque aquí nunca se limpiaba — a
+      // diferencia de edb-eraser (barra flotante), que sí lo hace en su propio
+      // pointerdown. Resultado: activar la goma desde el panel de dibujo a
+      // mano podía seguir apuntando a una capa distinta de la activa
+      // (_edTmp.active) sin que el usuario la hubiera elegido esta vez. Mismo
+      // criterio que edb-eraser: al activar la goma sin elegir capa
+      // explícitamente, borra siempre sobre la capa activa actual.
+      window._edEraserLayer = null;
       edActiveTool = 'eraser'; edCanvas.className = 'tool-eraser';
       edDrawOpacity = 100;
       edRenderOptionsPanel('eraser');
