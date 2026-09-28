@@ -1078,23 +1078,34 @@ function _rrSetFit(canvas, fit) {
 }
 
 // Asigna `fit`, animando con una transición CSS SOLO cuando el estado
-// "rotada/no rotada" cambia de verdad respecto a como estaba `canvas`:
+// "rotada/no rotada" cambia de verdad respecto a como estaba `canvas` Y se
+// pide animación (`animate`, por defecto true):
+//  - `animate=false`: SIEMPRE instantáneo, cambie o no cambie el estado. Lo
+//    usan los disparados por resize/orientationchange (giro FÍSICO real del
+//    dispositivo, o cualquier otro cambio de tamaño de ventana) — ver
+//    cabecera del bloque RR más arriba: el giro que el usuario ve/hace con
+//    las manos YA ES la transición; animar aquí encima sería una segunda
+//    rotación visible y redundante (Alberto: "giro el dispositivo, vuelve a
+//    rotar correctamente, pero innecesariamente"). Los disparados por
+//    NAVEGACIÓN (avanzar/retroceder de hoja, sin que el dispositivo se
+//    mueva) siguen pidiendo animate=true (el valor por defecto).
 //  - Sin cambio de estado (incluida la primera vez que se coloca, si no
 //    hace falta rotar): instantáneo, como hasta ahora.
-//  - Cambia y ya había un encaje previo válido en pantalla: la transición
-//    CSS anima directamente desde ahí hasta `fit`.
-//  - Cambia pero es la primera vez que se coloca ESTE canvas (recién
-//    creado, sin encaje previo del que partir): se deja primero en su
-//    encaje normal SIN rotar (`fitPlain`) — el "instante" de descuadre que
-//    Alberto dio por aceptable — y se anima hacia `fit` en el frame
-//    siguiente, ya con una hoja completamente cargada y visible de la que
-//    partir.
-function _rrApplyFit(canvas, fit, fitPlain) {
+//  - Cambia, se pide animar, y ya había un encaje previo válido en
+//    pantalla: la transición CSS anima directamente desde ahí hasta `fit`.
+//  - Cambia, se pide animar, pero es la primera vez que se coloca ESTE
+//    canvas (recién creado, sin encaje previo del que partir): se deja
+//    primero en su encaje normal SIN rotar (`fitPlain`) — el "instante" de
+//    descuadre que Alberto dio por aceptable — y se anima hacia `fit` en el
+//    frame siguiente, ya con una hoja completamente cargada y visible de la
+//    que partir.
+function _rrApplyFit(canvas, fit, fitPlain, animate) {
+  if (animate === undefined) animate = true;
   const wasRotated = !!canvas._rrRotated;
   const wasInited  = !!canvas._rrInited;
   canvas._rrInited = true;
   clearTimeout(canvas._rrAnimTimer);
-  if (fit.rotate === wasRotated) {
+  if (!animate || fit.rotate === wasRotated) {
     canvas.classList.remove('rr-animating');
     _rrSetFit(canvas, fit);
     return;
@@ -2505,7 +2516,9 @@ function startReader() {
   _setupControls();
   requestAnimationFrame(_positionBtns);
 
-  RS.resizeFn = () => { _resizeCanvas(); _render(); };
+  // animate=false: un resize (más que nada, un giro real del dispositivo)
+  // se aplica al instante, sin animación — ver _rrApplyFit.
+  RS.resizeFn = () => { _resizeCanvas(false); _render(); };
   setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
@@ -3091,12 +3104,16 @@ function _startScrollReader() {
       slide.style.height = _vh + 'px';
       const cv = slide.querySelector('canvas');
       if (cv) {
-        // Rotación automática (ver bloque RR más arriba): un giro real de
-        // dispositivo (u otro resize que cambie si hace falta rotar) anima
-        // la transición igual que la entrada inicial; un resize que no
-        // cambia el estado rotada/no-rotada se aplica instantáneo, como
-        // hasta ahora.
-        _rrApplyFit(cv, _rrFit(pw, ph, _vw, _vh, !panel?.isCredits), _rrFit(pw, ph, _vw, _vh, false));
+        // Rotación automática (ver bloque RR más arriba): SIEMPRE
+        // instantáneo aquí, cambie o no cambie el estado — un giro real del
+        // dispositivo (o cualquier otro resize) no debe animar, porque el
+        // giro que ve/hace el usuario con las manos YA ES la transición;
+        // animar aquí encima sería una segunda rotación visible y
+        // redundante (Alberto: "giro el dispositivo, vuelve a rotar
+        // correctamente, pero innecesariamente"). Animar SÍ (si cambia el
+        // estado) sigue pasando al navegar de hoja sin mover el
+        // dispositivo — ver _rrEnterPanel.
+        _rrApplyFit(cv, _rrFit(pw, ph, _vw, _vh, !panel?.isCredits), _rrFit(pw, ph, _vw, _vh, false), false);
         // Zoom del contenido: las dimensiones base cambian con el resize —
         // resetear también aquí para no arrastrar un transform calculado
         // sobre medidas que ya no son válidas.
@@ -3740,7 +3757,8 @@ function _panelDims(idx) {
   return { pw: isH ? ED_PAGE_H : ED_PAGE_W, ph: isH ? ED_PAGE_W : ED_PAGE_H };
 }
 
-function _resizeCanvas() {
+function _resizeCanvas(animate) {
+  if (animate === undefined) animate = true;
   const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
@@ -3750,11 +3768,13 @@ function _resizeCanvas() {
   const vh = window.innerHeight;
   // Hojas de créditos: nunca rotan (ver cabecera del bloque RR más arriba).
   // El resto: si su orientación no coincide con la del dispositivo, rotar
-  // 90° (con animación) para ocupar el máximo de pantalla — sustituye al
-  // recorte parcial que usaba esto antes solo para hojas horizontales.
+  // 90° para ocupar el máximo de pantalla — sustituye al recorte parcial
+  // que usaba esto antes solo para hojas horizontales. Con animación solo
+  // cuando `animate` lo pide (navegación entre hojas) — nunca en una
+  // llamada por resize/giro real del dispositivo (ver _rrApplyFit).
   const allowRotate = !panel?.isCredits;
   const fit = _rrFit(pw, ph, vw, vh, allowRotate);
-  _rrApplyFit(RS.canvas, fit, _rrFit(pw, ph, vw, vh, false));
+  _rrApplyFit(RS.canvas, fit, _rrFit(pw, ph, vw, vh, false), animate);
   RS.canvas.style.touchAction = 'manipulation';
   // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja (ni a un
   // redimensionado de ventana, que recalcula las dimensiones base sobre las
