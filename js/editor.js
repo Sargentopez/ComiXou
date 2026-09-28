@@ -14559,7 +14559,7 @@ function edOnStart(e){
         } else {
           window._edDrawTouchTimer = setTimeout(() => {
             if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
-            if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
+            if(!['draw','eraser'].includes(edActiveTool) && !(edActiveTool==='fill' && (_edDodgeBurnActive || (typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')))) return;
             _cofHandleTouch(_eSaved2);
           }, 120);
         }
@@ -14570,7 +14570,7 @@ function edOnStart(e){
       } else {
         window._edDrawTouchTimer = setTimeout(() => {
           if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
-          if(!(edActiveTool==='fill' && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')) return;
+          if(!(edActiveTool==='fill' && (_edDodgeBurnActive || (typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor')))) return;
           edStartPaint(_eSaved2);
         }, 120);
       }
@@ -16358,7 +16358,7 @@ function edOnEnd(e){
   // ejecutaba. La llamada real a _edDrawGradPreview vive ahora en edOnMove,
   // que es donde corresponde — ver ese archivo, dentro de
   // "if(edActiveTool==='fill'){...}". Bug reportado por Alberto.)
-  if(edPainting && (edActiveTool !== 'fill' || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
+  if(edPainting && (edActiveTool !== 'fill' || _edDodgeBurnActive || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
     // Nuevo sistema cursor: el trazo lo gestiona _cofHandleUp → no duplicar
     if(_cof.on && _cof._strokeStarted) return;
     edSaveDrawData(); _edOffsetFirstMove = false; _edFromSaved = false;
@@ -19228,8 +19228,28 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
       const cy = by + Math.floor(i / bw);
       const ci = cy * state.w + cx;
 
-      // Ignorar pixeles sin contenido original (alpha < 4)
-      if (state.origData[ci * 4 + 3] < 4) continue;
+      // Ignorar pixeles sin contenido original (alpha < 4) — salvo que el
+      // canvas SÍ tenga contenido real ahí mismo en este instante (d/imgD,
+      // el canvas vivo). state.origData es una foto de TODO el canvas
+      // tomada una única vez, la primera vez que iluminar/oscurecer tocó
+      // este canvas concreto (ver _dbEnsureState) — y edDodgeBurnStroke
+      // toca SIEMPRE los canvas de acuarela Y bote a la vez, aunque solo
+      // uno esté "activo". Sin este respaldo, cualquier trazo pintado
+      // DESPUÉS de esa primera foto (en una zona que entonces estaba
+      // vacía, o en el otro tipo de relleno que aún no tenía contenido)
+      // quedaba inmune para siempre a iluminar/oscurecer: bug reportado
+      // por Alberto tras activar el bote como destino — al usarlo una vez
+      // ahí, el trazo real de acuarela (pintado después) dejaba de
+      // afectarle. Aquí, si el píxel está vacío en la foto pero SÍ hay
+      // contenido real ahora, se adopta ese contenido vivo como origen
+      // (backfill perezoso, por píxel) en vez de omitirlo.
+      if (state.origData[ci * 4 + 3] < 4) {
+        if (d[pi + 3] < 4) continue; // también vacío en vivo: nada que afectar
+        state.origData[ci * 4]     = d[pi];
+        state.origData[ci * 4 + 1] = d[pi + 1];
+        state.origData[ci * 4 + 2] = d[pi + 2];
+        state.origData[ci * 4 + 3] = d[pi + 3];
+      }
 
       // Acumular nivel: cada pasada a maskA=1 suma 1 unidad
       state.levelData[ci] += sign * maskA;
@@ -19798,7 +19818,10 @@ function edClearDraw(){
 function _edSyncFillCursor(){
   if(!edCanvas) return;
   if(edActiveTool !== 'fill') return;
-  if(edFillBrushType === 'watercolor'){
+  // El cursor circular propio (vía .tool-watercolor → cursor:none) se usa
+  // siempre que haya un trazo continuo real: acuarela, o iluminar/oscurecer
+  // sobre cualquier tipo (acuarela o bote) — ver edMoveBrush().
+  if(edFillBrushType === 'watercolor' || _edDodgeBurnActive){
     edCanvas.classList.add('tool-watercolor');
   } else {
     edCanvas.classList.remove('tool-watercolor');
@@ -19817,8 +19840,8 @@ function edMoveBrush(e){
   }
   const sz = Math.round((edActiveTool==='eraser' ? edEraserSize : edDrawSize) * (edCamera ? edCamera.z : 1));
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
-  if(edActiveTool==='fill' && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
-    // Relleno normal: sin cursor circular
+  if(edActiveTool==='fill' && !_edDodgeBurnActive && (typeof edFillBrushType==='undefined' || edFillBrushType!=='watercolor')){
+    // Relleno normal (sin iluminar/oscurecer): sin cursor circular
     cur.style.display='none';
     _edOffsetHide();
     return;
@@ -22373,8 +22396,8 @@ function edRenderOptionsPanel(mode){
         } else {
           edDrawOpacity = 100;
         }
+        edCanvas.className = 'tool-fill' + ((edFillBrushType==='watercolor' || _edDodgeBurnActive)?' tool-watercolor':'');
         _edSyncFillCursor();
-        edCanvas.className = 'tool-fill' + (edFillBrushType==='watercolor'?' tool-watercolor':'');
       }
       if(_wasEraser){
         // Restaurar la goma, ya sobre la capa nueva (_edTmp.active de arriba)
@@ -26060,8 +26083,11 @@ function _edbSyncTool() {
   // Ocultar botón offset cuando se usa fill o en PC (solo táctil)
   const isFill = t === 'fill';
   const offsetBtn = $('edb-offset');
-  const _isWatercolor = isFill && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor';
-  const _hideOffset = (!_isWatercolor && isFill) || !window._edIsTouch;
+  // El offset de cursor debe seguir disponible con relleno cuando hay un
+  // trazo continuo real: acuarela, o iluminar/oscurecer sobre cualquier
+  // tipo (acuarela o bote) — ver _edDodgeBurnActive.
+  const _isLiveStrokeFill = isFill && (_edDodgeBurnActive || (typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'));
+  const _hideOffset = (!_isLiveStrokeFill && isFill) || !window._edIsTouch;
   if(offsetBtn) offsetBtn.style.display = _hideOffset ? 'none' : '';
   if(_hideOffset) { const pop=$('edb-offset-pop'); if(pop) pop.style.display='none'; }
   // El popover de iluminar/oscurecer no debe quedar abierto si se cambia a
@@ -26113,12 +26139,24 @@ function _edbSyncColor() {
 }
 
 // A qué tipo de relleno (acuarela o bote) debe aplicarse iluminar/oscurecer
-// al activarlo: si ya se estaba usando el bote, se mantiene el bote —
-// petición de Alberto: debe poder usarse también con relleno, no solo con
-// acuarela — y en cualquier otro caso (tinta, lápiz, goma, o ya en
-// acuarela) usa acuarela, que sigue siendo el modo por defecto.
+// al activarlo: usa el ÚLTIMO relleno realmente seleccionado por el usuario
+// (edFillBrushType), sea cual sea la herramienta activa en ese momento
+// (tinta, lápiz, goma, bote o ya acuarela) — petición de Alberto: debe
+// poder usarse también con relleno de bote, no solo con acuarela.
+// edFillBrushType vale 'bucket' por defecto (línea ~1143) y solo pasa a
+// 'watercolor' cuando el usuario elige explícitamente Acuarela.
 function _edDodgeBurnTargetType(){
-  return (edActiveTool === 'fill' && edFillBrushType === 'bucket') ? 'bucket' : 'watercolor';
+  // BUGFIX (reportado por Alberto): NO exigir edActiveTool==='fill' aquí.
+  // edFillBrushType es la memoria persistente de "qué sub-tipo de relleno
+  // se usó por última vez" (bote por defecto), y se conserva sin cambios al
+  // pasar por tinta/lápiz/goma (ver op-tmp-pen/pencil y _edWcReset) — pero
+  // edActiveTool SOLO pasa a 'fill' DENTRO de _edDodgeBurnActivate(), más
+  // abajo, DESPUÉS de llamar a esta función. Exigirlo aquí hacía que, viniendo
+  // de tinta/lápiz (edActiveTool aún 'draw'), iluminar/oscurecer cayera
+  // siempre en acuarela desde la barra flotante, sin importar qué relleno
+  // estuviera realmente seleccionado la última vez (típicamente bote, su
+  // valor por defecto).
+  return (edFillBrushType === 'bucket') ? 'bucket' : 'watercolor';
 }
 // Activa iluminar/oscurecer (sign: +1 iluminar, -1 oscurecer) preservando
 // el tipo de relleno actual (acuarela o bote) en vez de forzar siempre
