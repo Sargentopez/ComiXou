@@ -19113,6 +19113,36 @@ function _edPenPressure(e) {
 let _wcOffscreen = null, _wcOffCtx = null;
 let _wcColor = '#000000';
 
+// ── Umbral de tinta como límite para acuarela / iluminar-oscurecer ──────────
+// Pedido de Alberto (v41.14): el bote (relleno) sigue usando CUALQUIER
+// opacidad de tinta visible como límite (ver edFloodFill/_edFloodFillOnLayer,
+// umbral alpha>10, sin cambios). La acuarela y la herramienta de iluminar/
+// oscurecer, en cambio, solo deben verse limitadas por tinta cuya opacidad
+// sea ≥90% — por debajo de ese umbral la tinta no bloquea ni una ni otra.
+const _ED_INK_LIMIT_ALPHA = Math.round(0.9 * 255); // 229.5 → 230/255 = 90%
+
+// Recorta la región (bx,by,bw,bh) del canvas de tinta y la binariza al vuelo
+// según _ED_INK_LIMIT_ALPHA: alpha=255 donde la tinta alcanza el umbral,
+// alpha=0 en el resto. Devuelve null si no hay canvas, la región no cabe, o
+// no hay ningún píxel que supere el umbral (nada que enmascarar).
+function _edThresholdInkMask(srcCanvas, srcCtx, bx, by, bw, bh) {
+  if (!srcCanvas || bw <= 0 || bh <= 0) return null;
+  if (srcCanvas.width < bx + bw || srcCanvas.height < by + bh) return null;
+  const ctx = srcCtx || srcCanvas.getContext('2d');
+  const imgD = ctx.getImageData(bx, by, bw, bh);
+  const d = imgD.data;
+  let any = false;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] >= _ED_INK_LIMIT_ALPHA) { d[i] = 255; any = true; }
+    else { d[i] = 0; }
+  }
+  if (!any) return null;
+  const maskCanvas = document.createElement('canvas');
+  maskCanvas.width = bw; maskCanvas.height = bh;
+  maskCanvas.getContext('2d').putImageData(imgD, 0, 0);
+  return maskCanvas;
+}
+
 // ══════════════════════════════════════════
 //  DODGE / BURN  — sistema diagonal RGB clamped con nivel por pixel
 //  Todos los canales se mueven a la misma tasa (∆ = nivel × _DB_STEP).
@@ -19195,7 +19225,8 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   const maskData = sCtx.getImageData(0, 0, bw, bh).data;
 
   // Máscara de tinta: leer el área del pincel del canvas de tinta para excluir
-  // los píxeles bajo tinta del efecto iluminar/oscurecer
+  // los píxeles bajo tinta (≥90% opacidad, ver _ED_INK_LIMIT_ALPHA) del efecto
+  // iluminar/oscurecer
   const _penCanvas = _edTmp.pen?._canvas;
   let _inkMaskData = null;
   if (_penCanvas && _penCanvas.width >= bx + bw && _penCanvas.height >= by + bh) {
@@ -19220,8 +19251,9 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
       const maskA = maskData[pi + 3] / 255;
       if (maskA < 0.01) continue;
 
-      // Máscara de tinta: no modificar píxeles que estén bajo tinta
-      if (_inkMaskData && _inkMaskData[pi + 3] > 4) continue;
+      // Máscara de tinta: no modificar píxeles bajo tinta con opacidad ≥90%
+      // (por debajo del umbral, la tinta no limita el efecto iluminar/oscurecer)
+      if (_inkMaskData && _inkMaskData[pi + 3] >= _ED_INK_LIMIT_ALPHA) continue;
 
       // Coordenadas canvas para indexar el estado
       const cx = bx + (i % bw);
@@ -19354,6 +19386,8 @@ function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   // padding 3×blur): (1) blur del trazo en tmp2, (2) cortar tinta de tmp2,
   // (3) compositar tmp2 en fl. fl nunca recibe destination-out → acuarela
   // previa bajo tinta queda intacta y reaparece al borrar la tinta.
+  // La tinta solo actúa como límite a partir de ≥90% de opacidad
+  // (_ED_INK_LIMIT_ALPHA / _edThresholdInkMask) — por debajo, no recorta.
   const tmp2   = document.createElement('canvas');
   tmp2.width   = bw; tmp2.height = bh;
   const t2Ctx  = tmp2.getContext('2d');
@@ -19363,9 +19397,10 @@ function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   t2Ctx.drawImage(seg, 0, 0);
   t2Ctx.filter = 'none';
   t2Ctx.restore();
-  if (_edTmp.pen?._canvas) {
+  const _inkMask = _edThresholdInkMask(_edTmp.pen?._canvas, _edTmp.pen?._ctx, bx, by, bw, bh);
+  if (_inkMask) {
     t2Ctx.globalCompositeOperation = 'destination-out';
-    t2Ctx.drawImage(_edTmp.pen._canvas, -bx, -by);
+    t2Ctx.drawImage(_inkMask, 0, 0);
     t2Ctx.globalCompositeOperation = 'source-over';
   }
   fl._ctx.drawImage(tmp2, bx, by);
