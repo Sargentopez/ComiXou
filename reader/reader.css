@@ -299,3 +299,14 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   transform-origin: 0 0;
   will-change: transform;
 }
+
+/* ── Rotación automática al no coincidir la orientación de la hoja con la
+   del dispositivo (pedido de Alberto) — ver bloque RR en reader.js. Esta
+   clase la añade/quita JS solo mientras dura la transición (nunca queda
+   puesta de forma permanente), para no animar los cambios instantáneos de
+   hoja ni los reajustes por resize que no cambian el estado rotada/no
+   rotada. */
+#readerCanvas.rr-animating,
+.rs-slide canvas.rr-animating {
+  transition: left .45s ease, top .45s ease, width .45s ease, height .45s ease, transform .45s ease;
+}
