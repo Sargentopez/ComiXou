@@ -1020,10 +1020,23 @@ function _rzWheelZoom(e, canvas) {
 //    tamaño por esto — sigue midiendo siempre vw×vh; solo el <canvas> DE
 //    DENTRO rota/cambia de tamaño, así que el scroll-snap nativo del
 //    navegador (del que depende deslizar) no se entera de nada.
-//  - La animación solo se dispara cuando el estado "rotada/no rotada"
-//    CAMBIA de verdad (ver _rrApplyFit) — nunca en cada resize o al pasar a
-//    otra hoja con la misma orientación que la anterior, que se comportan
-//    exactamente como hasta ahora (cambio instantáneo).
+//  - La animación solo se dispara al ENTRAR de verdad en una hoja que
+//    necesita rotar (no estaba rotada, pasa a estarlo) — nunca en cada
+//    resize, nunca al pasar a otra hoja con la misma orientación que la
+//    anterior, y nunca al SALIR de una rotada (llegar a una que ya
+//    coincide con el dispositivo): esos tres casos son siempre
+//    instantáneos (ver _rrApplyFit/_rrEnterPanel). Asimétrico a propósito
+//    — Alberto (2026-09-29): "si la orientación coincide... no hace nada
+//    más" — la animación anuncia "voy a rotar esto", así que solo tiene
+//    sentido al entrar en una hoja que sí hace falta rotar.
+//  - Cuando SÍ se dispara, va en DOS FASES SECUENCIADAS, nunca combinadas
+//    (ver _rrPlayAdaptAnimation): primero se deja la hoja en su encaje
+//    normal sin rotar; PRIMERO gira en su sitio (fase "rr-rotating", sin
+//    cambiar aún tamaño/posición) y SOLO cuando el giro termina, crece
+//    hasta cubrir el espacio disponible (fase "rr-growing"). Alberto
+//    (2026-09-29): una transición combinada de todo a la vez no se leía
+//    como dos pasos — para cuando se percibía, la hoja ya parecía rotada
+//    desde el principio y el giro "posterior" no tenía sentido.
 //  - Un giro FÍSICO real del dispositivo (resize/orientationchange) nunca
 //    anima — el giro que hace el usuario con las manos YA ES la
 //    transición; solo una navegación de hoja sin mover el dispositivo
@@ -1158,52 +1171,90 @@ function _rrSetFit(canvas, fit) {
   canvas._rrRotated = fit.rotate;
 }
 
-// Asigna `fit`, animando con una transición CSS SOLO cuando el estado
-// "rotada/no rotada" cambia de verdad respecto a como estaba `canvas` Y se
-// pide animación (`animate`, por defecto true):
-//  - `animate=false`: SIEMPRE instantáneo, cambie o no cambie el estado. Lo
-//    usan los disparados por resize/orientationchange (giro FÍSICO real del
-//    dispositivo, o cualquier otro cambio de tamaño de ventana) — ver
-//    cabecera del bloque RR más arriba: el giro que el usuario ve/hace con
-//    las manos YA ES la transición; animar aquí encima sería una segunda
-//    rotación visible y redundante (Alberto: "giro el dispositivo, vuelve a
-//    rotar correctamente, pero innecesariamente"). Los disparados por
+// Reproduce la animación de adaptación en DOS FASES SECUENCIALES, nunca
+// combinadas (Alberto, 2026-09-29 — corrigiendo el diseño anterior, que
+// animaba giro+tamaño a la vez: "al acceder a la hoja... ya estaba
+// correctamente rotada desde el inicio... eso hace que la rotación que
+// ocurre posteriormente no tenga sentido"):
+//  1. Se deja primero la hoja en su encaje normal SIN rotar (`fitPlain`,
+//     ajustado al espacio disponible tal cual, sin llenar más pantalla).
+//  2. Fase A — SOLO gira (transform), sin tocar tamaño/posición todavía
+//     (sigue en el tamaño de `fitPlain` mientras gira).
+//  3. Cuando el giro termina, fase B — SOLO crece/reposiciona
+//     (left/top/width/height) hasta `fit`, con el transform ya fijo desde
+//     la fase A — cubre entonces el espacio disponible.
+// Se usa tanto desde _rrApplyFit (modo fixed) como desde _rrEnterPanel
+// (modo scroll) — mantenerlas sincronizadas si se toca esto.
+function _rrPlayAdaptAnimation(canvas, fit, fitPlain) {
+  clearTimeout(canvas._rrAnimTimer);
+  clearTimeout(canvas._rrAnimTimer2);
+  canvas.classList.remove('rr-animating', 'rr-rotating', 'rr-growing');
+  _rrSetFit(canvas, fitPlain);
+  canvas._rrInited = true;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    // Fase A: solo gira. Tamaño/posición se quedan en los de fitPlain.
+    canvas.classList.add('rr-animating', 'rr-rotating');
+    canvas.style.maxWidth  = 'none';
+    canvas.style.maxHeight = 'none';
+    canvas.style.transformOrigin = 'center center';
+    canvas.style.transform = 'rotate(90deg)';
+    canvas._rrRotated = fit.rotate;
+    canvas._rrAnimTimer = setTimeout(() => {
+      // Fase B: solo crece/reposiciona — el transform ya no cambia.
+      canvas.classList.remove('rr-rotating');
+      canvas.classList.add('rr-growing');
+      canvas.style.width  = fit.dw   + 'px';
+      canvas.style.height = fit.dh   + 'px';
+      canvas.style.left   = fit.left + 'px';
+      canvas.style.top    = fit.top  + 'px';
+      canvas._rrAnimTimer2 = setTimeout(() => {
+        canvas.classList.remove('rr-animating', 'rr-growing');
+      }, RR_ANIM_MS + 80);
+    }, RR_ANIM_MS + 80);
+  }));
+}
+
+// Asigna `fit` a `canvas`, animando en dos fases (ver _rrPlayAdaptAnimation)
+// SOLO al ENTRAR de verdad en una hoja que necesita rotar — nunca al salir
+// de una, ni al no cambiar de estado. Alberto (2026-09-29), describiendo el
+// proceso hoja a hoja: "primero la hoja se carga sin cambiar de
+// orientación... si la orientación coincide con la del dispositivo no hace
+// nada más, si no coincide, primero hace la animación de giro, después la
+// de ampliación" — es decir, asimétrico: la animación anuncia "voy a rotar
+// esto", así que solo tiene sentido al entrar en una hoja que SÍ hace
+// falta rotar; al llegar a una que ya coincide (aunque la anterior
+// estuviera rotada) no hay nada que anunciar, así que es instantáneo.
+//  - `animate=false`: SIEMPRE instantáneo. Lo usan los disparados por
+//    resize/orientationchange (giro FÍSICO real del dispositivo, o
+//    cualquier otro cambio de tamaño de ventana) — ver cabecera del bloque
+//    RR más arriba: el giro que el usuario ve/hace con las manos YA ES la
+//    transición; animar aquí encima sería una segunda rotación visible y
+//    redundante (Alberto: "giro el dispositivo, vuelve a rotar
+//    correctamente, pero innecesariamente"). Los disparados por
 //    NAVEGACIÓN (avanzar/retroceder de hoja, sin que el dispositivo se
 //    mueva) siguen pidiendo animate=true (el valor por defecto).
-//  - Sin cambio de estado (incluida la primera vez que se coloca, si no
-//    hace falta rotar): instantáneo, como hasta ahora.
-//  - Cambia, se pide animar, y ya había un encaje previo válido en
-//    pantalla: la transición CSS anima directamente desde ahí hasta `fit`.
-//  - Cambia, se pide animar, pero es la primera vez que se coloca ESTE
-//    canvas (recién creado, sin encaje previo del que partir): se deja
-//    primero en su encaje normal SIN rotar (`fitPlain`) — el "instante" de
-//    descuadre que Alberto dio por aceptable — y se anima hacia `fit` en el
-//    frame siguiente, ya con una hoja completamente cargada y visible de la
-//    que partir.
+//  - `animate=true` pero NO se está entrando en rotación (la hoja ya
+//    estaba rotada y sigue igual, la hoja ya estaba sin rotar y sigue
+//    igual, O se está SALIENDO de rotación): instantáneo — _rrSetFit
+//    directo a `fit` (necesario incluso sin animar: en modo fixed el mismo
+//    <canvas> reutilizado aún arrastra el transform/tamaño de la hoja
+//    anterior y hay que corregirlo).
+//  - `animate=true` y SÍ se está entrando en rotación (no estaba rotada,
+//    pasa a estarlo): reproduce las dos fases (giro, luego ampliación)
+//    arrancando desde el encaje normal sin rotar de ESTA hoja (`fitPlain`).
 function _rrApplyFit(canvas, fit, fitPlain, animate) {
   if (animate === undefined) animate = true;
   const wasRotated = !!canvas._rrRotated;
-  const wasInited  = !!canvas._rrInited;
   canvas._rrInited = true;
-  clearTimeout(canvas._rrAnimTimer);
-  if (!animate || fit.rotate === wasRotated) {
-    canvas.classList.remove('rr-animating');
+  const enteringRotation = animate && fit.rotate && !wasRotated;
+  if (!enteringRotation) {
+    clearTimeout(canvas._rrAnimTimer);
+    clearTimeout(canvas._rrAnimTimer2);
+    canvas.classList.remove('rr-animating', 'rr-rotating', 'rr-growing');
     _rrSetFit(canvas, fit);
     return;
   }
-  if (!wasInited) {
-    canvas.classList.remove('rr-animating');
-    _rrSetFit(canvas, fitPlain);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      canvas.classList.add('rr-animating');
-      _rrSetFit(canvas, fit);
-      canvas._rrAnimTimer = setTimeout(() => canvas.classList.remove('rr-animating'), RR_ANIM_MS + 80);
-    }));
-    return;
-  }
-  canvas.classList.add('rr-animating');
-  _rrSetFit(canvas, fit);
-  canvas._rrAnimTimer = setTimeout(() => canvas.classList.remove('rr-animating'), RR_ANIM_MS + 80);
+  _rrPlayAdaptAnimation(canvas, fit, fitPlain);
 }
 
 // Traduce un punto de VENTANA (winX,winY) al sistema de coordenadas propio
@@ -2712,10 +2763,12 @@ function _startScrollReader() {
   // PROPIO <canvas>, creado una sola vez, así que el estado de cada uno
   // por separado no dice nada sobre si la hoja ANTERIOR (un canvas
   // distinto) tenía el mismo encaje o no. RS._rrLast lleva esa cuenta a
-  // nivel de sesión. Solo anima cuando el estado cambia de verdad respecto
-  // a la última hoja mostrada; si no cambia, la hoja ya está en su sitio
-  // correcto desde que se construyó (o desde el último resize) y no hay
-  // nada que hacer — exactamente "solo rotarse al cambiar de estado".
+  // nivel de sesión. Solo anima al ENTRAR de verdad en una hoja que
+  // necesita rotar (ver _rrApplyFit para el razonamiento completo:
+  // asimétrico, nunca al salir de una rotada ni al no cambiar). Si no se
+  // entra en rotación, la hoja ya está en su sitio correcto desde que se
+  // construyó (o desde el último resize — cada canvas se mantiene siempre
+  // correcto salvo durante esta animación) y no hay nada que hacer.
   function _rrEnterPanel(pi) {
     const canvas = _canvases[pi];
     const panel  = RS.panels[pi];
@@ -2723,22 +2776,14 @@ function _startScrollReader() {
     const { pw, ph } = _panelDims(pi);
     const vw = window.innerWidth, vh = window.innerHeight;
     const fit = _rrFit(pw, ph, vw, vh, !panel.isCredits);
-    const changed = fit.rotate !== RS._rrLast;
+    const enteringRotation = fit.rotate && !RS._rrLast;
     RS._rrLast = fit.rotate;
-    if (!changed) {
+    if (!enteringRotation) {
       canvas._rrInited  = true;
       canvas._rrRotated = fit.rotate;
       return;
     }
-    clearTimeout(canvas._rrAnimTimer);
-    canvas.classList.remove('rr-animating');
-    _rrSetFit(canvas, _rrFit(pw, ph, vw, vh, false));
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      canvas.classList.add('rr-animating');
-      _rrSetFit(canvas, fit);
-      canvas._rrInited = true;
-      canvas._rrAnimTimer = setTimeout(() => canvas.classList.remove('rr-animating'), RR_ANIM_MS + 80);
-    }));
+    _rrPlayAdaptAnimation(canvas, fit, _rrFit(pw, ph, vw, vh, false));
   }
 
   // Dispara _rrEnterPanel(RS.idx) solo cuando el deslizamiento/scroll se ha
