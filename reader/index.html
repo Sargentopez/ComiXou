@@ -29,6 +29,32 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <style>
+    /* Oculta el documento hasta que el chequeo anti-caché de más abajo
+       confirme que esta build es la actual, o desista — ver ese bloque
+       para el porqué. Sin esto, una copia vieja podía pintar un frame
+       (la hoja ya "mal") antes de que la recarga forzada llegase a
+       corregirla — Alberto (2026-09-29 v41.21): "sigue viendose mal" tras
+       el primer arreglo, que sí recargaba pero no evitaba ese frame
+       inicial. Tope de seguridad de 800ms puesto por script (ver abajo):
+       nunca deja la pantalla en blanco para siempre si el chequeo no
+       llega a resolver (sin red, servidor caído...). visibility (no
+       display:none) para no alterar layout/medidas de nada. */
+    html.cx-vcheck-pending body { visibility: hidden; }
+  </style>
+  <script>
+    // Bootstrap del ocultamiento de arriba — lo primerísimo que se
+    // ejecuta, antes incluso de la redirección de dominio, para que nada
+    // llegue a pintar ni un frame antes de que quede ocultado.
+    document.documentElement.classList.add('cx-vcheck-pending');
+    var _cxVcheckSafety = setTimeout(function () {
+      document.documentElement.classList.remove('cx-vcheck-pending');
+    }, 800);
+    function _cxVcheckDone() {
+      clearTimeout(_cxVcheckSafety);
+      document.documentElement.classList.remove('cx-vcheck-pending');
+    }
+  </script>
   <script>
     // Redirección permanente del dominio antiguo de GitHub Pages al dominio propio.
     if (location.hostname === 'sargentopez.github.io') {
@@ -76,8 +102,15 @@
     // innecesarias). En cuanto la página ya cargó, limpia esa query de la
     // barra de direcciones (history.replaceState, sin recargar nada) para
     // que un enlace copiado o compartido después quede limpio.
+    //
+    // IMPORTANTE — el documento sigue OCULTO (ver el bloque de arriba)
+    // hasta que esto llama a _cxVcheckDone(): en el caso de desajuste NO
+    // se llama (se deja oculto hasta que la recarga forzada reemplaza el
+    // documento entero) — así el usuario nunca ve ni un frame de la copia
+    // vieja; en cualquier otro caso (coincide, no aplica, o falla la
+    // comprobación) si se llama, para no dejar la pantalla en blanco.
     (function () {
-      var READER_BUILD = '40.62';
+      var READER_BUILD = '40.63';
       var RETRY_KEY = 'cxReaderCacheRetry';
       if (/[?&]_cb=/.test(location.search)) {
         var clean = location.href.replace(/([?&])_cb=[^&]*&?/, '$1').replace(/[?&]$/, '');
@@ -89,10 +122,10 @@
       // SIEMPRE falla por CORS (origen "null") — no hay caché que defender
       // ahí, así que ni hace falta el chequeo ni conviene ensuciar la
       // consola con ese error inevitable.
-      if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+      if (location.protocol !== 'http:' && location.protocol !== 'https:') { _cxVcheckDone(); return; }
       var alreadyRetried = false;
       try { alreadyRetried = sessionStorage.getItem(RETRY_KEY) === '1'; } catch (_) {}
-      if (alreadyRetried) return;
+      if (alreadyRetried) { _cxVcheckDone(); return; }
       fetch('version.txt?_=' + Date.now(), { cache: 'no-store' })
         .then(function (r) { return r.ok ? r.text() : ''; })
         .then(function (v) {
@@ -101,9 +134,11 @@
             try { sessionStorage.setItem(RETRY_KEY, '1'); } catch (_) {}
             var sep = location.href.indexOf('?') === -1 ? '?' : '&';
             location.replace(location.href + sep + '_cb=' + Date.now().toString(36));
+            return; // sigue oculto — la recarga va a reemplazar el documento entero
           }
+          _cxVcheckDone();
         })
-        .catch(function () {});
+        .catch(function () { _cxVcheckDone(); });
     })();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
@@ -123,12 +158,12 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=40.62">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=40.63">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=40.62">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=40.63">
 
   <!-- Icono de pestaña — antes ausente aquí (el lector nunca lo declaraba,
        a diferencia de la app principal), así que cada carga pedía de más
@@ -139,9 +174,9 @@
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/typefaces.css">
-  <link rel="stylesheet" href="reader.css?v=40.62">
+  <link rel="stylesheet" href="reader.css?v=40.63">
 </head>
-<script src="../js/i18n.js?v=40.62"></script>
+<script src="../js/i18n.js?v=40.63"></script>
 <script>
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
@@ -151,7 +186,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=40.62" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=40.63" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">Cargando obra...</div>
@@ -210,12 +245,12 @@
 
   </div>
 
-  <script src="../js/pako.min.js?v=40.62"></script>
-  <script src="../js/UPNG.js?v=40.62"></script>
-  <script src="../js/fullscreen.js?v=40.62"></script>
-  <script src="../js/logo-data.js?v=40.62"></script>
-  <script src="../js/icon-data.js?v=40.62"></script>
-  <script src="../js/anim-clock.js?v=40.62"></script>
-  <script src="reader.js?v=40.62"></script>
+  <script src="../js/pako.min.js?v=40.63"></script>
+  <script src="../js/UPNG.js?v=40.63"></script>
+  <script src="../js/fullscreen.js?v=40.63"></script>
+  <script src="../js/logo-data.js?v=40.63"></script>
+  <script src="../js/icon-data.js?v=40.63"></script>
+  <script src="../js/anim-clock.js?v=40.63"></script>
+  <script src="reader.js?v=40.63"></script>
 </body>
 </html>

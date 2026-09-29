@@ -1417,10 +1417,50 @@ function _toggleFullscreen() {
   }
 }
 
+// Bloquea/libera la orientación NATIVA del dispositivo — Alberto
+// (2026-09-29): "al girar el dispositivo, el navegador lo detecta y vuelve
+// a hacer una rotación innecesaria... mira si puede bloquearse el giro
+// nativo del navegador en android". Sin esto, cada giro físico del móvil
+// hace que el propio SO/navegador reoriente TODA la página con su propia
+// animación nativa (fuera de nuestro control) — encima de la rotación CSS
+// que ya aplicamos nosotros para hojas horizontales, así que se percibían
+// dos rotaciones a la vez. Con la orientación bloqueada a portrait, el SO
+// deja de reorientar nada por su cuenta: el único "giro" que se ve es el
+// nuestro, por CSS, solo cuando de verdad hace falta.
+//   - Screen Orientation API (`screen.orientation.lock`): estándar de la
+//     industria para esto — no hay alternativa sin ella.
+//   - SOLO funciona con fullscreen activo — restricción impuesta por el
+//     propio navegador (Chrome la rechaza siempre fuera de fullscreen, para
+//     que una página cualquiera, compartiendo pantalla con la barra/otras
+//     pestañas, no pueda secuestrar la orientación del aparato). Fuera de
+//     fullscreen no hay forma de evitar el giro nativo desde la web.
+//   - Solo Chromium/Android la soporta de verdad (Chrome, Brave...); iOS
+//     Safari no implementa esta API en absoluto, con o sin fullscreen — ahí
+//     seguirá girando de forma nativa, no hay nada que hacer desde aquí.
+//   - Solo en teléfono (ver IS_MOBILE_PHONE) — la función de rotación
+//     entera es solo para teléfono, igual que aquí: no tiene sentido
+//     bloquear la orientación de una tablet o un PC con pantalla táctil.
+//   - Se libera sola al salir de fullscreen (comportamiento estándar del
+//     navegador), pero se libera también aquí a mano por si acaso.
+function _lockNativeOrientation(lock) {
+  if (!IS_MOBILE_PHONE) return;
+  const so = screen.orientation;
+  if (!so) return;
+  try {
+    if (lock && typeof so.lock === 'function') {
+      const p = so.lock('portrait');
+      if (p && typeof p.catch === 'function') p.catch(() => {}); // algunos navegadores la rechazan igual pese a fullscreen — fallo silencioso
+    } else if (!lock && typeof so.unlock === 'function') {
+      so.unlock();
+    }
+  } catch (_) {}
+}
+
 function _onFullscreenChange() {
   const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const btn  = document.getElementById('fullscreenToggle');
   if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
+  _lockNativeOrientation(isFs);
 }
 
 function _embedClose() {
