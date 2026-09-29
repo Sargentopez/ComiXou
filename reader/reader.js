@@ -1024,18 +1024,70 @@ function _rzWheelZoom(e, canvas) {
 //    CAMBIA de verdad (ver _rrApplyFit) — nunca en cada resize o al pasar a
 //    otra hoja con la misma orientación que la anterior, que se comportan
 //    exactamente como hasta ahora (cambio instantáneo).
+//  - Un giro FÍSICO real del dispositivo (resize/orientationchange) nunca
+//    anima — el giro que hace el usuario con las manos YA ES la
+//    transición; solo una navegación de hoja sin mover el dispositivo
+//    anima (ver el parámetro `animate` de _rrApplyFit/_resizeCanvas).
+//  - Solo se aplica en TELÉFONO móvil — nunca en tablet ni PC (aunque
+//    tengan pantalla táctil): son dispositivos que el usuario no gira con
+//    la mano, así que deben seguir viéndose exactamente como antes de esta
+//    función (encajados sin rotar, aunque no llenen la pantalla). Ver
+//    IS_MOBILE_PHONE — la capacidad táctil NO sirve como proxy de "esto es
+//    un móvil" (ya hay un bug documentado en este mismo proyecto por eso,
+//    ver js/editor.js).
 const RR_ANIM_MS = 450;
 
+// Detección de "teléfono móvil" — NUNCA capacidad táctil sola (ver arriba):
+// un iPad o un Android en modo tablet son igual de táctiles que un
+// teléfono, y un portátil Windows con pantalla táctil también daría
+// maxTouchPoints>0. Solución estándar de la industria, sin una única señal
+// 100% fiable (ni siquiera Client Hints cubre Safari/iPadOS, que no lo
+// soporta) — combina, de más a menos fiable:
+//  1. Client Hints (navigator.userAgentData.mobile), cuando el navegador lo
+//     soporta (Chromium/Android): la propia plataforma dice si es "móvil"
+//     de verdad, inmune a que Chrome recorte el string de userAgent.
+//  2. iPad: se anuncia como "Macintosh" desde iPadOS 13 (para que las webs
+//     le sirvan la versión de escritorio) — un Mac real nunca tiene
+//     pantalla táctil (maxTouchPoints>1); un iPad, sí. Ese es el truco
+//     estándar para distinguirlos.
+//  3. iPhone/iPod: token explícito en el userAgent.
+//  4. Android: el token "Mobile" en el userAgent indica teléfono; su
+//     ausencia indica tablet (convención de Google desde 2012 — ya no es
+//     100% fiable en Chrome muy recientes por la reducción del userAgent,
+//     pero sigue siendo la mejor señal disponible sin Client Hints).
+//  5. Cualquier otra cosa (Windows, Linux, ChromeOS, Mac de escritorio
+//     real...) -> no es teléfono.
+// Ante cualquier duda o error: false (comportamiento de "no es móvil", que
+// es el que ya existía antes de esta función).
+const IS_MOBILE_PHONE = (() => {
+  try {
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+      return navigator.userAgentData.mobile;
+    }
+    const ua = navigator.userAgent || '';
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return false; // iPad
+    if (/iPhone|iPod/.test(ua)) return true;
+    if (/Android/.test(ua)) return /Mobile/.test(ua);
+    return false;
+  } catch (_) {
+    return false;
+  }
+})();
+
 // Encaje de una hoja pw×ph en un viewport vw×vh, rotada o no. `allowRotate`
-// a false (hojas de créditos) nunca rota. dw/dh = tamaño CSS que hay que
-// asignar al <canvas> (su caja PROPIA, sin rotar — con transform-origin
-// center, un rotate(90deg) alrededor de su centro no la desplaza, así que
-// left/top se calculan igual centrando esa caja tanto si va a rotar como si
-// no). vis.* = recuadro que verá el usuario una vez rotada (ancho/alto
-// intercambiados) — lo necesita cualquiera que deba alinearse con lo que
-// está en pantalla (botones de esquina, hit-test de botones de capa).
+// a false (hojas de créditos, o cualquier dispositivo que no sea teléfono
+// móvil — ver IS_MOBILE_PHONE) nunca rota: con rotate=false esta función se
+// reduce exactamente al encaje "contain" de toda la vida (escalar sin
+// recortar, centrado, sin rotar) — el aspecto que debe conservar tablet/PC.
+// dw/dh = tamaño CSS que hay que asignar al <canvas> (su caja PROPIA, sin
+// rotar — con transform-origin center, un rotate(90deg) alrededor de su
+// centro no la desplaza, así que left/top se calculan igual centrando esa
+// caja tanto si va a rotar como si no). vis.* = recuadro que verá el
+// usuario una vez rotada (ancho/alto intercambiados) — lo necesita
+// cualquiera que deba alinearse con lo que está en pantalla (botones de
+// esquina, hit-test de botones de capa).
 function _rrFit(pw, ph, vw, vh, allowRotate) {
-  const rotate = !!allowRotate && ((pw > ph) !== (vw > vh));
+  const rotate = IS_MOBILE_PHONE && !!allowRotate && ((pw > ph) !== (vw > vh));
   const fitW = rotate ? vh : vw, fitH = rotate ? vw : vh;
   const scale = Math.min(fitW / pw, fitH / ph);
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
