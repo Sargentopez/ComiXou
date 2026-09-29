@@ -1209,6 +1209,15 @@ function _rrPlayAdaptAnimation(canvas, fit, fitPlain) {
       canvas.style.top    = fit.top  + 'px';
       canvas._rrAnimTimer2 = setTimeout(() => {
         canvas.classList.remove('rr-animating', 'rr-growing');
+        // _resizeCanvas()/_rrEnterPanel() ya llaman a _positionBtns() justo
+        // después de arrancar esta animación, pero en ese instante síncrono
+        // canvas._rrRotated TODAVÍA no se ha puesto a true (eso pasa dos
+        // rAF más tarde, arriba) — así que en el caso "entrando en rotación
+        // con animación" los botones se quedaban colocados para la hoja
+        // ANTERIOR durante toda la animación. Repetir la llamada aquí, ya
+        // con el giro+crecimiento asentados del todo, los deja en su sitio
+        // final correcto (Alberto, 2026-09-29).
+        _positionBtns();
       }, RR_ANIM_MS + 80);
     }, RR_ANIM_MS + 80);
   }));
@@ -3362,22 +3371,51 @@ function _positionScrollBtns(stateIdx) {
                   closeBtn.style.left = (cl + dw - PAD - btnW) + 'px'; closeBtn.style.top = (ct + OFY) + 'px'; }
 }
 
+// Coloca `btn` en (cl+bx, ct+by) — su sitio de SIEMPRE, relativo a la caja
+// SIN rotar del canvas (cl/ct/cw/ch) — y, si la hoja está rotada (bloque
+// RR), gira el botón esos mismos 90° alrededor del mismo centro que ya usa
+// el canvas (transform-origin puesto en ese centro, expresado en
+// coordenadas propias del botón: cw/2-bx, ch/2-by). Girar alrededor de ESE
+// punto en vez del centro del propio botón lo lleva exactamente a la
+// esquina que le corresponde sin tener que calcularla "a mano" aparte: es
+// la misma unidad rígida que ya gira el canvas, así que el botón se queda
+// siempre pegado al mismo sitio relativo AL DIBUJO (p.ej. "esquina superior
+// izquierda de la hoja"), sea cual sea el lado de la pantalla en el que eso
+// caiga tras el giro — Alberto, 2026-09-29: "los controles también deben
+// rotar, y los botones rotar y colocarse correctamente en las esquinas".
+// Sin rotar, transform/transformOrigin quedan vacíos: mismo resultado que
+// siempre.
+function _rrPlaceCornerBtn(btn, cl, ct, cw, ch, bx, by, rotated) {
+  if (!btn) return;
+  btn.style.left = (cl + bx) + 'px';
+  btn.style.top  = (ct + by) + 'px';
+  if (rotated) {
+    btn.style.transformOrigin = (cw / 2 - bx) + 'px ' + (ch / 2 - by) + 'px';
+    btn.style.transform = 'rotate(90deg)';
+  } else {
+    btn.style.transformOrigin = '';
+    btn.style.transform = '';
+  }
+}
+
 function _positionBtns() {
   const PAD = 8, OFY = 10;
-  let cl, ct, cw, ch;
+  let cl, ct, cw, ch, rotated;
 
   const scrollContainer = document.getElementById('scrollReader');
   const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
 
   if (isScrollMode) {
     // Modo scroll: calcular posición del canvas desde dimensiones del panel
-    // activo — _rrFit ya tiene en cuenta si toca rotar (ver bloque RR) y da
-    // directamente el recuadro VISUAL (vis), rotado o no.
+    // activo. _rrFit ya tiene en cuenta si toca rotar (ver bloque RR); sus
+    // left/top/dw/dh son SIEMPRE la caja SIN rotar (ver cabecera de _rrFit
+    // — `vis` es la única que intercambia ancho/alto), la misma referencia
+    // que usa el modo fixed más abajo.
     const { pw, ph } = _panelDims(RS.idx);
     const vw = window.innerWidth, vh = window.innerHeight;
     const panel = RS.panels[RS.idx];
-    const vis = _rrFit(pw, ph, vw, vh, !panel?.isCredits).vis;
-    cl = vis.left; ct = vis.top; cw = vis.width; ch = vis.height;
+    const fit = _rrFit(pw, ph, vw, vh, !panel?.isCredits);
+    cl = fit.left; ct = fit.top; cw = fit.dw; ch = fit.dh; rotated = fit.rotate;
   } else {
     // Modo fixed: el canvas tiene position:absolute con left/top explícitos
     // — esa es su caja SIN rotar (ver _rrSetFit, transform-origin:center).
@@ -3387,14 +3425,7 @@ function _positionBtns() {
     ct = parseInt(c.style.top)    || 0;
     cw = parseInt(c.style.width)  || 0;
     ch = parseInt(c.style.height) || 0;
-    if (c._rrRotated) {
-      // Rotada 90° alrededor de su propio centro: el recuadro visual tiene
-      // ancho/alto intercambiados y está desplazado respecto a la caja sin
-      // rotar — mismo cálculo que el `vis` de _rrFit().
-      const visL = cl + (cw - ch) / 2, visT = ct + (ch - cw) / 2;
-      cl = visL; ct = visT;
-      const _t = cw; cw = ch; ch = _t;
-    }
+    rotated = !!c._rrRotated;
   }
 
   const fsBtn      = document.getElementById('fullscreenToggle');
@@ -3402,28 +3433,14 @@ function _positionBtns() {
   const pageNavBtn  = document.getElementById('pageNavToggle');
   const offlineBtn  = document.getElementById('offlineDlBtn');
 
-  if (fsBtn) {
-    fsBtn.style.left = (cl + PAD) + 'px';
-    fsBtn.style.top  = (ct + OFY) + 'px';
-  }
-  if (closeBtn) {
-    const btnW = closeBtn.getBoundingClientRect().width || 32;
-    closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
-    closeBtn.style.top  = (ct + OFY) + 'px';
-  }
-  if (pageNavBtn) {
-    // Simétrico a fsBtn (esquina superior izquierda) pero pegado abajo
-    const btnH = pageNavBtn.getBoundingClientRect().height || 24;
-    pageNavBtn.style.left = (cl + PAD) + 'px';
-    pageNavBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
-  }
-  if (offlineBtn) {
-    // Simétrico a closeBtn (esquina superior derecha) pero pegado abajo
-    const btnW = offlineBtn.getBoundingClientRect().width  || 32;
-    const btnH = offlineBtn.getBoundingClientRect().height || 24;
-    offlineBtn.style.left = (cl + cw - PAD - btnW) + 'px';
-    offlineBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
-  }
+  // offsetWidth/offsetHeight (caja de layout) y no getBoundingClientRect()
+  // (caja ya pintada): a esta última si el botón quedó rotado en la llamada
+  // anterior le mediríamos el recuadro YA girado (ancho/alto intercambiados),
+  // corrompiendo el cálculo de la esquina siguiente.
+  if (fsBtn)     _rrPlaceCornerBtn(fsBtn,     cl, ct, cw, ch, PAD, OFY, rotated);
+  if (closeBtn)  _rrPlaceCornerBtn(closeBtn,  cl, ct, cw, ch, cw - PAD - (closeBtn.offsetWidth || 32), OFY, rotated);
+  if (pageNavBtn)  _rrPlaceCornerBtn(pageNavBtn, cl, ct, cw, ch, PAD, ch - OFY - (pageNavBtn.offsetHeight || 24), rotated);
+  if (offlineBtn)  _rrPlaceCornerBtn(offlineBtn, cl, ct, cw, ch, cw - PAD - (offlineBtn.offsetWidth || 32), ch - OFY - (offlineBtn.offsetHeight || 24), rotated);
 }
 
 // ── BARRA DE NAVEGACIÓN POR HOJA ──────────────────────────────
@@ -5224,9 +5241,30 @@ function _updateCounter() { /* sin pastilla — no se muestra */ }
 
 function _showControls() { /* botones de esquina siempre visibles */ }
 
-// El navegador transforma las coordenadas táctiles al sistema del usuario.
-// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo.
+// El navegador transforma las coordenadas táctiles al sistema del usuario
+// cuando gira FÍSICAMENTE el dispositivo (rotación real de la ventana):
+// "izquierda del usuario" es entonces siempre endX < W/2, sin nada más que
+// hacer. Pero eso NO cubre la hoja rotada "en falso" con CSS (bloque RR,
+// canvas._rrRotated) para aprovechar más pantalla sin que el usuario haya
+// girado el móvil todavía — ahí la ventana sigue en su orientación de
+// siempre y es el CONTENIDO el que gira 90° sobre sí mismo, así que su
+// "izquierda" ya no coincide con la mitad izquierda de la ventana.
+// BUG CORREGIDO (Alberto, 2026-09-29: "he tocado a la izquierda de una hoja
+// rotada, y ha ido a la página siguiente en vez de a la anterior") — se
+// reutiliza _rrLocalPoint (el mismo helper que ya usa el hit-test de
+// botones de capa) para deshacer esa rotación y mirar en qué mitad LOCAL
+// del canvas (izquierda/derecha de la hoja tal cual la dibujó el autor)
+// cayó el toque, en vez de en qué mitad de la ventana. Sin rotar, da
+// exactamente el mismo resultado que antes (ver _rrLocalPoint: si
+// !_rrRotated, lx/dw se calculan sobre rect.left/rect.width tal cual).
 function _isBackSide(endX, endY) {
+  const cv = RS.canvas;
+  if (cv && cv._rrRotated && !cv.classList.contains('rr-animating')) {
+    const lp = _rrLocalPoint(cv, endX, endY);
+    if (lp) return lp.lx < lp.dw / 2;
+    // Toque fuera del recuadro del canvas (p.ej. banda sobrante): sin
+    // referencia de contenido válida, se cae al criterio de ventana.
+  }
   return endX < window.innerWidth / 2;
 }
 
