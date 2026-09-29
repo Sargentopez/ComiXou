@@ -1218,6 +1218,10 @@ function _rrPlayAdaptAnimation(canvas, fit, fitPlain) {
         // con el giro+crecimiento asentados del todo, los deja en su sitio
         // final correcto (Alberto, 2026-09-29).
         _positionBtns();
+        // Mismo motivo, para los botones de la hoja de créditos (enlace y
+        // "volver a leer"), montados aparte — ver _mountCreditsButtons —
+        // cuando lo que entró en rotación animada es esa hoja.
+        if (RS.isCredits) { _hideCreditsButtons(); _mountCreditsButtons(); }
       }, RR_ANIM_MS + 80);
     }, RR_ANIM_MS + 80);
   }));
@@ -2700,7 +2704,31 @@ function startReader() {
   // animate=false: un resize (más que nada, un giro real del dispositivo)
   // se aplica al instante, sin animación — ver _rrApplyFit.
   RS.resizeFn = () => { _resizeCanvas(false); _render(); };
-  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
+  // BUG CORREGIDO (Alberto, 2026-09-29 — probando en el móvil real: con el
+  // teléfono físicamente en horizontal, las hojas horizontales rotaban y
+  // las verticales no, justo al revés de lo esperado). Causa: aquí en modo
+  // fixed solo se escuchaba 'resize' — en un giro FÍSICO real, algunos
+  // navegadores/dispositivos disparan ese evento (o lo procesan) antes de
+  // que window.innerWidth/innerHeight reflejen ya las nuevas dimensiones,
+  // así que _rrFit comparaba la hoja contra el viewport ANTIGUO (aún en
+  // vertical) y acababa invirtiendo qué hojas necesitaban rotar. El modo
+  // scroll ya tenía el arreglo — escuchar TAMBIÉN 'orientationchange' y
+  // reintentar la lectura de innerWidth/innerHeight con un margen (100ms y
+  // otra vez a 400ms, por si el dispositivo va lento) en vez de fiarse de
+  // 'resize' solo — pero nunca se replicó aquí. Mismo patrón ahora en fixed
+  // (ver más abajo, sección scroll, para el gemelo ya existente). De paso,
+  // fixed tampoco reajustaba nada al entrar/salir de pantalla completa
+  // (scroll sí, vía _onFsChange) — mismo arreglo, un solo sitio.
+  setTimeout(() => {
+    window.addEventListener('resize', RS.resizeFn);
+    window.addEventListener('orientationchange', () => {
+      setTimeout(RS.resizeFn, 100);
+      setTimeout(RS.resizeFn, 400);
+    });
+    const _onFsChangeFixed = () => setTimeout(RS.resizeFn, 50);
+    document.addEventListener('fullscreenchange',       _onFsChangeFixed);
+    document.addEventListener('webkitfullscreenchange', _onFsChangeFixed);
+  }, 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
@@ -2773,8 +2801,11 @@ function _startScrollReader() {
     // viendo), lo decide _rrEnterPanel() en el momento real en que el
     // usuario llega a ella — ver su cabecera para el porqué (con un
     // <canvas> propio por hoja, el canvas en sí no sabe qué se estaba
-    // viendo justo antes).
-    _rrSetFit(canvas, _rrFit(pw, ph, vw, vh, !panel?.isCredits));
+    // viendo justo antes). La hoja de créditos rota igual que cualquier
+    // otra (Alberto, 2026-09-29: "debes tratar la hoja final de creditos
+    // como otra hoja mas") — ya hereda su `orientation` de la última hoja
+    // real (ver loadWork/loadDraft/_startFromOfflineSnapshot).
+    _rrSetFit(canvas, _rrFit(pw, ph, vw, vh, true));
 
     slide.appendChild(canvas);
     container.appendChild(slide);
@@ -2824,7 +2855,10 @@ function _startScrollReader() {
     if (!canvas || !panel) return;
     const { pw, ph } = _panelDims(pi);
     const vw = window.innerWidth, vh = window.innerHeight;
-    const fit = _rrFit(pw, ph, vw, vh, !panel.isCredits);
+    // La hoja de créditos rota igual que cualquier otra — Alberto,
+    // 2026-09-29: "debes tratar la hoja final de creditos como otra hoja
+    // mas" (antes se excluía aquí a propósito).
+    const fit = _rrFit(pw, ph, vw, vh, true);
     const enteringRotation = fit.rotate && !RS._rrLast;
     RS._rrLast = fit.rotate;
     if (!enteringRotation) {
@@ -3287,8 +3321,9 @@ function _startScrollReader() {
         // redundante (Alberto: "giro el dispositivo, vuelve a rotar
         // correctamente, pero innecesariamente"). Animar SÍ (si cambia el
         // estado) sigue pasando al navegar de hoja sin mover el
-        // dispositivo — ver _rrEnterPanel.
-        _rrApplyFit(cv, _rrFit(pw, ph, _vw, _vh, !panel?.isCredits), _rrFit(pw, ph, _vw, _vh, false), false);
+        // dispositivo — ver _rrEnterPanel. La hoja de créditos incluida:
+        // rota igual que cualquier otra (Alberto, 2026-09-29).
+        _rrApplyFit(cv, _rrFit(pw, ph, _vw, _vh, true), _rrFit(pw, ph, _vw, _vh, false), false);
         // Zoom del contenido: las dimensiones base cambian con el resize —
         // resetear también aquí para no arrastrar un transform calculado
         // sobre medidas que ya no son válidas.
@@ -3413,8 +3448,9 @@ function _positionBtns() {
     // que usa el modo fixed más abajo.
     const { pw, ph } = _panelDims(RS.idx);
     const vw = window.innerWidth, vh = window.innerHeight;
-    const panel = RS.panels[RS.idx];
-    const fit = _rrFit(pw, ph, vw, vh, !panel?.isCredits);
+    // La hoja de créditos rota igual que cualquier otra (Alberto,
+    // 2026-09-29) — sin excepción aquí tampoco.
+    const fit = _rrFit(pw, ph, vw, vh, true);
     cl = fit.left; ct = fit.top; cw = fit.dw; ch = fit.dh; rotated = fit.rotate;
   } else {
     // Modo fixed: el canvas tiene position:absolute con left/top explícitos
@@ -3942,20 +3978,21 @@ function _panelDims(idx) {
 
 function _resizeCanvas(animate) {
   if (animate === undefined) animate = true;
-  const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // Hojas de créditos: nunca rotan (ver cabecera del bloque RR más arriba).
-  // El resto: si su orientación no coincide con la del dispositivo, rotar
+  // Si la orientación de la hoja no coincide con la del dispositivo, rotar
   // 90° para ocupar el máximo de pantalla — sustituye al recorte parcial
   // que usaba esto antes solo para hojas horizontales. Con animación solo
   // cuando `animate` lo pide (navegación entre hojas) — nunca en una
-  // llamada por resize/giro real del dispositivo (ver _rrApplyFit).
-  const allowRotate = !panel?.isCredits;
+  // llamada por resize/giro real del dispositivo (ver _rrApplyFit). La hoja
+  // de créditos rota igual que cualquier otra (Alberto, 2026-09-29: "debes
+  // tratar la hoja final de creditos como otra hoja mas" — antes se excluía
+  // aquí a propósito).
+  const allowRotate = true;
   const fit = _rrFit(pw, ph, vw, vh, allowRotate);
   _rrApplyFit(RS.canvas, fit, _rrFit(pw, ph, vw, vh, false), animate);
   RS.canvas.style.touchAction = 'manipulation';
@@ -5165,26 +5202,31 @@ function _mountCreditsButtons() {
   const cr = RS._creditsRestart;
   if (!cl || !cr) return;
 
-  // Posición real del canvas en pantalla (funciona en modo fixed y scroll)
-  const rect = RS.canvas.getBoundingClientRect();
-  const cW = rect.width;
-  const cH = rect.height;
-  const sx = cW / cl.pw;
-  const sy = cH / cl.ph;
+  // Caja SIN rotar del canvas (bloque RR), recalculada con _rrFit en vez de
+  // leída de RS.canvas.getBoundingClientRect(): esta última da el recuadro
+  // YA rotado (ancho/alto intercambiados) cuando la hoja de créditos está
+  // girada — y ahora puede estarlo, igual que cualquier otra hoja (Alberto,
+  // 2026-09-29: "trátala como otra hoja mas"). En modo scroll, además,
+  // canvas.style.left/top ni siquiera reflejan su posición real en pantalla
+  // (position:static, centrado por flexbox vía .rs-slide — ver _rrSetFit).
+  // _rrFit es una función pura de (pw,ph,vw,vh): recalcularla aquí da
+  // exactamente la misma caja que ya tiene aplicada el canvas, en los dos
+  // modos, sin tener que distinguirlos (a diferencia de _positionBtns, que
+  // sí necesita hacerlo porque en modo fixed lee el <canvas> directamente).
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const fit = _rrFit(cl.pw, cl.ph, vw, vh, true);
+  const cl0 = fit.left, ct0 = fit.top, cw0 = fit.dw, ch0 = fit.dh, rotated = fit.rotate;
+  const sx = cw0 / cl.pw;
+  const sy = ch0 / cl.ph;
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
     if (isLink) { el.href = 'https://comxow.com/'; el.target = '_blank'; el.rel = 'noopener'; }
     el.className = '_cxCreditBtn';
-    // Coordenadas canvas → pantalla
-    const screenX = rect.left + data.cx * sx;
-    const screenY = rect.top  + data.cy * sy;
     const bw = Math.round(data.fs * 10 * sx);
     const bh = Math.round(data.fs * 3  * sy);
     el.style.cssText = [
       'position:fixed',
-      'left:'   + Math.round(screenX - bw/2) + 'px',
-      'top:'    + Math.round(screenY - bh/2) + 'px',
       'width:'  + bw + 'px',
       'height:' + bh + 'px',
       'z-index:2147483647',
@@ -5201,6 +5243,14 @@ function _mountCreditsButtons() {
       'margin:0',
       'display:block',
     ].join(';');
+    // Centro del botón, convertido a coordenadas LOCALES del canvas (offset
+    // desde su esquina superior-izquierda SIN rotar) -> _rrPlaceCornerBtn lo
+    // coloca (y, si toca, lo gira alrededor del mismo centro que el propio
+    // canvas) exactamente igual que los botones de esquina — misma técnica,
+    // ver su comentario.
+    const bx = data.cx * sx - bw / 2;
+    const by = data.cy * sy - bh / 2;
+    _rrPlaceCornerBtn(el, cl0, ct0, cw0, ch0, bx, by, rotated);
     return el;
   }
 
@@ -5354,12 +5404,17 @@ function _setupControls() {
 
     if (wasCancelled) return;
     if (dy > 40) return;
-    // En créditos: swipe horizontal o tap en mitad izquierda → navegar atrás.
-    // Tap en mitad derecha o sobre botones HTML → el overlay gestiona.
+    // En créditos: swipe horizontal o tap en la mitad "izquierda" → navegar
+    // atrás. Tap en la mitad "derecha" o sobre botones HTML → el overlay
+    // gestiona. La hoja de créditos ahora puede rotar igual que cualquier
+    // otra (Alberto, 2026-09-29: "trátala como otra hoja mas"), así que el
+    // tap reutiliza _isBackSide (mismo criterio local/rotado que el resto
+    // de hojas) en vez de comparar contra la mitad de la VENTANA — si no,
+    // reaparecería aquí el mismo bug ya corregido para las demás hojas.
     if (RS.isCredits) {
       if (dx > 30 && dx > dy * 1.5) { goBack(); return; } // swipe
-      if (dx < 20 && dy < 20 && endX < window.innerWidth * 0.5) { goBack(); return; } // tap izq
-      return; // tap derecha: el overlay HTML gestiona los clicks
+      if (dx < 20 && dy < 20 && _isBackSide(endX, endY)) { goBack(); return; } // tap "izq"
+      return; // tap "derecha": el overlay HTML gestiona los clicks
     }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();
