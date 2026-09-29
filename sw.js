@@ -27,7 +27,7 @@
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
  */
 /* ComXow Service Worker — SPA */
-const CACHE = 'comxow-v41-20';
+const CACHE = 'comxow-v41-21';
 
 // Solo cacheamos assets estáticos que no cambian con cada versión (imágenes)
 // v40.54: la hoja de fuentes se llama «typefaces» (antes usaba el nombre genérico «fonts» + «.css»).
@@ -85,7 +85,13 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = e.request.url;
 
-  // No interceptar el reproductor externo — tiene su propia lógica
+  // No interceptar el reproductor externo — se desregistra cualquier SW él
+  // mismo nada más cargar (para funcionar como página suelta, embebible en
+  // cualquier sitio, sin depender de un SW con scope propio), y desde
+  // v40.62 tiene su PROPIA protección anti-caché, en JS, al principio de
+  // reader/index.html (comprueba reader/version.txt sin caché y se
+  // autorrecarga si no coincide con lo que cree tener) — no le hace falta
+  // el network-first de aquí abajo.
   if (url.includes('/reader/')) return;
 
   // HTML, JS, CSS y textos legales editables (legal/*.md): network-first

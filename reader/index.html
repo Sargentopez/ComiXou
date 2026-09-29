@@ -36,6 +36,76 @@
       location.replace('https://comxow.com' + _p + location.search + location.hash);
     }
   </script>
+  <!-- Cabeceras de caché "mejor esfuerzo" — no bastan por sí solas (los
+       navegadores modernos no las respetan para decidir si sirven un
+       documento de nivel superior desde caché), se dejan como refuerzo
+       barato. El arreglo real es el script de más abajo. -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <script>
+    // Anti-caché del HTML del reproductor externo (Alberto, 2026-09-29: "la
+    // hoja ya estaba correctamente rotada desde el inicio... eso hace que
+    // la rotación que ocurre posteriormente no tenga sentido" — síntoma
+    // compatible con estar viendo una build vieja cacheada de este mismo
+    // fichero). El Service Worker de la app principal excluye a propósito
+    // TODO /reader/ (ver sw.js, junto a "no interceptar el reproductor
+    // externo") porque este reproductor se desregistra cualquier SW él
+    // mismo (ver más abajo) para funcionar como página suelta, embebible en
+    // cualquier sitio, sin depender de un SW con scope propio — por eso no
+    // puede reutilizar el arreglo "network-first + cache:no-store" que ya
+    // protege al HTML/JS/CSS de la app principal contra el mismo problema
+    // (GitHub Pages sirve estos ficheros con cabeceras de caché de varios
+    // minutos — ver ese mismo comentario en sw.js). Los SUB-recursos de
+    // este documento (reader.js, reader.css...) ya se libran de esto
+    // porque llevan `?v=` — cada versión nueva es una URL distinta que el
+    // navegador nunca ha visto, así que no puede haber copia vieja en
+    // caché. Pero el propio index.html no tiene ningún `?v=` posible (es
+    // el punto de entrada, su URL la escribe/comparte/guarda el propio
+    // Alberto o sus lectores) — así que aquí, en cuanto carga, se comprueba
+    // a mano: pide sin caché (no-store + query nueva de por sí) un fichero
+    // de una sola línea con la versión REAL recién publicada (version.txt).
+    // Si no coincide con la que este documento cree tener, es que esta
+    // copia es vieja — fuerza entonces una recarga real, con una query que
+    // el navegador jamás ha visto (imposible que haya caché de eso), así
+    // que la recarga sí trae la versión nueva de verdad. Solo se reintenta
+    // UNA vez por pestaña (nunca en bucle, ni aunque la recarga fallase en
+    // volver a traer la versión nueva) y ocurre ANTES de que el lector
+    // empiece a descargar la obra en sí, así que nunca duplica esa descarga
+    // (ver nota de _creditsClick en reader.js sobre por qué evitar recargas
+    // innecesarias). En cuanto la página ya cargó, limpia esa query de la
+    // barra de direcciones (history.replaceState, sin recargar nada) para
+    // que un enlace copiado o compartido después quede limpio.
+    (function () {
+      var READER_BUILD = '40.62';
+      var RETRY_KEY = 'cxReaderCacheRetry';
+      if (/[?&]_cb=/.test(location.search)) {
+        var clean = location.href.replace(/([?&])_cb=[^&]*&?/, '$1').replace(/[?&]$/, '');
+        history.replaceState(null, '', clean);
+      }
+      // Solo tiene sentido con origen http(s) real (donde de verdad existe
+      // una caché HTTP de la que protegerse). Abierto en local por
+      // file:// (pruebas, depuración manual) fetch() a un fichero local
+      // SIEMPRE falla por CORS (origen "null") — no hay caché que defender
+      // ahí, así que ni hace falta el chequeo ni conviene ensuciar la
+      // consola con ese error inevitable.
+      if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+      var alreadyRetried = false;
+      try { alreadyRetried = sessionStorage.getItem(RETRY_KEY) === '1'; } catch (_) {}
+      if (alreadyRetried) return;
+      fetch('version.txt?_=' + Date.now(), { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.text() : ''; })
+        .then(function (v) {
+          v = (v || '').trim();
+          if (v && v !== READER_BUILD) {
+            try { sessionStorage.setItem(RETRY_KEY, '1'); } catch (_) {}
+            var sep = location.href.indexOf('?') === -1 ? '?' : '&';
+            location.replace(location.href + sep + '_cb=' + Date.now().toString(36));
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Comxow — Lector</title>
   <!-- TEMPORAL: bloquea la indexación en buscadores mientras la app esté en
@@ -53,18 +123,25 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=40.61">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=40.62">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=40.61">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=40.62">
+
+  <!-- Icono de pestaña — antes ausente aquí (el lector nunca lo declaraba,
+       a diferencia de la app principal), así que cada carga pedía de más
+       un /favicon.ico inexistente. Mismos ficheros que ya usa la app. -->
+  <link rel="icon" type="image/svg+xml" href="../icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="../icon-192.png">
+  <link rel="apple-touch-icon" href="../icon-192.png">
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/typefaces.css">
-  <link rel="stylesheet" href="reader.css?v=40.61">
+  <link rel="stylesheet" href="reader.css?v=40.62">
 </head>
-<script src="../js/i18n.js"></script>
+<script src="../js/i18n.js?v=40.62"></script>
 <script>
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
@@ -74,7 +151,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=40.61" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=40.62" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">Cargando obra...</div>
@@ -133,12 +210,12 @@
 
   </div>
 
-  <script src="../js/pako.min.js"></script>
-  <script src="../js/UPNG.js"></script>
-  <script src="../js/fullscreen.js?v=40.61"></script>
-  <script src="../js/logo-data.js"></script>
-  <script src="../js/icon-data.js"></script>
-  <script src="../js/anim-clock.js?v=40.61"></script>
-  <script src="reader.js?v=40.61"></script>
+  <script src="../js/pako.min.js?v=40.62"></script>
+  <script src="../js/UPNG.js?v=40.62"></script>
+  <script src="../js/fullscreen.js?v=40.62"></script>
+  <script src="../js/logo-data.js?v=40.62"></script>
+  <script src="../js/icon-data.js?v=40.62"></script>
+  <script src="../js/anim-clock.js?v=40.62"></script>
+  <script src="reader.js?v=40.62"></script>
 </body>
 </html>
