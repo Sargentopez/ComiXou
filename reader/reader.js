@@ -1035,6 +1035,15 @@ function _rzWheelZoom(e, canvas) {
 //    IS_MOBILE_PHONE — la capacidad táctil NO sirve como proxy de "esto es
 //    un móvil" (ya hay un bug documentado en este mismo proyecto por eso,
 //    ver js/editor.js).
+//  - En tablet/PC, además, una hoja horizontal nunca se ve a más "zoom"
+//    que una vertical (tope a la escala que tendría una hoja vertical
+//    canónica en ese mismo viewport — ver el bloque `if (!IS_MOBILE_PHONE)`
+//    dentro de _rrFit). Sin este tope, cada hoja se auto-escalaba para
+//    ocupar el máximo de pantalla y, al tener proporciones distintas,
+//    la horizontal acababa viéndose mucho más grande que la vertical —
+//    nada fiel a cómo se ve en el móvil, donde ambas llenan la pantalla
+//    por igual (la horizontal gracias al giro). Puede dejar espacio
+//    sobrante alrededor de la horizontal; nunca la desborda del viewport.
 const RR_ANIM_MS = 450;
 
 // Detección de "teléfono móvil" — NUNCA capacidad táctil sola (ver arriba):
@@ -1089,7 +1098,27 @@ const IS_MOBILE_PHONE = (() => {
 function _rrFit(pw, ph, vw, vh, allowRotate) {
   const rotate = IS_MOBILE_PHONE && !!allowRotate && ((pw > ph) !== (vw > vh));
   const fitW = rotate ? vh : vw, fitH = rotate ? vw : vh;
-  const scale = Math.min(fitW / pw, fitH / ph);
+  let scale = Math.min(fitW / pw, fitH / ph);
+  if (!IS_MOBILE_PHONE) {
+    // Tablet/PC (aquí `rotate` es siempre false): sin este tope, cada hoja
+    // se auto-escala por su cuenta para ocupar el máximo posible del
+    // viewport, y como una horizontal (780×360) y una vertical (360×780)
+    // tienen proporciones distintas, acaban con un "zoom" distinto entre
+    // sí — la horizontal se ve mucho más grande que la vertical, sin ser
+    // fiel a cómo se ve en el móvil, que es el dispositivo principal para
+    // el que se ha creado Comxow (Alberto, 2026-09-29). Así que se calcula
+    // también la escala que tendría una hoja VERTICAL canónica
+    // (ED_PAGE_W×ED_PAGE_H) en este mismo viewport, y se usa la MENOR de
+    // las dos. Para una hoja vertical coincide siempre con su propia
+    // escala (pw/ph ya son ED_PAGE_W/ED_PAGE_H, cero cambio). Para una
+    // horizontal, iguala el tamaño de las verticales dejando espacio
+    // sobrante en vez de invadir más pantalla que ellas — y si igualarla
+    // desbordaría el viewport (p.ej. una tablet en vertical, donde la
+    // hoja horizontal es más ancha que el propio viewport), se queda con
+    // su propio tope de siempre, que por construcción nunca desborda.
+    const refScale = Math.min(vw / ED_PAGE_W, vh / ED_PAGE_H);
+    scale = Math.min(scale, refScale);
+  }
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
   const left = Math.round((vw - dw) / 2);
   const top  = Math.round((vh - dh) / 2);
