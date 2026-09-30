@@ -20461,8 +20461,8 @@ function _edActivateShapeTool(isNew, isCreating) {
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
       <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_sel&&hasFill&&_edGradValid(_sel.fillGradient)?_edGradCss(_sel.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
-    <button id="op-shape-grad-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_gradientTitle')}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('shape')}
+    <button id="op-shape-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
@@ -20832,8 +20832,8 @@ function _edActivateLineTool(isNew, isCreating) {
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
       <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_cur&&hasFill&&_edGradValid(_cur.fillGradient)?_edGradCss(_cur.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
-    <button id="op-line-grad-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_gradientTitle')}</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('line')}
+    <button id="op-line-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
   </div>` : `
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">${_edVecPalHtml('line')}</div>`}
@@ -22006,10 +22006,15 @@ function _edCheckDoubleTap(el) {
 
 // ── Color de objetos vectoriales (paneles forma y línea) ──────────────────
 // Mismo método que el panel de dibujo a mano: fila con 🎨 (selector propio en
-// táctil / nativo en PC), 💧 cuentagotas y 5 muestras de la paleta compartida
-// (edColorPalette, las 5 primeras). El destino lo decide la muestra marcada:
+// táctil / nativo en PC), 💧 cuentagotas y 2 muestras editables
+// (_edVecPal: 2 muestras editables, propias). El destino lo decide la muestra marcada:
 // 'line' (muestra de línea) o 'fill' (muestra de relleno).
 let _edVecColorTarget = 'line';
+// Paleta propia del dibujo vectorial: 2 muestras (negro/blanco) EDITABLES,
+// independientes de la paleta de dibujo a mano (cuyas 2 primeras son fijas).
+let _edVecPal = ['#000000','#ffffff'];
+try{ const _p=JSON.parse(localStorage.getItem('cx_vec_pal')||'null'); if(Array.isArray(_p)&&_p.length===2&&_p.every(x=>/^#[0-9a-f]{6}$/i.test(x))) _edVecPal=_p; }catch(_){}
+function _edVecSavePal(){ try{ localStorage.setItem('cx_vec_pal', JSON.stringify(_edVecPal)); }catch(_){} }
 function _edVecTarget(pfx){
   return (_edVecColorTarget==='fill' && $('op-'+pfx+'-fill-btn')) ? 'fill' : 'line';
 }
@@ -22018,8 +22023,8 @@ function _edVecCurHex(pfx, la){
   return la.color || '#000000';
 }
 function _edVecPalHtml(pfx){
-  const dots = edColorPalette.slice(0,5).map((c,i)=>
-    '<button class="op-vpal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:2px solid var(--gray-300);cursor:'+(i<=1?'default':'pointer')+';flex-shrink:0;padding:0" title="'+c+'"></button>'
+  const dots = _edVecPal.map((c,i)=>
+    '<button class="op-vpal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="'+c+'"></button>'
   ).join('');
   return `<button id="op-${pfx}-custom" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:.85rem" title="${I18n.t('ed_customColorTitle')}">🎨</button>
     <button id="op-${pfx}-eyedrop" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>
@@ -22037,7 +22042,7 @@ function _edVecRefreshColorUI(pfx, la){
   const cur = (la.fillColor && la.fillColor!=='none' && !_edGradValid(la.fillGradient)) || tgt==='line'
     ? _edVecCurHex(pfx, la) : null;
   document.querySelectorAll('.op-vpal-dot').forEach(d=>{
-    const c = edColorPalette[parseInt(d.dataset.colidx)];
+    const c = _edVecPal[parseInt(d.dataset.colidx)];
     d.style.background = c;
     const sel = cur && c===cur;
     d.style.border = sel ? '3px solid var(--black)' : '2px solid var(--gray-300)';
@@ -22081,18 +22086,17 @@ function _edVecWireColors(pfx, getLayer){
     _edStartEyedrop(hex=>{ const la=L(); if(la){ _edVecApplyColor(pfx, la, hex); _edShapePushHistory(); } });
   });
   const editSlot = idx => {
-    if(idx<=1){ edToast(I18n.t('ed_colorNotEditable')); return; }
     const la=L(); if(!la) return;
     _edShowColorPicker((hex, final)=>{
       const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex);
-      if(final){ _edSetPaletteColor(idx, hex); const l3=L(); if(l3) _edVecRefreshColorUI(pfx, l3); _edShapePushHistory(); }
-    }, edColorPalette[idx]);
+      if(final){ _edVecPal[idx]=hex; _edVecSavePal(); const l3=L(); if(l3) _edVecRefreshColorUI(pfx, l3); _edShapePushHistory(); }
+    }, _edVecPal[idx]);
   };
   document.querySelectorAll('.op-vpal-dot').forEach(dot=>{
     const idx=parseInt(dot.dataset.colidx);
     dot.addEventListener('click', ()=>{
       const la=L(); if(!la) return;
-      _edVecApplyColor(pfx, la, edColorPalette[idx]); _edShapePushHistory();
+      _edVecApplyColor(pfx, la, _edVecPal[idx]); _edShapePushHistory();
     });
     dot.addEventListener('pointerup', e=>{
       if(!_edCheckDoubleTap(dot)) return;
