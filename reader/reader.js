@@ -2703,7 +2703,35 @@ function startReader() {
 
   // animate=false: un resize (más que nada, un giro real del dispositivo)
   // se aplica al instante, sin animación — ver _rrApplyFit.
-  RS.resizeFn = () => { _resizeCanvas(false); _render(); };
+  //
+  // BUG CORREGIDO #2 (Alberto, 2026-09-29 — mismo día, probando de nuevo:
+  // "cuando vas hacia atrás desde una hoja horizontal [con el teléfono en
+  // horizontal] a una hoja vertical no se reproduce el ajuste con
+  // animación"). Causa: consecuencia directa del arreglo de más abajo
+  // (orientationchange con reintentos a 100/400ms) — esos reintentos son
+  // temporizadores sueltos, sin relación con lo que el usuario haga
+  // mientras tanto. Si justo en ese margen el usuario navega a una hoja que
+  // SÍ necesita entrar en rotación, arranca la animación de dos fases
+  // (~1060ms) — pero si el reintento pendiente cae DURANTE esa animación,
+  // llama a _resizeCanvas(false) igualmente (siempre instantáneo, nunca
+  // comprueba si ya hay una animación en marcha) y la corta en seco a mitad
+  // de camino, saltándose la fase de crecimiento. Reproducido y confirmado
+  // con un diagnóstico dedicado (giro físico -> a los ~150ms, antes de que
+  // el reintento de 400ms del giro haya vencido, retroceder a una hoja que
+  // necesita rotar: la fase "rr-rotating" se corta hacia la mitad, nunca
+  // llega a "rr-growing"). Fix: el propio resizeFn se vuelve un no-op si el
+  // canvas ya está animando una transición de rotación — un reintento solo
+  // existe para corregir dimensiones obsoletas cuando NADIE ha navegado
+  // entretanto; si ya hay una animación en marcha es porque el usuario SÍ
+  // navegó, con lo que esa navegación ya leyó window.innerWidth/innerHeight
+  // frescos en su momento (ver _resizeCanvas) y el reintento no pinta nada
+  // — dejar que la animación en curso termine por sí sola es siempre lo
+  // correcto, nunca hace falta forzarla a un estado "ya corregido".
+  RS.resizeFn = () => {
+    if (RS.canvas && RS.canvas.classList.contains('rr-animating')) return;
+    _resizeCanvas(false);
+    _render();
+  };
   // BUG CORREGIDO (Alberto, 2026-09-29 — probando en el móvil real: con el
   // teléfono físicamente en horizontal, las hojas horizontales rotaban y
   // las verticales no, justo al revés de lo esperado). Causa: aquí en modo
@@ -2848,7 +2876,24 @@ function _startScrollReader() {
   // asimétrico, nunca al salir de una rotada ni al no cambiar). Si no se
   // entra en rotación, la hoja ya está en su sitio correcto desde que se
   // construyó (o desde el último resize — cada canvas se mantiene siempre
-  // correcto salvo durante esta animación) y no hay nada que hacer.
+  // correcto salvo durante esta animación).
+  //
+  // BUG CORREGIDO (encontrado revisando el código, no reportado por
+  // Alberto — al verificar a fondo los tres modos de reproducción,
+  // 2026-09-29: "comprueba bien que la rotación funcione con los tres
+  // modos"). El CANVAS en efecto no necesita nada más en la rama
+  // "!enteringRotation" (ya está bien, como dice el comentario de arriba),
+  // pero los BOTONES DE ESQUINA (fullscreen/cerrar/paginación) son un
+  // elemento del DOM compartido entre todas las hojas, no algo propio de
+  // cada canvas -- y aquí nunca se llamaba a _positionBtns() en esta rama.
+  // Efecto real: al salir de una hoja rotada hacia otra que NO necesita
+  // rotar (p.ej. h->v, viewport sin cambiar), el canvas se desrotaba bien
+  // pero los botones se quedaban con el transform rotate(90deg) y la
+  // esquina de la hoja anterior. Reproducido y confirmado con un
+  // diagnóstico dedicado. En modo fixed esto no pasaba porque
+  // _resizeCanvas() ya llama a _positionBtns() incondicionalmente justo
+  // después de _rrApplyFit, tanto si anima como si no (ver su código) --
+  // aquí faltaba el equivalente para el camino sin animación.
   function _rrEnterPanel(pi) {
     const canvas = _canvases[pi];
     const panel  = RS.panels[pi];
@@ -2864,6 +2909,7 @@ function _startScrollReader() {
     if (!enteringRotation) {
       canvas._rrInited  = true;
       canvas._rrRotated = fit.rotate;
+      _positionBtns();
       return;
     }
     _rrPlayAdaptAnimation(canvas, fit, _rrFit(pw, ph, vw, vh, false));
@@ -3304,6 +3350,20 @@ function _startScrollReader() {
 
   // ── Resize / giro de dispositivo ──
   RS.resizeFn = () => {
+    // BUG CORREGIDO (Alberto, 2026-09-29: retroceder a una hoja que entra en
+    // rotación, justo tras un giro físico reciente, se quedaba sin animar —
+    // encontrado en modo fixed, ver su resizeFn hermano más arriba para el
+    // análisis completo; mismo riesgo aquí, con el mismo arreglo). Un
+    // reintento de resize/orientationchange/fullscreenchange que cae
+    // MIENTRAS la hoja activa está animando su entrada en rotación
+    // (_rrPlayAdaptAnimation, vía _rrEnterPanel) forzaría aquí abajo un
+    // _rrApplyFit(..., false) instantáneo sobre ese mismo canvas y cortaría
+    // la animación a mitad de camino. Si ya hay una animación en marcha es
+    // porque el usuario navegó hace un instante, y esa navegación ya leyó
+    // dimensiones frescas en su momento — el reintento no aporta nada y solo
+    // puede hacer daño, así que se descarta entero.
+    const _activeCvNow = _canvases[RS.idx];
+    if (_activeCvNow && _activeCvNow.classList.contains('rr-animating')) return;
     const _vw = window.innerWidth, _vh = window.innerHeight;
     // Reajustar dimensiones de cada slide y canvas
     Array.from(container.children).forEach((slide, pi) => {
@@ -3333,8 +3393,38 @@ function _startScrollReader() {
     // Mantener RS._rrLast al día con el estado de la hoja activa tras el
     // resize — si no, una navegación posterior (swipe) podría comparar
     // contra un estado ya obsoleto y animar (o dejar de animar) por error.
-    const _activeCv = _canvases[RS.idx];
-    if (_activeCv) RS._rrLast = !!_activeCv._rrRotated;
+    //
+    // BUG CORREGIDO #3 (Alberto, 2026-09-29 — verificación explícita de
+    // fullscreen: "la anterior version ha fallado en pantalla completa pero
+    // no cuando no estaba fullscreen"). Causa: si hay un settle-check
+    // pendiente (_rrSettleRaf truthy) es que el usuario ACABA de deslizar a
+    // una hoja nueva — el listener 'scroll' ya adelantó RS.idx a esa hoja,
+    // pero _rrEnterPanel() (quien de verdad decide si la entrada anima)
+    // todavía no se ha ejecutado, a la espera de que el scroll se asiente
+    // (3 frames estables). Si en ese margen cae un reintento de resize (el
+    // de 50ms de fullscreenchange es el más ajustado, pero el mismo riesgo
+    // aplica a los de orientationchange), este bloque de arriba ya ha
+    // dejado el canvas activo en su encaje FINAL — y esta línea, tal cual
+    // estaba, copiaba ese estado ya nuevo directamente en RS._rrLast. Para
+    // cuando _rrEnterPanel() por fin se ejecuta, "enteringRotation = fit.
+    // rotate && !RS._rrLast" sale false porque RS._rrLast ya vale lo mismo
+    // que fit.rotate — la animación de entrada en rotación se salta por
+    // completo (no se corta a medias como el bug #2 de más arriba: aquí
+    // directamente nunca llega a arrancar). Reproducido con un diagnóstico
+    // dedicado (fullscreen + deslizamiento horizontal inmediato después),
+    // con traza fina confirmando que RS._rrLast pasa a true varios frames
+    // ANTES de que el settle-check dispare _rrEnterPanel. El reajuste de
+    // encaje de arriba (dimensiones/posición de cada canvas) sigue siendo
+    // correcto dejarlo correr siempre — _rrPlayAdaptAnimation() vuelve a
+    // dejar el canvas en fitPlain como primer paso si anima (ver su
+    // código), así que no hay riesgo ahí, solo en esta línea. Fix: si hay
+    // un settle-check pendiente, dejar que sea _rrEnterPanel() —a punto de
+    // ejecutarse— quien actualice RS._rrLast, con el valor ANTERIOR
+    // (previo a esta navegación) todavía intacto para poder compararlo.
+    if (!_rrSettleRaf) {
+      const _activeCv = _canvases[RS.idx];
+      if (_activeCv) RS._rrLast = !!_activeCv._rrRotated;
+    }
     // Reposicionar al panel activo
     const _sz = isH ? container.clientWidth : container.clientHeight;
     if (_sz) container.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
