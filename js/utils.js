@@ -31,6 +31,35 @@
    Debe cargarse antes que cualquier otro JS de página.
    ============================================================ */
 
+// Impide que un toque/clic dentro de `el` (un modal o submenú de pantalla
+// completa) llegue a los listeners globales del editor sobre `document`
+// (edOnStart/edOnMove/etc.). Sin esto, las guías/reglas del editor —que a
+// propósito tienen prioridad máxima sobre CUALQUIER otro bloqueo de UI, ver
+// _edGuidesPassThroughActive en editor.js— siguen respondiendo al toque
+// aunque el modal esté abierto tapando la pantalla, porque esos listeners
+// están en document y no comprueban por su cuenta si el toque cayó dentro
+// de un modal. Bug real, Alberto 2026-09-30: pudo mover una guía con el
+// panel de capas abierto ("no tiene sentido que puedan desplazarse las
+// guías cuando está abierto un modal, o cualquier submenú, atravesando los
+// toques o clicks"). Mismo patrón ya usado, antes de existir este helper,
+// para edShortcutsModal/edHelpRefModal/edProjectModal/edSaveChoiceModal/
+// edAnimRangeModal (ver su propio forEach en editor.js) — factorizado aquí
+// para no repetirlo a mano cada vez que se añade un modal nuevo de pantalla
+// completa. Usar SIEMPRE que se cree un modal/overlay que deba comportarse
+// como modal de verdad (nada de lo de detrás debe reaccionar al toque).
+function edStopCanvasLeak(el) {
+  if (!el) return;
+  // Guard: algunos modales (p.ej. edLayerPickModal) son HTML estático que se
+  // reabre muchas veces por sesión llamando siempre a la misma función de
+  // apertura — sin este guard, cada apertura añadiría otro juego completo de
+  // listeners duplicados sobre el mismo elemento (nunca se limpian solos).
+  if (el.dataset && el.dataset.edCanvasLeakGuarded === '1') return;
+  if (el.dataset) el.dataset.edCanvasLeakGuarded = '1';
+  ['pointerdown','pointermove','pointerup','pointercancel','click','wheel','touchstart','touchmove','touchend'].forEach(evt => {
+    el.addEventListener(evt, e => { e.stopPropagation(); }, { passive: true });
+  });
+}
+
 function escHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')

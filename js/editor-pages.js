@@ -115,6 +115,10 @@ function edOpenPages() {
   overlay.addEventListener('pointerdown', e => {
     if (e.target === overlay) edClosePages();
   });
+  // Modal de verdad: nada de lo que hay detrás (guías/reglas, que tienen
+  // prioridad máxima sobre cualquier otro bloqueo de UI) debe reaccionar
+  // al toque mientras este panel está abierto — ver edStopCanvasLeak.
+  edStopCanvasLeak(overlay);
 
   requestAnimationFrame(() => overlay.classList.add('open'));
 
@@ -439,7 +443,7 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
       ctx.beginPath();
       if (la.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
       else ctx.rect(-w/2, -h/2, w, h);
-      if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+      if (la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = (typeof _edFillStyle === 'function') ? _edFillStyle(ctx, la, w, h) : la.fillColor; ctx.fill(); }
       if ((la.lineWidth||0) > 0) { ctx.strokeStyle = la.color||'#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * scaleX/360); ctx.stroke(); }
     } else if (la.type === 'line' && la.points && la.points.length >= 2) {
       ctx.translate(cx, cy); if(rot) ctx.rotate(rot);
@@ -449,7 +453,7 @@ function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
       for (let i = 1; i < la.points.length; i++)
         ctx.lineTo(la.points[i].x * scaleX, la.points[i].y * scaleY);
       if (la.closed) ctx.closePath();
-      if (la.closed && la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = la.fillColor; ctx.fill(); }
+      if (la.closed && la.fillColor && la.fillColor !== 'none') { ctx.fillStyle = (typeof _edFillStyle === 'function') ? _edFillStyle(ctx, la, w, h) : la.fillColor; ctx.fill(); }
       if ((la.lineWidth||0) > 0) { ctx.strokeStyle = la.color||'#000'; ctx.lineWidth = Math.max(1.5, la.lineWidth * scaleX/360); ctx.stroke(); }
     } else if (la.type === 'text' || la.type === 'bubble') {
       ctx.fillStyle = la.backgroundColor || '#fff';

@@ -1891,6 +1891,30 @@ function _pathOrientDelta(points, closed, t, pw, ph) {
   return AnimClock.pathOrientDelta(points, closed, t, pw, ph);
 }
 // Grados extra de rotación de trayectoria a aplicar ahora al dibujar una capa
+// Degradado vectorial de shape/line (fillGradient = {type,c1,c2,angle}) — misma geometría
+// que _edFillStyle en js/editor.js (mantener en sync). ctx con origen en el centro del objeto;
+// w,h = bbox en px. Sin degradado válido devuelve el color plano (fillColor).
+function _rdFillStyle(ctx, la, w, h) {
+  const g = la.fillGradient;
+  if (!g || (g.type !== 'linear' && g.type !== 'radial') || typeof g.c1 !== 'string' || typeof g.c2 !== 'string') return la.fillColor;
+  let x0, y0, x1, y1;
+  if (typeof g.x0 === 'number' && typeof g.y0 === 'number' && typeof g.x1 === 'number' && typeof g.y1 === 'number') {
+    // línea guía dibujada por el usuario, en fracciones del bbox (0 = centro)
+    x0 = g.x0 * w; y0 = g.y0 * h; x1 = g.x1 * w; y1 = g.y1 * h;
+  } else if (g.type === 'radial') {
+    x0 = 0; y0 = 0; x1 = Math.max(w, h, 1) / 2; y1 = 0;
+  } else {
+    const a = (g.angle || 0) * Math.PI / 180, dx = Math.cos(a), dy = Math.sin(a), L = Math.abs(w * dx) + Math.abs(h * dy);
+    x0 = -dx * L / 2; y0 = -dy * L / 2; x1 = dx * L / 2; y1 = dy * L / 2;
+  }
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  if (len < 1) return g.c1;
+  const grad = g.type === 'radial' ? ctx.createRadialGradient(x0, y0, 0, x0, y0, len) : ctx.createLinearGradient(x0, y0, x1, y1);
+  grad.addColorStop(0, g.c1);
+  grad.addColorStop(1, g.c2);
+  return grad;
+}
+
 function _layerPathRotDeg(la) {
   return (la && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
 }
@@ -3714,7 +3738,7 @@ function _render() {
         ctx.beginPath();
         if (layer.shape === 'ellipse') ctx.ellipse(0, 0, w/2, h/2, 0, 0, Math.PI*2);
         else ctx.rect(-w/2, -h/2, w, h);
-        if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+        if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = _rdFillStyle(ctx, layer, w, h); ctx.fill(); }
         if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
       }
       ctx.restore();
@@ -3749,14 +3773,14 @@ function _render() {
             for(let i=1;i<c.length;i++) _rPath.lineTo(c[i].x*pw, c[i].y*ph);
             _rPath.closePath();
           }
-          if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(_rPath, 'evenodd'); }
+          if (layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = _rdFillStyle(ctx, layer, w, h); ctx.fill(_rPath, 'evenodd'); }
           if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(_rPath); }
         } else {
           ctx.beginPath();
           const _pts0 = _rContours[0] || [];
           if(_pts0.length){ ctx.moveTo(_pts0[0].x*pw, _pts0[0].y*ph); for(let i=1;i<_pts0.length;i++) ctx.lineTo(_pts0[i].x*pw, _pts0[i].y*ph); }
           if (layer.closed) ctx.closePath();
-          if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = layer.fillColor; ctx.fill(); }
+          if (layer.closed && layer.fillColor && layer.fillColor !== 'none') { ctx.fillStyle = _rdFillStyle(ctx, layer, w, h); ctx.fill(); }
           if ((layer.lineWidth || 0) > 0) { ctx.strokeStyle = layer.color || '#000'; ctx.lineWidth = layer.lineWidth; ctx.stroke(); }
         }
       }

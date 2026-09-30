@@ -174,6 +174,10 @@ function edOpenLayers() {
   overlay.addEventListener('pointerdown', e => {
     if (e.target === overlay) edCloseLayers();
   });
+  // Modal de verdad: nada de lo que hay detrás (guías/reglas, que tienen
+  // prioridad máxima sobre cualquier otro bloqueo de UI) debe reaccionar
+  // al toque mientras este panel está abierto — ver edStopCanvasLeak.
+  edStopCanvasLeak(overlay);
   requestAnimationFrame(() => overlay.classList.add('open'));
 
   // Desactivar touch del canvas mientras el overlay está abierto

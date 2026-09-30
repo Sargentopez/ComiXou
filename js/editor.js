@@ -3562,6 +3562,64 @@ class StrokeLayer extends BaseLayer {
 /* ══════════════════════════════════════════
    SHAPE LAYER — rectángulo y elipse editables
    ══════════════════════════════════════════ */
+/* ══════════════════════════════════════════
+   DEGRADADO VECTORIAL — fillGradient = {type:'linear'|'radial', c1, c2, angle}
+   Dato vectorial puro (no hay bitmap): se resuelve al dibujar sobre el bbox local
+   del objeto, así que se mueve, rota y escala con él. `fillColor` se mantiene
+   siempre como color de respaldo (= c1) para hit-test, miniaturas y cualquier
+   código que solo conozca colores planos. `angle` en grados, 0 = izquierda→derecha,
+   sentido horario (ejes de canvas, y hacia abajo). Radial: centro del bbox.
+   ══════════════════════════════════════════ */
+function _edGradValid(g){
+  return !!(g && (g.type==='linear'||g.type==='radial') && typeof g.c1==='string' && typeof g.c2==='string');
+}
+function _edCloneGrad(g){
+  if(!_edGradValid(g)) return undefined;
+  const o = {type:g.type, c1:g.c1, c2:g.c2, angle:g.angle||0};
+  if(typeof g.x0==='number' && typeof g.y0==='number' && typeof g.x1==='number' && typeof g.y1==='number'){
+    o.x0=g.x0; o.y0=g.y0; o.x1=g.x1; o.y1=g.y1;   // línea guía, en fracciones del bbox (0 = centro)
+  }
+  return o;
+}
+// Geometría del degradado en px locales (origen = centro del objeto).
+// Con línea guía (x0..y1, fracciones del bbox, dibujada por el usuario): lineal = de A a B;
+// radial = centro en A y radio |AB| (igual que el degradado de mano alzada).
+// Sin línea guía (objetos con ángulo antiguo): horizontal / centrado sobre el bbox.
+function _edGradGeom(g, w, h){
+  if(typeof g.x0==='number' && typeof g.y0==='number' && typeof g.x1==='number' && typeof g.y1==='number')
+    return {x0:g.x0*w, y0:g.y0*h, x1:g.x1*w, y1:g.y1*h};
+  if(g.type==='radial') return {x0:0, y0:0, x1:Math.max(w,h,1)/2, y1:0};
+  const a=(g.angle||0)*Math.PI/180, dx=Math.cos(a), dy=Math.sin(a), L=Math.abs(w*dx)+Math.abs(h*dy);
+  return {x0:-dx*L/2, y0:-dy*L/2, x1:dx*L/2, y1:dy*L/2};
+}
+// ctx con origen en el centro del objeto; w,h = tamaño del bbox en px
+function _edFillStyle(ctx, la, w, h){
+  const g = la && la.fillGradient;
+  if(!_edGradValid(g)) return la.fillColor;
+  const q = _edGradGeom(g, w, h);
+  const len = Math.hypot(q.x1-q.x0, q.y1-q.y0);
+  if(len < 1) return g.c1;
+  const grad = g.type==='radial'
+    ? ctx.createRadialGradient(q.x0, q.y0, 0, q.x0, q.y0, len)
+    : ctx.createLinearGradient(q.x0, q.y0, q.x1, q.y1);
+  grad.addColorStop(0, g.c1);
+  grad.addColorStop(1, g.c2);
+  return grad;
+}
+// CSS equivalente (muestras de la UI): CSS 0deg = hacia arriba → +90
+function _edGradCss(g){
+  if(g.type==='radial') return `radial-gradient(circle,${g.c1},${g.c2})`;
+  let ang = g.angle||0;
+  if(typeof g.x0==='number' && typeof g.x1==='number') ang = Math.atan2((g.y1-g.y0), (g.x1-g.x0)) * 180 / Math.PI;
+  return `linear-gradient(${ang+90}deg,${g.c1},${g.c2})`;
+}
+// Fondo de las muestras de relleno del panel / barra flotante
+function _edFillSwatchBg(la){
+  const has = la && la.fillColor && la.fillColor !== 'none';
+  if(has && _edGradValid(la.fillGradient)) return _edGradCss(la.fillGradient);
+  return has ? la.fillColor : ((la && la._lastFillColor) || '#ffffff');
+}
+
 class ShapeLayer extends BaseLayer {
   constructor(shape='rect', x=0.5, y=0.5, w=0.3, h=0.2) {
     super('shape', x, y, w, h);
@@ -3602,7 +3660,7 @@ class ShapeLayer extends BaseLayer {
       }
     }
     if (this.fillColor && this.fillColor !== 'none') {
-      ctx.fillStyle = this.fillColor;
+      ctx.fillStyle = _edFillStyle(ctx, this, w, h);
       ctx.fill();
     }
     if (this.lineWidth > 0) {
@@ -3845,6 +3903,7 @@ class LineLayer extends BaseLayer {
         _contours.forEach((c, _ci) => {
           const _st = _gStyles[_ci] || {};
           const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
+          const _fcStyle = _st.fillColor !== undefined ? _fc : _edFillStyle(ctx, this, this.width*pw, this.height*ph);
           const _sc = _st.color     !== undefined ? _st.color     : this.color;
           const _lw = _st.lineWidth !== undefined ? _st.lineWidth : this.lineWidth;
           const _cl = _st.closed    !== undefined ? _st.closed    : this.closed;
@@ -3861,7 +3920,7 @@ class LineLayer extends BaseLayer {
           const _path = new Path2D();
           _buildContour(_path, c, _crC, _cl);
           if(_cl && _fc && _fc !== 'none'){
-            ctx.fillStyle = _fc;
+            ctx.fillStyle = _fcStyle;
             ctx.fill(_path);
           }
           if(_lw > 0){
@@ -3887,7 +3946,7 @@ class LineLayer extends BaseLayer {
           _buildContour(combined, c, _crC, this.closed);
         });
         if (this.fillColor && this.fillColor !== 'none') {
-          ctx.fillStyle = this.fillColor;
+          ctx.fillStyle = _edFillStyle(ctx, this, this.width*pw, this.height*ph);
           ctx.fill(combined, 'evenodd');
         }
         if (this.lineWidth > 0) {
@@ -3923,7 +3982,7 @@ class LineLayer extends BaseLayer {
         ctx.closePath();
       }
       if (this.closed && this.fillColor && this.fillColor !== 'none') {
-        ctx.fillStyle = this.fillColor;
+        ctx.fillStyle = _edFillStyle(ctx, this, this.width*pw, this.height*ph);
         ctx.fill();
       }
       if (this.lineWidth > 0) {
@@ -4159,7 +4218,7 @@ function _edSnapLayerFragment(l){
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     if(l.type === 'shape')  return { type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
-      color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      color:l.color, fillColor:l.fillColor||'none', fillGradient:_edCloneGrad(l.fillGradient), lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadius: l.cornerRadius||0, locked:l.locked||false,
       hidden:l.hidden||false,
       groupId: l.groupId || undefined,
@@ -4174,7 +4233,7 @@ function _edSnapLayerFragment(l){
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     if(l.type === 'line')   return { type:'line', points:l.points.map(p=>p?{...p}:null),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
-      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
+      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', fillGradient:_edCloneGrad(l.fillGradient), lineWidth:l.lineWidth, opacity:l.opacity??1, locked:l.locked||false,
       hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       grouped: l.grouped||false,
@@ -4879,7 +4938,7 @@ function edApplyHistory(snapshot){
     }
     else if(o.type === 'shape') {
       l = new ShapeLayer(o.shape||'rect', o.x||0.5, o.y||0.5, o.width||0.3, o.height||0.2);
-      l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
+      l.color=o.color||'#000'; l.fillColor=o.fillColor||'none'; if(_edGradValid(o.fillGradient)) l.fillGradient=_edCloneGrad(o.fillGradient); l.lineWidth=o.lineWidth??3; l.rotation=o.rotation||0; l.opacity=o.opacity??1;
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.grouped) l.grouped = true;
@@ -4894,7 +4953,7 @@ function edApplyHistory(snapshot){
     else if(o.type === 'line') {
       l = new LineLayer();
       l.points=o.points||[]; l.closed=o.closed||false;
-      l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; l.lineWidth=o.lineWidth??3; l.opacity=o.opacity??1;
+      l.color=o.color||'#000'; l.fillColor=o.fillColor||'#ffffff'; if(_edGradValid(o.fillGradient)) l.fillGradient=_edCloneGrad(o.fillGradient); l.lineWidth=o.lineWidth??3; l.opacity=o.opacity??1;
       l.rotation=o.rotation||0;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.subPaths&&o.subPaths.length) l.subPaths = o.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;});
@@ -10240,6 +10299,15 @@ function _edOpenEmptyContextMenu(nx, ny, clientX, clientY){
   _edPositionContextMenu(menu, clientX, clientY);
 }
 
+// ¿Hay una sesión de edición de dibujo (a mano: tinta/lápiz/acuarela/goma/relleno; o vectorial:
+// objetos/rectas) en curso? Panel abierto en modo draw/fill/shape/line, o sus barras flotantes
+// visibles (menús minimizados). Sirve para desactivar el menú contextual del clic derecho.
+function _edIsDrawingEditActive(){
+  const p = $('edOptionsPanel');
+  if(p && p.classList.contains('open') && ['draw','fill','shape','line'].includes(p.dataset.mode)) return true;
+  if($('edDrawBar')?.classList.contains('visible') || $('edShapeBar')?.classList.contains('visible')) return true;
+  return false;
+}
 function _edShowContextMenu(e){
   edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
   const c = edCoords(e);
@@ -12611,6 +12679,9 @@ function _edGuidesPassThroughActive(){
 }
 
 function edOnStart(e){
+  // Cuentagotas activo (💧): el toque sobre el lienzo solo muestrea el color
+  // (lo gestiona _edStartEyedrop en pointerup); no debe crear/seleccionar objetos.
+  if(window._edEyedropActive && e.target===edCanvas) return;
   // Menú contextual propio (botón secundario, solo PC — ver listener
   // 'contextmenu' y _edShowContextMenu más abajo): un puntero nuevo FUERA
   // del menú lo cierra, igual que cualquier menú contextual estándar
@@ -16581,7 +16652,7 @@ function _vsSerLayer(l) {
       type: 'line',
       x: l.x, y: l.y, width: l.width, height: l.height,
       rotation: l.rotation || 0,
-      color: l.color, fillColor: l.fillColor || 'none',
+      color: l.color, fillColor: l.fillColor || 'none', fillGradient: _edCloneGrad(l.fillGradient),
       lineWidth: l.lineWidth, opacity: l.opacity ?? 1,
       closed: l.closed || false,
       _fromEllipse: l._fromEllipse || false,
@@ -16606,7 +16677,7 @@ function _vsSerLayer(l) {
       type: 'shape', shape: l.shape,
       x: l.x, y: l.y, width: l.width, height: l.height,
       rotation: l.rotation || 0,
-      color: l.color, fillColor: l.fillColor || 'none',
+      color: l.color, fillColor: l.fillColor || 'none', fillGradient: _edCloneGrad(l.fillGradient),
       lineWidth: l.lineWidth, opacity: l.opacity ?? 1,
       cornerRadius: l.cornerRadius,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : { ...l.cornerRadii }) : undefined,
@@ -16934,6 +17005,7 @@ function _edShapeApplyHistory(snapshot){
   // Restaurar propiedades del layer sin cambiar su posición en el array
   if(d.color        !== undefined) la.color       = d.color;
   if(d.fillColor    !== undefined) la.fillColor   = d.fillColor;
+  la.fillGradient = _edCloneGrad(d.fillGradient); // undefined = sin degradado (undo de un degradado)
   if(d.lineWidth    !== undefined) la.lineWidth   = d.lineWidth;
   if(d.opacity      !== undefined) la.opacity     = d.opacity;
   if(d.rotation     !== undefined) la.rotation    = d.rotation;
@@ -18265,6 +18337,7 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   if (!ffDest?._canvas) { edToast(I18n.t('ed_noActiveFillLayer')); return; }
   const imgData = ffDest._ctx.getImageData(0, 0, fw, fh);
   const d = imgData.data;
+  const _beforePx = new Uint8ClampedArray(d); // para deshacer si se responde "No" en la confirmación
   const len2 = ldx*ldx + ldy*ldy;
 
   for (let i = 0; i < fw*fh; i++) {
@@ -18284,13 +18357,172 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   }
 
   ffDest._ctx.putImageData(imgData, 0, 0);
-  _edDrawPushHistory();
-  edPushHistory();
   edRedraw();
+  // El historial se escribe solo al confirmar: con "No" el degradado desaparece sin dejar rastro.
+  _edGradConfirm(
+    () => { _edDrawPushHistory(); edPushHistory(); },
+    () => {
+      try {
+        ffDest._ctx.putImageData(new ImageData(_beforePx, fw, fh), 0, 0);
+        edRedraw();
+      } finally {
+        _edShowGradientDialog();                                  // el modal se reabre pase lo que pase
+      }
+    }
+  );
+}
+
+// ── Confirmación del degradado recién aplicado ("¿Confirmar? Sí / No") ──────────
+// Se coloca SOBRE el panel de opciones (no sobre el lienzo) para no tapar el resultado.
+// Un overlay transparente bloquea el lienzo mientras se decide (mismo criterio que los
+// modales, ver edStopCanvasLeak), de modo que nada cambia entre aplicar y confirmar.
+function _edGradConfirm(onYes, onNo) {
+  document.getElementById('ed-grad-confirm')?.remove();
+  document.getElementById('ed-grad-confirm-block')?.remove();
+  const block = document.createElement('div');
+  block.id = 'ed-grad-confirm-block';
+  block.style.cssText = 'position:fixed;inset:0;z-index:19998;background:transparent;touch-action:none;';
+  // Mismo aspecto que el resto de confirmaciones de la app (edConfirm/appConfirm): caja blanca
+  // con borde negro y sombra dura, botón secundario blanco a la izquierda y principal amarillo
+  // a la derecha. Reutiliza sus clases (.ed-confirm-box/.ed-confirm-msg/.ed-modal-actions/
+  // .ed-modal-btn), pero SIN el fondo oscuro con desenfoque, para no tapar el resultado.
+  const wrap = document.createElement('div');
+  wrap.id = 'ed-grad-confirm';
+  wrap.style.cssText = 'position:fixed;z-index:19999;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:center;pointer-events:none;';
+  wrap.innerHTML = `<div class="ed-confirm-box" style="pointer-events:auto;margin-top:8px">
+      <p class="ed-confirm-msg" style="margin-bottom:0">${I18n.t('ed_gradConfirmQ')}</p>
+      <div class="ed-modal-actions">
+        <button id="egc-no"  class="ed-modal-btn cancel">${I18n.t('ed_no')}</button>
+        <button id="egc-yes" class="ed-modal-btn ok">${I18n.t('ed_yes')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(block);
+  document.body.appendChild(wrap);
+  edStopCanvasLeak(block); edStopCanvasLeak(wrap);
+  // Posición: encima del panel de opciones (su mismo rectángulo); si no hay panel visible
+  // (táctil con menús ocultos), pegada abajo.
+  const place = () => {
+    const pn = document.getElementById('edOptionsPanel');
+    const r = pn && pn.classList.contains('open') ? pn.getBoundingClientRect() : null;
+    if (r && r.height > 20) {
+      wrap.style.left = r.left + 'px'; wrap.style.width = r.width + 'px';
+      wrap.style.top = r.top + 'px'; wrap.style.height = r.height + 'px'; wrap.style.bottom = 'auto';
+    } else {
+      wrap.style.left = '0'; wrap.style.width = '100%'; wrap.style.top = 'auto'; wrap.style.height = 'auto';
+      wrap.style.bottom = 'max(8px, env(safe-area-inset-bottom))';
+    }
+  };
+  place(); requestAnimationFrame(place); setTimeout(place, 120); // el panel puede re-renderizarse justo después de aplicar
+  let done = false;
+  const answer = cb => () => {
+    if (done) return; done = true;
+    wrap.remove(); block.remove();
+    // fuera del dispatch del click: nada de lo que abra cb() (p.ej. el modal de degradado,
+    // que cierra al tocar su fondo) puede recibir ese mismo toque
+    setTimeout(() => { try { cb && cb(); } catch (err) { console.error('[degradado] confirmación:', err); } }, 0);
+  };
+  wrap.querySelector('#egc-yes').addEventListener('click', answer(onYes));
+  wrap.querySelector('#egc-no').addEventListener('click',  answer(onNo));
+}
+
+// ── Degradado vectorial: abre el modal de degradado sobre un ShapeLayer/LineLayer ──
+// Flujo idéntico al de mano alzada: modal → "Dibujar →" → arrastrar la línea guía sobre
+// el objeto. La línea se guarda como fracciones del bbox local del objeto (dato vectorial).
+// onDone() — el llamador refresca su UI (muestra de relleno, casilla de relleno…).
+function _edOpenVecGradient(la, onDone, seed) {
+  if (!la) return;
+  const _refresh = () => { if (onDone) onDone(); edRedraw(); };
+  _edShowGradientDialog({
+    vector: true,
+    gradient: _edGradValid(la.fillGradient) ? la.fillGradient : null,
+    seed,
+    onApply: g => {
+      _edVecGradDrawLine(la, pts => {
+        // Estado previo, por si se responde "No" en la confirmación
+        const prev = { fillColor: la.fillColor, lastFill: la._lastFillColor, grad: _edCloneGrad(la.fillGradient), drawFill: edDrawFillColor };
+        la.fillGradient = _edCloneGrad({ type: g.type, c1: g.c1, c2: g.c2, angle: 0, x0: pts.x0, y0: pts.y0, x1: pts.x1, y1: pts.y1 });
+        la.fillColor = g.c1;          // respaldo plano (hit-test, miniaturas…) y activa el relleno
+        la._lastFillColor = g.c1;
+        edDrawFillColor = g.c1;
+        _refresh();
+        _edGradConfirm(
+          () => { _edShapePushHistory(); },                       // Sí: se conserva (un solo paso de historial)
+          () => {                                                 // No: se borra y vuelve el modal
+            try {
+              la.fillColor = prev.fillColor; la._lastFillColor = prev.lastFill; edDrawFillColor = prev.drawFill;
+              if (prev.grad) la.fillGradient = prev.grad; else delete la.fillGradient;
+              _refresh();
+            } finally {
+              _edOpenVecGradient(la, onDone, g);                  // el modal se reabre pase lo que pase
+            }
+          }
+        );
+      });
+    },
+    onRemove: () => { delete la.fillGradient; _refresh(); _edShapePushHistory(); }
+  });
+}
+
+// Captura la línea guía sobre `la`. Overlay propio a pantalla completa (así no se
+// mezcla con la selección/arrastre de objetos de edOnStart/edOnMove/edOnEnd) que
+// reutiliza la vista previa discontinua del degradado de mano alzada.
+function _edVecGradDrawLine(la, onLine) {
+  document.getElementById('ed-vgrad-capture')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'ed-vgrad-capture';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:19999;touch-action:none;cursor:crosshair;background:transparent;';
+  document.body.appendChild(ov);
+  edStopCanvasLeak(ov);
+  edToast(I18n.t('ed_dragLineForGradient'));
+  let start = null, pid = null;
+  const toLocal = e => {
+    const c = edCoords(e), pw = edPageW(), ph = edPageH();
+    const dx = (c.nx - la.x) * pw, dy = (c.ny - la.y) * ph, r = -(la.rotation || 0) * Math.PI / 180;
+    const lx = dx * Math.cos(r) - dy * Math.sin(r), ly = dx * Math.sin(r) + dy * Math.cos(r);
+    return { x: lx / Math.max(la.width * pw, 1), y: ly / Math.max(la.height * ph, 1) };
+  };
+  const cleanup = () => {
+    ov.remove();
+    document.getElementById('ed-grad-line')?.remove();
+    window._edGradPtStartClient = null;
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); cleanup(); } };
+  document.addEventListener('keydown', onKey, true);
+  ov.addEventListener('pointerdown', e => {
+    if (start) return;
+    e.preventDefault();
+    pid = e.pointerId;
+    try { ov.setPointerCapture(pid); } catch (_) {}
+    start = { cx: e.clientX, cy: e.clientY, l: toLocal(e) };
+    window._edGradPtStartClient = { x: e.clientX, y: e.clientY };
+  });
+  ov.addEventListener('pointermove', e => {
+    if (!start || e.pointerId !== pid) return;
+    _edDrawGradPreview(e);
+  });
+  ov.addEventListener('pointerup', e => {
+    if (!start || e.pointerId !== pid) return;
+    const s0 = start, end = toLocal(e), dist = Math.hypot(e.clientX - s0.cx, e.clientY - s0.cy);
+    cleanup();
+    if (dist < 6) { edToast(I18n.t('ed_lineTooShort')); return; }
+    onLine({ x0: s0.l.x, y0: s0.l.y, x1: end.x, y1: end.y });
+  });
+  ov.addEventListener('pointercancel', () => { cleanup(); });
 }
 
 // ── Degradado: ventana de configuración ──────────────────────────────────────
-function _edShowGradientDialog() {
+// opts (opcional) — modo VECTORIAL, para objetos ShapeLayer/LineLayer:
+//   { vector:true, gradient:<fillGradient actual o null>, onApply(g), onRemove() }
+// En ese modo el modal NO pasa al "dibujar flecha" del relleno de mano alzada: aplica
+// directamente un degradado vectorial (tipo + 2 colores + ángulo) al objeto.
+function _edShowGradientDialog(opts) {
+  const _V = !!(opts && opts.vector);
+  const _seedG = _V ? (opts.seed || opts.gradient) : null;   // tras un "No": los colores que acababa de elegir
+  if (_V && _edGradValid(_seedG)) {
+    _edGradC1 = _seedG.c1; _edGradC2 = _seedG.c2;
+    _edGradType = _seedG.type;
+  }
   document.getElementById('ed-grad-dlg')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'ed-grad-dlg';
@@ -18336,10 +18568,11 @@ function _edShowGradientDialog() {
           <div style="width:100%;height:14px;border-radius:3px;margin-bottom:4px;${_radG()}"></div>Circular</button>
       </div>
       <div style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:.76rem;color:#555;text-align:center;line-height:1.4">
-        ${I18n.t('ed_gradientHelp')}
+        ${_V ? I18n.t('ed_vecGradientHelp') : I18n.t('ed_gradientHelp')}
       </div>
       <div style="display:flex;gap:10px">
         <button id="egd-cancel" style="flex:1;padding:10px;border:2px solid #ddd;border-radius:8px;background:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">${I18n.t('cancel')}</button>
+        ${_V && _edGradValid(opts.gradient) ? `<button id="egd-remove" style="flex:1;padding:10px;border:2px solid #fcc;border-radius:8px;background:#fff;color:#c00;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">${I18n.t('ed_removeGradient')}</button>` : ''}
         <button id="egd-ok" style="flex:1;padding:10px;border:none;border-radius:8px;background:#111;color:#fff;font-weight:900;font-size:.9rem;cursor:pointer;font-family:inherit">${I18n.t('ed_drawArrowBtn')}</button>
       </div>
     </div>`;
@@ -18420,16 +18653,27 @@ function _edShowGradientDialog() {
     if (e.target === overlay) overlay.remove();
   });
 
+  document.getElementById('egd-remove')?.addEventListener('click', () => {
+    overlay.remove();
+    if (_V && opts.onRemove) opts.onRemove();
+  });
   document.getElementById('egd-ok')?.addEventListener('click', () => {
     overlay.remove();
+    if (_V) {
+      if (opts.onApply) opts.onApply({ type: _edGradType, c1: _edGradC1, c2: _edGradC2, angle: 0 });
+      return;
+    }
     _edFillGradActive = true;
     edToast(I18n.t('ed_dragLineForGradient'));
     edCanvas.style.cursor = 'crosshair';
     edRenderOptionsPanel('fill');
   });
   document.getElementById('egd-cancel')?.addEventListener('click', () => { overlay.remove(); });
-  overlay.addEventListener('pointerdown', e => { if (e.target !== overlay) e.stopPropagation(); }, true);
-  overlay.addEventListener('touchstart', e => e.stopPropagation(), {passive:true, capture:true});
+  // Antes solo se protegía pointerdown sobre los HIJOS (e.target !== overlay)
+  // y touchstart — un toque directo sobre el FONDO del propio overlay se
+  // colaba igual hasta el canvas de abajo (misma clase de bug que capas/
+  // páginas/comportamiento de trayectoria, ver edStopCanvasLeak).
+  edStopCanvasLeak(overlay);
 }
 
 function edColorErase(nx, ny){  const page = edPages[edCurrentPage]; if(!page) return;
@@ -20114,6 +20358,7 @@ function _edShapeToLineLayer(s) {
   // Heredar propiedades visuales
   l.color     = s.color     || '#000000';
   l.fillColor = s.fillColor || 'none';
+  if(_edGradValid(s.fillGradient)) l.fillGradient = _edCloneGrad(s.fillGradient);
   l.lineWidth = s.lineWidth ?? 3;
   l.opacity   = s.opacity   ?? 1;
   l.rotation  = s.rotation  || 0;
@@ -20191,7 +20436,6 @@ function _edActivateShapeTool(isNew, isCreating) {
     <button id="op-shape-select" style="flex-shrink:0;border:2px solid ${_edShapeType==='select'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='select'?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_borderColor')}"></button>
-    <button id="op-shape-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="${I18n.t('ed_eyedropTool')}">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
@@ -20211,12 +20455,14 @@ function _edActivateShapeTool(isNew, isCreating) {
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA RELLENO -->
-  <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
-    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">${I18n.t('ed_fillTool')}</span>
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">
+    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-shape-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
+      <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_sel&&hasFill&&_edGradValid(_sel.fillGradient)?_edGradCss(_sel.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
+    <button id="op-shape-grad-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_gradientTitle')}</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('shape')}
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
@@ -20311,14 +20557,8 @@ function _edActivateShapeTool(isNew, isCreating) {
     // estuviera seleccionado en ese instante.
   });
 
-  // ── Color borde ──
-  $('op-shape-color-btn')?.addEventListener('click', e=>{
-    const s=_curShape(); if(!s) return;
-    _edPickColor(e, s.color||'#000000',
-      hex=>{ s.color=hex; $('op-shape-color-btn').style.background=hex; edRedraw(); },
-      ()=>{ _edShapePushHistory(); }
-    );
-  });
+  // ── Color (línea/relleno + paleta + 🎨 + 💧) ──
+  _edVecWireColors('shape', _curShape);
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
     const sl=$('op-size-slider'),ob=$('op-opacity-slider');
@@ -20371,21 +20611,20 @@ function _edActivateShapeTool(isNew, isCreating) {
     if(on){
       const hex=s._lastFillColor||edDrawFillColor||'#ffffff';
       s.fillColor=hex; edDrawFillColor=hex;
-      if(fb) fb.style.background=hex;
+      if(fb) fb.style.background=_edFillSwatchBg(s);
     } else {
       s._lastFillColor=s.fillColor;
       s.fillColor='none'; edDrawFillColor='none';
     }
     edRedraw(); _edShapePushHistory();
   });
-  $('op-shape-eyedrop')?.addEventListener('click', ()=>{ _edStartEyedrop(); });
-  $('op-shape-fill-btn')?.addEventListener('click', e=>{
+  // Degradado vectorial (mismo modal que el relleno de mano alzada)
+  $('op-shape-grad-btn')?.addEventListener('click', ()=>{
     const s=_curShape(); if(!s) return;
-    const cur=(s.fillColor&&s.fillColor!=='none')?s.fillColor:'#ffffff';
-    _edPickColor(e, cur,
-      hex=>{ s.fillColor=hex; $('op-shape-fill-btn').style.background=hex; $('op-shape-fill-on').checked=true; edDrawFillColor=hex; edRedraw(); },
-      ()=>{ _edShapePushHistory(); }
-    );
+    _edOpenVecGradient(s, ()=>{
+      const fb=$('op-shape-fill-btn'); if(fb){ fb.style.background=_edFillSwatchBg(s); fb.style.opacity=1; }
+      const fo=$('op-shape-fill-on'); if(fo) fo.checked=true;
+    });
   });
 
   // ── Minimizar (idéntico a draw) ──
@@ -20556,7 +20795,6 @@ function _edActivateLineTool(isNew, isCreating) {
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-line-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('op_lineColorTitle')}"></button>
-    <button id="op-line-eyedrop" style="flex-shrink:0;border:none;background:transparent;cursor:pointer;font-size:.9rem;padding:2px 4px" title="${I18n.t('ed_eyedropTool')}">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
@@ -20588,13 +20826,17 @@ function _edActivateLineTool(isNew, isCreating) {
   </div>
   ${isClosed?`
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0">
-    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600)">${I18n.t('ed_fillTool')}</span>
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">
+    <span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-line-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
+      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_cur&&hasFill&&_edGradValid(_cur.fillGradient)?_edGradCss(_cur.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
-  </div>` : ''}
+    <button id="op-line-grad-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_gradientTitle')}</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('line')}
+  </div>` : `
+  <div style="height:1px;background:var(--gray-300);width:100%"></div>
+  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">${_edVecPalHtml('line')}</div>`}
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
@@ -20708,15 +20950,8 @@ function _edActivateLineTool(isNew, isCreating) {
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
 
-  // ── Color ──
-  $('op-line-color-btn')?.addEventListener('click', e=>{
-    const l=_curLine(); if(!l) return;
-    _edPickColor(e, l.color||'#000000',
-      hex=>{ l.color=hex; $('op-line-color-btn').style.background=hex; edRedraw(); },
-      ()=>{ _edShapePushHistory(); }
-    );
-  });
-  $('op-line-eyedrop')?.addEventListener('click', ()=>{ _edStartEyedrop(); });
+  // ── Color (línea/relleno + paleta + 🎨 + 💧) ──
+  _edVecWireColors('line', _curLine);
 
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
@@ -20784,20 +21019,20 @@ function _edActivateLineTool(isNew, isCreating) {
     if(on){
       const hex=l._lastFillColor||edDrawFillColor||'#ffffff';
       l.fillColor=hex; edDrawFillColor=hex;
-      if(fb) fb.style.background=hex;
+      if(fb) fb.style.background=_edFillSwatchBg(l);
     } else {
       l._lastFillColor=l.fillColor;
       l.fillColor='none'; edDrawFillColor='none';
     }
     edRedraw(); _edShapePushHistory();
   });
-  $('op-line-fill-btn')?.addEventListener('click', e=>{
+  // Degradado vectorial (mismo modal que el relleno de mano alzada)
+  $('op-line-grad-btn')?.addEventListener('click', ()=>{
     const l=_curLine(); if(!l) return;
-    const cur=(l.fillColor&&l.fillColor!=='none')?l.fillColor:'#ffffff';
-    _edPickColor(e, cur,
-      hex=>{ l.fillColor=hex; $('op-line-fill-btn').style.background=hex; $('op-line-fill-on').checked=true; edDrawFillColor=hex; edRedraw(); },
-      ()=>{ _edShapePushHistory(); }
-    );
+    _edOpenVecGradient(l, ()=>{
+      const fb=$('op-line-fill-btn'); if(fb){ fb.style.background=_edFillSwatchBg(l); fb.style.opacity=1; }
+      const fo=$('op-line-fill-on'); if(fo) fo.checked=true;
+    });
   });
 
   // ── Curva de vértice ──
@@ -20830,6 +21065,7 @@ function _edActivateLineTool(isNew, isCreating) {
     const _newLayer = new LineLayer();
     _newLayer.color    = _origin.color || edDrawColor || '#000000';
     _newLayer.fillColor = edDrawFillColor || '#ffffff'; // relleno aplicado al fusionar
+    if(_edGradValid(_origin.fillGradient) && _origin.fillColor === _newLayer.fillColor) _newLayer.fillGradient = _edCloneGrad(_origin.fillGradient); // el degradado del primer objeto se conserva
     _newLayer.lineWidth = _origin.lineWidth ?? edDrawSize ?? 3;
     _newLayer.opacity  = _origin.opacity ?? 1;
     _newLayer.rotation = 0; // el nuevo layer no tiene rotación propia
@@ -21766,6 +22002,109 @@ function _edCheckDoubleTap(el) {
   _edDblTapTime = isDbl ? 0 : now;
   _edDblTapEl   = isDbl ? null : el;
   return isDbl;
+}
+
+// ── Color de objetos vectoriales (paneles forma y línea) ──────────────────
+// Mismo método que el panel de dibujo a mano: fila con 🎨 (selector propio en
+// táctil / nativo en PC), 💧 cuentagotas y 5 muestras de la paleta compartida
+// (edColorPalette, las 5 primeras). El destino lo decide la muestra marcada:
+// 'line' (muestra de línea) o 'fill' (muestra de relleno).
+let _edVecColorTarget = 'line';
+function _edVecTarget(pfx){
+  return (_edVecColorTarget==='fill' && $('op-'+pfx+'-fill-btn')) ? 'fill' : 'line';
+}
+function _edVecCurHex(pfx, la){
+  if(_edVecTarget(pfx)==='fill') return (la.fillColor && la.fillColor!=='none') ? la.fillColor : '#ffffff';
+  return la.color || '#000000';
+}
+function _edVecPalHtml(pfx){
+  const dots = edColorPalette.slice(0,5).map((c,i)=>
+    '<button class="op-vpal-dot" data-colidx="'+i+'" style="width:22px;height:22px;border-radius:50%;background:'+c+';border:2px solid var(--gray-300);cursor:'+(i<=1?'default':'pointer')+';flex-shrink:0;padding:0" title="'+c+'"></button>'
+  ).join('');
+  return `<button id="op-${pfx}-custom" style="width:26px;height:26px;border-radius:50%;background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:.85rem" title="${I18n.t('ed_customColorTitle')}">🎨</button>
+    <button id="op-${pfx}-eyedrop" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${dots}`;
+}
+function _edVecRefreshColorUI(pfx, la){
+  const tgt = _edVecTarget(pfx);
+  const lb=$('op-'+pfx+'-color-btn'), fb=$('op-'+pfx+'-fill-btn');
+  if(lb){ lb.style.background = la.color||'#000000'; lb.style.border = (tgt==='line'?'3px solid var(--black)':'2px solid var(--gray-300)'); }
+  if(fb){
+    const on = la.fillColor && la.fillColor!=='none';
+    fb.style.background = _edFillSwatchBg(la); fb.style.opacity = on?1:0.4;
+    fb.style.border = (tgt==='fill'?'3px solid var(--black)':'2px solid var(--gray-300)');
+  }
+  const cur = (la.fillColor && la.fillColor!=='none' && !_edGradValid(la.fillGradient)) || tgt==='line'
+    ? _edVecCurHex(pfx, la) : null;
+  document.querySelectorAll('.op-vpal-dot').forEach(d=>{
+    const c = edColorPalette[parseInt(d.dataset.colidx)];
+    d.style.background = c;
+    const sel = cur && c===cur;
+    d.style.border = sel ? '3px solid var(--black)' : '2px solid var(--gray-300)';
+  });
+}
+function _edVecApplyColor(pfx, la, hex){
+  if(_edVecTarget(pfx)==='fill'){
+    la.fillColor=hex; delete la.fillGradient; la._lastFillColor=hex; edDrawFillColor=hex;
+    const fo=$('op-'+pfx+'-fill-on'); if(fo) fo.checked=true;
+  } else {
+    la.color=hex;
+  }
+  _edVecRefreshColorUI(pfx, la);
+  edRedraw();
+}
+function _edVecWireColors(pfx, getLayer){
+  const L = ()=>getLayer();
+  const mark = t => { _edVecColorTarget=t; const la=L(); if(la) _edVecRefreshColorUI(pfx, la); };
+  const openPicker = e => {
+    const la=L(); if(!la) return;
+    _edPickColor(e, _edVecCurHex(pfx, la),
+      hex=>{ const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex); },
+      ()=>{ _edShapePushHistory(); });
+  };
+  [['line','color'],['fill','fill']].forEach(([t,id])=>{
+    const b=$('op-'+pfx+'-'+id+'-btn'); if(!b) return;
+    b.addEventListener('click', ()=>mark(t));
+    // Doble clic/toque: mismo modal HSL que las muestras de dibujo a mano
+    const hslPicker = () => {
+      mark(t); const la=L(); if(!la) return;
+      _edShowColorPicker((hex, final)=>{
+        const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex);
+        if(final) _edShapePushHistory();
+      }, _edVecCurHex(pfx, la));
+    };
+    b.addEventListener('pointerup', e=>{ if(!_edCheckDoubleTap(b)) return; e.stopPropagation(); hslPicker(); });
+    b.addEventListener('dblclick', e=>{ if(document.getElementById('ed-hsl-picker')) return; e.stopPropagation(); hslPicker(); });
+  });
+  $('op-'+pfx+'-custom')?.addEventListener('click', e=>{ e.stopPropagation(); openPicker(e); });
+  $('op-'+pfx+'-eyedrop')?.addEventListener('click', ()=>{
+    _edStartEyedrop(hex=>{ const la=L(); if(la){ _edVecApplyColor(pfx, la, hex); _edShapePushHistory(); } });
+  });
+  const editSlot = idx => {
+    if(idx<=1){ edToast(I18n.t('ed_colorNotEditable')); return; }
+    const la=L(); if(!la) return;
+    _edShowColorPicker((hex, final)=>{
+      const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex);
+      if(final){ _edSetPaletteColor(idx, hex); const l3=L(); if(l3) _edVecRefreshColorUI(pfx, l3); _edShapePushHistory(); }
+    }, edColorPalette[idx]);
+  };
+  document.querySelectorAll('.op-vpal-dot').forEach(dot=>{
+    const idx=parseInt(dot.dataset.colidx);
+    dot.addEventListener('click', ()=>{
+      const la=L(); if(!la) return;
+      _edVecApplyColor(pfx, la, edColorPalette[idx]); _edShapePushHistory();
+    });
+    dot.addEventListener('pointerup', e=>{
+      if(!_edCheckDoubleTap(dot)) return;
+      e.stopPropagation(); editSlot(idx);
+    });
+    dot.addEventListener('dblclick', e=>{
+      if(window._edIsTouch) return;
+      if(document.getElementById('ed-hsl-picker')) return;
+      e.stopPropagation(); editSlot(idx);
+    });
+  });
+  const la0=L(); if(la0) _edVecRefreshColorUI(pfx, la0);
 }
 
 // initialColor: color de partida del picker (por defecto edDrawColor).
@@ -25421,6 +25760,13 @@ function edInitDrawBar() {
     overlay.addEventListener('pointerdown', _onOverlayDown);
     drawBtn.addEventListener('click', onDrawClick);
     fillBtn.addEventListener('click', onFillClick);
+    // Modal de verdad: nada de lo que hay detrás (guías/reglas) debe
+    // reaccionar al toque mientras este diálogo está abierto — ver
+    // edStopCanvasLeak. No interfiere con _onOverlayDown de arriba (mismo
+    // elemento, listener ya registrado antes: sigue disparándose igual,
+    // stopPropagation solo afecta a los ANCESTROS, no a otros listeners del
+    // propio nodo). Con guard interno: seguro llamarlo en cada apertura.
+    edStopCanvasLeak(overlay);
   }
   // Cierra el picker de capa si esta abierto (helper local)
   function _edbCloseLayerPickLocal() {
@@ -26610,7 +26956,7 @@ function _esbSync() {
   // Swatch color relleno
   const fillBtn = $('esb-fill');
   if(fillBtn){
-    fillBtn.style.background = hasFill ? la.fillColor : (la._lastFillColor || '#ffffff');
+    fillBtn.style.background = _edFillSwatchBg(la);
     fillBtn.style.opacity = hasFill ? '1' : '0.4';
   }
   // Grosor: si el panel emergente compartido con el lápiz está abierto en modo
@@ -26645,6 +26991,7 @@ function _edFreezeLineLayer(la, idx) {
     cornerRadii: {...cr},
     color: la.color,
     fillColor: la.fillColor,
+    fillGradient: _edCloneGrad(la.fillGradient),
     lineWidth: la.lineWidth,
     closed: la.closed,
     opacity: la.opacity ?? 1,
@@ -26695,6 +27042,7 @@ function _edUnfreezeLineLayer(la, idx) {
   }
   ll.color = la.color || d.color;       // respetar cambios de color
   ll.fillColor = la.fillColor || d.fillColor;
+  if(_edGradValid(d.fillGradient)) ll.fillGradient = _edCloneGrad(d.fillGradient);
   ll.lineWidth = la.lineWidth || d.lineWidth;
   ll.closed = d.closed;
   ll.opacity = la.opacity ?? d.opacity;
@@ -26830,7 +27178,7 @@ function edInitShapeBar() {
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
     const cur=(la.fillColor&&la.fillColor!=='none')?la.fillColor:'#ffffff';
     _edPickColor(e, cur,
-      hex=>{ la.fillColor=hex; la._lastFillColor=hex; _esbSync(); edRedraw(); },
+      hex=>{ la.fillColor=hex; la._lastFillColor=hex; delete la.fillGradient; _esbSync(); edRedraw(); },
       ()=>{ _edShapePushHistory(); }
     );
   });
@@ -26995,6 +27343,7 @@ function edInitShapeBar() {
     const _newLayer = new LineLayer();
     _newLayer.color    = _origin.color || edDrawColor || '#000000';
     _newLayer.fillColor = edDrawFillColor || '#ffffff';
+    if(_edGradValid(_origin.fillGradient) && _origin.fillColor === _newLayer.fillColor) _newLayer.fillGradient = _edCloneGrad(_origin.fillGradient); // el degradado del primer objeto se conserva
     _newLayer.lineWidth = _origin.lineWidth ?? edDrawSize ?? 3;
     _newLayer.opacity  = _origin.opacity ?? 1;
     _newLayer.rotation = 0;
@@ -29623,7 +29972,7 @@ function edSerLayer(l, skipCompress){
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
-      color:l.color, fillColor:l.fillColor||'none', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      color:l.color, fillColor:l.fillColor||'none', fillGradient:_edCloneGrad(l.fillGradient), lineWidth:l.lineWidth, opacity:l.opacity??1,
       cornerRadii:l.cornerRadii?[...l.cornerRadii]:undefined,
       cornerRadius:l.cornerRadius||0};
     if(l.groupId)_sobj.groupId=l.groupId;
@@ -29665,7 +30014,7 @@ function edSerLayer(l, skipCompress){
     const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
     const _lobj={type:'line', points:l.points.map(_edCloneLinePoint),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
-      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', lineWidth:l.lineWidth, opacity:l.opacity??1,
+      closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', fillGradient:_edCloneGrad(l.fillGradient), lineWidth:l.lineWidth, opacity:l.opacity??1,
       _fromEllipse:l._fromEllipse||false,
       cornerRadii:_hasR?{..._cr}:undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.map(_edCloneLinePoint); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined};
@@ -29866,7 +30215,7 @@ function edDeserLayer(d, pageOrientation){
   }
   if(d.type==='shape'){
     const l=new ShapeLayer(d.shape||'rect',d.x||0.5,d.y||0.5,d.width||0.3,d.height||0.2);
-    l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; l.lineWidth=d.lineWidth??3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
+    l.color=d.color||'#000'; l.fillColor=d.fillColor||'none'; if(_edGradValid(d.fillGradient)) l.fillGradient=_edCloneGrad(d.fillGradient); l.lineWidth=d.lineWidth??3; l.rotation=d.rotation||0; l.opacity=d.opacity??1;
     if(d.cornerRadius) l.cornerRadius=d.cornerRadius;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
     if(d.groupId) l.groupId=d.groupId;
@@ -29887,7 +30236,7 @@ function edDeserLayer(d, pageOrientation){
   if(d.type==='line'){
     const l=new LineLayer();
     l.points=(d.points||[]).map(_edCloneLinePoint); l.closed=d.closed||false;
-    l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
+    l.color=d.color||'#000'; l.fillColor=d.fillColor||'#ffffff'; if(_edGradValid(d.fillGradient)) l.fillGradient=_edCloneGrad(d.fillGradient); l.lineWidth=d.lineWidth??3; l.opacity=d.opacity??1;
     l.rotation=d.rotation||0;
     if(d._fromEllipse) l._fromEllipse=true;
     if(d.cornerRadii) l.cornerRadii=Array.isArray(d.cornerRadii)?[...d.cornerRadii]:{...d.cornerRadii};
@@ -33600,10 +33949,13 @@ function EditorView_init(){
   // para PC" — en táctil (_edIsTouch) el contextmenu nativo del navegador
   // por long-press queda igual que antes, solo suprimido, sin sustituirlo
   // por nada.
+  // Durante la edición de dibujos (a mano o vectoriales) NO se muestra el menú propio:
+  // el clic derecho no hace nada (el nativo ya está suprimido arriba). Petición de Alberto.
   if(_shell) _shell.addEventListener('contextmenu', e => {
     e.preventDefault();
     if(window._edIsTouch || window._gcpActive) return;
     if(e.target !== edCanvas) return;
+    if(_edIsDrawingEditActive()) return;
     _edShowContextMenu(e);
   }, { passive: false });
   window._edListeners = [
@@ -33672,6 +34024,10 @@ function EditorView_init(){
           </div>
         </div>`;
       document.body.appendChild(dlgCloud);
+      // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos
+      // del lienzo) debe reaccionar al toque mientras se avisa del guardado
+      // en curso — ver edStopCanvasLeak.
+      edStopCanvasLeak(dlgCloud);
       // Actualizar contador en el diálogo mientras está abierto
       const _dlgTimer = setInterval(() => {
         const b = document.getElementById('_edCloudSavingBadge');
@@ -33724,6 +34080,10 @@ function EditorView_init(){
 
     // Click fuera del cuadro → cerrar y volver al editor
     dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
+    // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos del
+    // lienzo) debe reaccionar al toque mientras se pregunta si guardar antes
+    // de salir — ver edStopCanvasLeak.
+    edStopCanvasLeak(dlg);
 
     document.getElementById('_edExitYes').onclick = async () => {
       dlg.remove();
@@ -34342,6 +34702,10 @@ function EditorView_init(){
     _mpbehModal?.addEventListener('pointerdown', (e) => {
       if (e.target === _mpbehModal) _mpbehClose();
     });
+    // Modal de verdad: nada de lo que hay detrás (guías/reglas, que tienen
+    // prioridad máxima sobre cualquier otro bloqueo de UI) debe reaccionar
+    // al toque mientras este panel está abierto — ver edStopCanvasLeak.
+    edStopCanvasLeak(_mpbehModal);
 
     // Toggle sección "Al final de la trayectoria"
     $('mpbeh-end-toggle')?.addEventListener('click', () => {
@@ -36100,6 +36464,22 @@ function _edBuildLineSvgPath(localPts, crObj, isClosed, pw, ph) {
   return parts.join(' ');
 }
 
+// ── Degradado vectorial → <linearGradient>/<radialGradient> SVG (userSpaceOnUse) ──
+// (cx,cy) = centro del bbox en el espacio de usuario donde se referencia el degradado.
+// Misma geometría que _edFillStyle: el SVG exportado se ve igual que en el editor.
+let _edSvgGradSeq = 0;
+function _edSvgGrad(la, w, h, cx, cy) {
+  if (!_edGradValid(la.fillGradient)) return null;
+  const g = la.fillGradient, id = 'edg' + (++_edSvgGradSeq), f = v => (+v).toFixed(3);
+  const q = _edGradGeom(g, w, h);
+  const stops = `<stop offset="0" stop-color="${g.c1}"/><stop offset="1" stop-color="${g.c2}"/>`;
+  if (g.type === 'radial') {
+    const r = Math.hypot(q.x1-q.x0, q.y1-q.y0);
+    return { id, def: `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${f(cx+q.x0)}" cy="${f(cy+q.y0)}" r="${f(Math.max(r,0.001))}">${stops}</radialGradient>` };
+  }
+  return { id, def: `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${f(cx+q.x0)}" y1="${f(cy+q.y0)}" x2="${f(cx+q.x1)}" y2="${f(cy+q.y1)}">${stops}</linearGradient>` };
+}
+
 // ── Helper: serializar una capa vector a elemento SVG ────────────────────────
 function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
   // pad (px) = semiancho máximo de trazo entre las capas exportadas;
@@ -36112,14 +36492,20 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
 
   if (la.type === 'shape') {
     const sw   = la.lineWidth || 0;
-    const fill = (la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+    let fill = (la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
     const strk = sw > 0 ? ` stroke="${la.color||'#000'}" stroke-width="${sw}"` : ' stroke="none"';
     const w    = +(la.width  * pw).toFixed(3);
     const h    = +(la.height * ph).toFixed(3);
-    const base = `fill="${fill}"${strk}${xform}${op}`;
+    // Degradado vectorial: rect/ellipse lo referencian en coords absolutas; el <path>
+    // con radios (más abajo) vive en un <g> centrado, así que necesita su propia copia en (0,0).
+    const _gdAbs = fill !== 'none' ? _edSvgGrad(la, w, h, +svgCx, +svgCy) : null;
+    const _gdLoc = fill !== 'none' ? _edSvgGrad(la, w, h, 0, 0) : null;
+    const _preAbs = _gdAbs ? `<defs>${_gdAbs.def}</defs>` : '';
+    const fillAbs = _gdAbs ? `url(#${_gdAbs.id})` : fill;
+    const base = `fill="${fillAbs}"${strk}${xform}${op}`;
 
     if (la.shape === 'ellipse') {
-      return `<ellipse cx="${svgCx}" cy="${svgCy}" rx="${(w/2).toFixed(3)}" ry="${(h/2).toFixed(3)}" ${base}/>`;
+      return _preAbs + `<ellipse cx="${svgCx}" cy="${svgCy}" rx="${(w/2).toFixed(3)}" ry="${(h/2).toFixed(3)}" ${base}/>`;
     }
     // Rect — con radios opcionales
     const hasCrs = Array.isArray(la.cornerRadii) && la.cornerRadii.some(r=>r>0);
@@ -36128,10 +36514,11 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
       const d = _edRectRadiiToPath(+(-w/2).toFixed(3), +(-h/2).toFixed(3), w, h,
                                     hasCrs ? la.cornerRadii : la.cornerRadius);
       return `<g transform="translate(${svgCx} ${svgCy})${rot ? ` rotate(${rot})` : ''}"${op}>`
-           + `<path d="${d}" fill="${fill}"${strk}/></g>`;
+           + (_gdLoc ? `<defs>${_gdLoc.def}</defs>` : '')
+           + `<path d="${d}" fill="${_gdLoc ? `url(#${_gdLoc.id})` : fill}"${strk}/></g>`;
     }
     const rxAttr = (la.cornerRadius||0) > 0 ? ` rx="${la.cornerRadius}"` : '';
-    return `<rect x="${(+svgCx - w/2).toFixed(3)}" y="${(+svgCy - h/2).toFixed(3)}" width="${w}" height="${h}"${rxAttr} ${base}/>`;
+    return _preAbs + `<rect x="${(+svgCx - w/2).toFixed(3)}" y="${(+svgCy - h/2).toFixed(3)}" width="${w}" height="${h}"${rxAttr} ${base}/>`;
   }
 
   if (la.type === 'line') {
@@ -36176,7 +36563,10 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
     }
 
     // ── Sin grouped: un único <path> con todos los contornos ──────────────
-    const fill = (la.closed && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+    let fill = (la.closed && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+    // Degradado vectorial (contorno único / fusionado): coords locales, el <g> ya está centrado
+    const _gdL = fill !== 'none' ? _edSvgGrad(la, la.width * pw, la.height * ph, 0, 0) : null;
+    if (_gdL) fill = `url(#${_gdL.id})`;
     // Respetar sw=0: no aplicar ningún trazo cuando el grosor es cero
     const strk = sw > 0
       ? `stroke="${la.color||'#000'}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"`
@@ -36194,7 +36584,7 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
 
     const d  = allD.join(' ');
     const fr = (contoursWithGIdx.length > 1 || hasSubs) ? ' fill-rule="evenodd"' : '';
-    return `<g transform="${gXform}"${op}><path d="${d}" fill="${fill}" ${strk}${fr}/></g>`;
+    return `<g transform="${gXform}"${op}>${_gdL ? `<defs>${_gdL.def}</defs>` : ''}<path d="${d}" fill="${fill}" ${strk}${fr}/></g>`;
   }
 
   return '';
