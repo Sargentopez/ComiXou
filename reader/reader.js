@@ -828,6 +828,68 @@ const ED_CANVAS_H = ED_PAGE_H * 3;   // 2340 - workspace completo, sin cambios
 // su valor histórico — NO recalcular a partir de ED_CANVAS_W/ED_CANVAS_H.
 const ED_TAIL_LEGACY_REF = 1800;
 
+// ── DETECCIÓN "TELÉFONO MÓVIL" Y TOPE DE ESCALA EN TABLET/PC ─────────────
+// Antes existía aquí también una rotación automática de hoja en teléfono
+// (feature completa, construida a lo largo de v40.63–v41.28) que Alberto
+// pidió revertir por completo el 2026-09-30: "las animaciones de giro
+// están dando muchos problemas y no mejora la experiencia, la empeora" —
+// volver a como funcionaba en v41.14. Ver memoria del proyecto
+// (codebase-invariants.md) antes de replantear cualquier rotación de hoja:
+// ya se intentó, con bastante trabajo detrás, y se descartó explícitamente
+// tras probarla en dispositivo real — no es una vía a reabrir sin más.
+//
+// De esa función SÍ se conserva (pedido explícito, misma fecha) el tope de
+// escala en tablet/PC de más abajo, que es independiente de la rotación:
+//
+// IS_MOBILE_PHONE — NUNCA uses capacidad táctil como proxy de "esto es un
+// móvil": un iPad o un Android en modo tablet son igual de táctiles que un
+// teléfono, y un portátil con pantalla táctil también daría
+// maxTouchPoints>0 (ya hay un bug documentado en este mismo proyecto por
+// esa confusión — ver js/editor.js). Solución estándar de la industria,
+// sin una única señal 100% fiable (ni Client Hints cubre Safari/iPadOS):
+//  1. Client Hints (navigator.userAgentData.mobile), cuando el navegador lo
+//     soporta (Chromium/Android): la propia plataforma dice si es "móvil".
+//  2. iPad: se anuncia como "Macintosh" desde iPadOS 13 — un Mac real nunca
+//     tiene pantalla táctil (maxTouchPoints>1); un iPad, sí.
+//  3. iPhone/iPod: token explícito en el userAgent.
+//  4. Android: el token "Mobile" indica teléfono; su ausencia, tablet.
+//  5. Cualquier otra cosa (Windows, Linux, ChromeOS, Mac de escritorio) no
+//     es teléfono.
+// Ante cualquier duda o error: false (mismo comportamiento que sin esta
+// función, que es "no es teléfono").
+const IS_MOBILE_PHONE = (() => {
+  try {
+    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
+      return navigator.userAgentData.mobile;
+    }
+    const ua = navigator.userAgent || '';
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return false; // iPad
+    if (/iPhone|iPod/.test(ua)) return true;
+    if (/Android/.test(ua)) return /Mobile/.test(ua);
+    return false;
+  } catch (_) {
+    return false;
+  }
+})();
+
+// Tope de escala SOLO en tablet/PC (nunca en teléfono): sin él, una hoja
+// horizontal (780×360) se auto-escala para llenar el máximo de viewport
+// posible igual que una vertical (360×780), y al tener proporciones
+// distintas acaba viéndose con más "zoom" que ella — nada fiel, porque en
+// teléfono ambas llenan la pantalla por igual. Se topa la escala de
+// cualquier hoja a la que tendría una hoja VERTICAL canónica
+// (ED_PAGE_W×ED_PAGE_H) en ese mismo viewport: para una vertical no cambia
+// nada (ya es esa escala); para una horizontal, la iguala a las verticales
+// dejando espacio sobrante en vez de invadir más pantalla que ellas — salvo
+// que ese tope desborde su propio viewport (p.ej. tablet en vertical, hoja
+// horizontal más ancha que el viewport), en cuyo caso se queda con su
+// propio tope de siempre, que por construcción nunca desborda.
+function _capScaleTabletPC(scale, vw, vh) {
+  if (IS_MOBILE_PHONE) return scale;
+  const refScale = Math.min(vw / ED_PAGE_W, vh / ED_PAGE_H);
+  return Math.min(scale, refScale);
+}
+
 // ── ESTADO ──────────────────────────────────────────────────
 // Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
 let _logoImg = null;
@@ -894,11 +956,7 @@ function _rzApply(canvas) {
 
 function _rzReset(canvas) {
   RZ.scale = 1; RZ.tx = 0; RZ.ty = 0;
-  // Si la hoja está rotada automáticamente para llenar pantalla (ver RR más
-  // abajo), su transform "de reposo" es rotate(90deg), no '' — conservarlo
-  // aquí en vez de machacarlo es lo que permite seguir llamando a este
-  // reset en cada cambio de hoja/resize exactamente igual que siempre.
-  if (canvas) canvas.style.transform = canvas._rrRotated ? 'rotate(90deg)' : '';
+  if (canvas) canvas.style.transform = '';
 }
 
 // Recuadro ORIGINAL (sin el transform actual) del canvas, en coordenadas de
@@ -956,11 +1014,6 @@ function _rzPinchCenter(touches) {
 }
 function _rzPinchStart(canvas, touches) {
   if (!canvas) { _rzPinch = null; return; }
-  // Zoom desactivado mientras la hoja está rotada automáticamente (ver RR
-  // más abajo) — no se pidió zoom combinado con rotación, y la geometría
-  // de RZ (_rzOrigRect etc.) da por hecho transform-origin:0 0, que deja de
-  // valer mientras dura la rotación (usa center — ver _rrSetFit).
-  if (canvas._rrRotated) { _rzPinch = null; return; }
   _rzPinch = {
     canvas,
     dist0:  Math.max(1, _rzPinchDist(touches)),
@@ -987,305 +1040,11 @@ function _rzPinchEnd() { _rzPinch = null; }
 // ── Ctrl+rueda (PC) — estándar del resto de la web, hacia el cursor ──────
 function _rzWheelZoom(e, canvas) {
   if (!canvas) return false;
-  if (canvas._rrRotated) return false; // ver nota de _rzPinchStart
   if (!(e.ctrlKey || e.metaKey)) return false;
   e.preventDefault();
   const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
   _rzZoomAt(canvas, e.clientX, e.clientY, factor);
   return true;
-}
-
-// ── ROTACIÓN AUTOMÁTICA DE HOJA PARA LLENAR PANTALLA (pedido explícito de
-// Alberto) ───────────────────────────────────────────────────────────────
-// Cuando la orientación de la hoja (pw×ph) no coincide con la del viewport,
-// se rota 90° con una animación para ocupar el máximo de pantalla posible,
-// en vez de quedar encajada con franjas enormes a los lados. Se aplica en
-// AMBOS modos de lectura (fixed y scroll horizontal/vertical) sobre el
-// mismo <canvas> que ya existía — nunca se toca cómo _render() dibuja el
-// contenido (eso sigue pintando siempre en el espacio pw×ph de la hoja, sin
-// enterarse de nada); esto es puramente un transform CSS aplicado DESPUÉS,
-// sobre el bitmap ya renderizado. Las hojas de créditos nunca rotan (tienen
-// enlaces HTML propios superpuestos que no sería viable mantener alineados).
-//
-// No debe romper la navegación (deslizar o tocar) bajo ningún concepto:
-//  - El pellizco/rueda de zoom se desactiva mientras la hoja está rotada
-//    (ver guardas en _rzPinchStart/_rzWheelZoom más arriba) — no se pidió
-//    zoom combinado con rotación, y soportarlo exigiría hacer también toda
-//    la geometría de RZ (_rzOrigRect, transform-origin:0 0) consciente de
-//    la rotación. _rzReset ya sabe conservar el transform de rotación.
-//  - El hit-test de botones de capa (_rBtnHitTestCanvas) SÍ sigue
-//    funcionando con la hoja rotada (ver _rrLocalPoint) — saltar a otra
-//    hoja o abrir un enlace de autor Sí es navegación.
-//  - El contenedor de cada slide en modo scroll (.rs-slide) NUNCA cambia de
-//    tamaño por esto — sigue midiendo siempre vw×vh; solo el <canvas> DE
-//    DENTRO rota/cambia de tamaño, así que el scroll-snap nativo del
-//    navegador (del que depende deslizar) no se entera de nada.
-//  - La animación solo se dispara al ENTRAR de verdad en una hoja que
-//    necesita rotar (no estaba rotada, pasa a estarlo) — nunca en cada
-//    resize, nunca al pasar a otra hoja con la misma orientación que la
-//    anterior, y nunca al SALIR de una rotada (llegar a una que ya
-//    coincide con el dispositivo): esos tres casos son siempre
-//    instantáneos (ver _rrApplyFit/_rrEnterPanel). Asimétrico a propósito
-//    — Alberto (2026-09-29): "si la orientación coincide... no hace nada
-//    más" — la animación anuncia "voy a rotar esto", así que solo tiene
-//    sentido al entrar en una hoja que sí hace falta rotar.
-//  - Cuando SÍ se dispara, va en DOS FASES SECUENCIADAS, nunca combinadas
-//    (ver _rrPlayAdaptAnimation): primero se deja la hoja en su encaje
-//    normal sin rotar; PRIMERO gira en su sitio (fase "rr-rotating", sin
-//    cambiar aún tamaño/posición) y SOLO cuando el giro termina, crece
-//    hasta cubrir el espacio disponible (fase "rr-growing"). Alberto
-//    (2026-09-29): una transición combinada de todo a la vez no se leía
-//    como dos pasos — para cuando se percibía, la hoja ya parecía rotada
-//    desde el principio y el giro "posterior" no tenía sentido.
-//  - Un giro FÍSICO real del dispositivo (resize/orientationchange) nunca
-//    anima — el giro que hace el usuario con las manos YA ES la
-//    transición; solo una navegación de hoja sin mover el dispositivo
-//    anima (ver el parámetro `animate` de _rrApplyFit/_resizeCanvas).
-//  - Solo se aplica en TELÉFONO móvil — nunca en tablet ni PC (aunque
-//    tengan pantalla táctil): son dispositivos que el usuario no gira con
-//    la mano, así que deben seguir viéndose exactamente como antes de esta
-//    función (encajados sin rotar, aunque no llenen la pantalla). Ver
-//    IS_MOBILE_PHONE — la capacidad táctil NO sirve como proxy de "esto es
-//    un móvil" (ya hay un bug documentado en este mismo proyecto por eso,
-//    ver js/editor.js).
-//  - En tablet/PC, además, una hoja horizontal nunca se ve a más "zoom"
-//    que una vertical (tope a la escala que tendría una hoja vertical
-//    canónica en ese mismo viewport — ver el bloque `if (!IS_MOBILE_PHONE)`
-//    dentro de _rrFit). Sin este tope, cada hoja se auto-escalaba para
-//    ocupar el máximo de pantalla y, al tener proporciones distintas,
-//    la horizontal acababa viéndose mucho más grande que la vertical —
-//    nada fiel a cómo se ve en el móvil, donde ambas llenan la pantalla
-//    por igual (la horizontal gracias al giro). Puede dejar espacio
-//    sobrante alrededor de la horizontal; nunca la desborda del viewport.
-const RR_ANIM_MS = 450;
-
-// Detección de "teléfono móvil" — NUNCA capacidad táctil sola (ver arriba):
-// un iPad o un Android en modo tablet son igual de táctiles que un
-// teléfono, y un portátil Windows con pantalla táctil también daría
-// maxTouchPoints>0. Solución estándar de la industria, sin una única señal
-// 100% fiable (ni siquiera Client Hints cubre Safari/iPadOS, que no lo
-// soporta) — combina, de más a menos fiable:
-//  1. Client Hints (navigator.userAgentData.mobile), cuando el navegador lo
-//     soporta (Chromium/Android): la propia plataforma dice si es "móvil"
-//     de verdad, inmune a que Chrome recorte el string de userAgent.
-//  2. iPad: se anuncia como "Macintosh" desde iPadOS 13 (para que las webs
-//     le sirvan la versión de escritorio) — un Mac real nunca tiene
-//     pantalla táctil (maxTouchPoints>1); un iPad, sí. Ese es el truco
-//     estándar para distinguirlos.
-//  3. iPhone/iPod: token explícito en el userAgent.
-//  4. Android: el token "Mobile" en el userAgent indica teléfono; su
-//     ausencia indica tablet (convención de Google desde 2012 — ya no es
-//     100% fiable en Chrome muy recientes por la reducción del userAgent,
-//     pero sigue siendo la mejor señal disponible sin Client Hints).
-//  5. Cualquier otra cosa (Windows, Linux, ChromeOS, Mac de escritorio
-//     real...) -> no es teléfono.
-// Ante cualquier duda o error: false (comportamiento de "no es móvil", que
-// es el que ya existía antes de esta función).
-const IS_MOBILE_PHONE = (() => {
-  try {
-    if (navigator.userAgentData && typeof navigator.userAgentData.mobile === 'boolean') {
-      return navigator.userAgentData.mobile;
-    }
-    const ua = navigator.userAgent || '';
-    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return false; // iPad
-    if (/iPhone|iPod/.test(ua)) return true;
-    if (/Android/.test(ua)) return /Mobile/.test(ua);
-    return false;
-  } catch (_) {
-    return false;
-  }
-})();
-
-// Encaje de una hoja pw×ph en un viewport vw×vh, rotada o no. `allowRotate`
-// a false (hojas de créditos, o cualquier dispositivo que no sea teléfono
-// móvil — ver IS_MOBILE_PHONE) nunca rota: con rotate=false esta función se
-// reduce exactamente al encaje "contain" de toda la vida (escalar sin
-// recortar, centrado, sin rotar) — el aspecto que debe conservar tablet/PC.
-// dw/dh = tamaño CSS que hay que asignar al <canvas> (su caja PROPIA, sin
-// rotar — con transform-origin center, un rotate(90deg) alrededor de su
-// centro no la desplaza, así que left/top se calculan igual centrando esa
-// caja tanto si va a rotar como si no). vis.* = recuadro que verá el
-// usuario una vez rotada (ancho/alto intercambiados) — lo necesita
-// cualquiera que deba alinearse con lo que está en pantalla (botones de
-// esquina, hit-test de botones de capa).
-function _rrFit(pw, ph, vw, vh, allowRotate) {
-  const rotate = IS_MOBILE_PHONE && !!allowRotate && ((pw > ph) !== (vw > vh));
-  const fitW = rotate ? vh : vw, fitH = rotate ? vw : vh;
-  let scale = Math.min(fitW / pw, fitH / ph);
-  if (!IS_MOBILE_PHONE) {
-    // Tablet/PC (aquí `rotate` es siempre false): sin este tope, cada hoja
-    // se auto-escala por su cuenta para ocupar el máximo posible del
-    // viewport, y como una horizontal (780×360) y una vertical (360×780)
-    // tienen proporciones distintas, acaban con un "zoom" distinto entre
-    // sí — la horizontal se ve mucho más grande que la vertical, sin ser
-    // fiel a cómo se ve en el móvil, que es el dispositivo principal para
-    // el que se ha creado Comxow (Alberto, 2026-09-29). Así que se calcula
-    // también la escala que tendría una hoja VERTICAL canónica
-    // (ED_PAGE_W×ED_PAGE_H) en este mismo viewport, y se usa la MENOR de
-    // las dos. Para una hoja vertical coincide siempre con su propia
-    // escala (pw/ph ya son ED_PAGE_W/ED_PAGE_H, cero cambio). Para una
-    // horizontal, iguala el tamaño de las verticales dejando espacio
-    // sobrante en vez de invadir más pantalla que ellas — y si igualarla
-    // desbordaría el viewport (p.ej. una tablet en vertical, donde la
-    // hoja horizontal es más ancha que el propio viewport), se queda con
-    // su propio tope de siempre, que por construcción nunca desborda.
-    const refScale = Math.min(vw / ED_PAGE_W, vh / ED_PAGE_H);
-    scale = Math.min(scale, refScale);
-  }
-  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
-  const left = Math.round((vw - dw) / 2);
-  const top  = Math.round((vh - dh) / 2);
-  const vis = rotate
-    ? { left: Math.round((vw - dh) / 2), top: Math.round((vh - dw) / 2), width: dh, height: dw }
-    : { left, top, width: dw, height: dh };
-  return { rotate, dw, dh, left, top, vis };
-}
-
-// Asigna `fit` a `canvas` de forma INMEDIATA (sin transición). Asigna
-// también left/top: en modo fixed el canvas es position:absolute y los
-// necesita para centrarse; en modo scroll el canvas es position:static
-// (se centra por flexbox vía .rs-slide) y el navegador simplemente ignora
-// left/top ahí, así que asignarlos siempre es inofensivo y evita tener que
-// mantener dos caminos distintos sincronizados con el ancho/alto.
-function _rrSetFit(canvas, fit) {
-  canvas.style.width  = fit.dw + 'px';
-  canvas.style.height = fit.dh + 'px';
-  canvas.style.left   = fit.left + 'px';
-  canvas.style.top    = fit.top  + 'px';
-  if (fit.rotate) {
-    // .rs-slide canvas tiene max-width/max-height:100% en el CSS (para el
-    // caso normal, sin rotar) — con la hoja rotada dw/dh se calculan contra
-    // el viewport INTERCAMBIADO y pueden superar el 100% de su slide (p.ej.
-    // dw ajustado a vh en un móvil en vertical), así que hay que anularlo
-    // explícitamente o el navegador recortaría el encaje ya calculado.
-    canvas.style.maxWidth  = 'none';
-    canvas.style.maxHeight = 'none';
-    canvas.style.transformOrigin = 'center center';
-    canvas.style.transform = 'rotate(90deg)';
-  } else {
-    canvas.style.maxWidth  = '';
-    canvas.style.maxHeight = '';
-    canvas.style.transformOrigin = '';
-    canvas.style.transform = '';
-  }
-  canvas._rrRotated = fit.rotate;
-}
-
-// Reproduce la animación de adaptación en DOS FASES SECUENCIALES, nunca
-// combinadas (Alberto, 2026-09-29 — corrigiendo el diseño anterior, que
-// animaba giro+tamaño a la vez: "al acceder a la hoja... ya estaba
-// correctamente rotada desde el inicio... eso hace que la rotación que
-// ocurre posteriormente no tenga sentido"):
-//  1. Se deja primero la hoja en su encaje normal SIN rotar (`fitPlain`,
-//     ajustado al espacio disponible tal cual, sin llenar más pantalla).
-//  2. Fase A — SOLO gira (transform), sin tocar tamaño/posición todavía
-//     (sigue en el tamaño de `fitPlain` mientras gira).
-//  3. Cuando el giro termina, fase B — SOLO crece/reposiciona
-//     (left/top/width/height) hasta `fit`, con el transform ya fijo desde
-//     la fase A — cubre entonces el espacio disponible.
-// Se usa tanto desde _rrApplyFit (modo fixed) como desde _rrEnterPanel
-// (modo scroll) — mantenerlas sincronizadas si se toca esto.
-function _rrPlayAdaptAnimation(canvas, fit, fitPlain) {
-  clearTimeout(canvas._rrAnimTimer);
-  clearTimeout(canvas._rrAnimTimer2);
-  canvas.classList.remove('rr-animating', 'rr-rotating', 'rr-growing');
-  _rrSetFit(canvas, fitPlain);
-  canvas._rrInited = true;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    // Fase A: solo gira. Tamaño/posición se quedan en los de fitPlain.
-    canvas.classList.add('rr-animating', 'rr-rotating');
-    canvas.style.maxWidth  = 'none';
-    canvas.style.maxHeight = 'none';
-    canvas.style.transformOrigin = 'center center';
-    canvas.style.transform = 'rotate(90deg)';
-    canvas._rrRotated = fit.rotate;
-    canvas._rrAnimTimer = setTimeout(() => {
-      // Fase B: solo crece/reposiciona — el transform ya no cambia.
-      canvas.classList.remove('rr-rotating');
-      canvas.classList.add('rr-growing');
-      canvas.style.width  = fit.dw   + 'px';
-      canvas.style.height = fit.dh   + 'px';
-      canvas.style.left   = fit.left + 'px';
-      canvas.style.top    = fit.top  + 'px';
-      canvas._rrAnimTimer2 = setTimeout(() => {
-        canvas.classList.remove('rr-animating', 'rr-growing');
-        // _resizeCanvas()/_rrEnterPanel() ya llaman a _positionBtns() justo
-        // después de arrancar esta animación, pero en ese instante síncrono
-        // canvas._rrRotated TODAVÍA no se ha puesto a true (eso pasa dos
-        // rAF más tarde, arriba) — así que en el caso "entrando en rotación
-        // con animación" los botones se quedaban colocados para la hoja
-        // ANTERIOR durante toda la animación. Repetir la llamada aquí, ya
-        // con el giro+crecimiento asentados del todo, los deja en su sitio
-        // final correcto (Alberto, 2026-09-29).
-        _positionBtns();
-        // Mismo motivo, para los botones de la hoja de créditos (enlace y
-        // "volver a leer"), montados aparte — ver _mountCreditsButtons —
-        // cuando lo que entró en rotación animada es esa hoja.
-        if (RS.isCredits) { _hideCreditsButtons(); _mountCreditsButtons(); }
-      }, RR_ANIM_MS + 80);
-    }, RR_ANIM_MS + 80);
-  }));
-}
-
-// Asigna `fit` a `canvas`, animando en dos fases (ver _rrPlayAdaptAnimation)
-// SOLO al ENTRAR de verdad en una hoja que necesita rotar — nunca al salir
-// de una, ni al no cambiar de estado. Alberto (2026-09-29), describiendo el
-// proceso hoja a hoja: "primero la hoja se carga sin cambiar de
-// orientación... si la orientación coincide con la del dispositivo no hace
-// nada más, si no coincide, primero hace la animación de giro, después la
-// de ampliación" — es decir, asimétrico: la animación anuncia "voy a rotar
-// esto", así que solo tiene sentido al entrar en una hoja que SÍ hace
-// falta rotar; al llegar a una que ya coincide (aunque la anterior
-// estuviera rotada) no hay nada que anunciar, así que es instantáneo.
-//  - `animate=false`: SIEMPRE instantáneo. Lo usan los disparados por
-//    resize/orientationchange (giro FÍSICO real del dispositivo, o
-//    cualquier otro cambio de tamaño de ventana) — ver cabecera del bloque
-//    RR más arriba: el giro que el usuario ve/hace con las manos YA ES la
-//    transición; animar aquí encima sería una segunda rotación visible y
-//    redundante (Alberto: "giro el dispositivo, vuelve a rotar
-//    correctamente, pero innecesariamente"). Los disparados por
-//    NAVEGACIÓN (avanzar/retroceder de hoja, sin que el dispositivo se
-//    mueva) siguen pidiendo animate=true (el valor por defecto).
-//  - `animate=true` pero NO se está entrando en rotación (la hoja ya
-//    estaba rotada y sigue igual, la hoja ya estaba sin rotar y sigue
-//    igual, O se está SALIENDO de rotación): instantáneo — _rrSetFit
-//    directo a `fit` (necesario incluso sin animar: en modo fixed el mismo
-//    <canvas> reutilizado aún arrastra el transform/tamaño de la hoja
-//    anterior y hay que corregirlo).
-//  - `animate=true` y SÍ se está entrando en rotación (no estaba rotada,
-//    pasa a estarlo): reproduce las dos fases (giro, luego ampliación)
-//    arrancando desde el encaje normal sin rotar de ESTA hoja (`fitPlain`).
-function _rrApplyFit(canvas, fit, fitPlain, animate) {
-  if (animate === undefined) animate = true;
-  const wasRotated = !!canvas._rrRotated;
-  canvas._rrInited = true;
-  const enteringRotation = animate && fit.rotate && !wasRotated;
-  if (!enteringRotation) {
-    clearTimeout(canvas._rrAnimTimer);
-    clearTimeout(canvas._rrAnimTimer2);
-    canvas.classList.remove('rr-animating', 'rr-rotating', 'rr-growing');
-    _rrSetFit(canvas, fit);
-    return;
-  }
-  _rrPlayAdaptAnimation(canvas, fit, fitPlain);
-}
-
-// Traduce un punto de VENTANA (winX,winY) al sistema de coordenadas propio
-// de `canvas` (su caja CSS sin rotar, dw×dh) — funciona igual si la hoja
-// está rotada 90° (deshace la rotación) que si no. null si el punto cae
-// fuera de su recuadro visible en pantalla.
-function _rrLocalPoint(canvas, winX, winY) {
-  const rect = canvas.getBoundingClientRect();
-  if (canvas._rrRotated) {
-    const dw = rect.height, dh = rect.width;
-    const lx = winY - rect.top;
-    const ly = (rect.left + rect.width) - winX;
-    if (lx < 0 || lx > dw || ly < 0 || ly > dh) return null;
-    return { lx, ly, dw, dh };
-  }
-  const lx = winX - rect.left, ly = winY - rect.top;
-  if (lx < 0 || lx > rect.width || ly < 0 || ly > rect.height) return null;
-  return { lx, ly, dw: rect.width, dh: rect.height };
 }
 
 // ── ARRANQUE ─────────────────────────────────────────────────
@@ -1430,50 +1189,10 @@ function _toggleFullscreen() {
   }
 }
 
-// Bloquea/libera la orientación NATIVA del dispositivo — Alberto
-// (2026-09-29): "al girar el dispositivo, el navegador lo detecta y vuelve
-// a hacer una rotación innecesaria... mira si puede bloquearse el giro
-// nativo del navegador en android". Sin esto, cada giro físico del móvil
-// hace que el propio SO/navegador reoriente TODA la página con su propia
-// animación nativa (fuera de nuestro control) — encima de la rotación CSS
-// que ya aplicamos nosotros para hojas horizontales, así que se percibían
-// dos rotaciones a la vez. Con la orientación bloqueada a portrait, el SO
-// deja de reorientar nada por su cuenta: el único "giro" que se ve es el
-// nuestro, por CSS, solo cuando de verdad hace falta.
-//   - Screen Orientation API (`screen.orientation.lock`): estándar de la
-//     industria para esto — no hay alternativa sin ella.
-//   - SOLO funciona con fullscreen activo — restricción impuesta por el
-//     propio navegador (Chrome la rechaza siempre fuera de fullscreen, para
-//     que una página cualquiera, compartiendo pantalla con la barra/otras
-//     pestañas, no pueda secuestrar la orientación del aparato). Fuera de
-//     fullscreen no hay forma de evitar el giro nativo desde la web.
-//   - Solo Chromium/Android la soporta de verdad (Chrome, Brave...); iOS
-//     Safari no implementa esta API en absoluto, con o sin fullscreen — ahí
-//     seguirá girando de forma nativa, no hay nada que hacer desde aquí.
-//   - Solo en teléfono (ver IS_MOBILE_PHONE) — la función de rotación
-//     entera es solo para teléfono, igual que aquí: no tiene sentido
-//     bloquear la orientación de una tablet o un PC con pantalla táctil.
-//   - Se libera sola al salir de fullscreen (comportamiento estándar del
-//     navegador), pero se libera también aquí a mano por si acaso.
-function _lockNativeOrientation(lock) {
-  if (!IS_MOBILE_PHONE) return;
-  const so = screen.orientation;
-  if (!so) return;
-  try {
-    if (lock && typeof so.lock === 'function') {
-      const p = so.lock('portrait');
-      if (p && typeof p.catch === 'function') p.catch(() => {}); // algunos navegadores la rechazan igual pese a fullscreen — fallo silencioso
-    } else if (!lock && typeof so.unlock === 'function') {
-      so.unlock();
-    }
-  } catch (_) {}
-}
-
 function _onFullscreenChange() {
   const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
   const btn  = document.getElementById('fullscreenToggle');
   if (btn) btn.textContent = isFs ? '[ ✕ ]' : '[ ]';
-  _lockNativeOrientation(isFs);
 }
 
 function _embedClose() {
@@ -2701,62 +2420,8 @@ function startReader() {
   _setupControls();
   requestAnimationFrame(_positionBtns);
 
-  // animate=false: un resize (más que nada, un giro real del dispositivo)
-  // se aplica al instante, sin animación — ver _rrApplyFit.
-  //
-  // BUG CORREGIDO #2 (Alberto, 2026-09-29 — mismo día, probando de nuevo:
-  // "cuando vas hacia atrás desde una hoja horizontal [con el teléfono en
-  // horizontal] a una hoja vertical no se reproduce el ajuste con
-  // animación"). Causa: consecuencia directa del arreglo de más abajo
-  // (orientationchange con reintentos a 100/400ms) — esos reintentos son
-  // temporizadores sueltos, sin relación con lo que el usuario haga
-  // mientras tanto. Si justo en ese margen el usuario navega a una hoja que
-  // SÍ necesita entrar en rotación, arranca la animación de dos fases
-  // (~1060ms) — pero si el reintento pendiente cae DURANTE esa animación,
-  // llama a _resizeCanvas(false) igualmente (siempre instantáneo, nunca
-  // comprueba si ya hay una animación en marcha) y la corta en seco a mitad
-  // de camino, saltándose la fase de crecimiento. Reproducido y confirmado
-  // con un diagnóstico dedicado (giro físico -> a los ~150ms, antes de que
-  // el reintento de 400ms del giro haya vencido, retroceder a una hoja que
-  // necesita rotar: la fase "rr-rotating" se corta hacia la mitad, nunca
-  // llega a "rr-growing"). Fix: el propio resizeFn se vuelve un no-op si el
-  // canvas ya está animando una transición de rotación — un reintento solo
-  // existe para corregir dimensiones obsoletas cuando NADIE ha navegado
-  // entretanto; si ya hay una animación en marcha es porque el usuario SÍ
-  // navegó, con lo que esa navegación ya leyó window.innerWidth/innerHeight
-  // frescos en su momento (ver _resizeCanvas) y el reintento no pinta nada
-  // — dejar que la animación en curso termine por sí sola es siempre lo
-  // correcto, nunca hace falta forzarla a un estado "ya corregido".
-  RS.resizeFn = () => {
-    if (RS.canvas && RS.canvas.classList.contains('rr-animating')) return;
-    _resizeCanvas(false);
-    _render();
-  };
-  // BUG CORREGIDO (Alberto, 2026-09-29 — probando en el móvil real: con el
-  // teléfono físicamente en horizontal, las hojas horizontales rotaban y
-  // las verticales no, justo al revés de lo esperado). Causa: aquí en modo
-  // fixed solo se escuchaba 'resize' — en un giro FÍSICO real, algunos
-  // navegadores/dispositivos disparan ese evento (o lo procesan) antes de
-  // que window.innerWidth/innerHeight reflejen ya las nuevas dimensiones,
-  // así que _rrFit comparaba la hoja contra el viewport ANTIGUO (aún en
-  // vertical) y acababa invirtiendo qué hojas necesitaban rotar. El modo
-  // scroll ya tenía el arreglo — escuchar TAMBIÉN 'orientationchange' y
-  // reintentar la lectura de innerWidth/innerHeight con un margen (100ms y
-  // otra vez a 400ms, por si el dispositivo va lento) en vez de fiarse de
-  // 'resize' solo — pero nunca se replicó aquí. Mismo patrón ahora en fixed
-  // (ver más abajo, sección scroll, para el gemelo ya existente). De paso,
-  // fixed tampoco reajustaba nada al entrar/salir de pantalla completa
-  // (scroll sí, vía _onFsChange) — mismo arreglo, un solo sitio.
-  setTimeout(() => {
-    window.addEventListener('resize', RS.resizeFn);
-    window.addEventListener('orientationchange', () => {
-      setTimeout(RS.resizeFn, 100);
-      setTimeout(RS.resizeFn, 400);
-    });
-    const _onFsChangeFixed = () => setTimeout(RS.resizeFn, 50);
-    document.addEventListener('fullscreenchange',       _onFsChangeFixed);
-    document.addEventListener('webkitfullscreenchange', _onFsChangeFixed);
-  }, 300);
+  RS.resizeFn = () => { _resizeCanvas(); _render(); };
+  setTimeout(() => window.addEventListener('resize', RS.resizeFn), 300);
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
   const msg = isTouch
@@ -2795,6 +2460,7 @@ function _startScrollReader() {
 
   RS.panels.forEach((panel, pi) => {
     const { pw, ph } = _panelDims(pi);
+    const scale = _capScaleTabletPC(Math.min(vw / pw, vh / ph), vw, vh);
 
     const slide = document.createElement('div');
     slide.className = 'rs-slide';
@@ -2820,20 +2486,9 @@ function _startScrollReader() {
     const canvas = document.createElement('canvas');
     canvas.width  = pw;
     canvas.height = ph;
+    canvas.style.width  = Math.round(pw * scale) + 'px';
+    canvas.style.height = Math.round(ph * scale) + 'px';
     canvas.style.pointerEvents = 'none';
-    // Rotación automática (ver bloque RR más arriba): aquí solo se coloca
-    // cada canvas en su encaje FINAL correcto, sin animar — nadie ve esto
-    // todavía (el lector sigue oculto tras la pantalla de carga). Si de
-    // verdad hace falta animar la entrada a una hoja (porque su estado
-    // rotada/no-rotada difiere del de la hoja anterior que se estaba
-    // viendo), lo decide _rrEnterPanel() en el momento real en que el
-    // usuario llega a ella — ver su cabecera para el porqué (con un
-    // <canvas> propio por hoja, el canvas en sí no sabe qué se estaba
-    // viendo justo antes). La hoja de créditos rota igual que cualquier
-    // otra (Alberto, 2026-09-29: "debes tratar la hoja final de creditos
-    // como otra hoja mas") — ya hereda su `orientation` de la última hoja
-    // real (ver loadWork/loadDraft/_startFromOfflineSnapshot).
-    _rrSetFit(canvas, _rrFit(pw, ph, vw, vh, true));
 
     slide.appendChild(canvas);
     container.appendChild(slide);
@@ -2852,94 +2507,11 @@ function _startScrollReader() {
   // ── Estado ──
   RS.idx        = 0;
   RS.textStep   = 0;
-  // Rotación automática (ver _rrEnterPanel más abajo): estado "rotada/no
-  // rotada" de la ÚLTIMA hoja mostrada de verdad al usuario. Arranca en
-  // false (línea base neutra, sin rotar) — si la hoja 0 necesita rotar,
-  // eso ya cuenta como cambio de estado real y anima su entrada, igual
-  // que en modo fixed.
-  RS._rrLast    = false;
   _updateContainerTouchAction();
 
   function _activateCanvas(pi) {
     RS.canvas = _canvases[pi];
     RS.ctx    = _canvases[pi]?.getContext('2d');
-  }
-
-  // Rotación automática en modo scroll — a diferencia de modo fixed (un
-  // único <canvas> persistente, donde canvas._rrRotated ya sirve de
-  // memoria de "cómo estaba la hoja anterior"), aquí cada hoja tiene su
-  // PROPIO <canvas>, creado una sola vez, así que el estado de cada uno
-  // por separado no dice nada sobre si la hoja ANTERIOR (un canvas
-  // distinto) tenía el mismo encaje o no. RS._rrLast lleva esa cuenta a
-  // nivel de sesión. Solo anima al ENTRAR de verdad en una hoja que
-  // necesita rotar (ver _rrApplyFit para el razonamiento completo:
-  // asimétrico, nunca al salir de una rotada ni al no cambiar). Si no se
-  // entra en rotación, la hoja ya está en su sitio correcto desde que se
-  // construyó (o desde el último resize — cada canvas se mantiene siempre
-  // correcto salvo durante esta animación).
-  //
-  // BUG CORREGIDO (encontrado revisando el código, no reportado por
-  // Alberto — al verificar a fondo los tres modos de reproducción,
-  // 2026-09-29: "comprueba bien que la rotación funcione con los tres
-  // modos"). El CANVAS en efecto no necesita nada más en la rama
-  // "!enteringRotation" (ya está bien, como dice el comentario de arriba),
-  // pero los BOTONES DE ESQUINA (fullscreen/cerrar/paginación) son un
-  // elemento del DOM compartido entre todas las hojas, no algo propio de
-  // cada canvas -- y aquí nunca se llamaba a _positionBtns() en esta rama.
-  // Efecto real: al salir de una hoja rotada hacia otra que NO necesita
-  // rotar (p.ej. h->v, viewport sin cambiar), el canvas se desrotaba bien
-  // pero los botones se quedaban con el transform rotate(90deg) y la
-  // esquina de la hoja anterior. Reproducido y confirmado con un
-  // diagnóstico dedicado. En modo fixed esto no pasaba porque
-  // _resizeCanvas() ya llama a _positionBtns() incondicionalmente justo
-  // después de _rrApplyFit, tanto si anima como si no (ver su código) --
-  // aquí faltaba el equivalente para el camino sin animación.
-  function _rrEnterPanel(pi) {
-    const canvas = _canvases[pi];
-    const panel  = RS.panels[pi];
-    if (!canvas || !panel) return;
-    const { pw, ph } = _panelDims(pi);
-    const vw = window.innerWidth, vh = window.innerHeight;
-    // La hoja de créditos rota igual que cualquier otra — Alberto,
-    // 2026-09-29: "debes tratar la hoja final de creditos como otra hoja
-    // mas" (antes se excluía aquí a propósito).
-    const fit = _rrFit(pw, ph, vw, vh, true);
-    const enteringRotation = fit.rotate && !RS._rrLast;
-    RS._rrLast = fit.rotate;
-    if (!enteringRotation) {
-      canvas._rrInited  = true;
-      canvas._rrRotated = fit.rotate;
-      _positionBtns();
-      return;
-    }
-    _rrPlayAdaptAnimation(canvas, fit, _rrFit(pw, ph, vw, vh, false));
-  }
-
-  // Dispara _rrEnterPanel(RS.idx) solo cuando el deslizamiento/scroll se ha
-  // asentado del todo (misma técnica que _mountCreditsWhenScrollEnds: 3
-  // frames seguidos sin cambiar de posición) — nunca a mitad de gesto, para
-  // no competir con el dedo del usuario ni animar una hoja por la que solo
-  // está pasando de largo durante un fling rápido. Reiniciar el contador en
-  // cada llamada (en vez de dejar correr uno anterior) hace que, si el
-  // usuario cambia de opinión a mitad de arrastre, solo cuente el
-  // asentamiento FINAL, con el RS.idx que de verdad quede fijo.
-  let _rrSettleRaf = null;
-  function _rrScheduleSettleCheck() {
-    if (_rrSettleRaf) cancelAnimationFrame(_rrSettleRaf);
-    let lastPos = isH ? container.scrollLeft : container.scrollTop;
-    let stable  = 0;
-    const check = () => {
-      const pos = isH ? container.scrollLeft : container.scrollTop;
-      if (pos === lastPos) {
-        stable++;
-        if (stable >= 3) { _rrSettleRaf = null; _rrEnterPanel(RS.idx); return; }
-      } else {
-        stable  = 0;
-        lastPos = pos;
-      }
-      _rrSettleRaf = requestAnimationFrame(check);
-    };
-    _rrSettleRaf = requestAnimationFrame(check);
   }
 
   function _hasPendingTexts() {
@@ -2969,7 +2541,6 @@ function _startScrollReader() {
     RS.idx      = 0;
     RS.textStep = _initTextStep(0);
     _activateCanvas(0);
-    _rrEnterPanel(0);
     _render();
     _updateOverlay();
     // Forzar posición inicial al panel 0
@@ -3182,7 +2753,6 @@ function _startScrollReader() {
       _prevSI = si;
       RS.idx  = si;
       _activateCanvas(si);
-      _rrScheduleSettleCheck();
       _updateContainerTouchAction();
       _resetPanelAnims(si); // reiniciar animaciones al llegar a un nuevo panel
       const np    = RS.panels[si];
@@ -3350,81 +2920,24 @@ function _startScrollReader() {
 
   // ── Resize / giro de dispositivo ──
   RS.resizeFn = () => {
-    // BUG CORREGIDO (Alberto, 2026-09-29: retroceder a una hoja que entra en
-    // rotación, justo tras un giro físico reciente, se quedaba sin animar —
-    // encontrado en modo fixed, ver su resizeFn hermano más arriba para el
-    // análisis completo; mismo riesgo aquí, con el mismo arreglo). Un
-    // reintento de resize/orientationchange/fullscreenchange que cae
-    // MIENTRAS la hoja activa está animando su entrada en rotación
-    // (_rrPlayAdaptAnimation, vía _rrEnterPanel) forzaría aquí abajo un
-    // _rrApplyFit(..., false) instantáneo sobre ese mismo canvas y cortaría
-    // la animación a mitad de camino. Si ya hay una animación en marcha es
-    // porque el usuario navegó hace un instante, y esa navegación ya leyó
-    // dimensiones frescas en su momento — el reintento no aporta nada y solo
-    // puede hacer daño, así que se descarta entero.
-    const _activeCvNow = _canvases[RS.idx];
-    if (_activeCvNow && _activeCvNow.classList.contains('rr-animating')) return;
     const _vw = window.innerWidth, _vh = window.innerHeight;
     // Reajustar dimensiones de cada slide y canvas
     Array.from(container.children).forEach((slide, pi) => {
       const panel = RS.panels[pi]; if (!panel) return;
       const { pw, ph } = _panelDims(pi);
+      const scale = _capScaleTabletPC(Math.min(_vw / pw, _vh / ph), _vw, _vh);
       slide.style.width  = _vw + 'px';
       slide.style.height = _vh + 'px';
       const cv = slide.querySelector('canvas');
       if (cv) {
-        // Rotación automática (ver bloque RR más arriba): SIEMPRE
-        // instantáneo aquí, cambie o no cambie el estado — un giro real del
-        // dispositivo (o cualquier otro resize) no debe animar, porque el
-        // giro que ve/hace el usuario con las manos YA ES la transición;
-        // animar aquí encima sería una segunda rotación visible y
-        // redundante (Alberto: "giro el dispositivo, vuelve a rotar
-        // correctamente, pero innecesariamente"). Animar SÍ (si cambia el
-        // estado) sigue pasando al navegar de hoja sin mover el
-        // dispositivo — ver _rrEnterPanel. La hoja de créditos incluida:
-        // rota igual que cualquier otra (Alberto, 2026-09-29).
-        _rrApplyFit(cv, _rrFit(pw, ph, _vw, _vh, true), _rrFit(pw, ph, _vw, _vh, false), false);
+        cv.style.width  = Math.round(pw * scale) + 'px';
+        cv.style.height = Math.round(ph * scale) + 'px';
         // Zoom del contenido: las dimensiones base cambian con el resize —
         // resetear también aquí para no arrastrar un transform calculado
         // sobre medidas que ya no son válidas.
         _rzReset(cv);
       }
     });
-    // Mantener RS._rrLast al día con el estado de la hoja activa tras el
-    // resize — si no, una navegación posterior (swipe) podría comparar
-    // contra un estado ya obsoleto y animar (o dejar de animar) por error.
-    //
-    // BUG CORREGIDO #3 (Alberto, 2026-09-29 — verificación explícita de
-    // fullscreen: "la anterior version ha fallado en pantalla completa pero
-    // no cuando no estaba fullscreen"). Causa: si hay un settle-check
-    // pendiente (_rrSettleRaf truthy) es que el usuario ACABA de deslizar a
-    // una hoja nueva — el listener 'scroll' ya adelantó RS.idx a esa hoja,
-    // pero _rrEnterPanel() (quien de verdad decide si la entrada anima)
-    // todavía no se ha ejecutado, a la espera de que el scroll se asiente
-    // (3 frames estables). Si en ese margen cae un reintento de resize (el
-    // de 50ms de fullscreenchange es el más ajustado, pero el mismo riesgo
-    // aplica a los de orientationchange), este bloque de arriba ya ha
-    // dejado el canvas activo en su encaje FINAL — y esta línea, tal cual
-    // estaba, copiaba ese estado ya nuevo directamente en RS._rrLast. Para
-    // cuando _rrEnterPanel() por fin se ejecuta, "enteringRotation = fit.
-    // rotate && !RS._rrLast" sale false porque RS._rrLast ya vale lo mismo
-    // que fit.rotate — la animación de entrada en rotación se salta por
-    // completo (no se corta a medias como el bug #2 de más arriba: aquí
-    // directamente nunca llega a arrancar). Reproducido con un diagnóstico
-    // dedicado (fullscreen + deslizamiento horizontal inmediato después),
-    // con traza fina confirmando que RS._rrLast pasa a true varios frames
-    // ANTES de que el settle-check dispare _rrEnterPanel. El reajuste de
-    // encaje de arriba (dimensiones/posición de cada canvas) sigue siendo
-    // correcto dejarlo correr siempre — _rrPlayAdaptAnimation() vuelve a
-    // dejar el canvas en fitPlain como primer paso si anima (ver su
-    // código), así que no hay riesgo ahí, solo en esta línea. Fix: si hay
-    // un settle-check pendiente, dejar que sea _rrEnterPanel() —a punto de
-    // ejecutarse— quien actualice RS._rrLast, con el valor ANTERIOR
-    // (previo a esta navegación) todavía intacto para poder compararlo.
-    if (!_rrSettleRaf) {
-      const _activeCv = _canvases[RS.idx];
-      if (_activeCv) RS._rrLast = !!_activeCv._rrRotated;
-    }
     // Reposicionar al panel activo
     const _sz = isH ? container.clientWidth : container.clientHeight;
     if (_sz) container.scrollTo({ left: isH ? RS.idx*_sz : 0, top: isH ? 0 : RS.idx*_sz, behavior:'instant' });
@@ -3496,62 +3009,31 @@ function _positionScrollBtns(stateIdx) {
                   closeBtn.style.left = (cl + dw - PAD - btnW) + 'px'; closeBtn.style.top = (ct + OFY) + 'px'; }
 }
 
-// Coloca `btn` en (cl+bx, ct+by) — su sitio de SIEMPRE, relativo a la caja
-// SIN rotar del canvas (cl/ct/cw/ch) — y, si la hoja está rotada (bloque
-// RR), gira el botón esos mismos 90° alrededor del mismo centro que ya usa
-// el canvas (transform-origin puesto en ese centro, expresado en
-// coordenadas propias del botón: cw/2-bx, ch/2-by). Girar alrededor de ESE
-// punto en vez del centro del propio botón lo lleva exactamente a la
-// esquina que le corresponde sin tener que calcularla "a mano" aparte: es
-// la misma unidad rígida que ya gira el canvas, así que el botón se queda
-// siempre pegado al mismo sitio relativo AL DIBUJO (p.ej. "esquina superior
-// izquierda de la hoja"), sea cual sea el lado de la pantalla en el que eso
-// caiga tras el giro — Alberto, 2026-09-29: "los controles también deben
-// rotar, y los botones rotar y colocarse correctamente en las esquinas".
-// Sin rotar, transform/transformOrigin quedan vacíos: mismo resultado que
-// siempre.
-function _rrPlaceCornerBtn(btn, cl, ct, cw, ch, bx, by, rotated) {
-  if (!btn) return;
-  btn.style.left = (cl + bx) + 'px';
-  btn.style.top  = (ct + by) + 'px';
-  if (rotated) {
-    btn.style.transformOrigin = (cw / 2 - bx) + 'px ' + (ch / 2 - by) + 'px';
-    btn.style.transform = 'rotate(90deg)';
-  } else {
-    btn.style.transformOrigin = '';
-    btn.style.transform = '';
-  }
-}
-
 function _positionBtns() {
   const PAD = 8, OFY = 10;
-  let cl, ct, cw, ch, rotated;
+  let cl, ct, cw, ch;
 
   const scrollContainer = document.getElementById('scrollReader');
   const isScrollMode = scrollContainer && scrollContainer.className.includes('scroll-');
 
   if (isScrollMode) {
-    // Modo scroll: calcular posición del canvas desde dimensiones del panel
-    // activo. _rrFit ya tiene en cuenta si toca rotar (ver bloque RR); sus
-    // left/top/dw/dh son SIEMPRE la caja SIN rotar (ver cabecera de _rrFit
-    // — `vis` es la única que intercambia ancho/alto), la misma referencia
-    // que usa el modo fixed más abajo.
+    // Modo scroll: calcular posición del canvas desde dimensiones del panel activo
     const { pw, ph } = _panelDims(RS.idx);
     const vw = window.innerWidth, vh = window.innerHeight;
-    // La hoja de créditos rota igual que cualquier otra (Alberto,
-    // 2026-09-29) — sin excepción aquí tampoco.
-    const fit = _rrFit(pw, ph, vw, vh, true);
-    cl = fit.left; ct = fit.top; cw = fit.dw; ch = fit.dh; rotated = fit.rotate;
+    const scale = _capScaleTabletPC(Math.min(vw / pw, vh / ph), vw, vh);
+    const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+    cl = Math.round((vw - dw) / 2);
+    ct = Math.round((vh - dh) / 2);
+    cw = dw;
+    ch = dh;
   } else {
     // Modo fixed: el canvas tiene position:absolute con left/top explícitos
-    // — esa es su caja SIN rotar (ver _rrSetFit, transform-origin:center).
     const c = RS.canvas;
     if (!c) return;
     cl = parseInt(c.style.left)   || 0;
     ct = parseInt(c.style.top)    || 0;
     cw = parseInt(c.style.width)  || 0;
     ch = parseInt(c.style.height) || 0;
-    rotated = !!c._rrRotated;
   }
 
   const fsBtn      = document.getElementById('fullscreenToggle');
@@ -3559,14 +3041,28 @@ function _positionBtns() {
   const pageNavBtn  = document.getElementById('pageNavToggle');
   const offlineBtn  = document.getElementById('offlineDlBtn');
 
-  // offsetWidth/offsetHeight (caja de layout) y no getBoundingClientRect()
-  // (caja ya pintada): a esta última si el botón quedó rotado en la llamada
-  // anterior le mediríamos el recuadro YA girado (ancho/alto intercambiados),
-  // corrompiendo el cálculo de la esquina siguiente.
-  if (fsBtn)     _rrPlaceCornerBtn(fsBtn,     cl, ct, cw, ch, PAD, OFY, rotated);
-  if (closeBtn)  _rrPlaceCornerBtn(closeBtn,  cl, ct, cw, ch, cw - PAD - (closeBtn.offsetWidth || 32), OFY, rotated);
-  if (pageNavBtn)  _rrPlaceCornerBtn(pageNavBtn, cl, ct, cw, ch, PAD, ch - OFY - (pageNavBtn.offsetHeight || 24), rotated);
-  if (offlineBtn)  _rrPlaceCornerBtn(offlineBtn, cl, ct, cw, ch, cw - PAD - (offlineBtn.offsetWidth || 32), ch - OFY - (offlineBtn.offsetHeight || 24), rotated);
+  if (fsBtn) {
+    fsBtn.style.left = (cl + PAD) + 'px';
+    fsBtn.style.top  = (ct + OFY) + 'px';
+  }
+  if (closeBtn) {
+    const btnW = closeBtn.getBoundingClientRect().width || 32;
+    closeBtn.style.left = (cl + cw - PAD - btnW) + 'px';
+    closeBtn.style.top  = (ct + OFY) + 'px';
+  }
+  if (pageNavBtn) {
+    // Simétrico a fsBtn (esquina superior izquierda) pero pegado abajo
+    const btnH = pageNavBtn.getBoundingClientRect().height || 24;
+    pageNavBtn.style.left = (cl + PAD) + 'px';
+    pageNavBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
+  }
+  if (offlineBtn) {
+    // Simétrico a closeBtn (esquina superior derecha) pero pegado abajo
+    const btnW = offlineBtn.getBoundingClientRect().width  || 32;
+    const btnH = offlineBtn.getBoundingClientRect().height || 24;
+    offlineBtn.style.left = (cl + cw - PAD - btnW) + 'px';
+    offlineBtn.style.top  = (ct + ch - OFY - btnH) + 'px';
+  }
 }
 
 // ── BARRA DE NAVEGACIÓN POR HOJA ──────────────────────────────
@@ -4066,25 +3562,32 @@ function _panelDims(idx) {
   return { pw: isH ? ED_PAGE_H : ED_PAGE_W, ph: isH ? ED_PAGE_W : ED_PAGE_H };
 }
 
-function _resizeCanvas(animate) {
-  if (animate === undefined) animate = true;
+function _resizeCanvas() {
+  const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
   RS.canvas.width  = pw;
   RS.canvas.height = ph;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // Si la orientación de la hoja no coincide con la del dispositivo, rotar
-  // 90° para ocupar el máximo de pantalla — sustituye al recorte parcial
-  // que usaba esto antes solo para hojas horizontales. Con animación solo
-  // cuando `animate` lo pide (navegación entre hojas) — nunca en una
-  // llamada por resize/giro real del dispositivo (ver _rrApplyFit). La hoja
-  // de créditos rota igual que cualquier otra (Alberto, 2026-09-29: "debes
-  // tratar la hoja final de creditos como otra hoja mas" — antes se excluía
-  // aquí a propósito).
-  const allowRotate = true;
-  const fit = _rrFit(pw, ph, vw, vh, allowRotate);
-  _rrApplyFit(RS.canvas, fit, _rrFit(pw, ph, vw, vh, false), animate);
+  // Panel de créditos: escalar como vertical normal (contain)
+  // Hojas horizontales reales: llenar toda la altura
+  const isHorizPanel = pw > ph && !panel?.isCredits;
+
+  let scale;
+  if (isHorizPanel) {
+    scale = vh / ph;
+    if (pw * scale > vw * 1.5) scale = vw / pw;
+  } else {
+    scale = Math.min(vw / pw, vh / ph);
+  }
+  scale = _capScaleTabletPC(scale, vw, vh);
+
+  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  RS.canvas.style.width  = dw + 'px';
+  RS.canvas.style.height = dh + 'px';
+  RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
+  RS.canvas.style.top    = Math.round((vh - dh) / 2) + 'px';
   RS.canvas.style.touchAction = 'manipulation';
   // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja (ni a un
   // redimensionado de ventana, que recalcula las dimensiones base sobre las
@@ -4752,20 +4255,14 @@ function _resetPanelAnims(idx) {
 // Helper: recibe coordenadas de ventana, devuelve la capa botón bajo el punto
 function _rBtnHitTestCanvas(winX, winY) {
   if (!RS.canvas) return null;
-  // Mientras dura la animación de rotación (ver bloque RR) el ángulo real
-  // está entre 0° y 90° — _rrLocalPoint solo sabe deshacer 0° o 90° exactos
-  // — así que se deja pasar el toque a la navegación normal (que no depende
-  // de la geometría del canvas) en vez de arriesgar un hit-test impreciso
-  // durante esa fracción de segundo.
-  if (RS.canvas.classList.contains('rr-animating')) return null;
-  const _lp = _rrLocalPoint(RS.canvas, winX, winY);
-  if (!_lp) return null;
+  const _rect = RS.canvas.getBoundingClientRect();
+  if (winX < _rect.left || winX > _rect.right || winY < _rect.top || winY > _rect.bottom) return null;
   const { pw, ph } = _panelDims(RS.idx);
-  const _sc = Math.min(_lp.dw / pw, _lp.dh / ph);
-  const _ox = (_lp.dw - pw * _sc) / 2;
-  const _oy = (_lp.dh - ph * _sc) / 2;
-  const _tpx = (_lp.lx - _ox) / _sc;
-  const _tpy = (_lp.ly - _oy) / _sc;
+  const _sc = Math.min(_rect.width / pw, _rect.height / ph);
+  const _ox = (_rect.width  - pw * _sc) / 2;
+  const _oy = (_rect.height - ph * _sc) / 2;
+  const _tpx = (winX - _rect.left - _ox) / _sc;
+  const _tpy = (winY - _rect.top  - _oy) / _sc;
   const _panel = RS.panels[RS.idx];
   return _panel ? _rBtnHitTest(_panel.layers || [], _tpx, _tpy, pw, ph, _panel) : null;
 }
@@ -5292,31 +4789,26 @@ function _mountCreditsButtons() {
   const cr = RS._creditsRestart;
   if (!cl || !cr) return;
 
-  // Caja SIN rotar del canvas (bloque RR), recalculada con _rrFit en vez de
-  // leída de RS.canvas.getBoundingClientRect(): esta última da el recuadro
-  // YA rotado (ancho/alto intercambiados) cuando la hoja de créditos está
-  // girada — y ahora puede estarlo, igual que cualquier otra hoja (Alberto,
-  // 2026-09-29: "trátala como otra hoja mas"). En modo scroll, además,
-  // canvas.style.left/top ni siquiera reflejan su posición real en pantalla
-  // (position:static, centrado por flexbox vía .rs-slide — ver _rrSetFit).
-  // _rrFit es una función pura de (pw,ph,vw,vh): recalcularla aquí da
-  // exactamente la misma caja que ya tiene aplicada el canvas, en los dos
-  // modos, sin tener que distinguirlos (a diferencia de _positionBtns, que
-  // sí necesita hacerlo porque en modo fixed lee el <canvas> directamente).
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const fit = _rrFit(cl.pw, cl.ph, vw, vh, true);
-  const cl0 = fit.left, ct0 = fit.top, cw0 = fit.dw, ch0 = fit.dh, rotated = fit.rotate;
-  const sx = cw0 / cl.pw;
-  const sy = ch0 / cl.ph;
+  // Posición real del canvas en pantalla (funciona en modo fixed y scroll)
+  const rect = RS.canvas.getBoundingClientRect();
+  const cW = rect.width;
+  const cH = rect.height;
+  const sx = cW / cl.pw;
+  const sy = cH / cl.ph;
 
   function makeBtn(data, isLink) {
     const el = isLink ? document.createElement('a') : document.createElement('button');
     if (isLink) { el.href = 'https://comxow.com/'; el.target = '_blank'; el.rel = 'noopener'; }
     el.className = '_cxCreditBtn';
+    // Coordenadas canvas → pantalla
+    const screenX = rect.left + data.cx * sx;
+    const screenY = rect.top  + data.cy * sy;
     const bw = Math.round(data.fs * 10 * sx);
     const bh = Math.round(data.fs * 3  * sy);
     el.style.cssText = [
       'position:fixed',
+      'left:'   + Math.round(screenX - bw/2) + 'px',
+      'top:'    + Math.round(screenY - bh/2) + 'px',
       'width:'  + bw + 'px',
       'height:' + bh + 'px',
       'z-index:2147483647',
@@ -5333,14 +4825,6 @@ function _mountCreditsButtons() {
       'margin:0',
       'display:block',
     ].join(';');
-    // Centro del botón, convertido a coordenadas LOCALES del canvas (offset
-    // desde su esquina superior-izquierda SIN rotar) -> _rrPlaceCornerBtn lo
-    // coloca (y, si toca, lo gira alrededor del mismo centro que el propio
-    // canvas) exactamente igual que los botones de esquina — misma técnica,
-    // ver su comentario.
-    const bx = data.cx * sx - bw / 2;
-    const by = data.cy * sy - bh / 2;
-    _rrPlaceCornerBtn(el, cl0, ct0, cw0, ch0, bx, by, rotated);
     return el;
   }
 
@@ -5381,30 +4865,9 @@ function _updateCounter() { /* sin pastilla — no se muestra */ }
 
 function _showControls() { /* botones de esquina siempre visibles */ }
 
-// El navegador transforma las coordenadas táctiles al sistema del usuario
-// cuando gira FÍSICAMENTE el dispositivo (rotación real de la ventana):
-// "izquierda del usuario" es entonces siempre endX < W/2, sin nada más que
-// hacer. Pero eso NO cubre la hoja rotada "en falso" con CSS (bloque RR,
-// canvas._rrRotated) para aprovechar más pantalla sin que el usuario haya
-// girado el móvil todavía — ahí la ventana sigue en su orientación de
-// siempre y es el CONTENIDO el que gira 90° sobre sí mismo, así que su
-// "izquierda" ya no coincide con la mitad izquierda de la ventana.
-// BUG CORREGIDO (Alberto, 2026-09-29: "he tocado a la izquierda de una hoja
-// rotada, y ha ido a la página siguiente en vez de a la anterior") — se
-// reutiliza _rrLocalPoint (el mismo helper que ya usa el hit-test de
-// botones de capa) para deshacer esa rotación y mirar en qué mitad LOCAL
-// del canvas (izquierda/derecha de la hoja tal cual la dibujó el autor)
-// cayó el toque, en vez de en qué mitad de la ventana. Sin rotar, da
-// exactamente el mismo resultado que antes (ver _rrLocalPoint: si
-// !_rrRotated, lx/dw se calculan sobre rect.left/rect.width tal cual).
+// El navegador transforma las coordenadas táctiles al sistema del usuario.
+// "Izquierda del usuario" es siempre endX < W/2, independientemente del ángulo.
 function _isBackSide(endX, endY) {
-  const cv = RS.canvas;
-  if (cv && cv._rrRotated && !cv.classList.contains('rr-animating')) {
-    const lp = _rrLocalPoint(cv, endX, endY);
-    if (lp) return lp.lx < lp.dw / 2;
-    // Toque fuera del recuadro del canvas (p.ej. banda sobrante): sin
-    // referencia de contenido válida, se cae al criterio de ventana.
-  }
   return endX < window.innerWidth / 2;
 }
 
@@ -5494,17 +4957,12 @@ function _setupControls() {
 
     if (wasCancelled) return;
     if (dy > 40) return;
-    // En créditos: swipe horizontal o tap en la mitad "izquierda" → navegar
-    // atrás. Tap en la mitad "derecha" o sobre botones HTML → el overlay
-    // gestiona. La hoja de créditos ahora puede rotar igual que cualquier
-    // otra (Alberto, 2026-09-29: "trátala como otra hoja mas"), así que el
-    // tap reutiliza _isBackSide (mismo criterio local/rotado que el resto
-    // de hojas) en vez de comparar contra la mitad de la VENTANA — si no,
-    // reaparecería aquí el mismo bug ya corregido para las demás hojas.
+    // En créditos: swipe horizontal o tap en mitad izquierda → navegar atrás.
+    // Tap en mitad derecha o sobre botones HTML → el overlay gestiona.
     if (RS.isCredits) {
       if (dx > 30 && dx > dy * 1.5) { goBack(); return; } // swipe
-      if (dx < 20 && dy < 20 && _isBackSide(endX, endY)) { goBack(); return; } // tap "izq"
-      return; // tap "derecha": el overlay HTML gestiona los clicks
+      if (dx < 20 && dy < 20 && endX < window.innerWidth * 0.5) { goBack(); return; } // tap izq
+      return; // tap derecha: el overlay HTML gestiona los clicks
     }
     // Navegación normal
     if (_isBackSide(endX, endY)) goBack(); else advance();

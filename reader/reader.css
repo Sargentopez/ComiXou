@@ -299,26 +299,3 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   transform-origin: 0 0;
   will-change: transform;
 }
-
-/* ── Rotación automática al no coincidir la orientación de la hoja con la
-   del dispositivo (pedido de Alberto) — ver bloque RR en reader.js. Estas
-   clases las añade/quita JS solo mientras dura cada fase de la animación
-   (nunca quedan puestas de forma permanente), para no animar los cambios
-   instantáneos de hoja ni los reajustes por resize que no cambian el
-   estado rotada/no rotada. Alberto (2026-09-29): la animación va en DOS
-   fases SECUENCIADAS, nunca combinadas — primero gira en su sitio
-   (.rr-rotating, solo transform) y, solo cuando el giro ha terminado,
-   crece hasta cubrir el espacio disponible (.rr-growing, solo
-   left/top/width/height, con el transform ya fijo) — una transición de
-   todo a la vez no se leía como "primero gira, luego amplía", parecía que
-   la hoja ya estaba rotada desde el principio. .rr-animating no anima
-   nada por sí sola: solo marca "hay una fase en curso" para JS (desactivar
-   pellizco/zoom mientras dura cualquiera de las dos fases). */
-#readerCanvas.rr-rotating,
-.rs-slide canvas.rr-rotating {
-  transition: transform .45s ease;
-}
-#readerCanvas.rr-growing,
-.rs-slide canvas.rr-growing {
-  transition: left .45s ease, top .45s ease, width .45s ease, height .45s ease;
-}
