@@ -424,8 +424,16 @@ async function _pgThumbPump(token) {
 function _pgRenderThumbLive(canvas, page, full) {
   const ctx = canvas.getContext('2d');
   const tw = canvas.width, th = canvas.height;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, tw, th);
+  // v41.45 — full=true (onion skin) deja el destino TRANSPARENTE: el fantasma de una hoja
+  // contigua es solo su contenido, sin papel blanco. Desde que se pinta ENCIMA de la hoja
+  // en vigor (antes iba debajo de sus capas y una imagen opaca lo tapaba), un fondo blanco
+  // opaco velaría toda la hoja; y antes ya velaba el margen de trabajo y, con hoja anterior
+  // Y siguiente, dejaba la anterior al 25% en vez del 50% (la siguiente, opaca, la cubría).
+  // Las miniaturas (full sin pasar) siguen con su papel blanco, sin cambios.
+  if (!full) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tw, th);
+  }
   if (!page || !page.layers) return;
 
   const _pi = edPages.indexOf(page);
@@ -440,6 +448,7 @@ function _pgRenderThumbLive(canvas, page, full) {
   // edOrientation/edCurrentPage se quedaban cambiados (la app creería estar en otra
   // hoja/orientación). Ahora se restauran SIEMPRE (ver el finally, más abajo).
   let off = null;
+  let _direct = false;
   try {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
@@ -451,18 +460,23 @@ function _pgRenderThumbLive(canvas, page, full) {
   // posiciona en coordenadas absolutas del área de trabajo (edMarginX()+x*pw,
   // etc.) o dibuja su propio canvas ya del tamaño del área de trabajo (caso
   // DrawLayer) — con solo este cambio de lienzo/transform, todas ellas pasan a
-  // dibujarse igual dentro o fuera del rectángulo de página. Se rellena de
-  // blanco SOLO el rectángulo de la página (no toda el área de trabajo), para
-  // que una zona vacía del área de trabajo no añada un velo blanco encima de
-  // lo que ya se ve en el lienzo principal — solo se transparenta contenido real.
-  off = document.createElement('canvas');
-  off.width  = full ? ED_CANVAS_W : pw;
-  off.height = full ? ED_CANVAS_H : ph;
-  const offCtx = off.getContext('2d');
+  // dibujarse igual dentro o fuera del rectángulo de página. v41.45: NO se
+  // rellena nada de blanco en este modo (antes sí, el rectángulo de la página):
+  // solo se transparenta contenido real, ver arriba.
+  // v41.45: si el destino ya mide exactamente el área de trabajo (siempre, para el
+  // onion skin), se dibuja DIRECTO en él en vez de en un lienzo intermedio del
+  // mismo tamaño que luego se copiaba encima — un lienzo de ~4,2 Mpx (≈17 MB) menos por
+  // fantasma, y sin la copia final.
+  _direct = !!full && tw === ED_CANVAS_W && th === ED_CANVAS_H;
+  off = _direct ? canvas : document.createElement('canvas');
+  if (!_direct) {
+    off.width  = full ? ED_CANVAS_W : pw;
+    off.height = full ? ED_CANVAS_H : ph;
+  }
+  const offCtx = _direct ? ctx : off.getContext('2d');
   if (full) {
     offCtx.setTransform(1, 0, 0, 1, 0, 0);
-    offCtx.fillStyle = '#ffffff';
-    offCtx.fillRect(mx, my, pw, ph);
+    // v41.45: sin papel blanco (ver arriba) — solo el contenido real de la hoja.
   } else {
     offCtx.fillStyle = '#ffffff';
     offCtx.fillRect(0, 0, pw, ph);
@@ -523,7 +537,7 @@ function _pgRenderThumbLive(canvas, page, full) {
     edCurrentPage  = _savedPage;
   }
 
-  ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, tw, th);
+  if (!_direct) ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, tw, th);
 }
 
 function _pgDrawLayers(ctx, layers, scaleX, scaleY) {
@@ -903,6 +917,12 @@ function _edRelayoutLayersForOrientation(layers, fromOrient, toOrient) {
 async function _pgRotatePage(idx) {
   let page = edPages[idx];
   if (!page) return;
+
+  // v41.45 — Rotar modifica los canvas de la hoja sin entrar en ella: lo que el cargador en segundo
+  // plano dejó cacheado (dataUrl del recorte de página con las medidas de la orientación anterior)
+  // deja de valer desde ya. Además se anula lo que el cargador tenga decodificado de esta hoja.
+  page._visitSeq = (page._visitSeq || 0) + 1;
+  if (typeof _edBgInvalidatePage === 'function') _edBgInvalidatePage(page);
 
   // v41.44 — Una hoja con los canvas pesados DESCARGADOS (aún sin abrir desde que se cargó la
   // obra, o ya abandonada) guarda su dibujo a mano como el RECORTE de página con las medidas

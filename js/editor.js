@@ -959,6 +959,9 @@ let gcpGridVisible = false; // cuadrícula visible en el canvas GCP
 let _edOnionPrevSrc = null, _edOnionNextSrc = null;       // page (referencia) ya renderizada en caché
 let _edOnionPrevCanvas = null, _edOnionNextCanvas = null; // canvas cacheado correspondiente
 let _edOnionRedrawQueued = false; // v40.59: ya hay un repintado diferido pendiente tras vaciar la caché (ver _edOnionInvalidatePage)
+// v41.45 — mezcla ya compuesta de las dos hojas contiguas en espacio de PANTALLA (se reutiliza
+// mientras no cambien las hojas contiguas ni la cámara). Ver _edDrawOnionGhost.
+let _edOnionOv = { canvas: null, ctx: null, prev: null, next: null, z: 0, x: 0, y: 0, ok: false };
 let edRules = [];          // array de reglas de la hoja actual
 let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
 let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
@@ -3033,6 +3036,9 @@ class DrawLayer extends BaseLayer {
     // Página descargada de memoria (ver _edUnloadPageCanvases): devolver la
     // versión ya calculada antes de liberar el canvas real, sin tocarlo.
     if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
+    // v41.45: reconstruida en segundo plano y sin editar desde entonces (ver _edBgExactOK):
+    // el dataUrl cacheado sigue siendo exacto — no recodificar el canvas.
+    if(this._bgExact && this._unloadedDataUrl && _edBgExactOK(this)) return this._unloadedDataUrl;
     // Exportar solo la zona de la página para compatibilidad con guardado
     const pw = edPageW(), ph = edPageH();
     const tmp = document.createElement('canvas');
@@ -3043,6 +3049,7 @@ class DrawLayer extends BaseLayer {
   }
   toDataUrlFull(){
     if(this._canvasUnloaded && this._unloadedFullDataUrl) return this._unloadedFullDataUrl;
+    if(this._bgExact && this._unloadedFullDataUrl && _edBgExactOK(this)) return this._unloadedFullDataUrl; // v41.45
     // Exportar el workspace completo (incluye dibujo fuera del lienzo)
     return this._canvas.toDataURL();
   }
@@ -3270,11 +3277,14 @@ class FillLayer extends BaseLayer {
     // Página descargada de memoria (ver _edUnloadPageCanvases): devolver la
     // versión ya calculada antes de liberar el canvas real, sin tocarlo.
     if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
+    // v41.45: reconstruida en segundo plano y sin editar desde entonces (ver _edBgExactOK)
+    if(this._bgExact && this._unloadedDataUrl && _edBgExactOK(this)) return this._unloadedDataUrl;
     // Guardar canvas local (pw×ph) — compatible con fromDataUrl
     return this._canvas.toDataURL();
   }
   toDataUrlFull() {
     if(this._canvasUnloaded && this._unloadedFullDataUrl) return this._unloadedFullDataUrl;
+    if(this._bgExact && this._unloadedFullDataUrl && _edBgExactOK(this)) return this._unloadedFullDataUrl; // v41.45
     // Alias — el canvas ya es el tamaño correcto
     return this._canvas.toDataURL();
   }
@@ -3529,6 +3539,7 @@ class StrokeLayer extends BaseLayer {
   // Exportar bitmap recortado
   toDataUrl(){
     if(this._canvasUnloaded && this._unloadedDataUrl) return this._unloadedDataUrl;
+    if(this._bgExact && this._unloadedDataUrl && _edBgExactOK(this)) return this._unloadedDataUrl; // v41.45
     return this._canvas.toDataURL();
   }
   // Expandir a DrawLayer para edición — devuelve un DrawLayer con el contenido restaurado
@@ -6013,34 +6024,10 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
     // shadowBlur en cada frame, una de las operaciones más costosas en Android.
     _edDrawPageBackground(ctx, !_drawSession);
-    // ── Transparencia hojas contiguas (onion skin) ──────────────────────────
-    // Ayuda de dibujo para animación: fotografía de fondo fija de la hoja
-    // anterior y posterior (si las hay), al 50% de opacidad SIEMPRE — no pasa
-    // por _isDimmed/dimFactor de más abajo (eso solo dimea las capas de la
-    // hoja EN VIGOR), así que no se ve afectada por el dimming al seleccionar
-    // o editar un objeto. No son capas reales: no están en edLayers, así que
-    // no son seleccionables, no salen en miniaturas ni se cuentan al crear la
-    // animación automática (todo eso recorre edLayers/page.layers, no esto).
-    // Incluye TODO el área de trabajo de esa hoja, no solo lo que cae dentro
-    // de la página (antes de v39.83 se recortaba a la página).
-    // page._onionSkinEnabled (no una variable global): activarlo en una hoja
-    // no afecta a las demás — ver el checkbox en edInitRules/edLoadPage.
-    if (page._onionSkinEnabled) {
-      _edOnionSkinEnsure();
-      if (_edOnionPrevCanvas || _edOnionNextCanvas) {
-        // _edOnionPrevCanvas/_edOnionNextCanvas ya son el área de trabajo
-        // COMPLETA (ED_CANVAS_W×ED_CANVAS_H) de la hoja contigua, en el mismo
-        // origen (0,0) que el área de trabajo de la hoja en vigor — esa área
-        // es una constante global, igual para las dos hojas sea cual sea su
-        // orientación (ver _edOnionRenderPage), así que ya no hace falta
-        // centrar ni ajustar tamaño: se dibuja directamente.
-        ctx.save();
-        ctx.globalAlpha = 0.5;
-        if (_edOnionPrevCanvas) ctx.drawImage(_edOnionPrevCanvas, 0, 0);
-        if (_edOnionNextCanvas) ctx.drawImage(_edOnionNextCanvas, 0, 0);
-        ctx.restore();
-      }
-    }
+    // Transparencia hojas contiguas (onion skin): v41.45 — YA NO se pinta aquí, debajo de
+    // las capas (una imagen pegada opaca, un relleno o un bocadillo la tapaban por
+    // completo y la transparencia no servía de nada). Se pinta al FINAL de esta función,
+    // encima de todo lo de la hoja en vigor — ver _edDrawOnionGhost.
   }
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
@@ -6195,6 +6182,22 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   if(_editingDraw && !_drawTmpRendered && drawTmpMode === 'inline'){
     _edRenderDrawTmp(ctx);
   }
+  // ── Transparencia hojas contiguas (onion skin) — v41.45: ENCIMA de todo ──────────
+  // Ayuda de dibujo para animación: fotografía fija de la hoja anterior y posterior (si
+  // las hay) al 50% de opacidad SIEMPRE — no pasa por _isDimmed/dimFactor (eso solo
+  // dimea las capas de la hoja EN VIGOR), así que no le afecta el dimming al seleccionar
+  // o editar un objeto. No son capas reales: no están en edLayers, así que no son
+  // seleccionables, no salen en miniaturas ni se cuentan al crear la animación
+  // automática. Antes se pintaba justo después del fondo de la hoja, DEBAJO de las
+  // capas: una imagen pegada opaca (o un relleno, un bocadillo…) la tapaba entera y la
+  // transparencia no servía de nada (fallo reportado por Alberto, probando v41.43).
+  // Reparto por modo (ver edRedraw):
+  //   'inline' — render completo: aquí.
+  //   'before' — caché estática de lo que va POR DEBAJO del trazo: no se pinta.
+  //   'after'  — lo que va por encima del trazo en vivo: aquí (un único blit por fotograma).
+  //   excludeLayerIdx>=0 — caché estática del arrastre: no se pinta; el camino rápido del
+  //              arrastre lo pinta tras la capa arrastrada (también va por encima de ella).
+  if (drawTmpMode !== 'before' && excludeLayerIdx < 0) _edDrawOnionGhost(ctx);
   // Indica al caller si esta llamada correspondía a una sesión de dibujo activa.
   return _editingDraw;
 }
@@ -6333,6 +6336,7 @@ function edRedraw(){
       edCtx.globalAlpha = 1;
       // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
     }
+    _edDrawOnionGhost(edCtx); // v41.45: el fantasma de las hojas contiguas va por encima también de la capa arrastrada
     _edRenderOverlays();
     return;
   }
@@ -6368,6 +6372,7 @@ function edRedraw(){
         _la.draw(edCtx, edCanvas);
         edCtx.globalAlpha = 1;
         // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
+        _edDrawOnionGhost(edCtx); // v41.45 (ver arriba)
         _edRenderOverlays();
         return;
       }
@@ -8826,6 +8831,33 @@ async function _edLoadPageCanvases(pageIdx) {
   if (_promises.length) await Promise.all(_promises);
 }
 
+// v41.45 — Parte SÍNCRONA de reconstruir una capa descargada (crear el canvas y pintar en él la
+// imagen ya decodificada). La comparten _edHydrateLayerCanvas (bajo demanda) y el cargador en
+// segundo plano (_edBgLoadPage). Devuelve false, sin tocar nada, si la capa ya no estaba descargada
+// (otra vía la reconstruyó mientras tanto). El canvas nuevo solo se instala al final: si algo
+// falla antes (memoria, imagen rota) la capa queda tal cual, descargada.
+function _edBuildLayerCanvas(l, img) {
+  if (!l._canvasUnloaded) return false;
+  const cv = document.createElement('canvas');
+  cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
+  cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
+  const ctx = cv.getContext('2d');
+  if (l._unloadedIsCrop && !l._unloadedFullDataUrl) {
+    // v41.44: el dataUrl guardado es el RECORTE de la página (DrawLayer cargado en
+    // modo ligero) → volver a colocarlo en el workspace con los mismos márgenes que
+    // DrawLayer.fromDataUrl, con las medidas de página con las que se guardó.
+    const _cpw = l._unloadedCropPW || img.naturalWidth, _cph = l._unloadedCropPH || img.naturalHeight;
+    const mx = (cv.width - _cpw) / 2, my = (cv.height - _cph) / 2;
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, _cpw, _cph);
+  } else {
+    ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  }
+  l._canvas = cv;
+  l._ctx = ctx;
+  l._canvasUnloaded = false;
+  return true;
+}
+
 // Reconstruye el canvas real de UNA capa descargada desde su dataUrl cacheado.
 function _edHydrateLayerCanvas(l) {
   return new Promise(resolve => {
@@ -8833,24 +8865,10 @@ function _edHydrateLayerCanvas(l) {
     if (!_src) { resolve(); return; }
     const img = new Image();
     const _build = () => {
-      if (!l._canvasUnloaded) { resolve(); return; } // otra vía ya la reconstruyó mientras tanto
-      const cv = document.createElement('canvas');
-      cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
-      cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
-      const ctx = cv.getContext('2d');
-      if (l._unloadedIsCrop && !l._unloadedFullDataUrl) {
-        // v41.44: el dataUrl guardado es el RECORTE de la página (DrawLayer cargado en
-        // modo ligero) → volver a colocarlo en el workspace con los mismos márgenes que
-        // DrawLayer.fromDataUrl, con las medidas de página con las que se guardó.
-        const _cpw = l._unloadedCropPW || img.naturalWidth, _cph = l._unloadedCropPH || img.naturalHeight;
-        const mx = (cv.width - _cpw) / 2, my = (cv.height - _cph) / 2;
-        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, _cpw, _cph);
-      } else {
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-      }
-      l._canvas = cv;
-      l._ctx = ctx;
-      l._canvasUnloaded = false;
+      // false si otra vía ya la reconstruyó mientras tanto. Si algo falla (memoria, imagen rota)
+      // la capa se queda descargada, pero la promesa SIEMPRE se resuelve: dejarla colgada
+      // mantendría la hoja «reconstruyéndose» para siempre (ver _edCurrentPageHydrating).
+      try { _edBuildLayerCanvas(l, img); } catch (_) {}
       resolve();
     };
     img.onload = () => {
@@ -8963,6 +8981,379 @@ async function _edEnsurePageThumb(idx) {
   try { return await job; } finally { if (page._thumbP === job) page._thumbP = null; }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   v41.45 — CARGA EN SEGUNDO PLANO de las hojas aún sin abrir
+
+   Desde v41.44 solo la hoja que se abre decodifica sus canvas pesados (relleno/lápiz/acuarela/
+   dibujo/trazo); las demás nacen «descargadas» y se reconstruyen al entrar en ellas (un pop-in de
+   0,3–0,5 s la primera vez). Este cargador las va reconstruyendo SOLO mientras se trabaja, de las
+   más cercanas a la hoja actual (siguiente, anterior, siguiente+1…) a las más lejanas, para que al
+   llegar a ellas ya estén listas — sin que el usuario note nada.
+
+   REGLAS (petición de Alberto):
+    · NO interfiere con arrastres, cambios de tamaño ni dibujo a mano de la hoja en la que se trabaja:
+      se detiene mientras haya cualquier gesto (_edIsGestureActive), puntero pulsado, tecla/rueda/
+      toque reciente (calma mínima), guardado en curso, visor abierto, etc. (_edBgBusyReason), y la
+      parte síncrona del trabajo es UNA capa cada vez, con un respiro proporcional entre capas.
+      Una capa pesada (el workspace del DrawLayer, 6,3 Mpx) cuesta ≈16 ms (≈75 ms con la CPU ×4) de
+      golpe y no se puede trocear (casi todo es reservar y poner a cero la memoria del canvas), por
+      eso solo se empieza tras ≥0,9 s sin tocar nada.
+    · Al NAVEGAR a otra hoja esa hoja se carga YA por la vía de siempre (edLoadPage →
+      _edTempLoadPage), sin esperar al cargador; el cargador se limita a re-centrarse en la nueva
+      hoja actual. Lo que decodificaba para la hoja a la que se entra se descarta.
+
+   MEMORIA: un presupuesto en píxeles de canvas (_edBgBudget) acota cuánto se precarga; si hay que
+   hacer sitio para hojas más cercanas, se sueltan primero las más lejanas que cargó el propio
+   cargador (nunca la actual ni lo que cargó otro consumidor).
+
+   EXACTITUD AL GUARDAR: una capa reconstruida por el cargador conserva su dataUrl cacheado
+   (_unloadedDataUrl/_unloadedFullDataUrl) y se marca _bgExact: mientras nadie pueda haberla
+   editado, toDataUrl()/toDataUrlFull() devuelven ese dataUrl en vez de recodificar el canvas
+   (si no, el guardado y el autoguardado —que serializa TODAS las hojas cada 30 s— recodificarían
+   cada canvas cargado). Dos salvaguardas: (1) edLoadPage borra _bgExact de toda hoja a la que se
+   entra (_edBgInvalidatePage) y _pgRotatePage de la que rota; (2) _edBgExactOK nunca da por bueno
+   el flag en una capa de edLayers (la hoja que se está editando), sea cual sea el camino por el
+   que se haya llegado a ella.
+   Desactivable: window._edBgDisabled = true  ·  localStorage.cx_bgload = '0'.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+const _ED_BG_HEAVY = ['fill', 'pencil', 'watercolor', 'draw', 'stroke'];
+const _ED_BG_HEAVY_PX = 1.5e6;        // a partir de este tamaño de canvas, trabajo «pesado» (el DrawLayer son 6,3 Mpx)
+const _ED_BG_COOLDOWN_MS = 250;       // calma mínima tras la última interacción para trabajo ligero
+const _ED_BG_COOLDOWN_HEAVY_MS = 900; // ... y para reconstruir una capa pesada
+const _ED_BG_WARMUP_MS = 700;         // tras acabar de abrir la obra, antes del primer trabajo
+const _edBg = {
+  gen: 0,           // sube en _edBgStop(): invalida cualquier bucle/trabajo en vuelo
+  running: false,   // hay un bucle activo
+  idleDone: false,  // el último bucle terminó sin nada más que hacer (ver sigN/sigCur)
+  sigN: -1, sigCur: -1,
+  lastInput: 0,     // performance.now() del último evento de usuario (puntero/tecla/rueda/toque)
+  ptrDown: 0,       // punteros pulsados ahora mismo
+  readyAt: 0,       // no hay trabajo antes de este instante (calentamiento tras abrir la obra)
+  lastWhy: null,    // último motivo de pausa anotado (para contar episodios, no sondeos)
+  idleStreak: 0,
+  handlers: null,
+  stats: null,
+};
+function _edBgNewStats() {
+  return { runs: 0, layers: 0, pages: 0, evicted: 0, fails: 0, chunks: 0, ms: 0, maxMs: 0, over30: 0, over60: 0,
+           mpx: 0, pauses: {}, startAt: 0, lastAt: 0, err: null };
+}
+_edBg.stats = _edBgNewStats();
+
+// Presupuesto de píxeles de canvas que el cargador puede tener reconstruidos a la vez
+// (incluida la hoja actual y lo que hayan cargado otros consumidores). Ajustable con
+// window._edBgBudgetPx (píxeles) o localStorage.cx_bgload_mpx (megapíxeles).
+function _edBgBudget() {
+  if (typeof window._edBgBudgetPx === 'number' && window._edBgBudgetPx > 0) return window._edBgBudgetPx;
+  try { const v = parseFloat(localStorage.getItem('cx_bgload_mpx')); if (v > 0) return v * 1e6; } catch (_) {}
+  const dm = navigator.deviceMemory || 4; // Chrome lo redondea y lo limita a 8
+  return (dm >= 8 ? 96 : dm >= 4 ? 48 : 24) * 1e6;
+}
+
+// Píxeles de canvas de una capa pesada: los reales si está reconstruida, los previstos si no.
+function _edBgLayerPx(l) {
+  if (l._canvasUnloaded) return ((l._unloadedCanvasW || 0) * (l._unloadedCanvasH || 0)) || 150000;
+  const c = l._canvas;
+  return c ? c.width * c.height : 0;
+}
+
+// ¿Puede el cargador reconstruir esta capa? (descargada, sin otra reconstrucción en curso, con fuente
+// y sin fallos previos — una capa que falló la reconstruye, si hace falta, el camino bajo demanda).
+function _edBgWants(l) {
+  return !!(l && _ED_BG_HEAVY.includes(l.type) && l._canvasUnloaded && !l._canvasLoadP && !l._bgFail &&
+            (l._unloadedFullDataUrl || l._unloadedDataUrl));
+}
+
+// Salvaguarda 2 (ver arriba): el flag _bgExact nunca vale en la hoja que se está editando.
+function _edBgExactOK(l) {
+  try { return !window._edBgDisabled && !(edLayers && edLayers.indexOf(l) >= 0); } catch (_) { return false; }
+}
+
+// Salvaguarda 1 (ver arriba): una hoja a la que se entra (o que se va a modificar sin entrar en ella)
+// deja de poder devolver dataUrl cacheados — sus canvas pueden dejar de coincidir con ellos.
+function _edBgInvalidatePage(page) {
+  if (!page || !page.layers) return;
+  for (let i = 0; i < page.layers.length; i++) { const l = page.layers[i]; if (l && l._bgExact) l._bgExact = false; }
+}
+
+// Suelta (sin recodificar: el dataUrl cacheado sigue siendo exacto) las capas que cargó el cargador.
+function _edBgEvictAll() {
+  (edPages || []).forEach(pg => {
+    if (!pg || !pg.layers || pg.layers === edLayers) return;
+    pg.layers.forEach(l => { if (l && l._bgExact && !l._canvasUnloaded) { _edReleaseTempCanvases([l]); l._bgExact = false; } });
+  });
+}
+
+// Momento en que NO se debe hacer trabajo en segundo plano. null = vía libre; 'off' = no hay nada
+// (más) que hacer o está desactivado → el bucle termina; cualquier otro motivo = esperar y reintentar.
+function _edBgBusyReason(heavy) {
+  const S = _edBg;
+  if (window._edBgDisabled) return 'off';
+  if (!edPages || edPages.length < 2 || !edCanvas || !edCanvas.isConnected) return 'off';
+  if (_edLoadProjectInProgress || window._edLoadingSuppressDirty) { S.readyAt = 0; return 'opening'; }
+  if (document.hidden) return 'hidden';
+  if (_edIsGestureActive()) return 'gesture'; // dibujo, arrastre, redimensión, rotación, pellizco, multiselección…
+  const now = performance.now();
+  if (S.ptrDown > 0) { if (now - S.lastInput > 8000) S.ptrDown = 0; else return 'pointer'; }
+  if (_edLocalSaving || _edCloudSaving) return 'saving';
+  if (document.getElementById('editorViewer')?.classList.contains('open')) return 'viewer';
+  if (window._gcpActive || _edMpPreviewActive) return 'preview';
+  if (typeof _pgThumbRunning !== 'undefined' && _pgThumbRunning && _pgThumbQueue && _pgThumbQueue.length) return 'thumbs';
+  if (!S.readyAt) S.readyAt = now + _ED_BG_WARMUP_MS;
+  if (now < S.readyAt) return 'warmup';
+  if (now - S.lastInput < (heavy ? _ED_BG_COOLDOWN_HEAVY_MS : _ED_BG_COOLDOWN_MS)) return 'cooldown';
+  try {
+    if (navigator.scheduling && navigator.scheduling.isInputPending && navigator.scheduling.isInputPending({ includeContinuous: true })) return 'input';
+  } catch (_) {}
+  return null;
+}
+
+function _edBgNotePause(why) {
+  const S = _edBg;
+  if (S.lastWhy === why) return;
+  S.lastWhy = why;
+  S.stats.pauses[why] = (S.stats.pauses[why] || 0) + 1;
+}
+function _edBgSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Cede hasta que el navegador esté libre (requestIdleCallback; sin él, un respiro corto).
+function _edBgIdle(timeout) {
+  return new Promise(res => {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(d => res(d), { timeout: timeout || 600 });
+    else setTimeout(() => res({ timeRemaining: () => 8, didTimeout: false }), 40);
+  });
+}
+// Imagen decodificada fuera del hilo principal (decode()); null si falla.
+function _edBgDecode(src) {
+  const img = new Image();
+  img.src = src;
+  if (typeof img.decode === 'function') return img.decode().then(() => img);
+  return new Promise((res, rej) => { img.onload = () => res(img); img.onerror = rej; });
+}
+
+// Elige la siguiente hoja a cargar: la más cercana a la actual (a igual distancia, la siguiente
+// antes que la anterior) que tenga algo por reconstruir y quepa en el presupuesto — contando con
+// que se pueden soltar las hojas cargadas por el cargador que estén MÁS LEJOS que ella.
+function _edBgPick() {
+  const n = edPages.length, cur = edCurrentPage, budget = _edBgBudget();
+  let used = 0;
+  const owned = new Array(n + 2).fill(0); // owned[d] = px soltables a distancia d de la hoja actual
+  for (let i = 0; i < n; i++) {
+    const pg = edPages[i];
+    if (!pg || !pg.layers) continue;
+    const isCur = pg.layers === edLayers;
+    for (let j = 0; j < pg.layers.length; j++) {
+      const l = pg.layers[j];
+      if (!l || !_ED_BG_HEAVY.includes(l.type)) continue;
+      // La hoja actual cuenta siempre (aunque aún se esté reconstruyendo bajo demanda: va a ocupar
+      // ese sitio); en las demás solo lo ya reconstruido.
+      if (l._canvasUnloaded && !isCur) continue;
+      const px = _edBgLayerPx(l);
+      used += px;
+      if (l._bgExact && !isCur) owned[Math.abs(i - cur)] += px;
+    }
+  }
+  const beyond = new Array(n + 2).fill(0); // beyond[d] = px soltables a distancia > d
+  for (let d = n; d >= 0; d--) beyond[d] = beyond[d + 1] + owned[d + 1];
+  for (let k = 1; k < n; k++) {
+    for (const idx of [cur + k, cur - k]) {
+      if (idx < 0 || idx >= n) continue;
+      const pg = edPages[idx];
+      if (!pg || !pg.layers || pg._pgRotating || pg.layers === edLayers) continue;
+      const todo = pg.layers.filter(_edBgWants);
+      if (!todo.length) continue;
+      let need = 0;
+      for (const l of todo) need += _edBgLayerPx(l);
+      if (used + need - beyond[k] <= budget) return { page: pg, idx, dist: k, layers: todo, over: Math.max(0, used + need - budget) };
+      // no cabe ni soltando lo más lejano: probar con la siguiente (más lejana, quizá más pequeña)
+    }
+  }
+  return null;
+}
+
+// Suelta lo cargado por el cargador en hojas a distancia > dist hasta recuperar needPx (las más lejanas primero).
+function _edBgEvictBeyond(dist, needPx) {
+  const S = _edBg, cur = edCurrentPage, n = edPages.length;
+  let freed = 0;
+  for (let d = n - 1; d > dist && freed < needPx; d--) {
+    for (const idx of [cur - d, cur + d]) {
+      if (idx < 0 || idx >= n) continue;
+      const pg = edPages[idx];
+      if (!pg || !pg.layers || pg.layers === edLayers) continue;
+      for (const l of pg.layers) {
+        if (!l || !l._bgExact || l._canvasUnloaded) continue;
+        freed += _edBgLayerPx(l);
+        _edReleaseTempCanvases([l]);
+        l._bgExact = false;
+        S.stats.evicted++;
+      }
+    }
+  }
+}
+
+// Espera el momento de hacer el trabajo SÍNCRONO de reconstruir una capa. false = abandonar el trabajo
+// (se entró en la hoja, se borró, se paró el cargador o se desactivó). Cualquier gesto, toque o
+// guardado hace esperar; tras la espera se vuelve a comprobar todo de forma síncrona.
+async function _edBgGate(heavy, gen, page) {
+  const S = _edBg;
+  for (;;) {
+    if (gen !== S.gen) return false;
+    if (page.layers === edLayers || edPages.indexOf(page) < 0) return false;
+    const why = _edBgBusyReason(heavy);
+    if (why === 'off') return false;
+    if (why) { _edBgNotePause(why); await _edBgSleep(why === 'cooldown' || why === 'warmup' ? 80 : 200); continue; }
+    await _edBgIdle(600); // el navegador libre de otras cosas
+    if (gen !== S.gen) return false;
+    if (page.layers === edLayers || edPages.indexOf(page) < 0) return false;
+    if (_edBgBusyReason(heavy)) continue; // algo ha pasado mientras esperaba el hueco
+    S.lastWhy = null;
+    return true;
+  }
+}
+
+// Reconstruye las capas pendientes de UNA hoja: las decodificaciones se lanzan todas a la vez (fuera
+// del hilo principal) y el trabajo síncrono se hace de una en una, cada una en su momento de calma.
+async function _edBgLoadPage(job, gen) {
+  const S = _edBg, st = S.stats, page = job.page;
+  const seq = page._visitSeq || 0;
+  if (job.over > 0) _edBgEvictBeyond(job.dist, job.over);
+  const items = job.layers.map(l => {
+    const full = l._unloadedFullDataUrl, crop = l._unloadedDataUrl;
+    return { l, full, crop, p: _edBgDecode(full || crop).catch(() => null) };
+  });
+  let built = 0, all = true;
+  for (const it of items) {
+    const l = it.l;
+    const img = await it.p;
+    if (gen !== S.gen) return built;
+    if (!l._canvasUnloaded) continue;                     // otro consumidor (navegación, miniatura…) ya la reconstruyó
+    if (!img) { l._bgFail = true; st.fails++; all = false; continue; }
+    const heavy = _edBgLayerPx(l) >= _ED_BG_HEAVY_PX;
+    if (!(await _edBgGate(heavy, gen, page))) return built;
+    // Tras esperar: si se visitó la hoja (se pudo editar y lo cacheado cambió) o cambió la fuente,
+    // lo decodificado puede estar obsoleto → se descarta y el bucle volverá a elegir.
+    if ((page._visitSeq || 0) !== seq || l._unloadedFullDataUrl !== it.full || l._unloadedDataUrl !== it.crop) return built;
+    if (!l._canvasUnloaded) continue;
+    const t0 = performance.now();
+    let ok = false;
+    try { ok = _edBuildLayerCanvas(l, img); }
+    catch (e) { l._bgFail = true; st.fails++; st.err = String(e && e.message || e).slice(0, 120); all = false; }
+    const dt = performance.now() - t0;
+    if (ok) {
+      l._bgExact = true; // canvas == decodificación del dataUrl cacheado, y la hoja no es la actual (comprobado arriba, sin esperas de por medio)
+      built++; st.layers++; st.chunks++; st.ms += dt; st.mpx += _edBgLayerPx(l) / 1e6; st.lastAt = performance.now();
+      if (dt > st.maxMs) st.maxMs = dt;
+      if (dt > 30) st.over30++;
+      if (dt > 60) st.over60++;
+    } else if (l._canvasUnloaded) {
+      all = false;
+    }
+    // Respiro: nunca dos trozos síncronos seguidos (≈1/3 del hilo como máximo, más con capas pesadas).
+    await _edBgSleep(Math.max(heavy ? 120 : 6, dt * 2));
+  }
+  if (all && gen === S.gen) st.pages++;
+  return built;
+}
+
+async function _edBgRun(gen) {
+  const S = _edBg, st = S.stats;
+  st.runs++;
+  if (!st.startAt) st.startAt = performance.now();
+  try {
+    for (;;) {
+      if (gen !== S.gen) return;
+      const why = _edBgBusyReason(false);
+      if (why === 'off') return;
+      if (why) { _edBgNotePause(why); await _edBgSleep(why === 'cooldown' || why === 'warmup' ? 80 : 220); continue; }
+      const job = _edBgPick();
+      if (!job) { S.idleDone = true; S.sigN = edPages.length; S.sigCur = edCurrentPage; return; }
+      S.lastWhy = null;
+      const built = await _edBgLoadPage(job, gen);
+      // Sin avance (todo falló, o se entró en la hoja a mitad): no girar en vacío
+      if (built > 0) S.idleStreak = 0;
+      else if (++S.idleStreak >= 4) { await _edBgSleep(1000); S.idleStreak = 0; }
+      await _edBgSleep(20);
+    }
+  } catch (e) {
+    st.err = String(e && e.message || e).slice(0, 160);
+  } finally {
+    if (gen === S.gen) S.running = false;
+  }
+}
+
+function _edBgInstall() {
+  const S = _edBg;
+  if (S.handlers) return;
+  const stamp = () => { S.lastInput = performance.now(); };
+  const down  = () => { S.ptrDown++; stamp(); };
+  const up    = () => { S.ptrDown = Math.max(0, S.ptrDown - 1); stamp(); };
+  // Sin ningún botón pulsado no hay arrastre posible (ratón/lápiz en vuelo): aunque se perdiera un pointerup
+  const move  = e => { S.lastInput = performance.now(); if (e.buttons === 0) S.ptrDown = 0; };
+  const vis   = () => { if (!document.hidden) _edBgKick(); };
+  const opt = { capture: true, passive: true };
+  S.handlers = [
+    [window, 'pointerdown', down, opt], [window, 'pointerup', up, opt], [window, 'pointercancel', up, opt],
+    [window, 'pointermove', move, opt], [window, 'touchstart', stamp, opt], [window, 'touchmove', stamp, opt],
+    [window, 'wheel', stamp, opt], [window, 'keydown', stamp, opt], [window, 'keyup', stamp, opt],
+    [window, 'input', stamp, opt], [document, 'visibilitychange', vis, false],
+  ];
+  S.handlers.forEach(([el, ev, fn, o]) => el.addEventListener(ev, fn, o));
+}
+function _edBgUninstall() {
+  const S = _edBg;
+  if (!S.handlers) return;
+  S.handlers.forEach(([el, ev, fn, o]) => el.removeEventListener(ev, fn, o));
+  S.handlers = null;
+  S.ptrDown = 0;
+}
+
+// Pone en marcha el cargador si hay algo que hacer. Barato e idempotente: se llama en cada cambio de
+// hoja, alta/baja de hojas, deshacer…; no hace nada si ya está en marcha o si no hay nada nuevo.
+function _edBgKick() {
+  const S = _edBg;
+  if (S.running || window._edBgDisabled) return;
+  try { if (localStorage.getItem('cx_bgload') === '0') return; } catch (_) {}
+  if (!edPages || edPages.length < 2 || !edCanvas || !edCanvas.isConnected) return;
+  if (S.idleDone && S.sigN === edPages.length && S.sigCur === edCurrentPage) return; // nada nuevo desde que acabó
+  S.idleDone = false;
+  _edBgInstall();
+  S.running = true;
+  _edBgRun(S.gen);
+}
+
+// Para el cargador y anula todo lo que tuviera en vuelo. destroy=true al salir del editor: además
+// suelta lo que tenía cargado (memoria) y quita los escuchas.
+function _edBgStop(destroy) {
+  const S = _edBg;
+  S.gen++;
+  S.running = false; S.idleDone = false; S.sigN = -1; S.sigCur = -1; S.readyAt = 0; S.lastWhy = null; S.idleStreak = 0;
+  if (destroy) { try { _edBgEvictAll(); } catch (_) {} _edBgUninstall(); }
+}
+
+// Estado para el diagnóstico 🩺 y las pruebas.
+function _edBgInfo() {
+  const S = _edBg, st = S.stats;
+  let used = 0, owned = 0, ownedLayers = 0, unloadedHeavy = 0, heavy = 0, flaggedInCurrent = 0;
+  (edPages || []).forEach(pg => {
+    (pg.layers || []).forEach(l => {
+      if (!l || !_ED_BG_HEAVY.includes(l.type)) return;
+      heavy++;
+      if (l._canvasUnloaded) { unloadedHeavy++; return; }
+      const px = _edBgLayerPx(l);
+      used += px;
+      if (l._bgExact) { owned += px; ownedLayers++; if (pg.layers === edLayers) flaggedInCurrent++; }
+    });
+  });
+  return {
+    disabled: !!window._edBgDisabled, running: S.running, idleDone: S.idleDone, why: S.lastWhy,
+    budgetMpx: +(_edBgBudget() / 1e6).toFixed(1), usedMpx: +(used / 1e6).toFixed(2), ownedMpx: +(owned / 1e6).toFixed(2),
+    ownedLayers, heavy, unloadedHeavy, flaggedInCurrent,
+    layers: st.layers, pages: st.pages, evicted: st.evicted, fails: st.fails, chunks: st.chunks,
+    ms: +st.ms.toFixed(1), maxMs: +st.maxMs.toFixed(1), over30: st.over30, over60: st.over60,
+    mpx: +st.mpx.toFixed(2), pauses: Object.assign({}, st.pauses), runs: st.runs, err: st.err,
+    sinceInputMs: S.lastInput ? Math.round(performance.now() - S.lastInput) : null, ptrDown: S.ptrDown,
+  };
+}
+
 // ── Onion skin de hojas contiguas (checkbox por página, ver
 // page._onionSkinEnabled y el desplegable Animar) ──────────────────────────
 // Renderiza `page` (una hoja distinta a la actual) ajustada por "contain"
@@ -9010,8 +9401,8 @@ function _edOnionRenderPage(page) {
 // lo cubre _edOnionInvalidatePage, v40.59) — así
 // cubre cualquier vía que pueda alterar qué hoja es la contigua (cambiar de
 // hoja, borrar/reordenar hojas, deshacer...) sin tener que engancharse a
-// cada una de ellas por separado. Se llama desde _edRenderFrame, solo si
-// page._onionSkinEnabled — el coste normal (checkbox activado pero sin
+// cada una de ellas por separado. Se llama desde _edDrawOnionGhost (a su vez desde
+// _edRenderFrame), solo si page._onionSkinEnabled — el coste normal (checkbox activado pero sin
 // cambios de hoja contigua) son dos comparaciones por referencia, no un
 // re-render.
 //
@@ -9019,7 +9410,7 @@ function _edOnionRenderPage(page) {
 // en vez de ejecutarse aquí mismo — desde que onion skin cubre el área de
 // trabajo completa (2700×2340, no solo la página) es demasiado costoso para
 // hacerlo síncrono en mitad de un cambio de hoja real: edLoadPage() llama a
-// edRedraw()→_edRenderFrame()→_edOnionSkinEnsure() de forma SÍNCRONA, así
+// edRedraw()→_edRenderFrame()→_edDrawOnionGhost()→_edOnionSkinEnsure() de forma SÍNCRONA, así
 // que sin diferir esto, borrar una hoja (edDeletePage → edPages.splice →
 // edLoadPage, todo en el mismo gesto de tocar "Eliminar") bloqueaba el hilo
 // principal con la creación/composición de hasta 4 canvas de ~4.2 millones
@@ -9082,6 +9473,71 @@ function _edOnionSkinEnsure() {
       _edOnionReloadThenRefresh(nextIdx, nextPage);
     }
   }
+}
+
+// v41.45 — Suelta TODO el estado del onion skin (lienzos de las dos hojas contiguas, ~25 MB cada
+// uno, y la mezcla de pantalla). Se llama al no haber transparencia activa en la hoja que se
+// pinta y al salir del editor — antes esos dos lienzos se quedaban retenidos hasta que se
+// volvía a usar el onion skin, aunque se hubiera desactivado o cerrado el editor.
+function _edOnionReleaseAll() {
+  _edOnionPrevSrc = _edOnionNextSrc = null;
+  _edOnionPrevCanvas = _edOnionNextCanvas = null;
+  const o = _edOnionOv;
+  o.canvas = null; o.ctx = null; o.ok = false; o.prev = o.next = null;
+}
+
+// v41.45 — Pinta el "fantasma" de las hojas contiguas ENCIMA de todo lo de la hoja en
+// vigor (se llama al final de _edRenderFrame y desde los caminos rápidos del arrastre).
+// Antes se pintaba justo tras el fondo, debajo de las capas: una imagen pegada opaca lo
+// tapaba y la transparencia no servía de nada (fallo reportado por Alberto). Cada hoja
+// contigua, al 50%, sobre fondo transparente (ver _pgRenderThumbLive con full=true): solo
+// se ve su contenido real. Debajo de los overlays de UI (selección, cuadrícula, marco).
+// · Con el cuentagotas activo no se pinta: él lee los píxeles del lienzo y debe recibir
+//   los colores reales de la hoja, no la mezcla con el fantasma.
+// · La mezcla de las dos hojas se compone UNA vez en un lienzo del tamaño de la pantalla
+//   (_edOnionOv) y cada fotograma es un único blit mientras no cambie nada (hojas
+//   contiguas, cámara, tamaño del lienzo). Antes, cada edRedraw() repetía dos drawImage de
+//   ~6,3 Mpx (≈3,5 ms, ≈15 ms con la CPU ×4) — y, al ir ahora ENCIMA de las capas, ya no
+//   hay forma de que el navegador descarte lo que queda tapado. Con la cámara moviéndose
+//   (pan/zoom) se recompone en cada fotograma: el mismo coste de antes más un blit.
+function _edDrawOnionGhost(ctx) {
+  const page = edPages[edCurrentPage];
+  const o = _edOnionOv;
+  if (!page || !page._onionSkinEnabled) {
+    // Sin transparencia en esta hoja: soltar los lienzos (el auxiliar de pantalla y los dos de
+    // las hojas contiguas, ~25 MB cada uno) — _edOnionSkinEnsure los reconstruye si se vuelve a activar.
+    if (o.canvas || _edOnionPrevCanvas || _edOnionNextCanvas || _edOnionPrevSrc || _edOnionNextSrc) _edOnionReleaseAll();
+    return;
+  }
+  if (window._edEyedropActive) return;
+  _edOnionSkinEnsure();
+  const P = _edOnionPrevCanvas, N = _edOnionNextCanvas;
+  if (!P && !N) { o.ok = false; o.prev = o.next = null; return; } // aún se están (re)generando: no retener los lienzos viejos
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  if (!o.canvas || o.canvas.width !== cw || o.canvas.height !== ch) {
+    o.canvas = document.createElement('canvas');
+    o.canvas.width = cw; o.canvas.height = ch;
+    o.ctx = o.canvas.getContext('2d');
+    o.ok = false;
+  }
+  if (!o.ok || o.prev !== P || o.next !== N ||
+      o.z !== edCamera.z || o.x !== edCamera.x || o.y !== edCamera.y) {
+    const g = o.ctx;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    g.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
+    g.globalAlpha = 0.5;
+    if (P) g.drawImage(P, 0, 0);
+    if (N) g.drawImage(N, 0, 0);
+    g.globalAlpha = 1;
+    o.prev = P; o.next = N;
+    o.z = edCamera.z; o.x = edCamera.x; o.y = edCamera.y;
+    o.ok = true;
+  }
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(o.canvas, 0, 0);
+  ctx.restore();
 }
 
 // _edUnloadPageCanvases (más abajo) descarga SIEMPRE los canvas pesados
@@ -9174,6 +9630,7 @@ function edLoadPage(idx){
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
   edPages[idx]._visitSeq = (edPages[idx]._visitSeq || 0) + 1; // v41.44: ver _edTempLoadPage
+  _edBgInvalidatePage(edPages[idx]); // v41.45: esta hoja pasa a poder editarse → sus capas ya no pueden devolver dataUrl cacheados
   // Onion skin (v40.59): esta hoja pasa a poder editarse — si otra la tenía como contigua en
   // caché, esa copia queda obsoleta desde ya (ver _edOnionInvalidatePage). edRedraw() va justo después.
   _edOnionInvalidatePage(edPages[idx]);
@@ -9242,8 +9699,15 @@ function edLoadPage(idx){
     if (edPages[edCurrentPage] === _pgObjLoad) edRedraw();
     else release();
   });
+  // v41.45: el cargador en segundo plano se recentra en la nueva hoja actual (la hoja a la que se
+  // acaba de entrar se carga YA, por el camino de arriba, sin esperar al cargador).
+  _edBgKick();
 }
 function edUpdateNavPages(){
+  // v41.45: cubre TODAS las vías que cambian las hojas (cambio de hoja, alta/baja/duplicado,
+  // deshacer, carga inicial): el cargador en segundo plano se (re)centra si hay algo nuevo que hacer.
+  // Barato e idempotente (ver _edBgKick).
+  _edBgKick();
   // NUEVO: barra flotante "ir a hoja" (botón corto en edQuickTools + barra
   // arrastrable) — independiente de todo lo que sigue en esta función
   // (flechas edPagePrev/edPageNext, desplegable ddNavPages con miniaturas),
@@ -31582,6 +32046,7 @@ let _edLoadProjectInProgress = false;
 async function edLoadProject(id){
   if(_edLoadProjectInProgress) return;
   _edLoadProjectInProgress = true;
+  _edBgStop(false); // v41.45: cualquier carga en segundo plano de la obra anterior queda anulada
   // Suprimir cualquier marcado de "sucio" mientras dure esta carga — ver
   // _edMarkPageDirty/_edInteractionTick. Se libera en EditorView_init, en el
   // mismo punto donde se oculta el contador bloqueante de my-works (cuando
@@ -33840,6 +34305,8 @@ function EditorView_destroy(){
   sessionStorage.removeItem('cx_editing');
   // Liberar el lock de carga para que la siguiente obra pueda iniciar correctamente
   _edLoadProjectInProgress = false;
+  _edBgStop(true); // v41.45: fuera del editor no se carga nada en segundo plano (y se suelta la memoria)
+  _edOnionReleaseAll(); // v41.45: y se sueltan los lienzos del onion skin (2 × ~25 MB), que antes se quedaban retenidos
 }
 async function edSaveProjectModal(){
   const _newTitle  = $('edMTitle').value.trim() || edProjectMeta.title;
@@ -34303,6 +34770,7 @@ function EditorView_init(){
     // seguir con lo que ya había en vez de salir del editor.
     if(edProjectId && edPages && edPages.length) {
       if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+      _edBgKick(); // v41.45: EditorView_destroy paró el cargador en segundo plano — se retoma
       return;
     }
     if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
@@ -34316,6 +34784,7 @@ function EditorView_init(){
   // _edLoadProjectInProgress se fuerza a false para que la nueva carga no quede bloqueada
   // si la sesión anterior terminó en error sin liberarlo.
   _edLoadProjectInProgress = false;
+  _edBgStop(true); // v41.45: antes de vaciar edPages — suelta lo que tuviera cargado el cargador en segundo plano
   edProjectId   = null;
   edPages       = [];
   edLayers      = [];
@@ -47714,10 +48183,26 @@ async function _edRunDiag() {
       _totalHeavy += _heavy.length; _totalUnloaded += _unl.length;
       if (p._cachedThumbCanvas) _totalThumbCached++;
       const _active = pi === edCurrentPage ? ' ← ACTIVA' : '';
-      L('  P'+pi+_active+': '+_heavy.length+' capas pesadas, '+_unl.length+' descargadas, thumbCache='+(!!p._cachedThumbCanvas));
+      const _bgN = _heavy.filter(l => l._bgExact).length; // v41.45: cargadas por el cargador en segundo plano
+      L('  P'+pi+_active+': '+_heavy.length+' capas pesadas, '+_unl.length+' descargadas, '+_bgN+' cargadas en 2º plano, thumbCache='+(!!p._cachedThumbCanvas));
     });
     L('Total: '+_totalHeavy+' capas pesadas, '+_totalUnloaded+' descargadas, '+_totalThumbCached+'/'+edPages.length+' páginas con miniatura cacheada');
   } catch(_mc) { L('Error: '+_mc.message); }
+  // v41.45 — Carga en segundo plano de las hojas sin abrir (ver _edBgInfo en editor.js)
+  L('\n── Carga en segundo plano (v41.45) ──');
+  try {
+    const _bi = _edBgInfo();
+    let _sw = 'activada';
+    try { if (localStorage.getItem('cx_bgload') === '0') _sw = 'DESACTIVADA (localStorage.cx_bgload=0)'; } catch(_) {}
+    if (_bi.disabled) _sw = 'DESACTIVADA (window._edBgDisabled)';
+    L('Estado: ' + _sw + ' | ' + (_bi.running ? 'en marcha' : (_bi.idleDone ? 'terminada (nada más que cargar)' : 'parada')) + (_bi.why ? ' | última pausa: ' + _bi.why : ''));
+    L('Memoria de canvas: ' + _bi.usedMpx + ' Mpx en uso (' + _bi.ownedMpx + ' cargados en 2º plano) · presupuesto ' + _bi.budgetMpx + ' Mpx');
+    L('Capas pesadas: ' + _bi.heavy + ' · descargadas ' + _bi.unloadedHeavy + ' · cargadas en 2º plano ' + _bi.ownedLayers + ' · soltadas por presupuesto ' + _bi.evicted + ' · fallos ' + _bi.fails);
+    L('Trabajo: ' + _bi.chunks + ' trozos, ' + _bi.ms + ' ms en total, máx ' + _bi.maxMs + ' ms · >30 ms: ' + _bi.over30 + ' · >60 ms: ' + _bi.over60 + ' · hojas completas: ' + _bi.pages);
+    const _pz = Object.keys(_bi.pauses).map(k => k + '×' + _bi.pauses[k]).join(', ');
+    L('Pausas (episodios): ' + (_pz || 'ninguna') + (_bi.err ? ' | último error: ' + _bi.err : ''));
+    if (_bi.flaggedInCurrent) L('  ⚠️ ' + _bi.flaggedInCurrent + ' capa(s) de la hoja ACTUAL marcadas como cargadas en 2º plano (no debería ocurrir; la salvaguarda las ignora)');
+  } catch(_bg) { L('Error: ' + _bg.message); }
 
   L('\n── Carga del editor ──');
   L('editId al cargar: ' + (window._edLastLoadId || 'null'));
