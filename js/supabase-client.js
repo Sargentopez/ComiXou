@@ -919,9 +919,11 @@ const SupabaseClient = (() => {
     let _oldRows = [];
     let _toInsert = layerRows;  // filas que de verdad hay que enviar
     let _kept = 0, _keptKB = 0; // capas que ya estaban en la nube idénticas (no se tocan)
+    let _cloudOrders = null;    // v41.48 (solo diagnóstico): órdenes de capa que ya existían en la nube
     if (_rowsP) {
       const _rr = await _rowsP;
       _pm('listLayersMs');
+      if (_rr.ok && Array.isArray(_rr.v)) _cloudOrders = new Set(_rr.v.map(c => c && c.layer_order));
       let _delta = null;
       if (_rr.ok && Array.isArray(_rr.v) && _rr.v.every(c => c && c.id != null && typeof c.layer_sha === 'string')) {
         _layerShaOk = true;
@@ -997,6 +999,12 @@ const SupabaseClient = (() => {
       _pg.layers = layerRows.length;
       _pg.sent = _toInsert.length; _pg.kept = _kept; _pg.keptKB = _keptKB; _pg.mode = _rowsP ? (_kept || _layerShaOk ? 'capas' : 'completo') : 'completo';
       _pg.kb = Math.round(_toInsert.reduce((n, r) => n + (r.layer_data ? r.layer_data.length : 0), 0) / 1024);
+      // v41.48 — (solo diagnóstico, no cambia lo que se envía) QUÉ capas se reenvían y por qué, de mayor a menor:
+      // tipo@orden:KB y una marca — C = cambiada (en la nube había otra capa en ese orden con distinto contenido),
+      // N = nueva (no había ninguna), B = lleva archivo del bucket (GIF/APNG: se reemplaza siempre). Sin marca = modo de siempre.
+      _pg.sentList = _toInsert.slice().sort((a, b) => ((b.layer_data || '').length - (a.layer_data || '').length)).slice(0, 10)
+        .map(r => r.layer_type + '@' + r.layer_order + ':' + Math.round((r.layer_data ? r.layer_data.length : 0) / 1024) + 'KB' +
+          ((r.gif_url || r.anim_url) ? ':B' : (_cloudOrders ? (_cloudOrders.has(r.layer_order) ? ':C' : ':N') : '')));
     }
   }
 
@@ -1726,38 +1734,102 @@ const SupabaseClient = (() => {
   }
 
   // ── BIBLIOTECA ────────────────────────────────────────────────
+  // v41.48 — bibFetch pide al SERVIDOR solo las filas de ESTA obra (dos consultas en paralelo, con los
+  // mismos filtros que ya usan los DELETE de bibSync desde hace versiones: like.<obra>::* y
+  // in.(__root__,__anim__)). Antes se descargaba SIEMPRE la tabla entera del autor —TODAS sus obras, con
+  // layer_data y miniaturas— para quedarse en JavaScript con un puñado de filas: cada «Editar» y cada
+  // sincronización de biblioteca bajaba megas que se tiraban nada más llegar. Si por cualquier motivo la
+  // consulta filtrada falla, se repite con la consulta completa de siempre (comportamiento anterior).
   async function bibFetch(authorId, workId) {
-    // Filtrar por author_id — el filtrado por folder_id se hace en JS
-    // para evitar problemas de encoding del wildcard % en la URL
-    const filter = `author_id=eq.${authorId}&order=created_at.asc`;
     if (window._authTryRefresh) await window._authTryRefresh();
-    const r = await fetch(`${BASE}/biblioteca?${filter}`, {
-      headers: _hdrsUser(),
-      cache: 'no-store',
-    });
-    if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
-    const rows = await r.json();
-    // Filtrar en JS por workId si se especificó
-    if (!workId) return rows;
+    const _getRows = async (extra) => {
+      const r = await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}${extra}&order=created_at.asc`, {
+        headers: _hdrsUser(),
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
+      return r.json();
+    };
+    if (!workId) return _getRows('');
     // Incluir items con prefijo workId:: Y items legacy sin prefijo UUID
     // (solo __root__ y __anim__ exactos — no folder_ids de otras obras)
     const _legacyFolders = new Set(['__root__', '__anim__']);
-    return rows.filter(row => {
-      if (!row.folder_id) return false;
-      if (row.folder_id.startsWith(workId + '::')) return true;
-      if (_legacyFolders.has(row.folder_id)) return true;
-      return false;
-    });
+    const _mine = row => !!row.folder_id && (row.folder_id.startsWith(workId + '::') || _legacyFolders.has(row.folder_id));
+    let rows;
+    try {
+      const [own, legacy] = await Promise.all([
+        _getRows(`&folder_id=like.${workId}::*`),
+        _getRows('&folder_id=in.(__root__,__anim__)'),
+      ]);
+      const _seen = new Set();
+      rows = own.concat(legacy).filter(r => { if (_seen.has(r.id)) return false; _seen.add(r.id); return true; });
+      rows.sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0));
+    } catch (_e) {
+      console.warn('bibFetch: consulta filtrada fallida, se usa la completa', _e);
+      rows = await _getRows('');
+    }
+    // Red de seguridad: aunque el servidor devolviera de más, solo se entregan las de esta obra.
+    return rows.filter(_mine);
+  }
+
+  // Borra filas de la biblioteca DEVOLVIENDO (id, anim_url) de lo borrado, en la misma petición
+  // (mismo mecanismo que ya usa _delete con opts.returning para panel_layers). Refresca el token y
+  // reintenta una vez, como _deleteWithRetry. Devuelve el array de filas borradas, o null si no se pudo.
+  async function _bibDeleteRows(label, filter) {
+    for (let intento = 0; intento < 2; intento++) {
+      try {
+        return await _delete('biblioteca', filter, { returning: 'id,anim_url' });
+      } catch (e) {
+        if (intento === 0) { try { if (window._authTryRefresh) await window._authTryRefresh(); } catch(_) {} continue; }
+        console.warn(`[storage] no se pudo borrar (devolviendo filas): ${label}`, e);
+      }
+    }
+    // Último recurso: el DELETE de siempre, sin pedir las filas de vuelta (por si el servidor no admitiera
+    // devolverlas). Sin esa lista no se sabe qué archivos quedan huérfanos ni cuáles conservar: se
+    // devuelve vacío y bibSync lo anota en el 🩺 (noReturning).
+    try {
+      if (window._authTryRefresh) await window._authTryRefresh();
+      const r = await fetch(`${BASE}/biblioteca?${filter}`, { method: 'DELETE', headers: _hdrsUser() });
+      if (r.ok) { if (window._sbLastBib) window._sbLastBib.noReturning = true; return []; }
+      console.warn(`[storage] no se pudo borrar: ${label} (HTTP ${r.status})`);
+    } catch (e) { console.warn(`[storage] no se pudo borrar: ${label} (excepción)`, e); }
+    return null;
   }
 
   // Sincronización completa: sube todos los items locales a Supabase.
   // folder_id se prefixa con workId:: para aislar por proyecto.
+  //
+  // v41.48 — misma semántica de siempre (borrar las filas de la obra y volver a insertar las locales),
+  // con menos viajes y menos bytes. El guardado en nube de Alberto tardó 9,4 s solo en esta fase para 9
+  // objetos de biblioteca. Medido con la nube simulada, el tiempo se iba en:
+  //   · bibFetch bajaba la tabla ENTERA del autor (todas sus obras) solo para saber qué archivos del
+  //     bucket quedaban huérfanos → ahora no se descarga nada: los DELETE devuelven (id, anim_url) de lo
+  //     que borran, en la misma petición (el mismo truco de v41.46 para panel_layers);
+  //   · los dos DELETE (obra + legacy) iban uno tras otro → ahora van a la vez;
+  //   · los archivos huérfanos se borraban uno a uno ANTES de borrar las filas → ahora a la vez y
+  //     DESPUÉS de que el INSERT haya tenido éxito (si el INSERT falla no se pierde ningún archivo).
+  // Además corrige un riesgo de pérdida de datos: una animación cuya copia local solo guarda la CLAVE de
+  // IndexedDB (la biblioteca «espejada» desde la nube en «Editar» no trae el APNG en memoria, solo
+  // _apngIdbKey) se reinsertaba con anim_url=null y su archivo del bucket se borraba como «huérfano»: la
+  // animación desaparecía de la nube. Ahora se conserva el anim_url que ya tenía esa fila en la nube y,
+  // si no tenía ninguno, se intenta leer el APNG de IndexedDB para subirlo.
+  // Deja el desglose de tiempos en window._sbLastBib (lo enseña el botón 🩺).
   async function bibSync(authorId, bibData, workId) {
+    const _t0 = performance.now();
+    const _st = window._sbLastBib = {
+      ts: new Date().toISOString(), ok: false, rows: 0, upKB: 0, ms: {},
+      apngUp: 0, apngKept: 0, apngIdb: 0, deleted: null, orphans: 0, error: null,
+    };
+    try {
     const prefix = workId ? workId + '::' : '';
     const folders = (bibData && bibData.folders) ? bibData.folders : [];
-    const rows = [];
-    for (const folder of folders) {
-      for (const entry of (folder.items || [])) {
+    const _jobs = [];
+    for (const folder of folders) for (const entry of (folder.items || [])) _jobs.push({ folder, entry });
+
+    // 1) Preparar las filas ANTES de tocar nada en la nube (si algo fallara aquí no se ha borrado nada).
+    //    En paralelo de 3 en 3 (hay APNG pesados): el resultado conserva el orden de los items.
+    const _tPrep = performance.now();
+    const _built = await _sbPoolMap(_jobs, 3, async ({ folder, entry }) => {
         let _animUrl = null;
         // APNG animado de biblioteca: subir al bucket 'anims'
         if (entry.isGifAnim) {
@@ -1773,6 +1845,7 @@ const SupabaseClient = (() => {
             if (_apngDataUrl) {
               const _bucketKey = 'bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
               _animUrl = await _animUpload(_bucketKey, _apngDataUrl);
+              _st.apngUp++;
             }
           } catch(e) { console.warn('bibSync APNG upload:', e); }
         }
@@ -1826,31 +1899,26 @@ const SupabaseClient = (() => {
         // clave única en la nube. bibDownload deshace este mismo prefijo al
         // reconstruir el id local, con el mismo criterio que ya usa para
         // folder_id.
-        rows.push({
-          id:          prefix + entry.id,
-          author_id:   authorId,
-          layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
-          layer_data:  _ld,
-          anim_url:    _animUrl,
-          thumb:       entry.thumb,
-          folder_id:   prefix + folder.id,
-          folder_name: folder.name,
-        });
-      }
-    }
-    // Recuperar rows existentes para borrar archivos huérfanos del bucket
-    try {
-      const _existingRows = await bibFetch(authorId, workId);
-      // Construir set de anim_urls que van a seguir existiendo
-      const _keepUrls = new Set(rows.filter(r => r.anim_url).map(r => r.anim_url));
-      for (const _er of (_existingRows || [])) {
-        if (_er.anim_url && !_keepUrls.has(_er.anim_url)) {
-          await _animDelete(_er.anim_url).catch(()=>{});
-        }
-      }
-    } catch(_e) { /* no bloquear si falla la limpieza */ }
+        return {
+          entry,
+          // animación sin binario local utilizable → se resuelve tras el borrado (paso 3)
+          needAnim: !!(entry.isGifAnim && !_animUrl),
+          row: {
+            id:          prefix + entry.id,
+            author_id:   authorId,
+            layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
+            layer_data:  _ld,
+            anim_url:    _animUrl,
+            thumb:       entry.thumb,
+            folder_id:   prefix + folder.id,
+            folder_name: folder.name,
+          },
+        };
+    });
+    const rows = _built.map(b => b.row);
+    _st.ms.prep = Math.round(performance.now() - _tPrep);
 
-    // Borrar todos los rows existentes del autor/workId y luego insertar limpio
+    // 2) Borrar todos los rows existentes del autor/workId y luego insertar limpio
     // (merge-duplicates no borra los items que ya no existen en local).
     //
     // BUG CORREGIDO (biblioteca de una obra seguía sin sincronizar pese a que
@@ -1862,46 +1930,92 @@ const SupabaseClient = (() => {
     // borrado → huérfanos, silenciado sin dejar rastro). Si ESTOS DELETE
     // fallan igual, las filas antiguas con el mismo id nunca se borran antes
     // del INSERT de más abajo — que sí lanza de verdad el error de bibSync —
-    // y ese INSERT choca con la clave ya existente. Se reutiliza
-    // _deleteWithRetry (refresca el token, reintenta una vez, deja
-    // constancia en consola si sigue fallando) en vez de silenciarlo sin más.
-    if (workId) {
-      // Borrar con prefijo
-      await _deleteWithRetry('biblioteca:' + workId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=like.${workId}::*`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }));
-      // Borrar sin prefijo (legacy — no contienen '::')
-      // PostgREST no soporta NOT LIKE directamente en todos los contextos,
-      // así que borramos los que tienen folder_id exactamente '__root__' o '__anim__'
-      // que son los únicos folder_id posibles sin prefijo
-      await _deleteWithRetry('biblioteca:legacy:' + authorId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }));
-    } else {
-      await _deleteWithRetry('biblioteca:todo:' + authorId, () => fetch(`${BASE}/biblioteca?author_id=eq.${authorId}`, {
-        method: 'DELETE', headers: _hdrsUser(),
-      }));
+    // y ese INSERT choca con la clave ya existente. _bibDeleteRows refresca
+    // el token, reintenta una vez y deja constancia en consola si sigue
+    // fallando, en vez de silenciarlo sin más.
+    const _tDel = performance.now();
+    const _delJobs = workId
+      ? [
+          // Borrar con prefijo
+          ['biblioteca:' + workId, `author_id=eq.${authorId}&folder_id=like.${workId}::*`],
+          // Borrar sin prefijo (legacy — no contienen '::'). PostgREST no soporta NOT LIKE directamente
+          // en todos los contextos, así que borramos los que tienen folder_id exactamente '__root__' o
+          // '__anim__', que son los únicos folder_id posibles sin prefijo
+          ['biblioteca:legacy:' + authorId, `author_id=eq.${authorId}&folder_id=in.(__root__,__anim__)`],
+        ]
+      : [['biblioteca:todo:' + authorId, `author_id=eq.${authorId}`]];
+    const _delRes = await Promise.all(_delJobs.map(([label, filter]) => _bibDeleteRows(label, filter)));
+    const _old = [];
+    _delRes.forEach(r => { if (r) _old.push(...r); });
+    _st.deleted = _delRes.map(r => r ? r.length : null);
+    _st.ms.del = Math.round(performance.now() - _tDel);
+
+    // 3) Animaciones sin binario local utilizable (ver arriba): conservar el archivo que esa fila ya
+    //    tenía en la nube; si no tenía ninguno, último recurso: leer el APNG de IndexedDB y subirlo.
+    const _oldById = new Map(_old.map(o => [o.id, o]));
+    for (const b of _built) {
+      if (!b.needAnim) continue;
+      const _prev = _oldById.get(b.row.id) || _oldById.get(b.entry.id);
+      if (_prev && _prev.anim_url) { b.row.anim_url = _prev.anim_url; _st.apngKept++; continue; }
+      const _key = b.entry._apngIdbKey || b.entry.animKey;
+      if (!_key || !window._sbAnimIdbLoad) continue;
+      try {
+        const _d = await window._sbAnimIdbLoad(_key);
+        // _d puede ser string (APNG completo) o array (frames PNG sueltos)
+        const _du = (typeof _d === 'string') ? _d
+          : (Array.isArray(_d) && _d.length > 1 ? await _buildApngFromFrames(_d, b.entry.gcpFrameDelay || 100, b.entry.gcpFrameHolds) : null);
+        if (_du) {
+          b.row.anim_url = await _animUpload('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8), _du);
+          _st.apngIdb++;
+        }
+      } catch(e) { console.warn('bibSync APNG (IndexedDB):', e); }
     }
 
-    if (!rows.length) return;
-    // Refrescar el token justo antes del INSERT final — es la única petición
-    // de bibSync que de verdad puede lanzar (ver más abajo), así que es la
-    // que más falta le hace llegar con un token fresco.
-    if (window._authTryRefresh) await window._authTryRefresh();
-    const r = await fetch(`${BASE}/biblioteca`, {
-      method:  'POST',
-      headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
-      body:    JSON.stringify(rows),
-    });
-    if (!r.ok) {
-      const _errBody = await r.text();
-      // Detalle completo del fallo real (no una suposición) — ver
-      // window._edLastBibSyncError en editor.js/edCloudSave, mostrado en el
-      // diagnóstico 🩺 ("Último error de bibSync").
-      if (typeof window !== 'undefined') {
-        window._edLastBibSyncError = { status: r.status, body: _errBody.slice(0, 2000), rows: rows.length, ts: new Date().toISOString() };
+    if (!rows.length) {
+      _st.ok = true;
+    } else {
+      // 4) INSERT. Refrescar el token justo antes — es la única petición de bibSync que de verdad
+      // puede lanzar (ver más abajo), así que es la que más falta le hace llegar con un token fresco.
+      if (window._authTryRefresh) await window._authTryRefresh();
+      const _tPost = performance.now();
+      const _body = JSON.stringify(rows);
+      _st.rows = rows.length; _st.upKB = Math.round(_body.length / 1024);
+      const r = await fetch(`${BASE}/biblioteca`, {
+        method:  'POST',
+        headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
+        body:    _body,
+      });
+      _st.ms.post = Math.round(performance.now() - _tPost);
+      if (!r.ok) {
+        const _errBody = await r.text();
+        // Detalle completo del fallo real (no una suposición) — ver
+        // window._edLastBibSyncError en editor.js/edCloudSave, mostrado en el
+        // diagnóstico 🩺 ("Último error de bibSync").
+        if (typeof window !== 'undefined') {
+          window._edLastBibSyncError = { status: r.status, body: _errBody.slice(0, 2000), rows: rows.length, ts: new Date().toISOString() };
+        }
+        throw new Error(`bibSync: ${r.status} ${_errBody}`);
       }
-      throw new Error(`bibSync: ${r.status} ${_errBody}`);
+      _st.ok = true;
+    }
+
+    // 5) Archivos del bucket que ya no cuelgan de ninguna fila (solo ahora que el INSERT tuvo éxito).
+    //    En paralelo (4 a la vez); un fallo aquí nunca rompe la sincronización.
+    try {
+      const _keepUrls = new Set(rows.filter(r => r.anim_url).map(r => r.anim_url));
+      const _orphans = [...new Set(_old.map(o => o.anim_url).filter(u => u && !_keepUrls.has(u)))];
+      _st.orphans = _orphans.length;
+      if (_orphans.length) {
+        const _tOr = performance.now();
+        await _sbPoolMap(_orphans, 4, u => _animDelete(u).catch(() => {}));
+        _st.ms.orphans = Math.round(performance.now() - _tOr);
+      }
+    } catch(_e) { /* no bloquear si falla la limpieza */ }
+    } catch (e) {
+      _st.error = String((e && e.message) || e).slice(0, 200);
+      throw e;
+    } finally {
+      _st.ms.total = Math.round(performance.now() - _t0);
     }
   }
 

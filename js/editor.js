@@ -29208,17 +29208,20 @@ async function _edCloudSaveInner() {
         // _bibSave(), aunque el contenido real (folders) no haya cambiado —
         // incluirlo en el hash haría que este "saltar si no cambió nada" nunca
         // funcionara, y se resubiría la biblioteca en cada guardado en nube.
-        const _bibJson = JSON.stringify({ folders: (_bib && _bib.folders) || [] });
-        const _bibHashNow = _cxSimpleHash(_bibJson);
-        const _bibHashKey = 'cx_bib_synced_hash_' + user.id + '_' + comic.supabaseId;
+        // (v41.48: fórmula y clave en _edBibContentHash/_edBibHashKey — las usa también
+        // _edBibNoteMirroredSync, que anota la huella al abrir una obra con biblioteca espejada.)
+        const _bibHashNow = _edBibContentHash(_bib);
+        const _bibHashKey = _edBibHashKey(user.id, comic.supabaseId);
         const _bibHashPrev = localStorage.getItem(_bibHashKey);
+        // v41.48 — para el 🩺: por qué se sincroniza o se omite (huellas comparadas, si la huella se anotó al abrir)
+        const _bibWhy = { prev: _bibHashPrev, now: _bibHashNow, notedAtOpen: !!(window._mcLastEditDecision && window._mcLastEditDecision.bib && window._mcLastEditDecision.bib.hashNoted) };
         if (_bibHashPrev === _bibHashNow) {
           // Sin cambios desde el último guardado en la nube — no subir nada
-          window._edLastBibSync = { skipped: true, ts: new Date().toISOString() };
+          window._edLastBibSync = { skipped: true, ts: new Date().toISOString(), hash: _bibWhy };
         } else {
           const _bibItems = (_bib?.folders||[]).reduce((n,f)=>n+(f.items?.length||0),0);
           const _bibFolderInfo = (_bib?.folders||[]).map(f=>f.id+':'+f.items.length).join(', ');
-          window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString(), skipped: false };
+          window._edLastBibSync = { items: _bibItems, folders: _bibFolderInfo, workId: comic.supabaseId?.slice(0,8), idbUnavail: _bibIdbUnavailable, cacheNull: _bibCache===null, ts: new Date().toISOString(), skipped: false, hash: _bibWhy };
           await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
           // Confirmar la huella SOLO tras éxito — igual que con las páginas
           try { localStorage.setItem(_bibHashKey, _bibHashNow); } catch(_) {}
@@ -32300,6 +32303,9 @@ async function edLoadProject(id){
   // cuando el usuario abra el panel.
   _bibCache = null;
   await _bibInitIdb(comic.supabaseId || null);
+  // v41.48: si «Editar» acaba de espejar la biblioteca de la nube, anotar su huella como ya
+  // sincronizada (ver _edBibNoteMirroredSync) — evita resubirla entera en el primer guardado.
+  try { _edBibNoteMirroredSync(id, comic); } catch(_) {}
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
   edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
@@ -37972,6 +37978,42 @@ function _bibLoad() {
     return d;
   }
   return _bibCache;
+}
+
+// v41.48 — HUELLA DE LA BIBLIOTECA «YA SINCRONIZADA CON LA NUBE».
+// edCloudSave solo vuelve a subir la biblioteca de una obra si su huella cambió respecto a la última
+// sincronizada (localStorage 'cx_bib_synced_hash_<usuario>_<obra>'). El diagnóstico 🩺 de Alberto
+// (v41.47) mostró que esa comprobación fallaba SIEMPRE en el primer guardado de cada sesión: 9,4 s de
+// los 16 s del guardado iban a resubir una biblioteca que no había cambiado. Causa (reproducida con la
+// nube simulada): «Editar» sustituye la biblioteca local por un ESPEJO de la nube (_mcResolveBiblioteca,
+// «gana la más reciente»), y ese espejo nunca es idéntico, byte a byte, a lo que se subió — cada item
+// vuelve con su `timestamp` = created_at de la fila (que cambia en cada subida), la carpeta vacía
+// «Animaciones» no existe en la nube y la crea _bibInitIdb, las animaciones cambian de clave… — así que la
+// huella guardada en la sesión anterior ya no coincidía y se resubía todo. Y como esa subida cambia los
+// created_at de la nube, la siguiente apertura volvía a espejar y a resubir: un bucle, una vez por sesión.
+// Solución: justo al abrir la obra, si la biblioteca local ACABA de ser un espejo de la nube, lo local es
+// idéntico a la nube POR DEFINICIÓN, así que se anota la huella del estado ya cargado (_bibCache, tras
+// _bibInitIdb) como «sincronizada». Si luego el usuario toca la biblioteca, la huella cambia y se sube.
+// La fórmula y la clave viven aquí para que edCloudSave y esta anotación nunca puedan divergir.
+function _edBibContentHash(bib) {
+  // Sin _localModifiedAt (cambia en cada _bibSave aunque el contenido sea el mismo) — ver edCloudSave.
+  return _cxSimpleHash(JSON.stringify({ folders: (bib && bib.folders) || [] }));
+}
+function _edBibHashKey(userId, supabaseId) {
+  return 'cx_bib_synced_hash_' + userId + '_' + supabaseId;
+}
+function _edBibNoteMirroredSync(projectId, comic) {
+  const dec = window._mcLastEditDecision;
+  const b = dec && dec.bib;
+  // Solo si ESTA apertura acaba de espejar la nube (decisión de «Editar» para esta misma obra) y solo
+  // una vez por decisión: reabrir el editor sin pasar por «Editar» no debe dar por sincronizados
+  // cambios locales hechos después.
+  if (!b || dec.comicId !== projectId || b.action !== 'overwritten_from_cloud' || b.hashNoted) return;
+  const user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+  if (!user || !user.id || !comic || !comic.supabaseId) return;
+  const h = _edBibContentHash(_bibLoad());
+  localStorage.setItem(_edBibHashKey(user.id, comic.supabaseId), h);
+  b.hashNoted = true; b.hash = h;
 }
 
 // Persiste en IDB; retorna Promise para poder awaitar si es necesario.
@@ -48567,7 +48609,8 @@ async function _edRunDiag() {
         L('    nube:  ' + _b.cloudItems + ' item(s), últ. modificación=' + (_b.cloudModifiedAt ? new Date(_b.cloudModifiedAt).toISOString() : '0 (nube vacía)'));
       }
       if (_b.action === 'kept_local_newer') L('  ✓ Local es más reciente que la nube — se conservó tal cual (correcto)');
-      else if (_b.action === 'overwritten_from_cloud') L('  ⚠️ La nube era igual o más reciente — se sobrescribió lo local con la nube');
+      else if (_b.action === 'overwritten_from_cloud') L('  ⚠️ La nube era igual o más reciente — se sobrescribió lo local con la nube' +
+        (_b.hashNoted ? ' · huella anotada al abrir como ya sincronizada: ' + _b.hash : ' · huella NO anotada al abrir (¿obra sin supabaseId o sin sesión?)'));
       else if (_b.action === 'kept_local_legacy_no_timestamp') L('  ℹ️ Local sin _localModifiedAt (dato de antes de v34.63) y nube vacía — se conservó lo local por seguridad');
       else if (_b.action === 'both_empty') L('  ℹ️ Local y nube vacías — scaffold vacío');
     } else {
@@ -48616,7 +48659,7 @@ async function _edRunDiag() {
   }
   // v41.46 — (fuera del else de errores: se muestra SIEMPRE) dónde se va el tiempo de un guardado en nube (ver edCloudSave / SupabaseClient.saveDraft).
   // Alberto: «12 segundos solo con una modificación en una hoja». Fases del editor + detalle de red.
-  L('\n── Último guardado en la nube: tiempos (v41.46) ──');
+  L('\n── Último guardado en la nube: tiempos (v41.46 · biblioteca v41.48) ──');
   try {
     const _ct = window._edCloudTiming;
     if (_ct && _ct.ms && Object.keys(_ct.ms).length) {
@@ -48630,6 +48673,23 @@ async function _edRunDiag() {
         ' | subida completa forzada: ' + (_i.forceFull ? 'sí' : 'no') + ' | primera subida: ' + (_i.firstUpload ? 'sí' : 'no'));
       if (_i.net) L('  red según el navegador: ' + (_i.net.type || '?') + ' | bajada est. ' + (_i.net.downlinkMbps ?? '?') + ' Mbps | latencia est. ' + (_i.net.rttMs ?? '?') + ' ms' + (_i.net.saveData ? ' | ahorro de datos ACTIVADO' : ''));
       else L('  red según el navegador: (no disponible en este navegador)');
+      // v41.48 — biblioteca: por qué se omitió o se sincronizó, y dónde se fue el tiempo (ver edCloudSave / SupabaseClient.bibSync)
+      const _lb = window._edLastBibSync, _bb = window._sbLastBib;
+      if (_lb && _lb.skipped) {
+        L('  biblioteca: OMITIDA — sin cambios desde la última sincronización (huella ' + (_lb.hash ? _lb.hash.now : '?') +
+          (_lb.hash && _lb.hash.notedAtOpen ? ', anotada al abrir la obra tras copiar la nube' : '') + ')');
+      } else if (_lb) {
+        L('  biblioteca: SINCRONIZADA — ' + _lb.items + ' objeto(s) (' + _lb.folders + ')' +
+          (_lb.hash ? ' · huella anotada ' + (_lb.hash.prev || '∅') + ' ≠ actual ' + _lb.hash.now + (_lb.hash.notedAtOpen ? ' (se había anotado al abrir)' : ' (no se anotó al abrir)') : ''));
+        if (_bb && String(_bb.ts) >= String(_lb.ts)) {
+          const _bm = _bb.ms || {};
+          L('    ' + _bb.rows + ' fila(s), ' + _bb.upKB + ' KB subidos · preparar ' + (_bm.prep ?? '—') + ' ms · borrar ' + (_bm.del ?? '—') +
+            ' ms (filas borradas: ' + (_bb.deleted ? _bb.deleted.map(n => n == null ? 'ERR' : n).join('+') : '—') + ') · insertar ' + (_bm.post ?? '—') +
+            ' ms · archivos huérfanos ' + _bb.orphans + (_bm.orphans != null ? ' (' + _bm.orphans + ' ms)' : '') + ' · total ' + (_bm.total ?? '—') + ' ms' +
+            (_bb.noReturning ? ' · ⚠️ el servidor no devolvió las filas borradas (borrado simple)' : '') + (_bb.error ? ' · ⚠️ ' + _bb.error : ''));
+          if (_bb.apngUp || _bb.apngKept || _bb.apngIdb) L('    animaciones: ' + _bb.apngUp + ' subidas desde memoria · ' + _bb.apngIdb + ' leídas de IndexedDB y subidas · ' + _bb.apngKept + ' conservadas tal cual estaban en la nube');
+        }
+      }
     } else {
       L('  (aún no se ha guardado en la nube en esta sesión)');
     }
@@ -48646,6 +48706,8 @@ async function _edRunDiag() {
           ' · borrado capas ' + (pg.delLayersMs ?? '—') + ' · envío capas ' + (pg.layersPostMs ?? '—') + ' · fin ' + (pg.doneMs ?? '—') + ' ms');
         L('      ' + (pg.layers ?? '?') + ' capas: ' + (pg.kept ?? 0) + ' ya estaban en la nube (' + (pg.keptKB ?? 0) + ' KB sin subir) · ' +
           (pg.sent ?? pg.layers ?? '?') + ' enviadas (' + (pg.kb ?? '?') + ' KB de datos de capa) · modo ' + (pg.mode || '?'));
+        // v41.48 — qué capas son (tipo@orden:KB · C=cambiada, N=nueva, B=archivo del bucket)
+        if (pg.sentList && pg.sentList.length) L('      reenviadas (de mayor a menor): ' + pg.sentList.join(' · '));
       });
       L('    peticiones más lentas (tag, inicio ms, duración ms, ↑KB, ↓KB, estado):');
       (_sb.reqs || []).slice(0, 8).forEach(r => L('      ' + r.tag + ' · ' + r.t0 + ' · ' + r.ms + ' ms · ↑' + Math.round((r.up || 0) / 1024) + ' · ↓' + Math.round((r.down || 0) / 1024) + ' · ' + r.status));
