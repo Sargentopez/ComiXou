@@ -169,6 +169,14 @@ function edOpenLayers() {
 
   document.body.appendChild(overlay);
   _lyRender();
+  // v41.44: si la hoja aún reconstruye sus canvas pesados (primeros instantes tras abrir una hoja
+  // que no se había visto), las miniaturas de esas capas se pintarían en blanco → repintar al terminar.
+  if (typeof _edCurrentPageHydrating === 'function' && _edCurrentPageHydrating()) {
+    const _lyPg = edCurrentPage;
+    _edLoadPageCanvases(_lyPg).then(() => {
+      if (edCurrentPage === _lyPg && document.getElementById('edLayersOverlay')) _lyRender();
+    }).catch(() => {});
+  }
   overlay.querySelector('#edLayersClose').addEventListener('click', edCloseLayers);
   // Cerrar también al tocar el fondo oscuro (fuera del box)
   overlay.addEventListener('pointerdown', e => {

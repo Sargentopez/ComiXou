@@ -1261,8 +1261,8 @@ edSerLayer = function(l) {
   return r;
 };
 const _edDeserLayerOrig = edDeserLayer;
-edDeserLayer = function(d, orient) {
-  const l = _edDeserLayerOrig(d, orient);
+edDeserLayer = function(d, orient, light) { // v41.44: reenvía «light» (carga ligera, ver edLoadProject)
+  const l = _edDeserLayerOrig(d, orient, light);
   if (l && d && d._buttonAction) l._buttonAction = Object.assign({}, d._buttonAction);
   return l;
 };
@@ -1280,8 +1280,8 @@ edSerLayer = function(l) {
   return r;
 };
 const _edNameDeserLayerOrig = edDeserLayer;
-edDeserLayer = function(d, orient) {
-  const l = _edNameDeserLayerOrig(d, orient);
+edDeserLayer = function(d, orient, light) { // v41.44: reenvía «light» (carga ligera, ver edLoadProject)
+  const l = _edNameDeserLayerOrig(d, orient, light);
   if (l && d && d.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
     l.name = d.name;
   }
@@ -2964,13 +2964,15 @@ function edSetOrientation(o, persist=true){
 
 
 class DrawLayer extends BaseLayer {
-  constructor(){
+  constructor(_light){
     super('draw', 0.5, 0.5, 1.0, 1.0);
     // El canvas interno cubre todo el workspace (no solo la página)
     // para permitir dibujar en la zona de trabajo fuera del lienzo.
+    // v41.44: _light=true (solo lo usa lightFromDataUrl) → placeholder de 1×1 en vez
+    // de reservar el workspace entero (2700×2340 ≈ 25 MB de RAM por capa).
     this._canvas = document.createElement('canvas');
-    this._canvas.width  = ED_CANVAS_W;
-    this._canvas.height = ED_CANVAS_H;
+    this._canvas.width  = _light ? 1 : ED_CANVAS_W;
+    this._canvas.height = _light ? 1 : ED_CANVAS_H;
     this._ctx = this._canvas.getContext('2d');
     this._lastX = 0;
     this._lastY = 0;
@@ -2994,6 +2996,26 @@ class DrawLayer extends BaseLayer {
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
+    return dl;
+  }
+  // v41.44 — Carga LIGERA (hojas que aún no se han abierto, ver edLoadProject): sin
+  // decodificar nada. La capa nace ya en estado «descargada» (_canvasUnloaded, el
+  // mismo que deja _edUnloadPageCanvases al salir de una hoja): toDataUrl() devuelve
+  // el dataUrl guardado tal cual (guardar/autoguardar/duplicar no necesitan el canvas)
+  // y _edLoadPageCanvases lo reconstruye cuando de verdad hace falta verla o editarla.
+  // El dataUrl persistido de un DrawLayer es el RECORTE de la página (no el workspace
+  // entero) → _unloadedIsCrop + las medidas de página con las que se guardó, para
+  // devolverlo a su sitio exacto (mismos márgenes que fromDataUrl).
+  static lightFromDataUrl(dataUrl, pw, ph){
+    const dl = new DrawLayer(true);
+    dl._unloadedDataUrl     = dataUrl;
+    dl._unloadedFullDataUrl = null;
+    dl._unloadedIsCrop      = true;
+    dl._unloadedCropPW      = pw;
+    dl._unloadedCropPH      = ph;
+    dl._unloadedCanvasW     = ED_CANVAS_W;
+    dl._unloadedCanvasH     = ED_CANVAS_H;
+    dl._canvasUnloaded      = true;
     return dl;
   }
   static fromDataUrlFull(dataUrl){
@@ -3180,20 +3202,35 @@ class DrawLayer extends BaseLayer {
    no en el DrawLayer, para mantener dibujo y relleno separados.
    ══════════════════════════════════════════ */
 class FillLayer extends BaseLayer {
-  constructor() {
+  constructor(_light) {
     super('fill', 0.5, 0.5, 1.0, 1.0);
     // Canvas LOCAL: tamaño de página, coordenadas relativas al stroke.
     // Los píxeles se pintan como si el stroke estuviera sin transformar,
     // centrado en (pw/2, ph/2). draw() aplica la misma transformación
     // que StrokeLayer: translate(cx,cy) + rotate + drawImage(-w/2,-h/2,w,h).
+    // v41.44: _light=true (solo lo usa lightFromDataUrl) → placeholder de 1×1.
     const pw = (typeof edPageW === 'function') ? edPageW() : ED_PAGE_W;
     const ph = (typeof edPageH === 'function') ? edPageH() : ED_PAGE_H;
     this._canvas = document.createElement('canvas');
-    this._canvas.width  = Math.max(1, Math.round(pw));
-    this._canvas.height = Math.max(1, Math.round(ph));
+    this._canvas.width  = _light ? 1 : Math.max(1, Math.round(pw));
+    this._canvas.height = _light ? 1 : Math.max(1, Math.round(ph));
     this._ctx = this._canvas.getContext('2d');
   }
   // ── Serialización ──────────────────────────────────────────────
+  // v41.44 — Carga LIGERA (hojas aún sin abrir, ver edLoadProject y DrawLayer.lightFromDataUrl):
+  // sin decodificar. El dataUrl persistido de estas capas (relleno/lápiz/acuarela) es el
+  // canvas ENTERO (edSerLayer usa toDataUrlFull) → sirve tal cual como «full» y como «crop».
+  // type: 'fill' | 'pencil' | 'watercolor' (mismo patrón que Pencil/WatercolorLayer.fromDataUrl).
+  static lightFromDataUrl(dataUrl, pw, ph, type) {
+    const fl = new FillLayer(true);
+    fl.type = type || 'fill';
+    fl._unloadedDataUrl     = dataUrl;
+    fl._unloadedFullDataUrl = dataUrl;
+    fl._unloadedCanvasW     = Math.max(1, Math.round(pw || ED_PAGE_W));
+    fl._unloadedCanvasH     = Math.max(1, Math.round(ph || ED_PAGE_H));
+    fl._canvasUnloaded      = true;
+    return fl;
+  }
   static fromDataUrl(dataUrl, pw, ph) {
     const fl = new FillLayer();
     fl._ensureCanvas(pw, ph);
@@ -3399,6 +3436,9 @@ class WatercolorLayer extends FillLayer {
 class StrokeLayer extends BaseLayer {
   constructor(srcCanvas){
     // srcCanvas es el workspace completo (ED_CANVAS_W × ED_CANVAS_H)
+    // v41.44: carga ligera (lightFromDataUrl) — el bitmap real llega después y la caja se fija
+    // a mano, así que ni se calcula el bounding box ni se crea el canvas provisional de 36×78.
+    if (srcCanvas && srcCanvas === StrokeLayer._lightSrc) { super('stroke', 0.5, 0.5, 0.1, 0.1); return; }
     // Calcular bounding box del contenido pintado
     const bb = StrokeLayer._boundingBox(srcCanvas);
     const pw = edPageW(), ph = edPageH();
@@ -3465,6 +3505,25 @@ class StrokeLayer extends BaseLayer {
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
+    return sl;
+  }
+  // v41.44 — Carga LIGERA (hojas aún sin abrir, ver edLoadProject y DrawLayer.lightFromDataUrl).
+  // El «lienzo» de origen del constructor es un canvas de 1×1 compartido (con uno recién creado,
+  // de 300×150, _boundingBox hacía un getImageData de 45.000 píxeles por cada trazo).
+  static lightFromDataUrl(dataUrl, x, y, width, height, pw, ph){
+    const _pw = pw || ED_PAGE_W, _ph = ph || ED_PAGE_H;
+    if (!StrokeLayer._lightSrc) { StrokeLayer._lightSrc = document.createElement('canvas'); StrokeLayer._lightSrc.width = 1; StrokeLayer._lightSrc.height = 1; }
+    const sl = new StrokeLayer(StrokeLayer._lightSrc, _pw, _ph);
+    sl.x = x; sl.y = y; sl.width = width; sl.height = height;
+    const ph1 = document.createElement('canvas');
+    ph1.width = 1; ph1.height = 1;
+    sl._canvas = ph1;
+    sl._ctx = ph1.getContext('2d');
+    sl._unloadedDataUrl     = dataUrl;
+    sl._unloadedFullDataUrl = dataUrl;
+    sl._unloadedCanvasW     = Math.max(1, Math.round(width  * _pw));
+    sl._unloadedCanvasH     = Math.max(1, Math.round(height * _ph));
+    sl._canvasUnloaded      = true;
     return sl;
   }
   // Exportar bitmap recortado
@@ -8730,6 +8789,7 @@ function _edUnloadPageCanvases(pageIdx) {
     } catch(_) { return; } // si falla la captura, no tocar esta capa — más seguro dejarla como está
     l._unloadedDataUrl     = _crop;
     l._unloadedFullDataUrl = _full;
+    l._unloadedIsCrop      = false; // v41.44: ahora sí hay «full» exacto (ver DrawLayer.lightFromDataUrl)
     // Guardar dimensiones originales por si algo las necesita antes de reconstruir
     l._unloadedCanvasW = l._canvas.width;
     l._unloadedCanvasH = l._canvas.height;
@@ -8753,27 +8813,59 @@ async function _edLoadPageCanvases(pageIdx) {
   const _promises = [];
   page.layers.forEach(l => {
     if (!l || !l._canvasUnloaded) return;
-    _promises.push(new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const cv = document.createElement('canvas');
-        cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
-        cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
-        const ctx = cv.getContext('2d');
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-        l._canvas = cv;
-        l._ctx = ctx;
-        l._canvasUnloaded = false;
-        resolve();
-      };
-      img.onerror = () => resolve(); // no dejar la promesa colgada si falla la decodificación
-      // Reconstruir siempre desde el FULL (el workspace completo) — es la
-      // fuente de la que toDataUrl() (recortado) se derivaría de nuevo si
-      // hiciera falta; usar el crop aquí perdería el contenido fuera de página.
-      img.src = l._unloadedFullDataUrl || l._unloadedDataUrl;
-    }));
+    l._hydrateReq = (l._hydrateReq || 0) + 1; // ver _edTempLoadPage
+    // v41.44: una sola reconstrucción por capa aunque la pidan a la vez varios
+    // consumidores (navegar a la hoja, miniaturas, onion skin, visor, guardado…).
+    if (!l._canvasLoadP) {
+      l._canvasLoadP = _edHydrateLayerCanvas(l).then(
+        () => { l._canvasLoadP = null; },
+        () => { l._canvasLoadP = null; });
+    }
+    _promises.push(l._canvasLoadP);
   });
   if (_promises.length) await Promise.all(_promises);
+}
+
+// Reconstruye el canvas real de UNA capa descargada desde su dataUrl cacheado.
+function _edHydrateLayerCanvas(l) {
+  return new Promise(resolve => {
+    const _src = l._unloadedFullDataUrl || l._unloadedDataUrl;
+    if (!_src) { resolve(); return; }
+    const img = new Image();
+    const _build = () => {
+      if (!l._canvasUnloaded) { resolve(); return; } // otra vía ya la reconstruyó mientras tanto
+      const cv = document.createElement('canvas');
+      cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
+      cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
+      const ctx = cv.getContext('2d');
+      if (l._unloadedIsCrop && !l._unloadedFullDataUrl) {
+        // v41.44: el dataUrl guardado es el RECORTE de la página (DrawLayer cargado en
+        // modo ligero) → volver a colocarlo en el workspace con los mismos márgenes que
+        // DrawLayer.fromDataUrl, con las medidas de página con las que se guardó.
+        const _cpw = l._unloadedCropPW || img.naturalWidth, _cph = l._unloadedCropPH || img.naturalHeight;
+        const mx = (cv.width - _cpw) / 2, my = (cv.height - _cph) / 2;
+        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, _cpw, _cph);
+      } else {
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      }
+      l._canvas = cv;
+      l._ctx = ctx;
+      l._canvasUnloaded = false;
+      resolve();
+    };
+    img.onload = () => {
+      // decode(): la decodificación de la imagen se hace fuera del hilo principal, y el
+      // drawImage de después ya no se la come (con muchas capas era la mayor parte del
+      // bloqueo al reconstruir una hoja). Si falla o no existe, _build() decodifica solo.
+      if (typeof img.decode === 'function') img.decode().then(_build, _build);
+      else _build();
+    };
+    img.onerror = () => resolve(); // no dejar la promesa colgada si falla la decodificación
+    // Reconstruir siempre desde el FULL (el workspace completo) — es la
+    // fuente de la que toDataUrl() (recortado) se derivaría de nuevo si
+    // hiciera falta; usar el crop aquí perdería el contenido fuera de página.
+    img.src = _src;
+  });
 }
 
 // v41.43 — Contraparte de _edLoadPageCanvases para una carga TEMPORAL (render al
@@ -8791,9 +8883,43 @@ function _edReleaseTempCanvases(layers) {
   });
 }
 
-function _edCachePageThumb(pageIdx) {
+// v41.44 — Carga TEMPORAL de una hoja descargada (render al guardar, miniaturas…):
+// reconstruye sus canvas y devuelve la función que SOLO suelta lo que reconstruyó esta
+// llamada. No suelta nada si en el ínterin se entró en la hoja, si alguien más (onion
+// skin, visor, otra miniatura…) pidió esos mismos canvas, o si la capa ya estaba cargada
+// (o a medio cargar por otra vía) cuando se llamó — en esos casos soltarlos dejaría a
+// ese otro consumidor con un placeholder en blanco. Soltar es solo ahorro de memoria:
+// no soltar nunca es incorrecto, solo menos eficiente.
+async function _edTempLoadPage(pageIdx) {
   const page = edPages[pageIdx];
-  if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return;
+  const mine = [];
+  if (page && page.layers) page.layers.forEach(l => { if (l && l._canvasUnloaded && !l._canvasLoadP) mine.push(l); });
+  // _edLoadPageCanvases cuenta la petición de forma SÍNCRONA (antes de su primer await):
+  // se anota el contador justo después, para que cualquier petición posterior de otro
+  // consumidor —mientras esta espera— lo haga distinto y no se suelte nada de lo suyo.
+  const _loading = page ? _edLoadPageCanvases(pageIdx) : null;
+  const reqs = mine.map(l => l._hydrateReq);
+  const visit = page ? (page._visitSeq || 0) : 0; // edLoadPage lo incrementa al entrar en la hoja
+  if (_loading) await _loading;
+  let _done = false;
+  return () => {
+    if (_done) return; _done = true;
+    // Si se entró en la hoja entretanto (puede estar siendo la actual y editándose), no tocar nada.
+    // (No se compara con edCurrentPage: el guardado lo cambia a propósito mientras recorre las hojas.)
+    if (!page || (page._visitSeq || 0) !== visit) return;
+    _edReleaseTempCanvases(mine.filter((l, i) => l._hydrateReq === reqs[i]));
+  };
+}
+
+function _edCachePageThumb(pageOrIdx) {
+  // v41.44: acepta la hoja (objeto) o su índice — con miniaturas progresivas el índice
+  // puede cambiar entre que se pide y se pinta (reordenar hojas), la hoja no.
+  const page = (typeof pageOrIdx === 'number') ? edPages[pageOrIdx] : pageOrIdx;
+  if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return false;
+  // v41.44: con canvas pesados descargados (hoja aún sin abrir, o a medio reconstruir) el
+  // render saldría SIN dibujo ni rellenos — y quedaría cacheado como si fuera bueno. Quien
+  // necesite la miniatura de una hoja así la pide con _edEnsurePageThumb (reconstruye antes).
+  if (page.layers.some(l => l && l._canvasUnloaded)) return false;
   try {
     const _orient = page.orientation || edOrientation;
     const _isV = _orient === 'vertical';
@@ -8810,7 +8936,31 @@ function _edCachePageThumb(pageIdx) {
     page._cachedThumbCanvas = off;
     page._thumbStale = false;
     page._navThumb = null;
+    return true;
   } catch(_) {} // si falla, _pgDrawThumb simplemente hará el render en vivo como antes
+  return false;
+}
+
+// v41.44 — Miniatura de CUALQUIER hoja, aunque tenga los canvas pesados descargados (hoja
+// aún sin abrir desde que se cargó la obra, o ya abandonada): los reconstruye solo el tiempo
+// del render y los vuelve a soltar (_edTempLoadPage). Devuelve la miniatura cacheada (canvas)
+// o null si no se pudo. Peticiones simultáneas de la misma hoja comparten una sola.
+async function _edEnsurePageThumb(idx) {
+  const page = edPages[idx];
+  if (!page) return null;
+  // La hoja actual no se da por buena por tener caché: se está editando, así que la copia
+  // cacheada puede ser de antes (se refresca al salir de ella, ver edLoadPage).
+  if (idx !== edCurrentPage && page._cachedThumbCanvas && !page._thumbStale) return page._cachedThumbCanvas;
+  if (page._thumbP) return page._thumbP;
+  const job = (async () => {
+    const release = await _edTempLoadPage(idx); // idx se evalúa AHORA (síncrono, antes del primer await)
+    try {
+      _edCachePageThumb(page); // por objeto: los índices pueden haber cambiado mientras se reconstruía
+    } finally { release(); }
+    return page._cachedThumbCanvas || null;
+  })();
+  page._thumbP = job;
+  try { return await job; } finally { if (page._thumbP === job) page._thumbP = null; }
 }
 
 // ── Onion skin de hojas contiguas (checkbox por página, ver
@@ -9023,6 +9173,7 @@ function edLoadPage(idx){
   }
 
   edCurrentPage=idx;edLayers=edPages[idx].layers;edSelectedIdx=-1;
+  edPages[idx]._visitSeq = (edPages[idx]._visitSeq || 0) + 1; // v41.44: ver _edTempLoadPage
   // Onion skin (v40.59): esta hoja pasa a poder editarse — si otra la tenía como contigua en
   // caché, esa copia queda obsoleta desde ya (ver _edOnionInvalidatePage). edRedraw() va justo después.
   _edOnionInvalidatePage(edPages[idx]);
@@ -9081,9 +9232,15 @@ function edLoadPage(idx){
     if (edCurrentPage === idx) edRedraw();
   });
   // Reconstruir bajo demanda los canvas pesados (relleno/lápiz/acuarela/dibujo/
-  // trazo) si esta página se descargó al salir de ella anteriormente.
-  _edLoadPageCanvases(idx).then(() => {
-    if (edCurrentPage === idx) edRedraw();
+  // trazo) si esta página se descargó al salir de ella anteriormente, o si aún no se
+  // había abierto desde que se cargó la obra (carga ligera, v41.44 — ver edLoadProject).
+  // Si se sale de la hoja ANTES de que termine, lo recién reconstruido se suelta otra vez
+  // (nadie ha podido editarlo: edOnStart ignora el lienzo mientras se reconstruye) — así
+  // pasar hojas rápido no va dejando todas cargadas en memoria.
+  const _pgObjLoad = edPages[idx];
+  _edTempLoadPage(idx).then(release => {
+    if (edPages[edCurrentPage] === _pgObjLoad) edRedraw();
+    else release();
   });
 }
 function edUpdateNavPages(){
@@ -9176,23 +9333,12 @@ async function _edNavThumbOne(canvas, idx) {
   const page = edPages[idx];
   if (!page) return;
   if (idx === edCurrentPage) { _edRenderPageThumb(canvas, page, idx); return; }
-  if (page._thumbStale) {
-    const _tmp = (page.layers || []).filter(l => l && l._canvasUnloaded);
-    if (_tmp.length) await _edLoadPageCanvases(idx);
-    try { if (edPages[idx] === page) _edCachePageThumb(idx); } finally {
-      if (_tmp.length && idx !== edCurrentPage) _edReleaseTempCanvases(_tmp);
-    }
-    page._navThumb = null;
-  }
-  const src = page._cachedThumbCanvas || page._navThumb;
+  // v41.44: _edEnsurePageThumb cubre todos los casos — caché al día, hoja marcada
+  // _thumbStale, y hoja sin abrir (canvas pesados descargados: los reconstruye solo el
+  // tiempo del render y los suelta).
+  const src = await _edEnsurePageThumb(idx);
   if (src) { _edNavThumbBlit(canvas, src); return; }
-  _edRenderPageThumb(canvas, page, idx);
-  try {
-    const c = document.createElement('canvas');
-    c.width = canvas.width; c.height = canvas.height;
-    c.getContext('2d').drawImage(canvas, 0, 0);
-    page._navThumb = c;
-  } catch(_) {}
+  _edRenderPageThumb(canvas, page, idx); // sin miniatura posible: render en vivo
 }
 function _edNavThumbFillAll(jobs) {
   const token = ++_edNavFillToken;
@@ -12785,10 +12931,27 @@ function _edGuidesPassThroughActive(){
   return false;
 }
 
+// v41.44: true mientras la hoja ACTUAL reconstruye canvas pesados (dibujo, rellenos, trazos)
+// que estaban descargados — ver edLoadPage/_edTempLoadPage. Son unos instantes tras abrir una
+// hoja que aún no se había visto desde que se cargó la obra.
+function _edCurrentPageHydrating() {
+  const p = edPages[edCurrentPage];
+  if (!p || !p.layers) return false;
+  for (let i = 0; i < p.layers.length; i++) {
+    const l = p.layers[i];
+    if (l && l._canvasUnloaded && l._canvasLoadP) return true;
+  }
+  return false;
+}
+
 function edOnStart(e){
   // Cuentagotas activo (💧): el toque sobre el lienzo solo muestrea el color
   // (lo gestiona _edStartEyedrop en pointerup); no debe crear/seleccionar objetos.
   if(window._edEyedropActive && e.target===edCanvas) return;
+  // v41.44: la hoja aún está reconstruyendo sus canvas pesados → ignorar el toque sobre el
+  // lienzo. Dibujar ahora lo haría sobre el canvas provisional (1×1) y ese trazo se perdería
+  // al terminar de cargar la capa. Dura una fracción de segundo.
+  if(e.target===edCanvas && _edCurrentPageHydrating()) return;
   // Menú contextual propio (botón secundario, solo PC — ver listener
   // 'contextmenu' y _edShowContextMenu más abajo): un puntero nuevo FUERA
   // del menú lo cierra, igual que cualquier menú contextual estándar
@@ -28214,19 +28377,32 @@ async function _edCloudSaveInner() {
     comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes, _palette: edColorPalette.slice() } };
     // También reconstruir panels (renders) si están vacíos
     if (!comic.panels || !comic.panels.length) {
-      comic.panels = edPages.map((p, i) => ({
-        id: 'panel_' + i,
-        dataUrl: edRenderPage(p),
-        orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
-        textMode: p.textMode || 'sequential',
-        texts: [],
-      }));
+      // v41.44: las hojas aún sin abrir tienen los canvas pesados descargados → se
+      // reconstruyen solo el tiempo de su render (ver _edTempLoadPage).
+      const _fbPanels = [];
+      for (let i = 0; i < edPages.length; i++) {
+        const p = edPages[i];
+        const _relFb = await _edTempLoadPage(i);
+        try {
+          _fbPanels.push({
+            id: 'panel_' + i,
+            dataUrl: edRenderPage(p),
+            orientation: (p.orientation || edOrientation) === 'vertical' ? 'v' : 'h',
+            textMode: p.textMode || 'sequential',
+            texts: [],
+          });
+        } finally { _relFb(); }
+      }
+      comic.panels = _fbPanels;
     }
     // Idem con la portada con texto horneado (ver coverDataUrl en edSaveProject)
     if (!comic.coverDataUrl && edPages[0]) {
-      comic.coverDataUrl = edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))
-        ? edRenderPage(edPages[0], true)
-        : (comic.panels[0]?.dataUrl || null);
+      if (edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) {
+        const _relCv = await _edTempLoadPage(0);
+        try { comic.coverDataUrl = edRenderPage(edPages[0], true); } finally { _relCv(); }
+      } else {
+        comic.coverDataUrl = comic.panels[0]?.dataUrl || null;
+      }
     }
   }
 
@@ -28745,6 +28921,7 @@ async function _edSaveProjectInner(_keepOverlay){
   // vez se reintentará todo lo que sea necesario, nunca se da por bueno algo
   // que no se ha llegado a persistir de verdad.
   const _freshlySerialized = [];
+  let _coverRelease = null; // v41.44: ver más abajo (hoja 1 cargada para la portada)
   for (let _pi=0; _pi<edPages.length; _pi++) {
     const p = edPages[_pi];
 
@@ -28780,8 +28957,23 @@ async function _edSaveProjectInner(_keepOverlay){
     // rellenos. Las capas en sí se guardaban bien (toDataUrl() devuelve lo cacheado).
     // Ahora se reconstruyen los canvas solo el tiempo de renderizar y se vuelven a
     // soltar sin recodificar nada (la caché sigue siendo la misma, no se ha tocado).
-    const _unloadedHere = p.layers.filter(l => l && l._canvasUnloaded);
-    if (_unloadedHere.length) await _edLoadPageCanvases(_pi);
+    // v41.44: _edTempLoadPage — misma carga temporal, pero suelta SOLO lo que reconstruyó esta
+    // llamada y nunca si en el ínterin otro consumidor (o el propio usuario) usó esa hoja.
+    // (Se devuelven antes a su valor real los globales que la hoja anterior dejó cambiados:
+    // mientras se espera, el resto de la app —redibujados, autoguardado— ve la hoja de verdad.)
+    // v41.44 — Tras un cambio ESTRUCTURAL (añadir/borrar/reordenar/duplicar hoja) se reserializan
+    // TODAS las hojas (sus claves de animación y botones llevan el índice), pero la IMAGEN de una
+    // hoja sin cambios no depende de su posición: se reutiliza la ya renderizada en vez de
+    // reconstruir sus canvas pesados, volver a renderizar y recodificar el PNG de cada hoja
+    // (con 31 hojas era la mayor parte del guardado, y con la carga ligera además las
+    // reconstruía una a una). Mismas condiciones que _canReuse, salvo el flag estructural.
+    const _canReuseRender = !_edPageDirtyLocal(p) && p._cachedPanelLocal && p._cachedPanelLocal.dataUrl &&
+                            p._cachedSerLocal && p._cachedSerLocal.layers.length === p.layers.length;
+    let _releaseTemp = null;
+    if (!_canReuseRender) {
+      edOrientation = _savedOrient2; edCurrentPage = _savedPage2;
+      _releaseTemp = await _edTempLoadPage(_pi);
+    }
 
     edCurrentPage = _pi;
     edOrientation = p.orientation || _savedOrient2;
@@ -28845,8 +29037,13 @@ async function _edSaveProjectInner(_keepOverlay){
         });
       }
     });
-    const _pageRender = edRenderPage(p);
-    if (_unloadedHere.length && _pi !== _savedPage2) _edReleaseTempCanvases(_unloadedHere);
+    const _pageRender = _canReuseRender ? p._cachedPanelLocal.dataUrl : edRenderPage(p);
+    // La hoja 1 con texto va a hacer falta otra vez para la portada (más abajo): se queda
+    // cargada hasta entonces en vez de decodificarla dos veces.
+    if (_releaseTemp) {
+      if (_pi === 0 && p.layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) _coverRelease = _releaseTemp;
+      else _releaseTemp();
+    }
     const _panelSer = {
       id:'panel_'+_pi,
       dataUrl:_pageRender,
@@ -28953,10 +29150,10 @@ async function _edSaveProjectInner(_keepOverlay){
     // v41.43: la hoja 1 puede tener sus canvas pesados descargados (se salió de
     // ella) aunque NO esté sucia (no se reserializa arriba) — misma corrección
     // que arriba: reconstruir solo para renderizar y soltar sin recodificar.
-    const _cvUnloaded = edPages[0].layers.filter(l => l && l._canvasUnloaded);
-    if (_cvUnloaded.length) await _edLoadPageCanvases(0);
+    const _releaseCover = _coverRelease || await _edTempLoadPage(0);
+    _coverRelease = null;
     _coverDataUrl = edRenderPage(edPages[0], true);
-    if (_cvUnloaded.length && _savedPage2 !== 0) _edReleaseTempCanvases(_cvUnloaded);
+    _releaseCover();
   }
   const _editorDataObj = {
     orientation:edOrientation,
@@ -30332,7 +30529,12 @@ function _edAnimIdbSave(key, frames) {
   })).catch(() => { _edAnimDb = null; });
 }
 
-function edDeserLayer(d, pageOrientation){
+// v41.44 — light=true: carga LIGERA de las capas de píxeles (fill/pencil/watercolor/draw/
+// stroke): no se decodifica nada, la capa nace «descargada» y su canvas se reconstruye al
+// necesitarse (ver DrawLayer.lightFromDataUrl y _edLoadPageCanvases). Solo la usa
+// edLoadProject para las hojas que no son la primera; el resto de capas (texto, formas,
+// imágenes, gif…) se deserializan igual que siempre.
+function edDeserLayer(d, pageOrientation, light){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
   if(d.type==='fill'){
@@ -30344,7 +30546,8 @@ function edDeserLayer(d, pageOrientation){
     // usar tamaño de página completo como fallback.
     const _fw = d.width  != null ? Math.max(1, Math.round(d.width  * _dPw)) : _dPw;
     const _fh = d.height != null ? Math.max(1, Math.round(d.height * _dPh)) : _dPh;
-    const fl = FillLayer.fromDataUrl(d.dataUrl||'', _fw, _fh);
+    const fl = (light && d.dataUrl) ? FillLayer.lightFromDataUrl(d.dataUrl, _fw, _fh, 'fill')
+                                    : FillLayer.fromDataUrl(d.dataUrl||'', _fw, _fh);
     if(d._drawLayerId) fl._drawLayerId=d._drawLayerId;
     if(d._uid) fl._uid=d._uid;
     if(d.hidden) fl.hidden=true;
@@ -30365,7 +30568,8 @@ function edDeserLayer(d, pageOrientation){
     const _fwP = d.width  != null ? Math.max(1, Math.round(d.width  * _dPwP)) : _dPwP;
     const _fhP = d.height != null ? Math.max(1, Math.round(d.height * _dPhP)) : _dPhP;
     const _LayerClass = d.type==='pencil' ? PencilLayer : WatercolorLayer;
-    const _pl = _LayerClass.fromDataUrl(d.dataUrl||'', _fwP, _fhP);
+    const _pl = (light && d.dataUrl) ? FillLayer.lightFromDataUrl(d.dataUrl, _fwP, _fhP, d.type)
+                                     : _LayerClass.fromDataUrl(d.dataUrl||'', _fwP, _fhP);
     if(d._drawLayerId) _pl._drawLayerId=d._drawLayerId;
     if(d._uid) _pl._uid=d._uid;
     if(d.hidden) _pl.hidden=true;
@@ -30381,7 +30585,7 @@ function edDeserLayer(d, pageOrientation){
     const _isV = (pageOrientation||'vertical')==='vertical';
     const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
     const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
-    const dl = d.dataUrl ? DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph) : new DrawLayer();
+    const dl = d.dataUrl ? (light ? DrawLayer.lightFromDataUrl(d.dataUrl, _pw, _ph) : DrawLayer.fromDataUrl(d.dataUrl, _pw, _ph)) : new DrawLayer();
     if(d.groupId) dl.groupId=d.groupId;
     if(d.locked) dl.locked=true;
     if(d.hidden) dl.hidden=true;
@@ -30409,7 +30613,8 @@ function edDeserLayer(d, pageOrientation){
     const _sy = d.y != null ? d.y : 0.5;
     const _sw = d.width  != null ? d.width  : 1.0;
     const _sh = d.height != null ? d.height : 1.0;
-    const sl = StrokeLayer.fromDataUrl(d.dataUrl||'', _sx, _sy, _sw, _sh, _pw, _ph);
+    const sl = (light && d.dataUrl) ? StrokeLayer.lightFromDataUrl(d.dataUrl, _sx, _sy, _sw, _sh, _pw, _ph)
+                                     : StrokeLayer.fromDataUrl(d.dataUrl||'', _sx, _sy, _sw, _sh, _pw, _ph);
     if(d.rotation) sl.rotation = d.rotation;
     if(d.opacity !== undefined) sl.opacity = d.opacity;
     if(d.color) sl.color = d.color;
@@ -31583,7 +31788,13 @@ async function edLoadProject(id){
           // Si no hay store → la obra se abrió sin pasar por la descarga de my-works
           // El layer quedará sin frames — es el caso esperado en incógnito sin descarga previa
         }
-        return edDeserLayer(d, orient);
+        // v41.44 — CARGA LIGERA: solo la hoja 1 (la que se abre) decodifica ahora sus capas de
+        // dibujo/relleno/trazo. Las demás nacen con los canvas "descargados" (el mismo estado
+        // que dejaba salir de una hoja, ver _edUnloadPageCanvases) y se reconstruyen al
+        // abrirlas, guardar (solo el tiempo de renderizarlas), ver miniaturas o abrir el visor.
+        // Es lo que hace que una obra grande se abra al instante en vez de esperar a
+        // decodificar las capas de TODAS las hojas.
+        return edDeserLayer(d, orient, _pi2 > 0);
       }).filter(Boolean);
       window._edDeserPageIdx = 0;
       // Migrar drawData legado (versiones <5.20) a DrawLayer si no hay DrawLayer ya
@@ -31740,10 +31951,14 @@ async function edLoadProject(id){
     // Disparar la 3ª condición de la puerta en paralelo con las otras dos —
     // no bloquea nada más mientras tanto (el redibujado normal la recoge en
     // cuanto llega, igual que las páginas que aún no se han visitado).
+    // v41.44: la puerta solo espera las fuentes de la hoja 1 (la que se abre); las de las
+    // demás hojas se piden igualmente, en segundo plano — no hace falta tenerlas todas para
+    // empezar a trabajar (con muchas fuentes externas esta espera llegaba al límite de 4 s).
     Promise.race([
-      _cxLoadPagesExternalFonts(edPages).catch(() => {}),
+      _cxLoadPagesExternalFonts(edPages.slice(0, 1)).catch(() => {}),
       new Promise(res => setTimeout(res, 4000)),
     ]).then(_edGateDone);
+    if (edPages.length > 1) _cxLoadPagesExternalFonts(edPages.slice(1)).catch(() => {});
     if(_fillLoadPromises.length) {
       // Mantener el flag activo hasta que los fills carguen y el historial se inicialice
       Promise.all(_fillLoadPromises).then(_doPushHistory).catch(() => {
@@ -36432,8 +36647,11 @@ async function _edSaveBlobNamed(blob, suggestedName, mimeType) {
   return _edSaveBlob(blob, finalName, mimeType);
 }
 
-function edExportPagePNG(format){
+async function edExportPagePNG(format){
   format = format || 'png';
+  // v41.44: si la hoja aún está reconstruyendo sus canvas pesados (los primeros instantes tras
+  // abrir una hoja que no se había visto), esperar — si no, el PNG saldría sin dibujo/rellenos.
+  for (let _g = 0; _g < 5 && _edCurrentPageHydrating(); _g++) { try { await _edLoadPageCanvases(edCurrentPage); } catch(_) { break; } }
   edSaveProject();
   const pw = Math.round(edPageW()), ph = Math.round(edPageH());
   const mx = edMarginX(), my = edMarginY();
@@ -36501,8 +36719,10 @@ function edExportPagePNG(format){
   }, mimeType, quality);
 }
 
-function edExportSelectionPNG(format, insertMode) {
+async function edExportSelectionPNG(format, insertMode) {
   format = format || 'png';
+  // v41.44: ver edExportPagePNG — esperar a que la hoja actual termine de reconstruir sus canvas pesados.
+  for (let _g = 0; _g < 5 && _edCurrentPageHydrating(); _g++) { try { await _edLoadPageCanvases(edCurrentPage); } catch(_) { break; } }
   // Calcular bbox de la selección (single o multi)
   let bb = null;
   if(edMultiSel.length >= 2) {
@@ -44782,6 +45002,12 @@ async function _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx){
       if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('ed_animRangeCreatingProgress', { n: fi + 1, total }));
       const page = edPages[pageIdx];
       if(!page){ perFrameLayers.push([]); continue; }
+      // v41.44: una hoja aún sin abrir (o ya abandonada) tiene sus canvas pesados descargados:
+      // edSerLayer devolvería el recorte guardado con SU orientación, y aquí se interpreta con
+      // la de destino. Se reconstruye solo el tiempo de procesar esta hoja y se suelta después
+      // — así se serializa igual que con la hoja cargada.
+      const _relPg = await _edTempLoadPage(pageIdx);
+      try {
       const srcOrientation = page.orientation || destOrientation;
       // La hoja activa vive en edLayers (puede tener cambios aún no volcados
       // a edPages[edCurrentPage].layers) — usar la copia en vivo si toca.
@@ -44801,6 +45027,7 @@ async function _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx){
         await new Promise(r => requestAnimationFrame(r));
       }
       perFrameLayers.push(ready);
+      } finally { _relPg(); }
     }
     const anyObjects = perFrameLayers.some(arr => arr.length);
     if(!anyObjects){

@@ -129,6 +129,7 @@ function edOpenPages() {
 function edClosePages() {
   const ov = document.getElementById('edPagesOverlay');
   if (!ov) return;
+  _pgThumbReset(); // v41.44: ya no hace falta terminar de rellenar miniaturas
   ov.classList.remove('open');
   setTimeout(() => {
     if (ov.parentNode) ov.parentNode.removeChild(ov);
@@ -165,6 +166,7 @@ function _pgBlockTouch(e) {
 function _pgRender() {
   const grid = document.getElementById('edPagesGrid');
   if (!grid) return;
+  _pgThumbReset(); // v41.44: anula la cola de miniaturas pendientes de la rejilla anterior
   grid.innerHTML = '';
 
   edPages.forEach((page, i) => {
@@ -303,24 +305,120 @@ function _pgBuildCard(page, idx) {
   return card;
 }
 
-// Envoltorio ligero: para la página ACTIVA (la que se está editando) siempre
-// se renderiza en vivo, igual que antes — es solo una página, coste asumible.
-// Para el resto de páginas, si ya hay una miniatura cacheada (generada al
-// salir de ellas — ver _edCachePageThumb en editor.js), se reutiliza tal
-// cual en vez de recorrer capas y canvas pesados de páginas que ni siquiera
-// se están viendo. Si aún no hay caché para esa página (primera vez que se
-// abre "Hojas" en la sesión), se renderiza en vivo como siempre — nunca
-// se muestra una miniatura vacía.
+// ── Miniaturas del panel (v41.44: progresivas) ─────────────────────────────
+// · Hoja ACTIVA (la que se está editando): siempre en vivo — es una sola hoja y
+//   sus canvas están cargados.
+// · Hoja con miniatura cacheada y al día (generada al salir de ella, ver
+//   _edCachePageThumb en editor.js): se reutiliza tal cual.
+// · Hoja con todos sus canvas cargados pero sin miniatura: render inmediato (barato)
+//   y se cachea para las siguientes aperturas.
+// · Hoja con canvas pesados DESCARGADOS (aún sin abrir desde que se cargó la obra —
+//   carga ligera, ver edLoadProject —, o ya abandonada): un render en vivo saldría sin
+//   el dibujo a mano ni los rellenos. La tarjeta se deja en blanco (o con su miniatura
+//   anterior, si tiene la misma forma) y se rellena DESPUÉS en segundo plano, de una en
+//   una (reconstruir canvas → render → soltar, ver _edEnsurePageThumb), solo las
+//   tarjetas visibles y empezando por las más cercanas a la hoja actual — así el panel
+//   se abre al instante en vez de esperar a pintar todas las hojas.
+let _pgThumbToken    = 0;     // se incrementa al reconstruir/cerrar el panel: anula la cola pendiente
+let _pgThumbQueue    = [];    // [{canvas, page}] — tarjetas visibles pendientes de rellenar
+let _pgThumbRunning  = false;
+let _pgThumbObserver = null;  // IntersectionObserver de las tarjetas pendientes
+
+function _pgThumbReset() {
+  _pgThumbToken++;
+  _pgThumbQueue = [];
+  _pgThumbRunning = false;
+  if (_pgThumbObserver) { try { _pgThumbObserver.disconnect(); } catch (_) {} _pgThumbObserver = null; }
+}
+
+function _pgThumbBlit(canvas, src) {
+  const ctx = canvas.getContext('2d');
+  const tw = canvas.width, th = canvas.height;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, tw, th);
+  ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, tw, th);
+}
+
 function _pgDrawThumb(canvas, page) {
-  if (page && page !== edPages[edCurrentPage] && page._cachedThumbCanvas) {
-    const ctx = canvas.getContext('2d');
-    const tw = canvas.width, th = canvas.height;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, tw, th);
-    ctx.drawImage(page._cachedThumbCanvas, 0, 0, tw, th);
+  if (!page || page === edPages[edCurrentPage]) { _pgRenderThumbLive(canvas, page); return; }
+  const cached = page._cachedThumbCanvas;
+  // Una miniatura cacheada de otra forma (la hoja se rotó desde entonces) no sirve ni
+  // como provisional: estirarla la deformaría.
+  const sameShape = !!cached && ((cached.width >= cached.height) === (canvas.width >= canvas.height));
+  if (sameShape && !page._thumbStale) { _pgThumbBlit(canvas, cached); return; }
+
+  const hasUnloaded = !!(page.layers && page.layers.some(l => l && l._canvasUnloaded));
+  if (!hasUnloaded) {
+    if (typeof _edCachePageThumb === 'function') _edCachePageThumb(page);
+    const fresh = page._cachedThumbCanvas;
+    if (fresh && !page._thumbStale && (fresh.width >= fresh.height) === (canvas.width >= canvas.height)) {
+      _pgThumbBlit(canvas, fresh);
+    } else {
+      _pgRenderThumbLive(canvas, page); // no se pudo cachear: en vivo, como antes
+    }
     return;
   }
-  _pgRenderThumbLive(canvas, page);
+
+  // Canvas descargados: provisional ahora, definitiva en segundo plano.
+  if (sameShape) _pgThumbBlit(canvas, cached);
+  else {
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+  _pgThumbWatch(canvas, page);
+}
+
+// Solo se rellenan las tarjetas que se ven (o están a punto de verse al desplazar la
+// rejilla): sin IntersectionObserver (WebViews muy antiguos) se encolan todas.
+function _pgThumbWatch(canvas, page) {
+  canvas._pgThumbPage = page;
+  const grid = document.getElementById('edPagesGrid');
+  if (typeof IntersectionObserver === 'undefined' || !grid) { _pgThumbEnqueue(canvas, page); return; }
+  if (!_pgThumbObserver) {
+    _pgThumbObserver = new IntersectionObserver(entries => {
+      entries.forEach(en => {
+        if (!en.isIntersecting) return;
+        const cv = en.target;
+        if (_pgThumbObserver) _pgThumbObserver.unobserve(cv);
+        if (cv._pgThumbPage) _pgThumbEnqueue(cv, cv._pgThumbPage);
+      });
+    }, { root: grid, rootMargin: '0px 240px 0px 240px' });
+  }
+  _pgThumbObserver.observe(canvas);
+}
+
+function _pgThumbEnqueue(canvas, page) {
+  _pgThumbQueue.push({ canvas, page });
+  if (!_pgThumbRunning) { _pgThumbRunning = true; _pgThumbPump(_pgThumbToken); }
+}
+
+async function _pgThumbPump(token) {
+  try {
+    while (token === _pgThumbToken && _pgThumbQueue.length) {
+      // La tarjeta más cercana a la hoja actual primero.
+      let bi = 0, bd = Infinity;
+      for (let i = 0; i < _pgThumbQueue.length; i++) {
+        const pi = edPages.indexOf(_pgThumbQueue[i].page);
+        const d = pi < 0 ? 1e9 : Math.abs(pi - edCurrentPage);
+        if (d < bd) { bd = d; bi = i; }
+      }
+      const job = _pgThumbQueue.splice(bi, 1)[0];
+      const idx = edPages.indexOf(job.page);
+      if (idx < 0 || !job.canvas.isConnected) continue;
+      let src = null;
+      try { src = await _edEnsurePageThumb(idx); } catch (_) {}
+      if (token !== _pgThumbToken) return; // el panel se reconstruyó o cerró mientras tanto
+      // Solo si la miniatura tiene la forma de ESTA tarjeta (la hoja pudo rotarse entretanto).
+      if (src && job.canvas.isConnected && (src.width >= src.height) === (job.canvas.width >= job.canvas.height)) {
+        _pgThumbBlit(job.canvas, src);
+      }
+      // Ceder el hilo entre hoja y hoja: el panel sigue respondiendo (desplazar, tocar…).
+      await new Promise(r => setTimeout(r, 0));
+    }
+  } finally {
+    if (token === _pgThumbToken) _pgThumbRunning = false;
+  }
 }
 
 function _pgRenderThumbLive(canvas, page, full) {
@@ -338,6 +436,11 @@ function _pgRenderThumbLive(canvas, page, full) {
   edOrientation = _po;
   if (_pi >= 0) edCurrentPage = _pi;
 
+  // v41.44: try/finally — si alguna capa lanzara una excepción a mitad del render,
+  // edOrientation/edCurrentPage se quedaban cambiados (la app creería estar en otra
+  // hoja/orientación). Ahora se restauran SIEMPRE (ver el finally, más abajo).
+  let off = null;
+  try {
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
 
@@ -352,7 +455,7 @@ function _pgRenderThumbLive(canvas, page, full) {
   // blanco SOLO el rectángulo de la página (no toda el área de trabajo), para
   // que una zona vacía del área de trabajo no añada un velo blanco encima de
   // lo que ya se ve en el lienzo principal — solo se transparenta contenido real.
-  const off = document.createElement('canvas');
+  off = document.createElement('canvas');
   off.width  = full ? ED_CANVAS_W : pw;
   off.height = full ? ED_CANVAS_H : ph;
   const offCtx = off.getContext('2d');
@@ -415,9 +518,10 @@ function _pgRenderThumbLive(canvas, page, full) {
   offCtx.globalAlpha = _textAlpha;
   _textLayers.forEach(l => l.draw(offCtx, off));
   offCtx.globalAlpha = 1;
-
-  edOrientation  = _savedOrient;
-  edCurrentPage  = _savedPage;
+  } finally {
+    edOrientation  = _savedOrient;
+    edCurrentPage  = _savedPage;
+  }
 
   ctx.drawImage(off, 0, 0, off.width, off.height, 0, 0, tw, th);
 }
@@ -492,11 +596,22 @@ function _pgDuplicate(idx) {
   }
   const _srcOrientation = src.orientation || edOrientation;
 
-  const newLayers = src.layers.map(l => {
+  // v41.44: edSerLayer recorta el dibujo a mano con la orientación/hoja GLOBALES (edPageW,
+  // edMarginX…) — se fijan a las de la hoja de origen mientras se serializa, igual que hace
+  // el guardado, por si no es la actual y tiene otra orientación.
+  const _dupSavedO = edOrientation, _dupSavedP = edCurrentPage;
+  edOrientation = _srcOrientation; edCurrentPage = idx;
+  let newLayers;
+  try {
+  newLayers = src.layers.map(l => {
     if (!l) return null;
     const ser = edSerLayer(l);
     if (!ser) return null;
-    const copy = edDeserLayer(ser, _srcOrientation);
+    // v41.44: la copia nace con los canvas pesados DESCARGADOS (carga ligera: no se
+    // decodifica nada ahora, se reconstruyen al abrir la hoja o al guardar) — evita
+    // reservar de golpe la memoria de todos los canvas de una hoja que quizá nunca se abra,
+    // y la miniatura del panel se rellena igualmente en segundo plano.
+    const copy = edDeserLayer(ser, _srcOrientation, true);
     if (!copy) return null;
 
     // edDeserLayer no restaura groupId/locked para capas tipo 'gif' (gap preexistente del
@@ -530,6 +645,7 @@ function _pgDuplicate(idx) {
 
     return copy;
   }).filter(Boolean);
+  } finally { edOrientation = _dupSavedO; edCurrentPage = _dupSavedP; }
 
   const newPage = {
     drawData: src.drawData || null,
@@ -557,13 +673,18 @@ function _pgDuplicate(idx) {
   // siguiente apertura del panel, _pgRender ya pide _pgDrawThumb de nuevo
   // para cada página, y para entonces newPage tiene sus propios canvas
   // reales cargados — se sustituye sola por el render correcto.
-  if (!src._cachedThumbCanvas && typeof _edCachePageThumb === 'function') _edCachePageThumb(idx);
+  // v41.44: la hoja ACTUAL se vuelve a cachear siempre (se está editando: su copia
+  // cacheada puede ser de antes) y una hoja con canvas descargados no puede cachearse
+  // (_edCachePageThumb lo rechaza) — en ese caso el duplicado hereda la miniatura de
+  // origen si la hay (con su marca de obsoleta) y, si no, el panel la rellena después.
+  if ((src === edPages[edCurrentPage] || !src._cachedThumbCanvas) && typeof _edCachePageThumb === 'function') _edCachePageThumb(src);
   if (src._cachedThumbCanvas) {
     const _thumbCopy = document.createElement('canvas');
     _thumbCopy.width  = src._cachedThumbCanvas.width;
     _thumbCopy.height = src._cachedThumbCanvas.height;
     _thumbCopy.getContext('2d').drawImage(src._cachedThumbCanvas, 0, 0);
     newPage._cachedThumbCanvas = _thumbCopy;
+    if (src._thumbStale) newPage._thumbStale = true;
   }
 
   // Insertar a continuación
@@ -779,9 +900,24 @@ function _edRelayoutLayersForOrientation(layers, fromOrient, toOrient) {
 }
 
 // Cambia la orientación de una hoja preservando el aspecto visual de todos los objetos.
-function _pgRotatePage(idx) {
-  const page = edPages[idx];
+async function _pgRotatePage(idx) {
+  let page = edPages[idx];
   if (!page) return;
+
+  // v41.44 — Una hoja con los canvas pesados DESCARGADOS (aún sin abrir desde que se cargó la
+  // obra, o ya abandonada) guarda su dibujo a mano como el RECORTE de página con las medidas
+  // de la orientación anterior (DrawLayer.toDataUrl devuelve lo cacheado). Si se rotara sin
+  // reconstruirla, ese recorte viejo se guardaría tal cual y al reabrir la obra se estiraría
+  // a las medidas nuevas (dibujo deformado). Reconstruyéndola antes, el guardado vuelve a
+  // recortar del lienzo real con las medidas de la nueva orientación, como siempre.
+  // Se queda reconstruida (no se suelta): lo que cacheaba su descarga ya no coincide.
+  if (page.layers && page.layers.some(l => l && l._canvasUnloaded) && typeof _edLoadPageCanvases === 'function') {
+    if (page._pgRotating) return; // otro toque mientras se reconstruye: ya hay una rotación en curso
+    page._pgRotating = true;
+    try { await _edLoadPageCanvases(idx); } finally { page._pgRotating = false; }
+    idx = edPages.indexOf(page); // las hojas pudieron reordenarse/borrarse durante la espera
+    if (idx < 0) return;
+  }
 
   const currentOrient = page.orientation || edOrientation;
   const newOrient = currentOrient === 'vertical' ? 'horizontal' : 'vertical';
