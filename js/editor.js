@@ -2990,7 +2990,7 @@ class DrawLayer extends BaseLayer {
       const mx = (ED_CANVAS_W - pw) / 2;
       const my = (ED_CANVAS_H - ph) / 2;
       dl._ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
-      if(typeof edRedraw === 'function') edRedraw();
+      if(typeof _edRedrawSoon === 'function') _edRedrawSoon();
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
@@ -3001,7 +3001,7 @@ class DrawLayer extends BaseLayer {
     const img = new Image();
     img.onload = () => {
       dl._ctx.drawImage(img, 0, 0, ED_CANVAS_W, ED_CANVAS_H);
-      if(typeof edRedraw === 'function') edRedraw();
+      if(typeof _edRedrawSoon === 'function') _edRedrawSoon();
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
@@ -3203,7 +3203,7 @@ class FillLayer extends BaseLayer {
       img.onload = () => {
         fl._ctx.clearRect(0, 0, fl._canvas.width, fl._canvas.height);
         fl._ctx.drawImage(img, 0, 0, fl._canvas.width, fl._canvas.height);
-        if (typeof edRedraw === 'function') edRedraw();
+        if (typeof _edRedrawSoon === 'function') _edRedrawSoon();
         res();
       };
       img.onerror = () => res();
@@ -3461,7 +3461,7 @@ class StrokeLayer extends BaseLayer {
     const img = new Image();
     img.onload = () => {
       sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
-      if(typeof edRedraw === 'function') edRedraw();
+      if(typeof _edRedrawSoon === 'function') _edRedrawSoon();
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
     img.src = dataUrl;
@@ -4503,7 +4503,12 @@ function _edMarkPageDirty(pageOrIdx) {
   // sesión, aunque el usuario no hubiera tocado nada todavía.
   if (window._edLoadingSuppressDirty) return;
   const p = (typeof pageOrIdx === 'number') ? edPages[pageOrIdx] : pageOrIdx;
-  if (p) { p._dirtyLocal = true; p._dirtyCloud = true; }
+  if (p) {
+    p._dirtyLocal = true; p._dirtyCloud = true;
+    // v41.43: la miniatura cacheada de una hoja que NO es la actual ya no refleja
+    // su contenido — se rehace al abrir "Ir a página" (ver _edNavThumbOne).
+    if (p !== edPages[edCurrentPage]) p._thumbStale = true;
+  }
 }
 function _edMarkPagesStructureDirty() {
   if (window._edLoadingSuppressDirty) return;
@@ -6233,6 +6238,19 @@ function _edRedrawCameraThrottled(){
     edRedraw();
     if (window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
   });
+}
+// v41.43 — Redibujado diferido y UNIFICADO para los onload de carga de capas.
+// Al abrir una obra, CADA imagen/dibujo/relleno/trazo de CADA hoja disparaba un
+// edRedraw() síncrono completo al terminar de decodificarse (decenas o cientos de
+// redibujados seguidos del mismo lienzo, la mayoría de hojas que ni se ven): medido
+// con la CPU ×4 más lenta, ~2,5 s de los ~9 s de apertura de una obra de 31 hojas.
+// Un único redibujo por fotograma (requestAnimationFrame) da el mismo resultado
+// visible — el redibujo ya pintaba siempre TODO el estado actual, no solo la capa
+// que acababa de cargar.
+let _edRedrawSoonRaf = 0;
+function _edRedrawSoon(){
+  if (_edRedrawSoonRaf) return;
+  _edRedrawSoonRaf = requestAnimationFrame(() => { _edRedrawSoonRaf = 0; edRedraw(); });
 }
 function edRedraw(){
   if (_edInlineTextEditFor) _edInlineTextEditReposition(); // v40.14 — barato, no-op si no hay edición activa
@@ -8758,6 +8776,21 @@ async function _edLoadPageCanvases(pageIdx) {
   if (_promises.length) await Promise.all(_promises);
 }
 
+// v41.43 — Contraparte de _edLoadPageCanvases para una carga TEMPORAL (render al
+// guardar): vuelve a soltar los canvas sin recodificar, porque los dataURL cacheados
+// por _edUnloadPageCanvases (_unloadedDataUrl/_unloadedFullDataUrl) siguen siendo
+// exactos — la hoja no es la actual y nadie ha podido modificarlos entretanto.
+function _edReleaseTempCanvases(layers) {
+  (layers || []).forEach(l => {
+    if (!l || l._canvasUnloaded || !(l._unloadedFullDataUrl || l._unloadedDataUrl)) return;
+    const ph = document.createElement('canvas');
+    ph.width = 1; ph.height = 1;
+    l._canvas = ph;
+    l._ctx = ph.getContext('2d');
+    l._canvasUnloaded = true;
+  });
+}
+
 function _edCachePageThumb(pageIdx) {
   const page = edPages[pageIdx];
   if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return;
@@ -8775,6 +8808,8 @@ function _edCachePageThumb(pageIdx) {
     off.height = _isV ? _long : 90;
     _pgRenderThumbLive(off, page);
     page._cachedThumbCanvas = off;
+    page._thumbStale = false;
+    page._navThumb = null;
   } catch(_) {} // si falla, _pgDrawThumb simplemente hará el render en vivo como antes
 }
 
@@ -9075,8 +9110,23 @@ function edUpdateNavPages(){
   // en llamadas repetidas que no lo modifican.
   if (_pnumChanged && typeof _edUpdateTitlePill === 'function') _edUpdateTitlePill();
 
+  // Marcar orientación activa (va ANTES del desplegable de miniaturas: no depende de él)
+  $('dd-orientv')?.classList.toggle('active',edOrientation==='vertical');
+  $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
+
   const wrap=$('ddNavPages');if(!wrap)return;
+  // v41.43 — Las miniaturas de "Ir a página" solo se ven con ese desplegable abierto,
+  // pero esta función se llama en CADA cambio de hoja (y con debounce tras ediciones
+  // vectoriales): reconstruía y renderizaba en vivo las miniaturas de TODAS las hojas
+  // (medido: ~0,4 s por llamada con 31 hojas, ~1,9 s con la CPU ×4 más lenta) con el
+  // desplegable cerrado. Ahora solo se reconstruyen con él abierto (edOpenMenu('nav')
+  // llama a esta función al abrirlo) y, aun así, solo la hoja actual se renderiza
+  // en vivo: el resto sale de la miniatura cacheada y se rellena en trozos para no
+  // bloquear el hilo (ver _edNavThumbFill).
+  if (edMenuOpen !== 'nav') { wrap._edNavStale = true; return; }
+  wrap._edNavStale = false;
   wrap.innerHTML='';
+  const _thumbJobs = [];
   edPages.forEach((p,i)=>{
     const btn=document.createElement('button');
     btn.className='op-btn ed-nav-page-btn'+(i===edCurrentPage?' active':'');
@@ -9088,7 +9138,9 @@ function edUpdateNavPages(){
     const isV=(p.orientation||edOrientation)==='vertical';
     thumb.width=44; thumb.height=isV?60:44;
     thumb.style.cssText='display:block;border:1px solid #ccc;border-radius:3px;background:#fff;max-width:44px';
-    _edRenderPageThumb(thumb, p, i);
+    const _tctx = thumb.getContext('2d');
+    _tctx.fillStyle = '#ffffff'; _tctx.fillRect(0, 0, thumb.width, thumb.height);
+    _thumbJobs.push({ canvas: thumb, idx: i });
     btn.appendChild(thumb);
 
     // Número de página
@@ -9097,12 +9149,66 @@ function edUpdateNavPages(){
     lbl.style.cssText='font-size:10px;font-weight:700;line-height:1';
     btn.appendChild(lbl);
 
-    btn.addEventListener('click',()=>{edLoadPage(i);edCloseMenus();});
+    // Cerrar el desplegable ANTES de cambiar de hoja: edLoadPage vuelve a llamar a
+    // edUpdateNavPages, y con el desplegable aún abierto reconstruiría todas las
+    // miniaturas justo antes de que se cierre.
+    btn.addEventListener('click',()=>{edCloseMenus();edLoadPage(i);});
     wrap.appendChild(btn);
   });
-  // Marcar orientación activa
-  $('dd-orientv')?.classList.toggle('active',edOrientation==='vertical');
-  $('dd-orienth')?.classList.toggle('active',edOrientation==='horizontal');
+  _edNavThumbFillAll(_thumbJobs);
+}
+
+// ── v41.43 · Miniaturas del desplegable "Ir a página" ──────────────────────
+// Hoja ACTUAL → render en vivo (es la que se está editando). Resto → la miniatura
+// que se cachea al SALIR de cada hoja (_edCachePageThumb, hecha ANTES de soltar los
+// canvas pesados) — un render en vivo de una hoja ya descargada saldría sin dibujo
+// a mano ni rellenos, que era lo que pasaba. Hojas sin caché (aún no visitadas) →
+// un render en vivo UNA vez, que se guarda para las siguientes aperturas. Hojas
+// marcadas _thumbStale (modificadas estando otra hoja activa: aplicar a todas, flujo
+// de textos...) → se reconstruyen sus canvas solo el tiempo de repintar la miniatura.
+let _edNavFillToken = 0;
+function _edNavThumbBlit(canvas, src) {
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(src, 0, 0, src.width, src.height, 0, 0, canvas.width, canvas.height);
+}
+async function _edNavThumbOne(canvas, idx) {
+  const page = edPages[idx];
+  if (!page) return;
+  if (idx === edCurrentPage) { _edRenderPageThumb(canvas, page, idx); return; }
+  if (page._thumbStale) {
+    const _tmp = (page.layers || []).filter(l => l && l._canvasUnloaded);
+    if (_tmp.length) await _edLoadPageCanvases(idx);
+    try { if (edPages[idx] === page) _edCachePageThumb(idx); } finally {
+      if (_tmp.length && idx !== edCurrentPage) _edReleaseTempCanvases(_tmp);
+    }
+    page._navThumb = null;
+  }
+  const src = page._cachedThumbCanvas || page._navThumb;
+  if (src) { _edNavThumbBlit(canvas, src); return; }
+  _edRenderPageThumb(canvas, page, idx);
+  try {
+    const c = document.createElement('canvas');
+    c.width = canvas.width; c.height = canvas.height;
+    c.getContext('2d').drawImage(canvas, 0, 0);
+    page._navThumb = c;
+  } catch(_) {}
+}
+function _edNavThumbFillAll(jobs) {
+  const token = ++_edNavFillToken;
+  let k = 0;
+  // La hoja actual primero: es la que el usuario mira.
+  jobs.sort((a, b) => (a.idx === edCurrentPage ? -1 : 0) - (b.idx === edCurrentPage ? -1 : 0));
+  const step = async () => {
+    const t0 = performance.now();
+    while (k < jobs.length && performance.now() - t0 < 10) {
+      if (token !== _edNavFillToken) return; // llegó una reconstrucción más reciente
+      const j = jobs[k++];
+      try { await _edNavThumbOne(j.canvas, j.idx); } catch(_) {}
+    }
+    if (k < jobs.length && token === _edNavFillToken) setTimeout(step, 0);
+  };
+  step();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -9210,6 +9316,7 @@ function _edSetupPageJumpBar() {
 // Regenera solo el thumb de la hoja actual en el nav (sin reconstruir todo el nav)
 function _edRefreshCurrentPageThumb(){
   const wrap=$('ddNavPages'); if(!wrap) return;
+  if (edMenuOpen !== 'nav') { wrap._edNavStale = true; return; } // v41.43: desplegable cerrado → nada que repintar
   const btns=wrap.querySelectorAll('.ed-nav-page-btn');
   const btn=btns[edCurrentPage]; if(!btn) return;
   const thumb=btn.querySelector('canvas'); if(!thumb) return;
@@ -28040,9 +28147,18 @@ async function _edCloudSaveInner() {
         // auth-pages.js doLogin y EditorView_init) — así la petición
         // original del usuario ("guardar en la nube") se completa de verdad
         // tras autenticarse, en vez de dejar la obra solo en local.
-        await edSaveProject();
-        const _savedComic = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
-        const _savedOk = !!(_savedComic && _savedComic.editorData && _savedComic.editorData.pages && _savedComic.editorData.pages.length);
+        // v41.43: edSaveProject devuelve la instantánea ya verificada (o null si la
+        // verificación falló) — ya no se relee la obra entera de OPFS para saberlo.
+        // undefined = ni siquiera se ejecutó (otro guardado en curso): se comprueba
+        // como siempre.
+        const _savedSnap = await edSaveProject();
+        let _savedOk;
+        if (_savedSnap === undefined) {
+          const _savedComic = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
+          _savedOk = !!(_savedComic && _savedComic.editorData && _savedComic.editorData.pages && _savedComic.editorData.pages.length);
+        } else {
+          _savedOk = !!(_savedSnap && _savedSnap.editorData && _savedSnap.editorData.pages && _savedSnap.editorData.pages.length);
+        }
         if (_savedOk) sessionStorage.setItem('cx_pendingCloudSave', edProjectId);
         Router.go('login');
       }, I18n.t('loginBtn'));
@@ -28052,10 +28168,19 @@ async function _edCloudSaveInner() {
 
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
   _edSaveOverlayUpdate(I18n.t('ed_savingEllipsis'));
-  await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
+  const _justSaved = await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
   _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloud'));
 
-  let comic = WorkStore.getByIdFull
+  // v41.43: la instantánea que acaba de devolver edSaveProject ES exactamente lo
+  // que se escribió (y verificó) en OPFS — antes se releía y parseaba el archivo
+  // entero solo para obtener lo mismo. Si no hay instantánea (guardado ya en
+  // curso, o verificación fallida) se lee de OPFS como siempre.
+  let comic = null;
+  if (_justSaved && _justSaved.editorData) {
+    const _metaNow = WorkStore.getById(edProjectId);
+    if (_metaNow) comic = { ..._metaNow, editorData: _justSaved.editorData, panels: _justSaved.panels, coverDataUrl: _justSaved.coverDataUrl };
+  }
+  if (!comic) comic = WorkStore.getByIdFull
     ? (await WorkStore.getByIdFull(edProjectId))
     : WorkStore.getById(edProjectId);
   if (!comic) { edToast(I18n.t('ed_workNotFound')); return; }
@@ -28111,27 +28236,46 @@ async function _edCloudSaveInner() {
   // En Android, _buildApngFromFrames puede fallar (OOM, UPNG crash).
   // Si el layer vivo tiene _pngFrames o _apngSrc, los inyectamos directamente
   // para que _uploadPanels los use como fallback sin pasar por UPNG.
+  // v41.43: ahora las páginas serializadas son las MISMAS que cachea el editor
+  // (p._cachedSerLocal) — antes eran una copia recién parseada de OPFS y mutarlas
+  // era inocuo. Para no contaminar esas cachés (acabarían escritas en el siguiente
+  // guardado local, con _apngSrc enormes) la inyección es copy-on-write: solo se
+  // clonan la capa afectada, su página y la lista de páginas.
   if (comic.editorData && comic.editorData.pages && edPages && edPages.length) {
+    let _pagesCow = null;
     comic.editorData.pages.forEach((pg, pi) => {
       const livePage = edPages[pi];
       if (!livePage) return;
+      let _layersCow = null;
       (pg.layers || []).forEach((sl, li) => {
         const liveLayer = livePage.layers[li];
         if (!liveLayer || sl.type !== 'image') return;
+        let _add = null;
         // Inyectar _apngSrc si el layer vivo lo tiene (APNG completo → upload directo)
-        if (liveLayer._apngSrc && !sl._apngSrc) sl._apngSrc = liveLayer._apngSrc;
+        if (liveLayer._apngSrc && !sl._apngSrc) _add = { _apngSrc: liveLayer._apngSrc };
         // Inyectar _pngFrames si el layer vivo los tiene y no hay _apngSrc
-        if (!sl._apngSrc && liveLayer._pngFrames && liveLayer._pngFrames.length && !sl._pngFrames)
-          sl._pngFrames = liveLayer._pngFrames;
+        else if (!sl._apngSrc && liveLayer._pngFrames && liveLayer._pngFrames.length && !sl._pngFrames)
+          _add = { _pngFrames: liveLayer._pngFrames };
+        if (!_add) return;
+        if (!_layersCow) _layersCow = pg.layers.slice();
+        _layersCow[li] = { ...sl, ..._add };
       });
+      if (_layersCow) {
+        if (!_pagesCow) _pagesCow = comic.editorData.pages.slice();
+        _pagesCow[pi] = { ...pg, layers: _layersCow };
+      }
     });
+    if (_pagesCow) comic = { ...comic, editorData: { ...comic.editorData, pages: _pagesCow } };
   }
 
   // Asignar supabaseId si aún no tiene
   const _wasUploadedBefore = !!comic.supabaseId; // v40.50: ¿ya existía la obra en la nube antes de este guardado?
   if (!comic.supabaseId) {
     comic.supabaseId = crypto.randomUUID();
-    WorkStore.save(comic);
+    // v41.43: solo el id nuevo, en el índice ligero. Antes: WorkStore.save(comic) —
+    // reescribía la obra ENTERA en OPFS (sin esperarla, en paralelo con la subida;
+    // y con los _apngSrc inyectados arriba dentro) solo para anotar este campo.
+    WorkStore.updateMeta(edProjectId, { supabaseId: comic.supabaseId });
   }
 
   // ── v40.50 — ¿otro dispositivo ha guardado esta obra en la nube después de que la abriera aquí? ──
@@ -28240,24 +28384,34 @@ async function _edCloudSaveInner() {
     // junto a _pageSer._dirtyCloud en _edSaveProjectInner (CAUSA RAÍZ del
     // guardado de 136s: sin esto, el primer guardado en nube de cada sesión
     // siempre subía la obra entera, por diseño desde v34.34).
-    const _comicAfter = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : WorkStore.getById(edProjectId);
-    if (_comicAfter) {
-      if (_comicAfter.editorData && Array.isArray(_comicAfter.editorData.pages) &&
-          _comicAfter.editorData.pages.length === edPages.length) {
-        _comicAfter.editorData.pages.forEach((pd, i) => {
-          pd._dirtyCloud = edPages[i]._dirtyCloud;
-          pd._dirtyCountCloud = edPages[i]._dirtyCountCloud;
-        });
-        _comicAfter.editorData._structureDirtyCloud = false;
-      }
-      // Si no coinciden en número (cambio estructural justo durante la subida),
-      // no se toca editorData — se deja tal cual está en disco (conservador:
-      // el próximo guardado en nube seguirá subiendo la obra entera, igual que
-      // hasta ahora) en vez de arriesgar índices que no signifiquen lo mismo.
-      //
+    //
+    // v41.43: lo anterior (releer la obra entera con getByIdFull, retocar los flags
+    // y volver a ESCRIBIRLA entera — más la copia extra de la carpeta visible en
+    // PC) costaba, medido, más que el resto del guardado local; todo para anotar
+    // unos pocos flags. Ahora el estado de sincronización de cada hoja se anota SOLO
+    // en el índice ligero (cloudSync, ver WorkStore.updateMeta y edLoadProject) y el
+    // archivo pesado no se toca. Cualquier escritura posterior del archivo pesado
+    // (WorkStore.save con editorData) anula esa anotación y manda lo que lleve dentro.
+    // Si el nº de hojas ya no coincide con lo guardado (cambio estructural justo
+    // durante la subida) no se anota nada — conservador, como antes.
+    if (WorkStore.getById(edProjectId)) {
+      const _csN = edPages.length;
+      const _cloudSyncNote = (comic.editorData && Array.isArray(comic.editorData.pages) &&
+                              comic.editorData.pages.length === _csN)
+        ? {
+            n: _csN,
+            d: edPages.map(p => (p._dirtyCloud === false && typeof p._dirtyCountCloud === 'number') ? 0 : 1),
+            c: edPages.map(p => (typeof p._dirtyCountCloud === 'number' ? p._dirtyCountCloud : 0)),
+            s: window._edPagesStructureDirtyCloud ? 1 : 0,
+          }
+        : null;
       // cloudSavedAt marca el momento exacto de la última subida exitosa a la nube.
       // Se usa en my-works para saber si hay cambios locales sin subir antes de publicar.
-      await WorkStore.save({ ..._comicAfter, published: false, approved: false, pendingReview: false, cloudSavedAt: new Date().toISOString() });
+      WorkStore.updateMeta(edProjectId, {
+        published: false, approved: false, pendingReview: false,
+        cloudSavedAt: new Date().toISOString(),
+        cloudSync: _cloudSyncNote,
+      });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
     // Sincronizar biblioteca con la nube — solo si su contenido cambió de
@@ -28364,9 +28518,41 @@ const _ED_SIZE_CACHE_MS = 3000; // ventana de reutilización para las comprobaci
 // toDataURL(). El JSON de pageSer.layers ya incluye los metadatos de cada
 // capa (incluida la de gif/imagen animada); solo hace falta sumar aparte el
 // binario de gif/APNG, que vive en IDB/bucket y no en ese JSON.
+//
+// v41.43 — antes: new Blob([JSON.stringify(pageSer.layers)]).size. Se llamaba UNA VEZ
+// POR PÁGINA al abrir la obra (y tras cada guardado): construir una cadena JSON de
+// decenas de MB en total solo para medirla — medido: ~0,9 s de los ~9 s de apertura
+// de una obra de 31 hojas con la CPU ×4 más lenta. Ahora se ESTIMA recorriendo el
+// objeto ya serializado (sin construir ninguna cadena): las cadenas (dataUrl) dominan
+// y se cuentan exactas; números/booleanos/claves son una aproximación. Solo alimenta
+// el aviso de tamaño y el tope de 60 MB, que no necesitan el byte exacto. Trabaja
+// SOLO con el objeto serializado (también lleva type/gifKey/animKey), sin depender
+// de las capas vivas — así sirve igual para páginas aún sin construir.
+function _edJsonBytesEstimate(v) {
+  if (v == null) return 4;
+  switch (typeof v) {
+    case 'string':  return v.length + 2;
+    case 'number':  return Number.isInteger(v) ? 3 : 12;
+    case 'boolean': return 5;
+    case 'object': {
+      let n = 2;
+      if (Array.isArray(v)) {
+        const len = v.length;
+        if (len && typeof v[0] === 'number') return n + len * 8; // listas de coordenadas: atajo
+        for (let i = 0; i < len; i++) n += _edJsonBytesEstimate(v[i]) + 1;
+        return n;
+      }
+      for (const k in v) n += k.length + 4 + _edJsonBytesEstimate(v[k]);
+      return n;
+    }
+  }
+  return 0;
+}
 function _edPageCachedBytes(p, pageSer) {
-  let bytes = new Blob([JSON.stringify(pageSer.layers || [])]).size;
-  (p.layers || []).forEach(l => {
+  const layers = (pageSer && pageSer.layers) || [];
+  let bytes = _edJsonBytesEstimate(layers);
+  layers.forEach(l => {
+    if (!l) return;
     if (l.type === 'gif' && l.gifKey) {
       bytes += parseInt(localStorage.getItem('cxSzGif:'+l.gifKey)||'0');
     } else if (l.type === 'image' && l.animKey) {
@@ -28585,6 +28771,18 @@ async function _edSaveProjectInner(_keepOverlay){
       continue;
     }
 
+    // v41.43 — BUG CORREGIDO (hallado midiendo guardado/carga): al salir de una hoja,
+    // edLoadPage descarga los canvas pesados (relleno/lápiz/acuarela/dibujo/trazo) y
+    // los sustituye por un placeholder de 1×1 (ver _edUnloadPageCanvases). Si se
+    // editaba una hoja, se pasaba a otra y se guardaba, esta hoja (sucia → se
+    // reserializa) se RENDERIZABA con esos placeholders: la imagen de la hoja
+    // (panels[i].dataUrl, también la miniatura/portada) salía sin dibujo a mano ni
+    // rellenos. Las capas en sí se guardaban bien (toDataUrl() devuelve lo cacheado).
+    // Ahora se reconstruyen los canvas solo el tiempo de renderizar y se vuelven a
+    // soltar sin recodificar nada (la caché sigue siendo la misma, no se ha tocado).
+    const _unloadedHere = p.layers.filter(l => l && l._canvasUnloaded);
+    if (_unloadedHere.length) await _edLoadPageCanvases(_pi);
+
     edCurrentPage = _pi;
     edOrientation = p.orientation || _savedOrient2;
 
@@ -28647,9 +28845,11 @@ async function _edSaveProjectInner(_keepOverlay){
         });
       }
     });
+    const _pageRender = edRenderPage(p);
+    if (_unloadedHere.length && _pi !== _savedPage2) _edReleaseTempCanvases(_unloadedHere);
     const _panelSer = {
       id:'panel_'+_pi,
-      dataUrl:edRenderPage(p),
+      dataUrl:_pageRender,
       orientation:(p.orientation||edOrientation)==='vertical' ? 'v' : 'h',
       textMode: p.textMode || 'sequential',
       texts,
@@ -28750,24 +28950,31 @@ async function _edSaveProjectInner(_keepOverlay){
   // duplicar el render.
   let _coverDataUrl = panels[0]?.dataUrl || null;
   if (edPages[0] && edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) {
+    // v41.43: la hoja 1 puede tener sus canvas pesados descargados (se salió de
+    // ella) aunque NO esté sucia (no se reserializa arriba) — misma corrección
+    // que arriba: reconstruir solo para renderizar y soltar sin recodificar.
+    const _cvUnloaded = edPages[0].layers.filter(l => l && l._canvasUnloaded);
+    if (_cvUnloaded.length) await _edLoadPageCanvases(0);
     _coverDataUrl = edRenderPage(edPages[0], true);
+    if (_cvUnloaded.length && _savedPage2 !== 0) _edReleaseTempCanvases(_cvUnloaded);
   }
+  const _editorDataObj = {
+    orientation:edOrientation,
+    pages:_edPages,
+    _rules: edRules,
+    _ruleNodes: edRuleNodes,
+    _palette: edColorPalette.slice(), // v40.45: muestras de color de la obra
+    // v40.77: persistir también el flag ESTRUCTURAL de nube (añadir/borrar/
+    // reordenar hojas) — ver el porqué junto a _pageSer._dirtyCloud, arriba.
+    _structureDirtyCloud: !!window._edPagesStructureDirtyCloud,
+  };
   await WorkStore.save({
     ...existing,
     id:edProjectId,
     ...edProjectMeta,
     panels,
     coverDataUrl: _coverDataUrl,
-    editorData:{
-      orientation:edOrientation,
-      pages:_edPages,
-      _rules: edRules,
-      _ruleNodes: edRuleNodes,
-      _palette: edColorPalette.slice(), // v40.45: muestras de color de la obra
-      // v40.77: persistir también el flag ESTRUCTURAL de nube (añadir/borrar/
-      // reordenar hojas) — ver el porqué junto a _pageSer._dirtyCloud, arriba.
-      _structureDirtyCloud: !!window._edPagesStructureDirtyCloud,
-    },
+    editorData:_editorDataObj,
     updatedAt:_savedAt,
     localSavedAt:_savedAt,
     cameraState: _camState,
@@ -28778,8 +28985,16 @@ async function _edSaveProjectInner(_keepOverlay){
   });
   // Verificar que OPFS guardó correctamente
   _edSaveOverlayUpdate(I18n.t('ed_verifyingIntegrity'));
-  const _verify = WorkStore.getByIdFull ? await WorkStore.getByIdFull(edProjectId) : null;
-  if (_verify && _verify.editorData && _verify.editorData.pages && _verify.editorData.pages.length > 0) {
+  // v41.43: antes se releía y parseaba la obra ENTERA (getByIdFull) solo para
+  // comprobar que estaba ahí. verifySaved comprueba lo mismo que importa sin leerla:
+  // el archivo existe, mide exactamente lo que se acaba de escribir y termina bien
+  // (un volcado truncado no); y la obra serializada tiene hojas (comprobación en memoria).
+  const _verifyOk = _edPages.length > 0 && !!WorkStore.verifySaved && await WorkStore.verifySaved(edProjectId);
+  let _savedSnapshot = null;
+  if (_verifyOk) {
+    // Instantánea de lo que acaba de quedar en disco, para que el guardado en
+    // nube (_edCloudSaveInner) no tenga que releerlo del archivo.
+    _savedSnapshot = { editorData: _editorDataObj, panels, coverDataUrl: _coverDataUrl };
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast(I18n.t('ed_savedOk'));
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
@@ -28824,6 +29039,7 @@ async function _edSaveProjectInner(_keepOverlay){
   _edSavedHistoryIdx = edHistoryIdx;
   // Limpiar autosave — awaitar para garantizar que se borra antes de retornar
   await _edAutosaveClear(edProjectId);
+  return _savedSnapshot; // null si la verificación falló
 }
 function edRenderPage(page, withText){
   const _savedOrient = edOrientation;
@@ -30469,7 +30685,7 @@ function edDeserLayer(d, pageOrientation){
       const img=new Image();
       img.onload=()=>{
         l.img=img; l.src=img.src;
-        if(l._keepSize){ edRedraw(); if(window._gcpActive) _gcpRedraw(); return; }
+        if(l._keepSize){ _edRedrawSoon(); if(window._gcpActive) _gcpRedraw(); return; }
         const _isV = (pageOrientation||'vertical') === 'vertical';
         const _pw = _isV ? ED_PAGE_W : ED_PAGE_H;
         const _ph = _isV ? ED_PAGE_H : ED_PAGE_W;
@@ -30479,7 +30695,7 @@ function edDeserLayer(d, pageOrientation){
         if(!d.height) {
           l.height = _natH;
         }
-        edRedraw();
+        _edRedrawSoon();
         if(window._gcpActive) _gcpRedraw();
       };
       img.onerror=()=>{ console.warn('edDeserLayer: failed to load image'); };
@@ -31174,8 +31390,12 @@ async function edLoadProject(id){
   // nunca se deja sin resolver (evitaría un bloqueo permanente del contador).
   let _edResolveFullyLoaded;
   window._edFullyLoadedPromise = new Promise(res => { _edResolveFullyLoaded = res; });
+  // v41.43: useStash — si "Editar" (my-works.js) ya leyó y parseó la obra entera
+  // hace un instante, se reutiliza en vez de leer el archivo otra vez (ver
+  // WorkStore.stashFull). Sin esa entrega (o si algo guardó la obra entretanto)
+  // lee de OPFS exactamente como siempre.
   const comic = WorkStore.getByIdFull
-    ? (await WorkStore.getByIdFull(id)) : WorkStore.getById(id);
+    ? (await WorkStore.getByIdFull(id, { useStash: true })) : WorkStore.getById(id);
   if(!comic){ _edLoadProjectInProgress = false; _edResolveFullyLoaded(); return; }
   // Declarado aquí (no dentro de if(edCanvas){...}) para que siga en alcance en
   // el resto de la función — antes se declaraba con `const` dentro de ese bloque
@@ -31215,9 +31435,18 @@ async function edLoadProject(id){
   // incremental en nube funcione también en el primer guardado de la sesión.
   // Obras guardadas con una versión anterior de la app no tienen este campo
   // (undefined) → se comportan exactamente igual que antes (conservador).
+  // v41.43: tras un guardado en nube, el estado «sincronizado» de cada hoja se
+  // anota solo en el índice ligero (comic.cloudSync, ver WorkStore.updateMeta)
+  // en vez de reescribir el archivo pesado entero. Cualquier escritura posterior
+  // del archivo pesado lo anula (WorkStore.save), y solo se acepta si el nº de
+  // hojas coincide — mismo criterio conservador que el resto de flags.
+  const _cs = (comic.cloudSync && Array.isArray(comic.cloudSync.d) && comic.editorData &&
+               Array.isArray(comic.editorData.pages) && comic.cloudSync.n === comic.editorData.pages.length)
+    ? comic.cloudSync : null;
   window._edPagesStructureDirtyCloud = _justSyncedCloud ? false :
-    (comic.editorData && typeof comic.editorData._structureDirtyCloud === 'boolean'
-      ? comic.editorData._structureDirtyCloud : true);
+    (_cs ? !!_cs.s :
+      (comic.editorData && typeof comic.editorData._structureDirtyCloud === 'boolean'
+        ? comic.editorData._structureDirtyCloud : true));
   // Mismo criterio que las dos líneas de arriba, aplicado a edProjectMeta
   // (ver _edApplyProjectMeta/_edHasUnsavedLocalChanges): recién cargada,
   // coincide por definición con OPFS; con la nube, conservador salvo que se
@@ -31398,6 +31627,10 @@ async function edLoadProject(id){
         _newPage._dirtyCountLocal = 0;
         if (_justSyncedCloud) {
           _newPage._dirtyCloud = false; _newPage._dirtyCountCloud = 0;
+        } else if (_cs) {
+          // v41.43: estado anotado tras el último guardado en nube (índice ligero)
+          _newPage._dirtyCloud = !!_cs.d[_pi2];
+          _newPage._dirtyCountCloud = (_cs.c && _cs.c[_pi2]) || 0;
         } else if (typeof pd._dirtyCloud === 'boolean') {
           // v40.77: restaurar el estado de sincronización con la nube que
           // dejó persistido el guardado local anterior (ver _pageSer arriba,
@@ -35047,6 +35280,11 @@ function EditorView_init(){
     // Editor de textos, etc.) dejarlo hacer scroll nativo — no intervenir
     const overScrollable = e.target.closest('.ed-layers-list, .ed-pages-grid, .ed-fulloverlay-box, #edOptionsPanel, .ed-modal-body, #tdPageArea, #gcpFramesBar, #gcpPropsPanel, [data-gcpmenu], [id^="gdd-"]');
     if(overScrollable) return;
+    // Ctrl+rueda con el cursor sobre la cabecera o la barra de menús (no sobre
+    // el canvas): NO se intercepta → el navegador cambia su tamaño de lectura
+    // (zoom nativo). Sobre el canvas sigue haciendo zoom del lienzo. Sirve
+    // también para el editor de animaciones (comparte este listener).
+    if((e.ctrlKey || e.metaKey) && e.target.closest && e.target.closest('#edTopbar, #edMenuBar, #gcpTopbar, #gcpMenuBar, .ed-dropdown')) return;
     e.preventDefault();
     if(e.ctrlKey || e.metaKey){
       // Zoom hacia el cursor

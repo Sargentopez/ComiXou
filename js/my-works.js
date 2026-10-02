@@ -87,10 +87,12 @@ async function _mcLoadLocalThumb(comicId) {
   if (_mcThumbCache.has(comicId)) return;
   _mcThumbCache.set(comicId, ''); // marca como en progreso
   try {
-    const full = WorkStore.getByIdFull ? await WorkStore.getByIdFull(comicId) : null;
-    // coverDataUrl (con el texto horneado) si existe — obras guardadas antes
-    // de este cambio no lo tienen, panels[0].dataUrl sigue de respaldo.
-    const url = full ? (full.coverDataUrl || (full.panels && full.panels[0] ? full.panels[0].dataUrl : '')) : '';
+    // v41.43: WorkStore.getCover lee un archivito aparte con SOLO la portada
+    // (coverDataUrl con el texto horneado si existe, si no la imagen de la hoja
+    // 1 — la misma regla de antes). Antes aquí se leía y parseaba el archivo
+    // pesado ENTERO de la obra (decenas de MB) para pintar 72×72 px, y se
+    // repetía tras cada guardado (ver _mcOnStoreChange).
+    const url = WorkStore.getCover ? await WorkStore.getCover(comicId) : '';
     if (!url) return;
     _mcThumbCache.set(comicId, url);
     const div = document.querySelector(`[data-local-thumb-id="${comicId}"]`);
@@ -118,13 +120,20 @@ function _mcOnStoreChange(e) {
   const id = e?.detail?.id;
   if (!id) return;
   _mcThumbCache.delete(id);
+  const local0 = WorkStore.getById(id);
+  if (local0 && local0.supabaseId && local0.supabaseId !== id) _mcThumbCache.delete(local0.supabaseId);
+  // v41.43: con el editor abierto (donde ocurre casi todo guardado) la lista de
+  // "Mis obras" ni existe en pantalla — recargar aquí la miniatura era trabajo
+  // tirado (y, antes, una lectura del archivo entero tras cada guardado).
+  // Invalidada la caché (arriba), la lista la vuelve a pedir sola, perezosamente,
+  // cuando se muestre (ver _mcRenderList / _thumbObs). Solo se recarga ahora si
+  // la fila de esta obra está visible.
   setTimeout(() => {
-    _mcLoadLocalThumb(id);
     const local = WorkStore.getById(id);
-    if (local && local.supabaseId && local.supabaseId !== id) {
-      _mcThumbCache.delete(local.supabaseId);
-      _mcLoadThumb(local.supabaseId);
-    }
+    const _rowVisible = !!document.querySelector(`.work-row[data-id="${CSS.escape(id)}"]`);
+    if (!_rowVisible) return;
+    _mcLoadLocalThumb(id);
+    if (local && local.supabaseId && local.supabaseId !== id) _mcLoadThumb(local.supabaseId);
   }, 400);
 }
 window.addEventListener('cx:store', _mcOnStoreChange);
@@ -1567,6 +1576,12 @@ async function _mcOpenWorkForEdit(id) {
     } catch(_) { /* no crítico: edLoadProject lo descartará por fecha */ }
   }
 
+  // v41.43: la obra ya está leída y parseada aquí — se la entrega al editor para
+  // que no la lea otra vez entera (solo si NO se acaba de descargar de la nube:
+  // en ese caso el contenido cambió y el editor la lee de OPFS como siempre).
+  if (!_needsDownload && comicToEdit && comicToEdit.editorData && WorkStore.stashFull) {
+    WorkStore.stashFull(comicToEdit);
+  }
   // Guardar qué proyecto editar y navegar al editor
   sessionStorage.setItem('cx_edit_id', id);
   Router.go('editor');

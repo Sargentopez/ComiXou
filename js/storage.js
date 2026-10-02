@@ -132,6 +132,12 @@ const WorkStore = (() => {
     const list = getAll();
     const idx  = list.findIndex(c => c.id === comic.id);
     const light = _stripHeavy(comic);
+    // v41.43: cualquier escritura del archivo pesado (editorData) deja en él el estado
+    // de sincronización con la nube de cada hoja (pd._dirtyCloud, ver
+    // _edSaveProjectInner) — es lo que manda, así que se anula el estado «posterior»
+    // que el guardado en nube anota solo en el índice ligero (ver updateMeta y
+    // cloudSync en edLoadProject).
+    if (comic.editorData) light.cloudSync = null;
     if (idx >= 0) {
       list[idx] = { ...list[idx], ...light, updatedAt: new Date().toISOString() };
     } else {
@@ -150,6 +156,21 @@ const WorkStore = (() => {
     _fsWrite(comic.id, comic).catch(() => {});
 
     return _opfsPromise.then(() => comic);
+  }
+
+  // v41.43 — actualiza SOLO campos ligeros del registro (índice en localStorage),
+  // sin tocar ni leer el archivo pesado de OPFS. Para cambios de metadatos que
+  // antes obligaban a releer y reescribir la obra ENTERA (decenas de MB) solo para
+  // cambiar un par de campos: p.ej. tras subir a la nube, anotar supabaseId /
+  // cloudSavedAt / cloudSync. `patch` no debe contener editorData/panels/portada.
+  function updateMeta(id, patch) {
+    const list = getAll();
+    const idx  = list.findIndex(c => c.id === id);
+    if (idx < 0) return false;
+    list[idx] = { ...list[idx], ...patch, updatedAt: new Date().toISOString() };
+    saveAll(list);
+    _emit('save', id);
+    return true;
   }
 
   function remove(id) {
@@ -253,21 +274,101 @@ const WorkStore = (() => {
     } catch(_) {}
   }
 
-  /* ── getByIdFull: async — devuelve comic completo con editorData ── */
-  async function getByIdFull(id) {
-    const meta = getById(id);
-    if (!meta) return null;
-    // Seguridad: verificar que la obra pertenece al usuario actual
+  // Seguridad: la obra debe pertenecer al usuario actual (compartido por
+  // getByIdFull y getCover).
+  function _ownsMeta(meta) {
     const _sess = (() => { try { return JSON.parse(localStorage.getItem('cs_session') || 'null'); } catch(_) { return null; } })();
     if (_sess && _sess.id && meta.userId && meta.userId !== '_anon_' && meta.userId !== _sess.id && meta.username !== _sess.username) {
       console.warn('[WorkStore] Acceso denegado: obra pertenece a otro autor.');
-      return null;
+      return false;
+    }
+    return true;
+  }
+
+  /* ── v41.43 — Entrega de la obra ya leída (evita leer DOS veces el archivo al editar) ──
+     "Editar" en Mis obras ya lee la obra entera (para decidir si descargar de la nube,
+     ver _mcOpenWorkForEdit) y, justo después, el editor (edLoadProject) la volvía a
+     leer y parsear entera: en una obra de decenas de MB, la lectura + JSON.parse
+     duplicada cuesta del orden de 1 s en un móvil medio. Ranura única, con caducidad
+     y comprobada contra el registro ligero (updatedAt): si algo ha guardado la obra
+     entretanto, no se usa y se vuelve a leer como siempre. */
+  let _stash = null;
+  function stashFull(comic) {
+    if (!comic || !comic.id || !comic.editorData) return;
+    const meta = getById(comic.id);
+    if (!meta) return;
+    const s = { id: comic.id, stamp: meta.updatedAt || null, comic };
+    _stash = s;
+    setTimeout(() => { if (_stash === s) _stash = null; }, 120000); // no retener decenas de MB si no se usa
+  }
+  function _takeStash(id) {
+    const s = _stash;
+    _stash = null;
+    if (!s || s.id !== id) return null;
+    const meta = getById(id);
+    if (!meta || (meta.updatedAt || null) !== s.stamp) return null; // algo la ha guardado entretanto
+    const c = s.comic;
+    return { ...meta, editorData: c.editorData, panels: c.panels || [], coverDataUrl: c.coverDataUrl || null };
+  }
+
+  /* ── getByIdFull: async — devuelve comic completo con editorData ── */
+  async function getByIdFull(id, opts) {
+    const meta = getById(id);
+    if (!meta) return null;
+    // Seguridad: verificar que la obra pertenece al usuario actual
+    if (!_ownsMeta(meta)) return null;
+    if (opts && opts.useStash) {
+      const _s = _takeStash(id);
+      if (_s) return _s;
     }
     try {
       const full = await _opfsRead(id);
       if (full) return { ...meta, ...full };
     } catch(e) {}
     return meta;
+  }
+
+  /* ── v41.43 — Portada/miniatura SIN leer el archivo pesado ──
+     "Mis obras" solo necesita la imagen de portada, pero su única fuente era el
+     archivo pesado entero (editorData + todas las hojas): tras CADA guardado se
+     releía y parseaba completo solo para pintar un cuadrado de 72 px. Ahora
+     _opfsWrite deja un archivito aparte (<id>.cover.txt, solo la URL de datos) y
+     esto lo lee directamente. Obras guardadas antes de v41.43 no lo tienen: la
+     primera vez se lee el archivo pesado y se deja creado el pequeño. */
+  async function getCover(id) {
+    const meta = getById(id);
+    if (!meta || !_ownsMeta(meta)) return '';
+    const c = await _opfsReadCover(id);
+    if (c !== null) return c;
+    try {
+      const full = await _opfsRead(id);
+      if (!full) return '';
+      const url = full.coverDataUrl || (full.panels && full.panels[0] && full.panels[0].dataUrl) || '';
+      const dir = await _opfsRoot();
+      if (dir) await _opfsWriteCover(dir, id, url);
+      return url;
+    } catch(e) { return ''; }
+  }
+
+  /* ── v41.43 — Verificación barata de la última escritura ──
+     Antes del guardado local se releía y parseaba la obra ENTERA solo para
+     comprobar que "estaba ahí". Comprobación estándar de integridad de una
+     escritura: el archivo existe, su tamaño es el esperado y termina en la llave
+     de cierre del JSON (un volcado truncado no). */
+  async function verifySaved(id) {
+    const rec = _lastWrite.get(id);
+    if (!rec || !rec.ok) return false;
+    const dir = await _opfsRoot();
+    if (!dir) return false;
+    try {
+      const fh   = await dir.getFileHandle(id + '.json');
+      const file = await fh.getFile();
+      // Ni más corto que lo escrito (volcado truncado) ni absurdamente más largo
+      // (UTF-8 ocupa como mucho 3 bytes por unidad de la cadena).
+      if (file.size < rec.minBytes || file.size > rec.minBytes * 3) return false;
+      const tail = await file.slice(Math.max(0, file.size - 16)).text();
+      return /\}\s*$/.test(tail);
+    } catch(e) { return false; }
   }
 
   /* ── Revisión de la nube en la que se basa la copia local (v40.49) ──
@@ -330,9 +431,34 @@ const WorkStore = (() => {
     } catch(e) { return null; }
   }
 
+  // Última escritura del archivo pesado por obra — {ok, minBytes} — la usa
+  // verifySaved() (v41.43) para comprobar la integridad sin releer el archivo.
+  const _lastWrite = new Map();
+  const _COVER_SUFFIX = '.cover.txt';
+
+  async function _opfsWriteCover(dir, id, url) {
+    try {
+      const fh = await dir.getFileHandle(id + _COVER_SUFFIX, { create: true });
+      const ws = await fh.createWritable();
+      await ws.write(url || '');
+      await ws.close();
+    } catch(e) { /* best-effort: sin este archivo getCover recurre al pesado */ }
+  }
+
+  // null = no existe (obra guardada antes de v41.43); '' = existe y no hay portada
+  async function _opfsReadCover(id) {
+    const dir = await _opfsRoot();
+    if (!dir) return null;
+    try {
+      const fh   = await dir.getFileHandle(id + _COVER_SUFFIX);
+      const file = await fh.getFile();
+      return await file.text();
+    } catch(e) { return null; }
+  }
+
   async function _opfsWrite(id, comic) {
     const dir = await _opfsRoot();
-    if (!dir) return false;
+    if (!dir) { _lastWrite.set(id, { ok: false }); return false; }
     try {
       // Guardar solo los datos pesados
       const payload = {
@@ -340,12 +466,22 @@ const WorkStore = (() => {
         panels:       comic.panels       || [],
         coverDataUrl: comic.coverDataUrl || null,
       };
+      const json = JSON.stringify(payload);
       const fh = await dir.getFileHandle(id + '.json', { create: true });
       const ws = await fh.createWritable();
-      await ws.write(JSON.stringify(payload));
+      await ws.write(json);
       await ws.close();
+      // Cota inferior de bytes para verifySaved: UTF-8 ocupa SIEMPRE ≥ 1 byte por
+      // unidad de la cadena (justo 1 en ASCII, que es casi todo: base64). No se
+      // construye un Blob solo para medir los bytes exactos — medido: new Blob() de
+      // 25 MB cuesta más que la propia escritura (~0,4 s frente a ~0,25 s con la CPU ×4 más lenta).
+      _lastWrite.set(id, { ok: true, minBytes: json.length });
+      // Portada aparte (pequeña) — ver getCover. Misma regla que usaba "Mis obras":
+      // coverDataUrl (con texto horneado) y, si no hay, la imagen de la hoja 1.
+      await _opfsWriteCover(dir, id,
+        comic.coverDataUrl || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl) || '');
       return true;
-    } catch(e) { console.warn('[OPFS] write error:', e); return false; }
+    } catch(e) { _lastWrite.set(id, { ok: false }); console.warn('[OPFS] write error:', e); return false; }
   }
 
   async function _opfsRead(id) {
@@ -363,6 +499,8 @@ const WorkStore = (() => {
     const dir = await _opfsRoot();
     if (!dir) return;
     try { await dir.removeEntry(id + '.json'); } catch(e) {}
+    try { await dir.removeEntry(id + _COVER_SUFFIX); } catch(e) {}
+    _lastWrite.delete(id);
   }
 
   // Mueve a la carpeta OPFS del usuario ya autenticado el archivo pesado
@@ -410,6 +548,9 @@ const WorkStore = (() => {
       // huérfanos en '_anon_' que no se borrarían nunca — _purgeLocalData
       // ya no encontraría esta obra ahí una vez reclamada por el usuario).
       try { await anonDir.removeEntry(id + '.json'); } catch(_) {}
+      // v41.43: la portada pequeña de invitado ya no corresponde a esa carpeta;
+      // en la del usuario se regenera sola la primera vez (ver getCover).
+      try { await anonDir.removeEntry(id + _COVER_SUFFIX); } catch(_) {}
       return true;
     } catch(e) {
       console.warn('[WorkStore] migrateAnonToUser:', e);
@@ -586,6 +727,10 @@ const WorkStore = (() => {
     getAll,
     getById,
     getByIdFull,
+    getCover,
+    verifySaved,
+    stashFull,
+    updateMeta,
     save,
     remove,
     createNew,
