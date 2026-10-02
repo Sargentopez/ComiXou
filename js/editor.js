@@ -961,7 +961,16 @@ let _edOnionPrevCanvas = null, _edOnionNextCanvas = null; // canvas cacheado cor
 let _edOnionRedrawQueued = false; // v40.59: ya hay un repintado diferido pendiente tras vaciar la caché (ver _edOnionInvalidatePage)
 // v41.45 — mezcla ya compuesta de las dos hojas contiguas en espacio de PANTALLA (se reutiliza
 // mientras no cambien las hojas contiguas ni la cámara). Ver _edDrawOnionGhost.
-let _edOnionOv = { canvas: null, ctx: null, prev: null, next: null, z: 0, x: 0, y: 0, ok: false };
+let _edOnionOv = { canvas: null, ctx: null, prev: null, next: null, z: 0, x: 0, y: 0, ok: false, a: 0, both: false };
+// v41.47 — INTENSIDAD del fantasma: opacidad TOTAL con la que las hojas contiguas se superponen a la hoja en
+// vigor (0,10–0,60; por defecto 0,40). Preferencia del usuario, no de la hoja → se recuerda en localStorage
+// (clave cxOnionAlpha) y se ajusta con el deslizador del menú Animar. Con dos contiguas, cada una aporta
+// la mitad (ver _edDrawOnionGhost): la hoja en vigor conserva SIEMPRE el (1 − intensidad) de su aspecto allí
+// donde las contiguas son opacas. Antes (v39.72–v41.45) era 0,5 FIJO por contigua: con dos contiguas
+// opacas la hoja en vigor quedaba al 25 % (Alberto: «ahora se le está aplicando también transparencia»).
+const _ED_ONION_ALPHA_MIN = 0.1, _ED_ONION_ALPHA_MAX = 0.6, _ED_ONION_ALPHA_DEFAULT = 0.4;
+let _edOnionAlpha = _ED_ONION_ALPHA_DEFAULT;
+try { const _oa = parseFloat(localStorage.getItem('cxOnionAlpha')); if (_oa >= _ED_ONION_ALPHA_MIN && _oa <= _ED_ONION_ALPHA_MAX) _edOnionAlpha = _oa; } catch(_) {}
 let edRules = [];          // array de reglas de la hoja actual
 let _edCanvasTop = 0;      // top del canvas en viewport — cacheado en edFitCanvas
 let edRulesHidden = false; // true = guías ocultas (invisibles, no seleccionables, sin snap)
@@ -6184,7 +6193,7 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   }
   // ── Transparencia hojas contiguas (onion skin) — v41.45: ENCIMA de todo ──────────
   // Ayuda de dibujo para animación: fotografía fija de la hoja anterior y posterior (si
-  // las hay) al 50% de opacidad SIEMPRE — no pasa por _isDimmed/dimFactor (eso solo
+  // las hay) con la intensidad _edOnionAlpha SIEMPRE — no pasa por _isDimmed/dimFactor (eso solo
   // dimea las capas de la hoja EN VIGOR), así que no le afecta el dimming al seleccionar
   // o editar un objeto. No son capas reales: no están en edLayers, así que no son
   // seleccionables, no salen en miniaturas ni se cuentan al crear la animación
@@ -9490,8 +9499,10 @@ function _edOnionReleaseAll() {
 // vigor (se llama al final de _edRenderFrame y desde los caminos rápidos del arrastre).
 // Antes se pintaba justo tras el fondo, debajo de las capas: una imagen pegada opaca lo
 // tapaba y la transparencia no servía de nada (fallo reportado por Alberto). Cada hoja
-// contigua, al 50%, sobre fondo transparente (ver _pgRenderThumbLive con full=true): solo
-// se ve su contenido real. Debajo de los overlays de UI (selección, cuadrícula, marco).
+// contigua, sobre fondo transparente (ver _pgRenderThumbLive con full=true): solo se ve su
+// contenido real. Intensidad: _edOnionAlpha (v41.47; antes 50 % FIJO por contigua, que con dos
+// contiguas opacas dejaba la hoja en vigor al 25 %). Debajo de los overlays de UI (selección,
+// cuadrícula, marco).
 // · Con el cuentagotas activo no se pinta: él lee los píxeles del lienzo y debe recibir
 //   los colores reales de la hoja, no la mezcla con el fantasma.
 // · La mezcla de las dos hojas se compone UNA vez en un lienzo del tamaño de la pantalla
@@ -9520,17 +9531,28 @@ function _edDrawOnionGhost(ctx) {
     o.ctx = o.canvas.getContext('2d');
     o.ok = false;
   }
-  if (!o.ok || o.prev !== P || o.next !== N ||
+  // v41.47 — intensidad (ver _edOnionAlpha) repartida entre las contiguas que EXISTEN (no las que ya
+  // tengan el lienzo listo: así la intensidad no «salta» mientras la otra se regenera). Con dos, cada
+  // una pesa la mitad; con una sola, pesa todo. Las dos se SUMAN con 'lighter' (suma de colores
+  // premultiplicados) en vez de apilarse con source-over: apilarlas atenuaba la de abajo con la de arriba,
+  // así que la anterior pesaba menos que la siguiente donde se solapan. Con la suma pesan IGUAL en todas
+  // partes, y donde las contiguas son opacas la hoja en vigor conserva exactamente (1 − intensidad).
+  const _hasPrev = edCurrentPage > 0, _hasNext = edCurrentPage < edPages.length - 1;
+  const _both = _hasPrev && _hasNext;
+  if (!o.ok || o.prev !== P || o.next !== N || o.a !== _edOnionAlpha || o.both !== _both ||
       o.z !== edCamera.z || o.x !== edCamera.x || o.y !== edCamera.y) {
     const g = o.ctx;
+    const s = _both ? _edOnionAlpha / 2 : _edOnionAlpha; // peso de cada contigua sobre la hoja en vigor
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, cw, ch);
     g.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-    g.globalAlpha = 0.5;
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = s;
     if (P) g.drawImage(P, 0, 0);
     if (N) g.drawImage(N, 0, 0);
     g.globalAlpha = 1;
-    o.prev = P; o.next = N;
+    g.globalCompositeOperation = 'source-over';
+    o.prev = P; o.next = N; o.a = _edOnionAlpha; o.both = _both;
     o.z = edCamera.z; o.x = edCamera.x; o.y = edCamera.y;
     o.ok = true;
   }
@@ -9638,7 +9660,7 @@ function edLoadPage(idx){
   // la que se navega, no arrastrar el de la que se deja (ver edInitRules,
   // _edRenderFrame).
   const _onionChkNav = $('dd-onionskin-check');
-  if (_onionChkNav) _onionChkNav.checked = !!edPages[idx]?._onionSkinEnabled;
+  if (_onionChkNav) { _onionChkNav.checked = !!edPages[idx]?._onionSkinEnabled; _edOnionSyncUI(); }
   const _po = edPages[idx]?.orientation || 'vertical';
   if(_po !== edOrientation){
     edOrientation = _po;
@@ -25831,10 +25853,10 @@ function _edUpdateScrollArrows(scroll, arrowL, arrowR) {
 function edInitRules() {
   $('dd-rule-add')?.addEventListener('click', () => {
     _edRuleAdd();
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
   });
   $('dd-rule-clear')?.addEventListener('click', () => {
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
     _edRuleClear();
   });
   $('dd-rule-toggle')?.addEventListener('click', () => {
@@ -25848,7 +25870,7 @@ function edInitRules() {
       edRulesHidden = true;
     }
     _edRuleToggleSync();
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
     edRedraw();
   });
   $('dd-rule-lock-all')?.addEventListener('click', () => {
@@ -25857,7 +25879,7 @@ function edInitRules() {
     edRules.forEach(r => { if(!r.locked){ r.locked = true; _count++; } });
     // Bloquear también los nodos compartidos
     edRuleNodes.forEach(n => { if(!n.locked){ n.locked = true; } });
-    document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+    edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
     edRedraw();
   });
 
@@ -25870,7 +25892,7 @@ function edInitRules() {
       edGridVisible = _gridChk.checked;
       try { localStorage.setItem('cxGridVisible', edGridVisible ? '1' : '0'); } catch(e) {}
       // Cerrar dropdown pero sin consumir el click de la label
-      document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+      edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
       edRedraw();
     });
   }
@@ -25888,10 +25910,35 @@ function edInitRules() {
     _onionChk.addEventListener('change', () => {
       const _p = edPages[edCurrentPage];
       if (_p) _p._onionSkinEnabled = _onionChk.checked;
-      document.querySelectorAll('.ed-dropdown').forEach(d => d.classList.remove('open'));
+      edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
+      _edOnionSyncUI();
       edRedraw();
     });
   }
+  // v41.47 — deslizador «Opacidad» (intensidad del fantasma). Se queda dentro del menú Animar: no es un
+  // botón/etiqueta, así que arrastrarlo no cierra el menú y el lienzo se repinta en vivo detrás.
+  const _onionSl = $('dd-onionskin-alpha');
+  if (_onionSl) {
+    _onionSl.addEventListener('input', () => {
+      const _v = Math.max(_ED_ONION_ALPHA_MIN, Math.min(_ED_ONION_ALPHA_MAX, (+_onionSl.value) / 100));
+      _edOnionAlpha = _v;
+      try { localStorage.setItem('cxOnionAlpha', String(_v)); } catch(_) {}
+      _edOnionSyncUI();
+      edRedraw(); // _edDrawOnionGhost recompone la mezcla: la intensidad forma parte de su clave de caché
+    });
+  }
+  _edOnionSyncUI();
+}
+
+// v41.47 — Refleja en el menú Animar el estado del papel cebolla de LA HOJA EN VIGOR: el deslizador de
+// opacidad solo tiene sentido (y solo se puede mover) con la transparencia activada en esa hoja.
+function _edOnionSyncUI() {
+  const _chk = $('dd-onionskin-check'), _sl = $('dd-onionskin-alpha'), _val = $('dd-onionskin-alpha-val'), _row = $('dd-onionskin-alpha-row');
+  const _on = !!(_chk && _chk.checked);
+  const _pct = Math.round(_edOnionAlpha * 100);
+  if (_sl) { if (+_sl.value !== _pct) _sl.value = _pct; _sl.disabled = !_on; }
+  if (_val) _val.textContent = _pct + '%';
+  if (_row) _row.style.opacity = _on ? '1' : '.45';
 }
 
 // ── Snap a reglas durante el drag ────────────────────────────────────────────
@@ -27985,6 +28032,16 @@ function edInitShapeBar() {
     const panel = $('esb-slider-panel');
     if (panel && panel.style.display === 'flex' && !panel.contains(e.target) &&
         e.target.id !== 'esb-opacity' && e.target.id !== 'esb-curve' && e.target.id !== 'edb-opacity') {
+      // v41.47 — EL SLIDER DE CURVATURA NO SE CIERRA AL TOCAR FUERA. Este cierre (v40.70) está pensado
+      // para el slider de OPACIDAD, que es un popup puntual. El de curvatura es parte del MODO NODOS: se
+      // abre al activar NODOS y debe quedarse hasta desactivarlo (ver el listener de #esb-curve:
+      // «El slider permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo»), porque su
+      // trabajo es precisamente ajustar el nodo que se acaba de TOCAR EN EL LIENZO — y ese toque es un
+      // pointerdown «fuera» del panel. Con este cierre, elegir un nodo apagaba el slider en el mismo
+      // instante (bug reportado por Alberto: «activar NODOS y seleccionar uno, no aparece el slider»;
+      // reproducido con eventos de puntero reales). Se sigue cerrando: al pulsar NODOS de nuevo, OK,
+      // Escape, ocultar la barra, o abrir otro popup de la barra (_edbCloseAllPopovers).
+      if (panel._mode === 'curve' && $('esb-curve')?.dataset.curveActive === '1') return;
       _esbHideSlider();
     }
   }, { passive: true });
@@ -28670,9 +28727,16 @@ async function edCloudSave() {
   // recargar la obra. Con el guard, 0% de fallos en la misma simulación.
   if (_edCloudSaving) { edToast(I18n.t('ed_alreadySavingCloud')); return; }
   _edCloudSaving = true;
+  // v41.46 — cronómetro de fases del guardado en nube (solo MIDE; lo enseña el botón 🩺, ver
+  // _edRunDiag). Alberto: un guardado con UNA hoja modificada tardó 12 s, y sin saber si el tiempo
+  // se iba en CPU del móvil (serializar/comprimir), en viajes de red o en megas subidos, cualquier
+  // arreglo sería a ciegas. SupabaseClient deja aparte el detalle de cada petición (_sbLastSave).
+  const _tAllCloud = performance.now();
+  const _cloudTm = window._edCloudTiming = { startedAt: new Date().toISOString(), ms: {}, info: {}, error: null };
   try {
     await _edCloudSaveInner();
   } catch(_e) {
+    _cloudTm.error = String((_e && _e.message) || _e).slice(0, 160);
     // Red de seguridad final: el try/catch/finally interno ya cubre errores
     // de la subida en sí, pero _edCalcProjectBytes/edSaveProject/la
     // reconstrucción de fallback incógnito-OPFS se ejecutan ANTES de ese
@@ -28682,6 +28746,7 @@ async function edCloudSave() {
     console.error('edCloudSave (excepción no controlada):', _e);
     edToast(I18n.t('ed_unexpectedSaveErr'));
   } finally {
+    _cloudTm.ms.total = Math.round(performance.now() - _tAllCloud);
     _edCloudSaving = false;
     _edSaveOverlayHide();
     _edCloudSavingStop();
@@ -28699,7 +28764,8 @@ async function edCloudSave() {
    una comprobación que falla no debe impedir guardar, y la subida ya da su propio error si
    de verdad no hay red. */
 async function _edCloudConflictCheck(comic) {
-  const res = { conflict: false, reason: '', localRev: null, cloudUpdatedAt: null, error: null };
+  const res = { conflict: false, reason: '', localRev: null, cloudUpdatedAt: null, error: null, ms: 0 };
+  const _tChk0 = performance.now(); // v41.46: lo que tardó la consulta en sí (ahora corre a la vez que el guardado local)
   try {
     res.localRev = (WorkStore.getCloudRev && WorkStore.getCloudRev(comic.id)) || null;
     if (!res.localRev) {
@@ -28725,6 +28791,7 @@ async function _edCloudConflictCheck(comic) {
     res.error = String((e && e.message) || e);
     res.reason = 'no se pudo consultar la nube: se guarda como siempre';
   }
+  res.ms = Math.round(performance.now() - _tChk0);
   window._edLastCloudSaveCheck = { ts: new Date().toISOString(), supabaseId: comic.supabaseId, choice: null, ...res };
   return res;
 }
@@ -28737,19 +28804,25 @@ async function _edCloudSaveInner() {
   // "no respondía". Cualquier salida temprana de aquí en adelante debe
   // ocultar el overlay explícitamente Y liberar _edCloudSaving (no hay
   // guardado real que lo sustituya).
-  _edSaveOverlayShow(I18n.t('ed_checkingSize'));
+  // v41.46: el texto inicial ya no es «Comprobando tamaño…»: esa comprobación pasó a hacerse DESPUÉS del
+  // guardado local (ver más abajo), así que lo primero que ocurre ahora es guardar.
+  _edSaveOverlayShow(I18n.t('ed_savingEllipsis'));
   // Mientras esta función siga en marcha (cualquiera de sus fases), el overlay
   // no debe cerrarse solo por el cierre automático de seguridad — solo cuando
   // esta misma función llame explícitamente a _edSaveOverlayHide() (éxito,
   // error, o salida temprana, todos ya cubiertos más abajo).
   _edSaveOverlayForceOpen = true;
+  const _TM = (window._edCloudTiming && window._edCloudTiming.ms) ? window._edCloudTiming : { ms: {}, info: {} };
+  const _tmEnd = (k, t0) => { _TM.ms[k] = Math.round(performance.now() - t0); };
 
-  // Comprobar tamaño antes de intentar subir — evita el viaje a la nube si la obra es demasiado grande
-  const _preSz = await _edCalcProjectBytes(true);
-  if (_preSz >= _ED_MAX_BYTES) {
-    edToast(I18n.t('ed_workTooLarge'), 5000);
-    return;
-  }
+  // v41.46 — La comprobación de tamaño ya NO va antes de guardar. Antes, _edCalcProjectBytes(true)
+  // re-serializaba cada hoja sucia (decodificar y recomprimir sus imágenes, recodificar sus capas de
+  // dibujo a PNG) solo para MEDIR, tiraba el resultado y a continuación edSaveProject volvía a hacer
+  // exactamente el mismo trabajo para guardarlo: el doble de CPU en el móvil, antes de tocar la red.
+  // Ahora se comprueba justo después del guardado local, con los tamaños que este ya deja calculados
+  // (todas las hojas quedan «limpias», así que no serializa nada). Se pierde solo que una obra
+  // demasiado grande ya no se rechaza ANTES de guardarla en el dispositivo: se guarda (que es lo que
+  // se quiere) y se rechaza solo la subida.
   if (!Auth?.currentUser?.()) {
     // Sin sesión: ofrecer login en lugar de rechazar.
     // v38.27 — unificado con edConfirm() (modal propio, usado en el resto
@@ -28793,9 +28866,33 @@ async function _edCloudSaveInner() {
     return;
   }
 
+  // v41.46 — «¿ha guardado otro dispositivo?» (ver _edCloudConflictCheck) es solo una consulta a la
+  // nube y no depende del guardado local: sale YA, y su viaje de red (cientos de ms en un móvil)
+  // transcurre mientras se guarda en el dispositivo, en vez de esperar a que este termine. El
+  // resultado se recoge más abajo, en el mismo punto donde antes se hacía la consulta, así que el
+  // orden de lo que ve el usuario no cambia: primero se guarda en local y solo después, si hay
+  // conflicto, se le pregunta.
+  const _metaPre = WorkStore.getById(edProjectId);
+  const _preSid = _metaPre && _metaPre.supabaseId;
+  let _chkEarlyP = null, _chkEarlyDone = false;
+  if (_preSid) {
+    _chkEarlyP = _edCloudConflictCheck({ id: edProjectId, supabaseId: _preSid });
+    _chkEarlyP.then(() => { _chkEarlyDone = true; }, () => { _chkEarlyDone = true; });
+  }
+
   // Guardar localmente primero para asegurar que editorData refleja el estado actual del canvas
-  _edSaveOverlayUpdate(I18n.t('ed_savingEllipsis'));
+  const _tLocal = performance.now();
   const _justSaved = await edSaveProject(true); // _keepOverlay: el overlay lo gestiona edCloudSave
+  _tmEnd('localSave', _tLocal);
+
+  // Comprobar tamaño antes de subir — evita el viaje a la nube si la obra es demasiado grande.
+  const _tSize = performance.now();
+  const _postSz = await _edCalcProjectBytes(true);
+  _tmEnd('sizeCheck', _tSize);
+  if (_postSz >= _ED_MAX_BYTES) {
+    edToast(I18n.t('ed_workTooLarge'), 5000);
+    return;
+  }
   _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloud'));
 
   // v41.43: la instantánea que acaba de devolver edSaveProject ES exactamente lo
@@ -28929,8 +29026,18 @@ async function _edCloudSaveInner() {
   //    sería falsa.
   let _forceFullUpload = false;
   if (_wasUploadedBefore) {
-    _edSaveOverlayUpdate(I18n.t('mc_checkingCloud'));
-    const _chk = await _edCloudConflictCheck(comic);
+    // v41.46: normalmente la consulta lanzada antes del guardado local ya ha terminado. Si el id de la
+    // obra cambiase entre medias (no debería), se descarta y se consulta de nuevo como siempre.
+    const _tChk = performance.now();
+    let _chk;
+    if (_chkEarlyP && comic.supabaseId === _preSid) {
+      if (!_chkEarlyDone) _edSaveOverlayUpdate(I18n.t('mc_checkingCloud'));
+      _chk = await _chkEarlyP;
+    } else {
+      _edSaveOverlayUpdate(I18n.t('mc_checkingCloud'));
+      _chk = await _edCloudConflictCheck(comic);
+    }
+    _tmEnd('conflictWait', _tChk);
     if (_chk.conflict) {
       _edSaveOverlayHide(); // el overlay bloqueante (z-index mayor) taparía el diálogo
       const _overwrite = await new Promise(res => {
@@ -28972,11 +29079,23 @@ async function _edCloudSaveInner() {
   _edCloudSavingStart = Date.now();
   _edCloudSavingUpdateBadge();
 
+  // Para el diagnóstico 🩺 (v41.46): qué se subió y en qué condiciones de red.
+  try {
+    const _nc = navigator.connection || null;
+    _TM.info = {
+      pages: edPages.length,
+      dirtyPages: _dirtyPageIndices === null ? 'todas (ruta completa)' : _dirtyPageIndices.map(n => n + 1).join(','), // número de hoja como lo ve el usuario (1 = primera)
+      forceFull: _forceFullUpload, firstUpload: !_wasUploadedBefore,
+      net: _nc ? { type: _nc.effectiveType || null, downlinkMbps: _nc.downlink ?? null, rttMs: _nc.rtt ?? null, saveData: !!_nc.saveData } : null,
+    };
+  } catch(_) {}
+
   try {
     // v40.49: revisión de la nube que deja ESTA subida. Se anota en cuanto se
     // escribe la fila works (callback, antes de subir las hojas: así una subida a
     // medias o una app cerrada no se toma luego por un cambio hecho desde otro
     // dispositivo) y otra vez al terminar. Ver WorkStore.getCloudRev.
+    const _tDraft = performance.now();
     const _saveRes = await SupabaseClient.saveDraft(comic, _dirtyPageIndices, (_rev) => {
       try { WorkStore.setCloudRev(comic.id, _rev); } catch(_) {}
     }, (_donePages, _totalPages) => {
@@ -28984,6 +29103,8 @@ async function _edCloudSaveInner() {
       // cuántas hojas se están subiendo, no solo el texto genérico fijo.
       _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloudProgress', { done: _donePages, total: _totalPages }));
     });
+    _tmEnd('saveDraft', _tDraft);
+    const _tPost = performance.now();
     try { if (_saveRes && _saveRes.updatedAt) WorkStore.setCloudRev(comic.id, _saveRes.updatedAt); } catch(_) {}
     edToast(I18n.t('ed_savedToCloud'));
     // Confirmar limpieza de guardado incremental en la nube SOLO ahora que se
@@ -29054,6 +29175,8 @@ async function _edCloudSaveInner() {
       });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
+    _tmEnd('post', _tPost);
+    const _tBib = performance.now();
     // Sincronizar biblioteca con la nube — solo si su contenido cambió de
     // verdad desde el último guardado en la nube DE ESTA OBRA.
     //
@@ -29135,7 +29258,9 @@ async function _edCloudSaveInner() {
         edToast(I18n.t('ed_bibSyncFailedWarn'), 4500);
       }
     }
+    _tmEnd('bibSync', _tBib);
   } catch(err) {
+    try { _TM.error = String((err && err.message) || err).slice(0, 160); } catch(_) {}
     _edSaveOverlayHide();
     edToast('⚠️ ' + (err.message || I18n.t('ed_errSaveCloudGeneric')));
     console.error('edCloudSave:', err);
@@ -29610,14 +29735,33 @@ async function _edSaveProjectInner(_keepOverlay){
   // ninguno, panels[0].dataUrl ya es idéntico visualmente y no hace falta
   // duplicar el render.
   let _coverDataUrl = panels[0]?.dataUrl || null;
+  let _coverCacheNext = null; // v41.46: portada recién renderizada, para memorizarla si el guardado se verifica
   if (edPages[0] && edPages[0].layers.some(l => l && (l.type === 'text' || l.type === 'bubble'))) {
-    // v41.43: la hoja 1 puede tener sus canvas pesados descargados (se salió de
-    // ella) aunque NO esté sucia (no se reserializa arriba) — misma corrección
-    // que arriba: reconstruir solo para renderizar y soltar sin recodificar.
-    const _releaseCover = _coverRelease || await _edTempLoadPage(0);
-    _coverRelease = null;
-    _coverDataUrl = edRenderPage(edPages[0], true);
-    _releaseCover();
+    // v41.46 — La portada con texto se re-renderizaba en CADA guardado (reconstruir los canvas pesados
+    // de la hoja 1 si se había salido de ella, dibujarla entera con sus textos y recodificar el JPEG),
+    // incluso con la hoja 1 intacta: era trabajo de CPU repetido en cada guardado en nube. Si la
+    // serialización que se va a guardar para la hoja 1 es EXACTAMENTE la misma que la de la portada
+    // ya renderizada (mismo objeto: la hoja no se ha reserializado desde entonces, es decir, no ha
+    // cambiado) el resultado sería idéntico, así que se reutiliza. Cualquier cambio en la hoja 1, o
+    // en la estructura de la obra, genera un objeto nuevo y fuerza el render como siempre.
+    const _cc = window._edCoverCache;
+    if (_cc && _cc.pid === edProjectId && _cc.ser === _edPages[0] && _cc.url) {
+      _coverDataUrl = _cc.url;
+      if (_coverRelease) { _coverRelease(); _coverRelease = null; }
+    } else {
+      // v41.43: la hoja 1 puede tener sus canvas pesados descargados (se salió de
+      // ella) aunque NO esté sucia (no se reserializa arriba) — misma corrección
+      // que arriba: reconstruir solo para renderizar y soltar sin recodificar.
+      const _releaseCover = _coverRelease || await _edTempLoadPage(0);
+      _coverRelease = null;
+      _coverDataUrl = edRenderPage(edPages[0], true);
+      _releaseCover();
+      // Solo se memoriza si las fuentes ya estaban cargadas: un texto dibujado con la fuente de
+      // respaldo no debe quedarse como portada hasta que la hoja cambie.
+      if (!document.fonts || document.fonts.status === 'loaded') {
+        _coverCacheNext = { pid: edProjectId, ser: _edPages[0], url: _coverDataUrl };
+      }
+    }
   }
   const _editorDataObj = {
     orientation:edOrientation,
@@ -29656,6 +29800,7 @@ async function _edSaveProjectInner(_keepOverlay){
     // Instantánea de lo que acaba de quedar en disco, para que el guardado en
     // nube (_edCloudSaveInner) no tenga que releerlo del archivo.
     _savedSnapshot = { editorData: _editorDataObj, panels, coverDataUrl: _coverDataUrl };
+    if (_coverCacheNext) window._edCoverCache = _coverCacheNext; // v41.46: portada reutilizable (ver arriba)
     if(!_keepOverlay) _edSaveOverlayHide();
     edToast(I18n.t('ed_savedOk'));
     setTimeout(_edSizeCheck, 500); // actualizar banner tras guardar
@@ -29792,8 +29937,17 @@ function edRenderPage(page, withText){
   edCurrentPage = _savedPage;
   return tmp.toDataURL('image/jpeg',0.85);
 }
+// v41.46 — _edCmpFinal: la última llamada a _edCompressImageSrc llegó hasta el final (la imagen
+// estaba cargada y se recodificó) — su resultado es DEFINITIVO para ese origen y se puede reutilizar.
+// Si devolvió el original porque la imagen aún no estaba decodificada (o por una excepción), vale
+// false y NO debe memorizarse: en la próxima llamada podría comprimir de verdad.
+let _edCmpFinal = false;
+// Memoria por capa (WeakMap: muere con la capa y no ensucia el objeto, así que ninguna copia o
+// serialización genérica de la capa la arrastra): origen → resultado de la compresión.
+const _edSerCmpMemo = new WeakMap();
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
+  _edCmpFinal = false;
   if(!src) return src;
   // SVG: conservar siempre el original — es texto vectorial con transparencia inherente,
   // no necesita compresión y rasterizarlo a JPEG destruiría la transparencia
@@ -29818,10 +29972,12 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
       const d = cctx.getImageData(0, 0, w, h).data;
       let hasAlpha = false;
       for(let i=3; i<d.length; i+=4){ if(d[i]<255){ hasAlpha=true; break; } }
-      if(hasAlpha) return cv.toDataURL('image/png'); // preservar transparencia
+      if(hasAlpha){ const _png = cv.toDataURL('image/png'); _edCmpFinal = true; return _png; } // preservar transparencia
     }
-    return cv.toDataURL('image/jpeg', quality);
-  } catch(e) { return src; }
+    const _jpg = cv.toDataURL('image/jpeg', quality);
+    _edCmpFinal = true;
+    return _jpg;
+  } catch(e) { _edCmpFinal = false; return src; }
 }
 // Misma lógica EXACTA que _edCompressImageSrc (mismo maxPx/quality por
 // defecto, mismo criterio "PNG solo si hay transparencia real" — pedido
@@ -30686,7 +30842,24 @@ function edSerLayer(l, skipCompress){
   }
   if(l.type==='image'){
     const _rawSrc = l.src || (l.img ? l.img.src : '');
-    const compressedSrc = skipCompress ? _rawSrc : _edCompressImageSrc(_rawSrc);
+    // v41.46 — antes cada serialización (cada guardado local, y el cálculo de tamaño que lo precedía)
+    // volvía a decodificar la imagen ORIGINAL (puede ser una foto de varios megapíxeles), a dibujarla
+    // reducida en un canvas, a mirar píxel a píxel si tiene transparencia y a recodificarla — por cada
+    // imagen de cada hoja sucia, aunque no se hubiera tocado. Con el mismo origen el resultado es el
+    // mismo (mismo tamaño máximo y calidad), así que se reutiliza el de la vez anterior. Solo se
+    // memoriza un resultado definitivo (_edCmpFinal), nunca el «aún no cargada» que devuelve el original.
+    let compressedSrc;
+    if (skipCompress) {
+      compressedSrc = _rawSrc;
+    } else {
+      const _memo = _edSerCmpMemo.get(l);
+      if (_memo && _memo.src === _rawSrc) {
+        compressedSrc = _memo.out;
+      } else {
+        compressedSrc = _edCompressImageSrc(_rawSrc);
+        if (_edCmpFinal && _rawSrc) _edSerCmpMemo.set(l, { src: _rawSrc, out: compressedSrc });
+      }
+    }
     const _r={type:'image',x:l.x,y:l.y,width:l.width,height:l.height,rotation:l.rotation,src:compressedSrc,...op};
     if(l.groupId) _r.groupId=l.groupId;
     if(l._blendMode) _r._blendMode=l._blendMode;
@@ -48365,7 +48538,7 @@ async function _edRunDiag() {
     const _cc = window._edLastCloudSaveCheck;
     L('  ts: ' + _cc.ts + ' | supabaseId: ' + _cc.supabaseId);
     L('  revisión de este dispositivo: ' + (_cc.localRev || '∅') + ' | updated_at de la nube: ' + (_cc.cloudUpdatedAt || '∅'));
-    L('  resultado: ' + (_cc.conflict ? 'CONFLICTO' : 'sin conflicto') + ' — ' + _cc.reason + (_cc.error ? ' | error: ' + _cc.error : ''));
+    L('  resultado: ' + (_cc.conflict ? 'CONFLICTO' : 'sin conflicto') + ' — ' + _cc.reason + (_cc.error ? ' | error: ' + _cc.error : '') + (_cc.ms ? ' | consulta: ' + _cc.ms + ' ms' : ''));
     L('  respuesta del usuario: ' + (_cc.choice || '—'));
   } else {
     L('  (aún no se ha guardado en la nube en esta sesión)');
@@ -48441,6 +48614,69 @@ async function _edRunDiag() {
   } catch(e) { L('error: ' + e.message); }
   L('\n── Errores de guardado: ninguno ──');
   }
+  // v41.46 — (fuera del else de errores: se muestra SIEMPRE) dónde se va el tiempo de un guardado en nube (ver edCloudSave / SupabaseClient.saveDraft).
+  // Alberto: «12 segundos solo con una modificación en una hoja». Fases del editor + detalle de red.
+  L('\n── Último guardado en la nube: tiempos (v41.46) ──');
+  try {
+    const _ct = window._edCloudTiming;
+    if (_ct && _ct.ms && Object.keys(_ct.ms).length) {
+      const _m = _ct.ms, _fmt = k => (_m[k] != null ? _m[k] + ' ms' : '—');
+      L('  inicio: ' + _ct.startedAt + (_ct.error ? ' | ⚠️ ERROR: ' + _ct.error : ''));
+      L('  TOTAL ' + _fmt('total') + '  =  guardado local ' + _fmt('localSave') + ' + tamaño ' + _fmt('sizeCheck') +
+        ' + espera conflicto ' + _fmt('conflictWait') + ' + subida (saveDraft) ' + _fmt('saveDraft') +
+        ' + cierre ' + _fmt('post') + ' + biblioteca ' + _fmt('bibSync'));
+      const _i = _ct.info || {};
+      L('  hojas de la obra: ' + (_i.pages ?? '?') + ' | hojas subidas: ' + (_i.dirtyPages === '' ? '(ninguna)' : (_i.dirtyPages ?? '?')) +
+        ' | subida completa forzada: ' + (_i.forceFull ? 'sí' : 'no') + ' | primera subida: ' + (_i.firstUpload ? 'sí' : 'no'));
+      if (_i.net) L('  red según el navegador: ' + (_i.net.type || '?') + ' | bajada est. ' + (_i.net.downlinkMbps ?? '?') + ' Mbps | latencia est. ' + (_i.net.rttMs ?? '?') + ' ms' + (_i.net.saveData ? ' | ahorro de datos ACTIVADO' : ''));
+      else L('  red según el navegador: (no disponible en este navegador)');
+    } else {
+      L('  (aún no se ha guardado en la nube en esta sesión)');
+    }
+    const _sb = window._sbLastSave;
+    if (_sb) {
+      L('  subida a Supabase/R2 (' + _sb.kind + '): ' + _sb.totalMs + ' ms en total, ' + _sb.netBusyMs + ' ms con alguna petición en vuelo');
+      L('    ' + _sb.requests + ' peticiones | subido ' + _sb.upKB + ' KB | bajado ' + _sb.downKB + ' KB' +
+        (_sb.totalMs > 0 && _sb.upKB ? ' | ≈ ' + (_sb.upKB * 8 / _sb.totalMs).toFixed(2) + ' Mbps de subida efectiva media' : ''));
+      L('    subida por capas (solo se envían las capas que cambian): ' + (_sb.layerSha || '?'));
+      if (_sb.marks && _sb.marks.length) L('    hitos: ' + _sb.marks.map(x => x[0] + '@' + x[1]).join(' · '));
+      (_sb.pages || []).forEach(pg => {
+        L('    hoja ' + (pg.i + 1) + ': empezó a los ' + pg.t0 + ' ms · fila ' + (pg.panelMs ?? '—') + ' · capas preparadas ' + (pg.layersBuiltMs ?? '—') +
+          (pg.listLayersMs != null ? ' · lista de capas de la nube ' + pg.listLayersMs : '') + (pg.deltaMs != null ? ' · comparación ' + pg.deltaMs : '') +
+          ' · borrado capas ' + (pg.delLayersMs ?? '—') + ' · envío capas ' + (pg.layersPostMs ?? '—') + ' · fin ' + (pg.doneMs ?? '—') + ' ms');
+        L('      ' + (pg.layers ?? '?') + ' capas: ' + (pg.kept ?? 0) + ' ya estaban en la nube (' + (pg.keptKB ?? 0) + ' KB sin subir) · ' +
+          (pg.sent ?? pg.layers ?? '?') + ' enviadas (' + (pg.kb ?? '?') + ' KB de datos de capa) · modo ' + (pg.mode || '?'));
+      });
+      L('    peticiones más lentas (tag, inicio ms, duración ms, ↑KB, ↓KB, estado):');
+      (_sb.reqs || []).slice(0, 8).forEach(r => L('      ' + r.tag + ' · ' + r.t0 + ' · ' + r.ms + ' ms · ↑' + Math.round((r.up || 0) / 1024) + ' · ↓' + Math.round((r.down || 0) / 1024) + ' · ' + r.status));
+    }
+  } catch(_ctE) { L('  (error al mostrar los tiempos: ' + _ctE.message + ')'); }
+  // v41.47 — estado del papel cebolla y de la barra flotante vectorial (nodos / slider de curvatura), para
+  // contrastar lo que ve Alberto con lo que hace el código sin tener que preguntar cada detalle.
+  L('\n── Papel cebolla y nodos (v41.47) ──');
+  try {
+    const _pg = edPages[edCurrentPage];
+    const _cv = c => c ? (c.width + 'x' + c.height) : '—';
+    L('  papel cebolla: hoja ' + (edCurrentPage + 1) + '/' + edPages.length + ' · activado en esta hoja: ' + (_pg && _pg._onionSkinEnabled ? 'sí' : 'no') +
+      ' · intensidad total: ' + Math.round(_edOnionAlpha * 100) + '% (' + (edCurrentPage > 0 && edCurrentPage < edPages.length - 1 ? 'dos contiguas: ' + Math.round(_edOnionAlpha * 50) + '% cada una' : 'una contigua: ' + Math.round(_edOnionAlpha * 100) + '%') + ')');
+    L('  lienzos de las contiguas — anterior: ' + _cv(_edOnionPrevCanvas) + ' · siguiente: ' + _cv(_edOnionNextCanvas) +
+      ' · mezcla de pantalla: ' + (_edOnionOv.ok ? 'lista (' + _cv(_edOnionOv.canvas) + ', intensidad ' + Math.round((_edOnionOv.a || 0) * 100) + '%)' : 'sin componer') +
+      (window._edEyedropActive ? ' · cuentagotas activo (fantasma oculto)' : ''));
+    [edCurrentPage - 1, edCurrentPage + 1].forEach(ix => {
+      const pp = edPages[ix]; if (!pp) return;
+      const cnt = {}; (pp.layers || []).forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
+      L('  contigua ' + (ix + 1) + ': ' + (Object.keys(cnt).map(k => k + '×' + cnt[k]).join(', ') || '(vacía)'));
+    });
+    const _sp = $('esb-slider-panel'), _cb = $('esb-curve'), _sb = $('edShapeBar');
+    const _sel = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    L('  nodos: barra vectorial ' + (_sb && _sb.classList.contains('visible') ? 'visible' : 'oculta') +
+      ' · botón NODOS ' + (_cb && _cb.dataset.curveActive === '1' ? 'activo' : 'inactivo') +
+      ' · slider de la barra: ' + (_sp ? (_sp.style.display || '(sin estilo)') + ' modo=' + (_sp._mode || '—') : '(no existe)') +
+      ' · nodo seleccionado: ' + (window._edCurveVertIdx >= 0 ? window._edCurveVertIdx : '—') +
+      ' · radio actual: ' + (window._edCurveRadius ?? '—'));
+    L('  objeto seleccionado: ' + (_sel ? _sel.type + (_sel.points ? ' · ' + _sel.points.filter(Boolean).length + ' nodos' : '') + (_sel.cornerRadii ? ' · radios=' + JSON.stringify(_sel.cornerRadii) : '') : '(ninguno)') +
+      ' · modo nodos detectado por el editor: ' + (_edCurveModeActive() ? 'sí' : 'no'));
+  } catch(_onE) { L('  (error al mostrar papel cebolla/nodos: ' + _onE.message + ')'); }
   L('── PushHistory log ──');
   (window._edHistDiag||[]).forEach(m => L('  ' + m));
   L('edCamera: x=' + Math.round(edCamera.x) + ' y=' + Math.round(edCamera.y) + ' z=' + edCamera.z.toFixed(3) + ' | canvas: ' + (edCanvas?edCanvas.width+'x'+edCanvas.height:'null'));

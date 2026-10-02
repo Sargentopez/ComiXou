@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.45</footer>
+    <footer class="app-version">v41.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -344,7 +344,11 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — OCULTO de nuevo en v40.85 (petición de Alberto),
+        <!-- Botón de diagnóstico — REACTIVADO en v41.47 (petición de Alberto) para las investigaciones
+             abiertas: tiempos del guardado en la nube (sección «Último guardado en la nube» del
+             informe, v41.46), papel cebolla y nodos. Al cerrarlas, volver a ocultarlo como siempre
+             (meter el <button> de abajo entre marcadores de comentario; NO borrarlo).
+             Historial anterior: OCULTO de nuevo en v40.85 (petición de Alberto),
              cerrada la investigación para la que se reactivó en v40.80: el falso
              positivo de "cambios sin guardar" al salir tras usar "Convertir hojas
              en animación" y descartar sin guardar. Causa raíz encontrada y
@@ -363,9 +367,8 @@ Router.register('editor', {
              "REGISTRO DE CONTEO" (window._edTickLog), la herramienta que permitió
              encontrar la causa raíz de la investigación v40.80→v40.83.
              El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
-             nada ni da error mientras esté oculto.
+             nada ni da error mientras esté oculto. -->
         <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
-        -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -439,6 +442,14 @@ Router.register('editor', {
                 <input type="checkbox" id="dd-onionskin-check" style="width:16px;height:16px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
                 <span data-i18n="ed_onionSkin">Transparencia hojas contiguas</span>
               </label>
+              <!-- v41.47: intensidad del fantasma (preferencia global, se recuerda). Solo activo si la hoja en vigor
+                   tiene el papel cebolla activado. NO es un <button>/<label>: tocarlo no cierra el menú. -->
+              <div class="ed-dropdown-item" id="dd-onionskin-alpha-row" style="cursor:default;user-select:none;opacity:.45">
+                <span data-i18n="ed_onionOpacity" style="flex-shrink:0">Opacidad</span>
+                <input type="range" id="dd-onionskin-alpha" min="10" max="60" step="5" value="40" disabled
+                       style="flex:1;min-width:80px;accent-color:#1a8cff;cursor:pointer" data-i18n-aria="ed_onionOpacity" aria-label="Opacidad">
+                <span id="dd-onionskin-alpha-val" style="min-width:36px;text-align:right;font-variant-numeric:tabular-nums">40%</span>
+              </div>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
