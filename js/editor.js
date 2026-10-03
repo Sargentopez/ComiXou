@@ -7369,7 +7369,34 @@ function _edFocusOnLayer(la, instant) {
   // cursor mientras se escribe, comportamiento sin cambios respecto a antes.
   // Limitar el zoom máximo a 4x para evitar zooms absurdos en objetos muy pequeños.
   const targetZ = Math.min(zForReading, zForW, 4);
-  const newZ = Math.max(targetZ, 0.2);
+  // v41.51 — Alberto: "creo una caja de texto en PC y funciona como si fuera un
+  // móvil, manteniendo el tamaño visual del texto redimensionando la cámara. Eso
+  // es para cuando el tamaño está limitado. No sé qué se ha roto". Causa (medida
+  // con Playwright en 1280×800, ratón, sin teclado virtual: zoom 0,91 → 0,56 al
+  // crear una caja de fuente 30): aquí se aplicaba SIEMPRE el tamaño de lectura
+  // (`newZ = max(min(zForReading, zForW, 4), 0.2)`) — los reintentos de
+  // _ppKbSettle (50/200/400/650 ms tras abrir el panel) llaman a esta función
+  // con instant=true y nada comprobaba ya si había teclado virtual. La regla de
+  // Alberto (v40.64, ver _hasVirtualKeyboard/_hasEnoughSpace arriba) se perdió en
+  // una refactorización posterior (probablemente la de v40.94, que dejó esas dos
+  // constantes sin uso): "el zoom no se toca en PC en ningún caso, solo si existe
+  // teclado virtual".
+  //  · SIN teclado virtual (PC, tablet con teclado físico…): el zoom NO se toca
+  //    jamás — solo el paneo (centrado/seguimiento del cursor), que sí debe
+  //    seguir recalculándose. El tamaño de lectura no interviene en ningún caso.
+  //  · CON teclado virtual (espacio limitado): como en v40.64 — con espacio de
+  //    sobra se conserva el zoom heredado salvo que sea menor que el tamaño de
+  //    lectura o el objeto no quepa; sin espacio, tamaño de lectura (tope: ancho).
+  let newZ;
+  if (!_hasVirtualKeyboard) {
+    newZ = edCamera.z;
+  } else if (_hasEnoughSpace) {
+    const _inheritedTooSmall = edCamera.z < zForReading;
+    const _currentlyFits = zForW >= edCamera.z && zForH >= edCamera.z;
+    newZ = (!_inheritedTooSmall && _currentlyFits) ? edCamera.z : Math.max(targetZ, 0.2);
+  } else {
+    newZ = Math.max(targetZ, 0.2);
+  }
   const freeCx = freeLeft + freeW / 2;
   const freeCy = freeTop  + freeH / 2;
   const camOffX = freeCx - canvasRect.left;
@@ -42661,6 +42688,33 @@ let _gcpThumbIO = null;
 let _gcpThumbQueue = [];
 let _gcpThumbQueueRunning = false;
 
+// v41.50 — Reinicia TODO el estado de miniaturas del editor de animaciones.
+// Se llama al ABRIR y al CERRAR cada sesión de GCP (gcpOpen/_gcpDoClose).
+//
+// Bug reportado por Alberto: "tengo una obra con varias animaciones; he editado
+// una y luego otra, y al editar la segunda me aparece la fila de fotogramas de
+// la primera". Causa: estas cachés son de MÓDULO (viven toda la sesión de la
+// app, no la de una animación) y la de miniaturas COMPUESTAS
+// (_gcpComposedThumbCache) se indexa solo por "fotograma-tamaño" (p.ej.
+// "0-88"), sin nada que identifique a qué animación pertenece — así que la
+// segunda animación encontraba ya "calculadas" las miniaturas 0-88, 1-88, 2-88
+// de la primera y las pintaba tal cual. Las otras dos cachés (por objeto/frame
+// y de muestra) van por UID de capa, que es único por instancia y no choca
+// entre animaciones, pero se quedaban ocupando memoria (un canvas por celda
+// de la matriz) hasta cerrar la app. Una sesión de GCP no debe heredar nada de
+// la anterior: se vacían las tres, se corta el observador de visibilidad y se
+// descarta la cola de celdas pendientes (sus holders ya no están en el DOM).
+// _gcpThumbQueueRunning NO se toca a propósito: si hay una cadena de rAF viva
+// (_gcpProcessThumbQueue) se apaga sola al encontrar la cola vacía; ponerlo a
+// false aquí permitiría arrancar una segunda cadena en paralelo.
+function _gcpResetThumbState() {
+  _gcpThumbCache.clear();
+  _gcpComposedThumbCache.clear();
+  _gcpSampleThumbCache.clear();
+  if (_gcpThumbIO) _gcpThumbIO.disconnect();
+  _gcpThumbQueue.length = 0;
+}
+
 function _gcpQueueThumbRender(holder, la, fi, S) {
   holder._gcpLa = la; holder._gcpFi = fi; holder._gcpS = S;
   if (_gcpThumbIO) _gcpThumbIO.observe(holder);
@@ -45915,6 +45969,16 @@ function gcpOpen(edLayerIdx) {
   window._gcpFramesScrollLeft = 0; window._gcpFramesScrollTop = 0;
   window._gcpFrameHolds = [];
   _gcpRules = []; _gcpRuleNodes = []; _gcpRulesHidden = false; _gcpRuleDrag = null; _gcpRuleNodeId = 0;
+  // v41.50 — cada sesión de GCP arranca sin NADA de la anterior: miniaturas
+  // (la fila de fotogramas de una animación aparecía en la siguiente, ver
+  // _gcpResetThumbState) y la marca de "cambios sin guardar" (tras "Salir sin
+  // guardar" se quedaba a true y la siguiente animación, aunque no se tocara,
+  // preguntaba al cerrar). Restaurar una animación guardada (_gcpPushLayer con
+  // isRestore, más abajo) deja la marca a false a propósito, y la conversión
+  // de hojas en animación (_gcpCpBuildFromRangeConfirmed) la pone a true
+  // DESPUÉS de llamar a este gcpOpen, así que ninguna se ve afectada.
+  _gcpResetThumbState();
+  window._gcpDirty = false;
   // Cerrar barra de frames al abrir editor
   const _frBar = document.getElementById('gcpFramesBar');
   if (_frBar) { _frBar.style.display='none'; _frBar.innerHTML=''; }
@@ -46548,6 +46612,7 @@ function _gcpDoClose() {
   window._gcpActive = false;
   window._gcpEdLayerIdx = -1;
   _gcpClearHistory(); // borrar historial al salir del editor de animaciones
+  _gcpResetThumbState(); // v41.50 — liberar las miniaturas de esta sesión (y que la próxima no herede ninguna)
   _gs = null;
   gcpCanvas = null; gcpCtx = null;
   document.getElementById('editorShell')?.classList.remove('gcp-open');
