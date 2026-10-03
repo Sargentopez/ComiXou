@@ -6125,29 +6125,32 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   let _drawTmpRendered = false;
   let _reachedDraw = false; // true en cuanto el forEach pasa por el DrawLayer activo
 
-  // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
-  // Textos/bocadillos siempre al final (encima de todo).
-  // En modo draw, las capas temporales se insertan EN LA POSICIÓN del DrawLayer,
-  // de modo que capas superiores se sigan viendo (con dimming) por encima del dibujo.
-  edLayers.forEach((l,i)=>{
-    if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
-    if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
-    // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
-    if(_editingDraw && l.type==='draw'){
-      _reachedDraw = true;
-      if(drawTmpMode === 'inline') _edRenderDrawTmp(ctx);
-      _drawTmpRendered = true;
-      return;
+  // ── v41.49 — OBJETO EN EDICIÓN SIEMPRE VISIBLE, ENCIMA DE TODO ──────────────────────────
+  // Con el panel de propiedades de un objeto abierto ('props'/'text-props'), el objeto que se
+  // edita se pinta el ÚLTIMO — encima de todos los demás, textos y bocadillos incluidos — al
+  // 100 %, y el resto queda por debajo con el dimming de siempre. Antes se pintaba en su orden
+  // normal de capas, así que cualquier objeto situado por encima lo tapaba (un bocadillo sobre
+  // una imagen, un dibujo posterior…) y no se veía el efecto de los cambios del panel (Alberto,
+  // 41.48: "debe verse sin ser cubierto por ningún otro objeto"). Sus capas vinculadas
+  // (relleno/lápiz/acuarela de un trazo) suben con él, conservando su orden relativo. Solo en
+  // el render completo ('inline', sin capa excluida): las cachés de arrastre y de trazo siguen
+  // como estaban (en el arrastre la capa arrastrada ya se pinta aparte, encima de la caché).
+  // Es solo visual y temporal: no toca edLayers ni el orden real de capas, que se guarda igual.
+  let _liftSet = null;
+  if(_editingProps && !_editingDraw && !_editingShape && drawTmpMode === 'inline' && excludeLayerIdx < 0){
+    const _selLift = edLayers[edSelectedIdx];
+    if(_selLift && !_selLift.hidden){
+      _liftSet = new Set([_selLift]);
+      if(_linkedFill)       _liftSet.add(_linkedFill);
+      if(_linkedPencil)     _liftSet.add(_linkedPencil);
+      if(_linkedWatercolor) _liftSet.add(_linkedWatercolor);
     }
-    // En modo draw: las 4 capas del grupo se pintan como temporales, omitir aquí
-    if(_editingDraw && l.type==='fill'       && _linkedFill       && l===_linkedFill)       return;
-    if(_editingDraw && l.type==='pencil'     && _linkedPencil     && l===_linkedPencil)     return;
-    if(_editingDraw && l.type==='watercolor' && _linkedWatercolor && l===_linkedWatercolor) return;
-    // 'before'/'after': pintar solo la mitad correspondiente respecto al DrawLayer
-    if(drawTmpMode === 'before' && _reachedDraw)  return; // eso ya es zona "after"
-    if(drawTmpMode === 'after'  && !_reachedDraw) return; // eso es zona "before", ya cacheada
-    if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
-    const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
+  }
+
+  // Pintado de una capa NO textual (imagen, trazo, dibujo, forma, línea, relleno, lápiz,
+  // acuarela, gif) con su factor de dimming — extraído tal cual del forEach de abajo para
+  // poder reutilizarlo al pintar el objeto en edición al final (_liftSet).
+  const _paintNonTextLayer = (l, dimFactor) => {
     if(l.type==='fill' || l.type==='pencil' || l.type==='watercolor'){
       ctx.globalAlpha = (l.opacity??1)*dimFactor;
       l.draw(ctx);
@@ -6172,6 +6175,32 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
       const _og=l.opacity; l.opacity=(l.opacity??1)*dimFactor;
       l.draw(ctx); l.opacity=_og;
     }
+  };
+
+  // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
+  // Textos/bocadillos siempre al final (encima de todo).
+  // En modo draw, las capas temporales se insertan EN LA POSICIÓN del DrawLayer,
+  // de modo que capas superiores se sigan viendo (con dimming) por encima del dibujo.
+  edLayers.forEach((l,i)=>{
+    if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
+    if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
+    if(_liftSet && _liftSet.has(l)) return; // v41.49: el objeto en edición se pinta al final, encima de todo
+    // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
+    if(_editingDraw && l.type==='draw'){
+      _reachedDraw = true;
+      if(drawTmpMode === 'inline') _edRenderDrawTmp(ctx);
+      _drawTmpRendered = true;
+      return;
+    }
+    // En modo draw: las 4 capas del grupo se pintan como temporales, omitir aquí
+    if(_editingDraw && l.type==='fill'       && _linkedFill       && l===_linkedFill)       return;
+    if(_editingDraw && l.type==='pencil'     && _linkedPencil     && l===_linkedPencil)     return;
+    if(_editingDraw && l.type==='watercolor' && _linkedWatercolor && l===_linkedWatercolor) return;
+    // 'before'/'after': pintar solo la mitad correspondiente respecto al DrawLayer
+    if(drawTmpMode === 'before' && _reachedDraw)  return; // eso ya es zona "after"
+    if(drawTmpMode === 'after'  && !_reachedDraw) return; // eso es zona "before", ya cacheada
+    if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
+    _paintNonTextLayer(l, _isDimmed(l, i) ? 0.5 : 1);
   });
   // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo).
   // En modo 'before' se omiten — van encima del trazo, los pinta el modo 'after'.
@@ -6180,12 +6209,29 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
       if(l.hidden) return; // capa oculta por el usuario
       const i = edLayers.indexOf(l);
       if(i === excludeLayerIdx) return; // capa excluida (drag)
+      if(_liftSet && _liftSet.has(l)) return; // v41.49: el objeto en edición se pinta al final
       const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
       ctx.globalAlpha = _textGroupAlpha * dimFactor;
       l.draw(ctx, edCanvas);
     });
   }
   ctx.globalAlpha = 1;
+  // v41.49 — objeto en edición (panel de propiedades abierto) y sus capas vinculadas: lo último
+  // que se pinta, al 100 %, de modo que ningún otro objeto lo cubre (ver _liftSet arriba). Primero
+  // las capas no textuales en su orden relativo (relleno bajo el trazo, etc.); después, si el
+  // objeto es un texto/bocadillo, él mismo con la opacidad del grupo de textos de la hoja.
+  if(_liftSet){
+    edLayers.forEach(l=>{
+      if(!_liftSet.has(l) || l.hidden || l.type==='text' || l.type==='bubble') return;
+      _paintNonTextLayer(l, 1);
+    });
+    edLayers.forEach(l=>{
+      if(!_liftSet.has(l) || l.hidden || !(l.type==='text' || l.type==='bubble')) return;
+      ctx.globalAlpha = _textGroupAlpha;
+      l.draw(ctx, edCanvas);
+    });
+    ctx.globalAlpha = 1;
+  }
   // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final.
   // Solo en modo 'inline' (en 'before'/'after' no se compone el trazo aquí).
   if(_editingDraw && !_drawTmpRendered && drawTmpMode === 'inline'){
@@ -11047,6 +11093,16 @@ function _edIsDrawingEditActive(){
   if($('edDrawBar')?.classList.contains('visible') || $('edShapeBar')?.classList.contains('visible')) return true;
   return false;
 }
+// v41.49 — ¿Hay abierto el panel de PROPIEDADES de un objeto (modo 'props' o 'text-props')?
+// Comprobación en vivo del DOM (la misma que ya usa el bloqueo de arrastre de edOnMove y el
+// dimming de _edRenderFrame): en cuanto el panel se cierra, por el camino que sea, deja de
+// valer sola, sin ninguna bandera que mantener. Petición de Alberto: mientras un objeto tiene
+// abierto su panel de propiedades NO se puede seleccionar nada desde el lienzo — ni otro
+// objeto ni el propio que se edita; la selección solo vuelve a funcionar con el panel cerrado.
+function _edPropsPanelOpen(){
+  const p = $('edOptionsPanel');
+  return !!(p && p.classList.contains('open') && (p.dataset.mode === 'props' || p.dataset.mode === 'text-props'));
+}
 function _edShowContextMenu(e){
   edCloseMenus(); // cerrar cualquier otro menú/dropdown abierto antes de mostrar este
   const c = edCoords(e);
@@ -13494,6 +13550,7 @@ function edOnStart(e){
   // al principio de CUALQUIER gesto nuevo, para no arrastrar un candidato
   // obsoleto de un gesto anterior distinto.
   window._edCtxMenuTapCandidate = null;
+  window._edTextTapArm = null; // v41.49 — "toque sobre el texto = voy a escribir" (ver guarda del panel de propiedades más abajo)
   // Interceptar zoom rect antes de cualquier otra lógica
   if (_edZoomRectActive) {
     _edZoomRectStart = { sx: e.clientX, sy: e.clientY };
@@ -15268,6 +15325,39 @@ function edOnStart(e){
   // Si se está creando una línea nueva (_edLineLayer sin objeto seleccionado aún), bloquear selección
   if(_edLineLayer){ edRedraw(); return; }
 
+  // ── v41.49 — PANEL DE PROPIEDADES ABIERTO: NINGUNA SELECCIÓN DESDE EL LIENZO ───────────
+  // Petición de Alberto: "cuando se abre el panel de propiedades de un objeto no se debe poder
+  // seleccionar otro objeto, ni siquiera el objeto del que se están editando sus propiedades;
+  // la selección de objetos del canvas debe ocurrir solo cuando ningún objeto tiene abierto su
+  // panel de propiedades". Antes solo estaba bloqueado el TÁCTIL, en modo 'props' y solo si el
+  // toque caía sobre un objeto: con ratón o lápiz (y con 'text-props' en cualquier dispositivo)
+  // un clic cambiaba edSelectedIdx al objeto que quedara ENCIMA en ese punto — el panel seguía
+  // abierto pero sus controles pasaban a actuar sobre otro objeto — y un doble clic reabría el
+  // panel para ese otro. Aquí se absorbe el toque ANTES de mirar qué hay bajo él, para TODOS los
+  // punteros: ni selección, ni doble toque, ni candidato a menú contextual, ni candado, ni
+  // goma elástica (rubber band), ni deselección en vacío. Quedan intactos, porque se resuelven
+  // más arriba y no son "seleccionar": cámara/pinch, tiradores de redimensionar/rotar y de la
+  // cola del bocadillo del objeto en edición, cuentagotas, recorte y trayectoria. Se mueve
+  // por la cámara con dos dedos o con la rueda como siempre; el único modo de volver a poder
+  // seleccionar es cerrar el panel (✓ OK).
+  //
+  // EXCEPCIÓN — el TEXTO de bocadillos y cajas de texto (petición de Alberto: "en bocadillos y cajas
+  // de texto se debe detectar el toque sobre el texto, para saber que se va a escribir"). Tocar el
+  // texto del objeto editado no es "seleccionar": es avisar de que se va a escribir. En el modo
+  // completo ('props') el <textarea> in situ cubre exactamente el objeto y recibe el toque de forma
+  // nativa (foco + teclado), así que ahí no hace falta nada. En el panel intermedio ('text-props',
+  // el del botón «Editar bocadillo/texto») el toque se ARMA aquí y se resuelve en edOnEnd si
+  // termina sin arrastre ni segundo dedo → equivale a pulsar ese botón (la pulsación de soltar es
+  // el gesto de usuario que permite abrir el teclado en Android).
+  if(_edPropsPanelOpen()){
+    const _tpl = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if($('edOptionsPanel')?.dataset.mode === 'text-props' && _tpl && (_tpl.type === 'text' || _tpl.type === 'bubble')
+       && !_tpl.hidden && !_tpl.groupId && _tpl.contains(c.nx, c.ny)){
+      window._edTextTapArm = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now() };
+    }
+    edRedraw(); return;
+  }
+
   // Seleccionar: de mayor a menor índice (mayor = encima visualmente).
   // contains() de cada clase hace el hit-test correcto:
   //   - ImageLayer: bbox + alpha real del píxel (ignora zonas transparentes)
@@ -16746,6 +16836,17 @@ function edOnEnd(e){
   // sin pasar por el delete normal que está más abajo — origen de todos los "dedos fantasma".
   if(e && e.pointerId !== undefined && window._edActivePointers){
     window._edActivePointers.delete(e.pointerId);
+  }
+  // v41.49 — toque (sin arrastre) sobre el TEXTO del bocadillo/caja con el panel intermedio
+  // ('text-props') abierto = "voy a escribir": se abre el modo de escritura, igual que el botón
+  // «Editar bocadillo/texto». Armado en edOnStart (ver la guarda del panel de propiedades).
+  if(window._edTextTapArm){
+    const _tta = window._edTextTapArm; window._edTextTapArm = null;
+    if(e && e.type === 'pointerup' && e.pointerId === _tta.id && Math.hypot(e.clientX - _tta.x, e.clientY - _tta.y) <= 10
+       && (Date.now() - _tta.t) < 800 && edSelectedIdx >= 0 && $('edOptionsPanel')?.dataset.mode === 'text-props'){
+      edRenderOptionsPanel('props');
+      return;
+    }
   }
   // v38.08 — BUG CORREGIDO (reportado por Alberto: el extremo de una guía se
   // quedaba "pegado" al cursor sin soltarse nunca, sin más solución que
@@ -35056,6 +35157,9 @@ function EditorView_init(){
     if(window._edIsTouch || window._gcpActive) return;
     if(e.target !== edCanvas) return;
     if(_edIsDrawingEditActive()) return;
+    // v41.49 — con el panel de propiedades de un objeto abierto, el clic derecho tampoco
+    // selecciona nada (el menú contextual cambia la selección al objeto bajo el puntero).
+    if(_edPropsPanelOpen()) return;
     _edShowContextMenu(e);
   }, { passive: false });
   window._edListeners = [
@@ -36728,6 +36832,9 @@ function EditorView_init(){
     // Busca siempre desde el objeto ANCLA (el primero seleccionado), no desde el centroide.
     // Así se puede saltar objetos intermedios y seleccionar cualquier objeto no contiguo.
     if(e.shiftKey && !ctrl && (e.key==='ArrowUp'||e.key==='ArrowDown'||e.key==='ArrowLeft'||e.key==='ArrowRight')){
+      // v41.49 — con el panel de propiedades abierto Shift+flecha NO amplía la selección
+      // (sería seleccionar otro objeto desde el teclado); se absorbe la tecla sin más.
+      if(_edPropsPanelOpen()){ e.preventDefault(); return; }
       if(!window._edIsTouch && edLayers.length > 0){
         e.preventDefault();
         const pw = edPageW(), ph = edPageH();
@@ -48659,7 +48766,7 @@ async function _edRunDiag() {
   }
   // v41.46 — (fuera del else de errores: se muestra SIEMPRE) dónde se va el tiempo de un guardado en nube (ver edCloudSave / SupabaseClient.saveDraft).
   // Alberto: «12 segundos solo con una modificación en una hoja». Fases del editor + detalle de red.
-  L('\n── Último guardado en la nube: tiempos (v41.46 · biblioteca v41.48) ──');
+  L('\n── Último guardado en la nube: tiempos (v41.46 · biblioteca v41.49) ──');
   try {
     const _ct = window._edCloudTiming;
     if (_ct && _ct.ms && Object.keys(_ct.ms).length) {
@@ -48683,10 +48790,21 @@ async function _edRunDiag() {
           (_lb.hash ? ' · huella anotada ' + (_lb.hash.prev || '∅') + ' ≠ actual ' + _lb.hash.now + (_lb.hash.notedAtOpen ? ' (se había anotado al abrir)' : ' (no se anotó al abrir)') : ''));
         if (_bb && String(_bb.ts) >= String(_lb.ts)) {
           const _bm = _bb.ms || {};
-          L('    ' + _bb.rows + ' fila(s), ' + _bb.upKB + ' KB subidos · preparar ' + (_bm.prep ?? '—') + ' ms · borrar ' + (_bm.del ?? '—') +
-            ' ms (filas borradas: ' + (_bb.deleted ? _bb.deleted.map(n => n == null ? 'ERR' : n).join('+') : '—') + ') · insertar ' + (_bm.post ?? '—') +
-            ' ms · archivos huérfanos ' + _bb.orphans + (_bm.orphans != null ? ' (' + _bm.orphans + ' ms)' : '') + ' · total ' + (_bm.total ?? '—') + ' ms' +
-            (_bb.noReturning ? ' · ⚠️ el servidor no devolvió las filas borradas (borrado simple)' : '') + (_bb.error ? ' · ⚠️ ' + _bb.error : ''));
+          if (_bb.mode === 'diferencias') {
+            // v41.49 — biblioteca por diferencias: qué había en la nube, qué se conservó y qué se tocó (ver SupabaseClient.bibSync)
+            L('    modo: POR DIFERENCIAS · en la nube ' + _bb.cloud + ' fila(s) · locales ' + _bb.desired + ' → conservadas ' + _bb.kept + ' · nuevas ' + _bb.added +
+              ' · rehechas por cambio de contenido ' + _bb.replaced + ' · rehechas por cambio de carpeta ' + _bb.moved + ' · borradas ' + _bb.removed + ' · antiguas sin prefijo ' + _bb.legacy);
+            L('    ' + _bb.rows + ' fila(s), ' + _bb.upKB + ' KB subidos · lista de la nube ' + (_bm.list ?? '—') + ' ms · huellas ' + (_bm.hash ?? '—') + ' ms (en paralelo con la lista) · preparar ' + (_bm.prep ?? '—') +
+              ' ms · insertar ' + (_bm.post ?? '—') + ' ms · borrar ' + (_bm.del ?? '—') + ' ms · archivos huérfanos ' + _bb.orphans + (_bm.orphans != null ? ' (' + _bm.orphans + ' ms)' : '') +
+              ' · total ' + (_bm.total ?? '—') + ' ms' + (_bb.error ? ' · ⚠️ ' + _bb.error : ''));
+          } else {
+            L('    modo: COMPLETO (el de siempre: borrar todo y volver a subir)' + (_bb.fallback ? ' — motivo: ' + _bb.fallback : ''));
+            L('    ' + _bb.rows + ' fila(s), ' + _bb.upKB + ' KB subidos · preparar ' + (_bm.prep ?? '—') + ' ms · borrar ' + (_bm.del ?? '—') +
+              ' ms (filas borradas: ' + (_bb.deleted ? _bb.deleted.map(n => n == null ? 'ERR' : n).join('+') : '—') + ') · insertar ' + (_bm.post ?? '—') +
+              ' ms · archivos huérfanos ' + _bb.orphans + (_bm.orphans != null ? ' (' + _bm.orphans + ' ms)' : '') + ' · total ' + (_bm.total ?? '—') + ' ms' +
+              (_bb.noReturning ? ' · ⚠️ el servidor no devolvió las filas borradas (borrado simple)' : '') + (_bb.error ? ' · ⚠️ ' + _bb.error : ''));
+          }
+          L('    columna content_sha de la tabla biblioteca: ' + (_bb.contentSha || '—'));
           if (_bb.apngUp || _bb.apngKept || _bb.apngIdb) L('    animaciones: ' + _bb.apngUp + ' subidas desde memoria · ' + _bb.apngIdb + ' leídas de IndexedDB y subidas · ' + _bb.apngKept + ' conservadas tal cual estaban en la nube');
         }
       }

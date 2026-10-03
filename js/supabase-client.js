@@ -1796,7 +1796,334 @@ const SupabaseClient = (() => {
     return null;
   }
 
-  // Sincronización completa: sube todos los items locales a Supabase.
+  // ── BIBLIOTECA POR DIFERENCIAS (v41.49) ─────────────────────────────────────────────────────────
+  // Alberto: «la biblioteca debería funcionar como las hojas: guardar en la nube solo los nuevos objetos
+  // incorporados y borrar los eliminados». Hasta v41.48 cada sincronización borraba TODAS las filas de la
+  // obra y volvía a subir TODOS los objetos (7 objetos, 160 KB, para añadir uno). Misma técnica que la
+  // subida por capas de las hojas (v41.46): comparar el CONTENIDO por huella SHA-256 y tocar solo lo que difiere.
+  //   · Cada fila guarda una columna `content_sha` = SHA-256 del contenido SIN comprimir (el JSON del objeto
+  //     + su miniatura). Se guarda ya calculada (no la calcula la base de datos) porque el gzip no sale idéntico
+  //     entre dispositivos: la misma biblioteca comprimida en dos móviles da cadenas distintas, y una huella de
+  //     lo comprimido marcaría «cambiado» en falso al cambiar de dispositivo.
+  //   · Se pide a la nube la LISTA de filas de la obra (solo id, tipo, carpeta, archivo y huella: sin layer_data
+  //     ni miniaturas) y se compara con los objetos locales:
+  //        misma huella y misma carpeta → no se toca            · no está en la nube → se inserta
+  //        huella distinta o cambio de carpeta → se borra y se vuelve a insertar (como siempre)
+  //        ya no está en local → se borra                       · fila antigua sin prefijo (legacy) → se borra
+  //   · Solo DELETE e INSERT — las mismas operaciones que ya usaba el modo completo: no depende de ningún
+  //     permiso más (nada de UPDATE/upsert) y el orden de los objetos en la nube sigue siendo el local.
+  //   · Un archivo del bucket (APNG) solo se sube si el objeto es nuevo o cambió; si solo cambió de carpeta se
+  //     reutiliza el que ya tenía. Los archivos que dejan de usarse se borran al final, tras el INSERT.
+  //   · Ante cualquier duda se usa el modo completo de siempre, y SIEMPRE antes de tocar nada en la nube:
+  //     falta la columna (SQL sin ejecutar), el listado falla, ≥1000 filas (tope de PostgREST), ids raros o
+  //     repetidos, sin crypto.subtle (contexto no seguro) o sin workId.
+  let _bibShaOk = null; // null = sin probar en esta sesión · true = la columna content_sha existe · false = no existe
+  // «No existe» se recuerda solo 60 s: así, al ejecutar el SQL con la app abierta, el siguiente guardado vuelve a
+  // comprobarlo (2 consultas pequeñas) sin tener que recargar la app.
+  let _bibShaFalseAt = 0;
+  const _BIB_ID_OK = /^[A-Za-z0-9_:.\-]+$/;
+
+  // Payload de un objeto de biblioteca, SIN comprimir (lo que se guarda en layer_data). Compartido por el modo
+  // completo y el de diferencias: para GIF/APNG todo lo necesario para re-edición (pngFrames van al bucket,
+  // gifDataUrl/thumb son pequeños, gcpLayersData/gcpFramesData son vectoriales); para el resto, layerData con
+  // fillLayerData, orientation e isGroup embebidos en el payload (sin columnas extra).
+  function _bibEntryPayloadStr(entry) {
+    const _payloadBase = entry.isGifAnim
+      ? { isGifAnim:      true,
+          gifDataUrl:     entry.gifDataUrl,
+          gcpFrameDelay:  entry.gcpFrameDelay,
+          gcpRepeatCount: entry.gcpRepeatCount,
+          gcpStopAtEnd:   entry.gcpStopAtEnd,
+          gcpLayersData:  entry.gcpLayersData  || null,
+          gcpFramesData:  entry.gcpFramesData  || null,
+          gcpLayerNames:  entry.gcpLayerNames  || null,
+          normW:          entry.normW           || null,
+          normH:          entry.normH           || null }
+      : entry.layerData;
+    const _payload = entry.isGifAnim ? _payloadBase : {
+      ..._payloadBase,
+      ...(entry.fillLayerData ? { _fillLayerData: entry.fillLayerData } : {}),
+      ...(entry.orientation   ? { _orientation:   entry.orientation   } : {}),
+      ...(entry.isGroup       ? { _isGroup: true, _layers: entry.layers } : {}),
+    };
+    return JSON.stringify(_payload);
+  }
+  function _bibRowType(entry) {
+    return entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown');
+  }
+  // ¿El objeto trae en memoria el binario de su animación (APNG ya montado o frames sueltos)?
+  function _bibEntryHasLocalApng(entry) {
+    return !!(entry.isGifAnim && (entry.apngSrc || (entry.pngFrames && entry.pngFrames.length > 1)));
+  }
+  // APNG animado de biblioteca: si el objeto lo trae en memoria, subirlo al bucket 'anims' y devolver su URL
+  // (o null si no hay binario local o la subida falla).
+  async function _bibEntryApngUpload(entry, st) {
+    if (!entry.isGifAnim) return null;
+    try {
+      let _apngDataUrl = null;
+      if (entry.apngSrc) {
+        // Ya es un dataUrl APNG completo — subir directamente
+        _apngDataUrl = entry.apngSrc;
+      } else if (entry.pngFrames && entry.pngFrames.length > 1) {
+        // Array de frames individuales — reconstruir APNG
+        _apngDataUrl = await _buildApngFromFrames(entry.pngFrames, entry.gcpFrameDelay || 100, entry.gcpFrameHolds);
+      }
+      if (_apngDataUrl) {
+        const _bucketKey = 'bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
+        const _u = await _animUpload(_bucketKey, _apngDataUrl);
+        st.apngUp++;
+        return _u;
+      }
+    } catch(e) { console.warn('bibSync APNG upload:', e); }
+    return null;
+  }
+  // Animación sin binario local utilizable (la biblioteca «espejada» desde la nube solo trae _apngIdbKey):
+  // conservar el archivo que esa fila ya tenía en la nube (prevUrl); si no tenía ninguno, último recurso:
+  // leer el APNG de IndexedDB y subirlo. Devuelve la URL, o null si no hay forma de conseguir el archivo.
+  async function _bibAnimReuseOrIdb(entry, prevUrl, st) {
+    if (prevUrl) { st.apngKept++; return prevUrl; }
+    const _key = entry._apngIdbKey || entry.animKey;
+    if (!_key || !window._sbAnimIdbLoad) return null;
+    try {
+      const _d = await window._sbAnimIdbLoad(_key);
+      // _d puede ser string (APNG completo) o array (frames PNG sueltos)
+      const _du = (typeof _d === 'string') ? _d
+        : (Array.isArray(_d) && _d.length > 1 ? await _buildApngFromFrames(_d, entry.gcpFrameDelay || 100, entry.gcpFrameHolds) : null);
+      if (_du) {
+        const _u = await _animUpload('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8), _du);
+        st.apngIdb++;
+        return _u;
+      }
+    } catch(e) { console.warn('bibSync APNG (IndexedDB):', e); }
+    return null;
+  }
+
+  // Borra filas de la biblioteca por id (trozos pequeños: los ids van en la URL). Refresca el token y
+  // reintenta una vez; si sigue fallando LANZA (el modo por diferencias no sigue con un borrado a medias).
+  async function _bibDeleteIds(authorId, ids) {
+    // Los ids llevan «::» y PostgREST documenta «:» y «.» como caracteres reservados en los filtros: entre
+    // comillas dobles (%22) valen siempre, sea cual sea la versión de PostgREST.
+    const filter = `author_id=eq.${authorId}&id=in.(${ids.map(i => '"' + i + '"').join(',')})`;
+    for (let intento = 0; ; intento++) {
+      try { await _delete('biblioteca', filter); return; }
+      catch (e) {
+        if (intento === 0) { try { if (window._authTryRefresh) await window._authTryRefresh(); } catch(_) {} continue; }
+        throw e;
+      }
+    }
+  }
+  // INSERT de filas (Prefer: return=minimal, igual que el modo completo) en trozos de ~4 MB como mucho.
+  async function _bibPostRows(rows, st) {
+    const chunks = []; let cur = [], curLen = 0;
+    for (const r of rows) {
+      const n = (r.layer_data ? r.layer_data.length : 0) + (r.thumb ? r.thumb.length : 0) + 600;
+      if (cur.length && curLen + n > 4 * 1024 * 1024) { chunks.push(cur); cur = []; curLen = 0; }
+      cur.push(r); curLen += n;
+    }
+    if (cur.length) chunks.push(cur);
+    for (const ch of chunks) {
+      // Refrescar el token justo antes: es la petición que de verdad puede lanzar (ver el modo completo).
+      if (window._authTryRefresh) await window._authTryRefresh();
+      const _body = JSON.stringify(ch);
+      st.upKB += Math.round(_body.length / 1024);
+      const r = await _rqFetch('POST biblioteca', `${BASE}/biblioteca`, {
+        method:  'POST',
+        headers: { ..._hdrsUser(), 'Prefer': 'return=minimal' },
+        body:    _body,
+      }, _body.length);
+      if (!r.ok) {
+        const _errBody = await r.text();
+        // Detalle completo del fallo real — lo enseña el 🩺 ("Último error de bibSync"), ver edCloudSave.
+        if (typeof window !== 'undefined') {
+          window._edLastBibSyncError = { status: r.status, body: _errBody.slice(0, 2000), rows: ch.length, ts: new Date().toISOString() };
+        }
+        throw new Error(`bibSync: ${r.status} ${_errBody}`);
+      }
+    }
+  }
+
+  // Devuelve true si la sincronización por diferencias se completó, o false si hay que usar el modo
+  // completo — y entonces NO se ha tocado nada en la nube (ni filas ni archivos). Lanza si falla ya en pleno
+  // cambio (un DELETE/INSERT): quien llama lo trata como un fallo de sincronización, y como el siguiente intento
+  // vuelve a comparar contra lo que HAY en la nube, converge solo (no queda nada «a medias» que arreglar).
+  async function _bibSyncDelta(authorId, bibData, workId, _st) {
+    const prefix = workId + '::';
+    const folders = (bibData && bibData.folders) ? bibData.folders : [];
+    const want = []; // objetos locales, en orden: { folder, entry, id (de fila), type, sha }
+    const _seen = new Set();
+    for (const folder of folders) for (const entry of (folder.items || [])) {
+      const id = prefix + entry.id;
+      if (!_BIB_ID_OK.test(id)) { _st.fallback = 'id con caracteres no admitidos'; return false; }
+      if (_seen.has(id)) { _st.fallback = 'id repetido en la biblioteca local'; return false; }
+      _seen.add(id);
+      want.push({ folder, entry, id, type: _bibRowType(entry), sha: null });
+    }
+    _st.desired = want.length;
+
+    // 1) Lista de la nube (sin layer_data ni miniaturas) ‖ huella SHA-256 de cada objeto local (CPU, en paralelo).
+    const _tList = performance.now();
+    const _q = `biblioteca?author_id=eq.${authorId}&select=id,layer_type,folder_id,folder_name,anim_url,content_sha`;
+    const _listP = Promise.all([
+      _get(`${_q}&folder_id=like.${workId}::*`),
+      _get(`${_q}&folder_id=in.(__root__,__anim__)`),
+    ]).then(v => ({ ok: true, v }), e => ({ ok: false, e }));
+    const _tHash = performance.now();
+    const _hashP = _sbPoolMap(want, 4, async w => {
+      // El separador \u001f no puede aparecer sin escapar dentro del JSON: la unión es inequívoca.
+      w.sha = await _sha256Hex(_bibEntryPayloadStr(w.entry) + '\u001f' + (w.entry.thumb || ''));
+    }).then(() => null, e => e);
+    const _lr = await _listP;
+    _st.ms.list = Math.round(performance.now() - _tList);
+    const _hashErr = await _hashP;
+    _st.ms.hash = Math.round(performance.now() - _tHash);
+    if (_hashErr) throw _hashErr;
+    if (want.some(w => !w.sha)) { _st.fallback = 'no se pudo calcular la huella'; return false; }
+
+    if (!_lr.ok) {
+      const _msg = String((_lr.e && _lr.e.message) || _lr.e);
+      // _get lanza «GET <ruta>: <estado> <cuerpo>». La ruta ya menciona content_sha, así que se mira SOLO el cuerpo:
+      // 400/404 que habla de content_sha = la columna no existe (SQL sin ejecutar). Un error de red/5xx/401 no marca nada.
+      const _m = _msg.match(/: (\d{3}) ([\s\S]*)$/);
+      if (_m && (_m[1] === '400' || _m[1] === '404') && /content_sha/.test(_m[2])) {
+        _bibShaOk = false; _bibShaFalseAt = Date.now(); _st.fallback = 'falta la columna content_sha en la tabla biblioteca';
+      } else {
+        _st.fallback = 'no se pudo listar la nube: ' + _msg.slice(0, 100);
+      }
+      return false;
+    }
+    const [_own, _leg] = _lr.v;
+    if (!Array.isArray(_own) || !Array.isArray(_leg)) { _st.fallback = 'respuesta inesperada al listar'; return false; }
+    if (_own.length >= 1000 || _leg.length >= 1000) { _st.fallback = 'demasiadas filas en la nube (≥1000)'; return false; }
+    if (_own.concat(_leg).some(c => !c || typeof c.id !== 'string' || !_BIB_ID_OK.test(c.id))) { _st.fallback = 'la nube tiene ids con caracteres no admitidos'; return false; }
+    _bibShaOk = true;
+
+    // 2) Comparar. prevOwn = filas de ESTA obra (folder_id con prefijo); prevLegacy = filas antiguas sin prefijo.
+    const prevOwn = new Map(_own.map(c => [c.id, c]));
+    const prevLegacy = new Map(_leg.filter(c => !prevOwn.has(c.id)).map(c => [c.id, c]));
+    // Cualquier fila de la nube por su id tal cual (con o sin prefijo): un objeto nuevo hereda el archivo de la
+    // fila antigua que tenía su id SIN prefijo (igual que el modo completo con las filas que acababa de borrar).
+    const prevAny = new Map([..._own, ...prevLegacy.values()].map(c => [c.id, c]));
+    const _nz = v => (v == null ? '' : v);
+    const toAdd = [], toReplace = [], keptRows = [];
+    for (const w of want) {
+      const c = prevOwn.get(w.id);
+      if (!c) { toAdd.push({ w, c: null, why: 'new' }); continue; }
+      const sameSha    = typeof c.content_sha === 'string' && c.content_sha === w.sha && c.layer_type === w.type;
+      const sameFolder = c.folder_id === prefix + w.folder.id && _nz(c.folder_name) === _nz(w.folder.name);
+      // Animación cuya fila en la nube NO tiene archivo pero el objeto sí puede darlo (en memoria o en IndexedDB):
+      // se rehace para completarla, como hacía el modo completo en cada sincronización.
+      const needBin = !!(w.entry.isGifAnim && !c.anim_url && (_bibEntryHasLocalApng(w.entry) || w.entry._apngIdbKey || w.entry.animKey));
+      if (sameSha && sameFolder && !needBin) keptRows.push(c);
+      else toReplace.push({ w, c, why: (sameSha && !needBin) ? 'folder' : 'content' });
+    }
+    const wantIds = new Set(want.map(w => w.id));
+    const toRemove = _own.filter(c => !wantIds.has(c.id));
+    const toLegacy = [...prevLegacy.values()];
+    _st.cloud = _own.length + prevLegacy.size;
+    _st.kept = keptRows.length; _st.added = toAdd.length;
+    _st.replaced = toReplace.filter(x => x.why === 'content').length; _st.moved = toReplace.filter(x => x.why === 'folder').length;
+    _st.removed = toRemove.length; _st.legacy = toLegacy.length;
+    const delRows = [...toReplace.map(x => x.c), ...toRemove, ...toLegacy]; // filas de la nube que dejan de existir tal cual
+    _st.mode = 'diferencias';
+    if (!toAdd.length && !delRows.length) { _st.ok = true; return true; } // la nube ya es idéntica
+
+    // 3) Preparar las filas a subir ANTES de tocar nada (si algo fallara aquí no se ha borrado nada).
+    //    En el orden local (el orden de inserción es el que verá otro dispositivo) y de 3 en 3 (hay APNG pesados).
+    const _up = new Map(); toAdd.forEach(x => _up.set(x.w.id, x)); toReplace.forEach(x => _up.set(x.w.id, x));
+    const _tPrep = performance.now();
+    const _built = await _sbPoolMap(want.filter(w => _up.has(w.id)).map(w => _up.get(w.id)), 3, async ({ w, c, why }) => {
+      const entry = w.entry;
+      let _animUrl = null;
+      if (entry.isGifAnim) {
+        if (why === 'folder' && c && c.anim_url) {
+          // Solo cambió de carpeta: el archivo del bucket es el mismo, no se vuelve a subir.
+          _animUrl = c.anim_url; _st.apngKept++;
+        } else {
+          _animUrl = await _bibEntryApngUpload(entry, _st);
+          if (!_animUrl) {
+            const _lg = prevAny.get(entry.id);
+            _animUrl = await _bibAnimReuseOrIdb(entry, (c && c.anim_url) || (_lg && _lg.anim_url) || null, _st);
+          }
+        }
+      }
+      const _raw = _bibEntryPayloadStr(entry);
+      const _ld = _raw.length >= _CZ_MIN ? await _czCompress(_raw) : _raw;
+      return {
+        id:          w.id,
+        author_id:   authorId,
+        layer_type:  w.type,
+        layer_data:  _ld,
+        anim_url:    _animUrl,
+        thumb:       entry.thumb == null ? null : entry.thumb,
+        folder_id:   prefix + w.folder.id,
+        folder_name: w.folder.name == null ? null : w.folder.name,
+        content_sha: w.sha,
+      };
+    });
+    _st.ms.prep = Math.round(performance.now() - _tPrep);
+    _st.rows = _built.length;
+
+    // 4) Cambiar la nube. Una fila que se rehace (mismo id) exige DELETE antes que INSERT. Si no hay ninguna
+    //    (solo objetos nuevos y/o eliminados) se inserta PRIMERO y se borra después: si el INSERT fallara no se
+    //    ha borrado nada, y si fallara el borrado las filas sobrantes siguen listadas en el siguiente intento
+    //    (con sus archivos, que así se limpian). Un fallo lanza; lo que ya se hizo es coherente: el siguiente
+    //    intento vuelve a comparar contra lo que HAY en la nube y converge.
+    const _delIds = delRows.map(c => c.id);
+    const _runDelete = async () => {
+      if (!_delIds.length) return;
+      const _t = performance.now();
+      for (let i = 0; i < _delIds.length; i += 40) await _bibDeleteIds(authorId, _delIds.slice(i, i + 40));
+      _st.ms.del = Math.round(performance.now() - _t);
+    };
+    const _runPost = async () => {
+      if (!_built.length) return;
+      const _t = performance.now();
+      await _bibPostRows(_built, _st);
+      _st.ms.post = Math.round(performance.now() - _t);
+    };
+    if (toReplace.length) { await _runDelete(); await _runPost(); }
+    else { await _runPost(); await _runDelete(); }
+    _st.ok = true;
+
+    // 5) Archivos del bucket que ya no cuelgan de ninguna fila (solo ahora que todo fue bien). Mejor esfuerzo.
+    try {
+      const _keepUrls = new Set([...keptRows.map(c => c.anim_url), ..._built.map(r => r.anim_url)].filter(Boolean));
+      const _orphans = [...new Set(delRows.map(c => c.anim_url).filter(u => u && !_keepUrls.has(u)))];
+      _st.orphans = _orphans.length;
+      if (_orphans.length) {
+        const _tOr = performance.now();
+        await _sbPoolMap(_orphans, 4, u => _animDelete(u).catch(() => {}));
+        _st.ms.orphans = Math.round(performance.now() - _tOr);
+      }
+    } catch(_e) { /* no bloquear si falla la limpieza */ }
+    return true;
+  }
+
+  // Punto de entrada: sincroniza la biblioteca local de la obra con Supabase. Prefiere el modo por
+  // diferencias; si no está disponible (o ante cualquier duda, antes de tocar nada) usa el modo completo.
+  // Deja el desglose en window._sbLastBib (lo enseña el botón 🩺).
+  async function bibSync(authorId, bibData, workId) {
+    const _t0 = performance.now();
+    const _st = window._sbLastBib = {
+      ts: new Date().toISOString(), ok: false, mode: 'completo', fallback: null, rows: 0, upKB: 0, ms: {},
+      apngUp: 0, apngKept: 0, apngIdb: 0, deleted: null, orphans: 0, error: null, contentSha: 'sin probar',
+    };
+    try {
+      if (!workId) _st.fallback = 'sin id de obra';
+      else if (_bibShaOk === false && Date.now() - _bibShaFalseAt < 60000) _st.fallback = 'falta la columna content_sha en la tabla biblioteca';
+      else if (!_shaCapable()) _st.fallback = 'el navegador no ofrece crypto.subtle (contexto no seguro)';
+      else if (await _bibSyncDelta(authorId, bibData, workId, _st)) return;
+      await _bibSyncFull(authorId, bibData, workId, _st);
+    } catch (e) {
+      _st.error = String((e && e.message) || e).slice(0, 200);
+      throw e;
+    } finally {
+      _st.contentSha = _bibShaOk === true ? 'activa' : (_bibShaOk === false ? 'no disponible (falta la columna content_sha)' : 'sin probar');
+      _st.ms.total = Math.round(performance.now() - _t0);
+    }
+  }
+
+  // Sincronización completa (modo de siempre): sube todos los items locales a Supabase.
   // folder_id se prefixa con workId:: para aislar por proyecto.
   //
   // v41.48 — misma semántica de siempre (borrar las filas de la obra y volver a insertar las locales),
@@ -1814,13 +2141,8 @@ const SupabaseClient = (() => {
   // animación desaparecía de la nube. Ahora se conserva el anim_url que ya tenía esa fila en la nube y,
   // si no tenía ninguno, se intenta leer el APNG de IndexedDB para subirlo.
   // Deja el desglose de tiempos en window._sbLastBib (lo enseña el botón 🩺).
-  async function bibSync(authorId, bibData, workId) {
-    const _t0 = performance.now();
-    const _st = window._sbLastBib = {
-      ts: new Date().toISOString(), ok: false, rows: 0, upKB: 0, ms: {},
-      apngUp: 0, apngKept: 0, apngIdb: 0, deleted: null, orphans: 0, error: null,
-    };
-    try {
+  async function _bibSyncFull(authorId, bibData, workId, _st) {
+    _st.mode = 'completo';
     const prefix = workId ? workId + '::' : '';
     const folders = (bibData && bibData.folders) ? bibData.folders : [];
     const _jobs = [];
@@ -1830,55 +2152,17 @@ const SupabaseClient = (() => {
     //    En paralelo de 3 en 3 (hay APNG pesados): el resultado conserva el orden de los items.
     const _tPrep = performance.now();
     const _built = await _sbPoolMap(_jobs, 3, async ({ folder, entry }) => {
-        let _animUrl = null;
-        // APNG animado de biblioteca: subir al bucket 'anims'
-        if (entry.isGifAnim) {
-          try {
-            let _apngDataUrl = null;
-            if (entry.apngSrc) {
-              // Ya es un dataUrl APNG completo — subir directamente
-              _apngDataUrl = entry.apngSrc;
-            } else if (entry.pngFrames && entry.pngFrames.length > 1) {
-              // Array de frames individuales — reconstruir APNG
-              _apngDataUrl = await _buildApngFromFrames(entry.pngFrames, entry.gcpFrameDelay || 100, entry.gcpFrameHolds);
-            }
-            if (_apngDataUrl) {
-              const _bucketKey = 'bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
-              _animUrl = await _animUpload(_bucketKey, _apngDataUrl);
-              _st.apngUp++;
-            }
-          } catch(e) { console.warn('bibSync APNG upload:', e); }
-        }
-        // Payload: para GIF/APNG incluir todo lo necesario para re-edición
-        // pngFrames van al bucket (anim_url), gifDataUrl/thumb son pequeños
-        // gcpLayersData/gcpFramesData son vectoriales — se comprimen bien
-        // Para items con fill: embeber fillLayerData en el payload
-        const _payloadBase = entry.isGifAnim
-          ? { isGifAnim:      true,
-              gifDataUrl:     entry.gifDataUrl,
-              gcpFrameDelay:  entry.gcpFrameDelay,
-              gcpRepeatCount: entry.gcpRepeatCount,
-              gcpStopAtEnd:   entry.gcpStopAtEnd,
-              gcpLayersData:  entry.gcpLayersData  || null,
-              gcpFramesData:  entry.gcpFramesData  || null,
-              gcpLayerNames:  entry.gcpLayerNames  || null,
-              normW:          entry.normW           || null,
-              normH:          entry.normH           || null }
-          : entry.layerData;
-        // Embeber fillLayerData, orientation e isGroup en el payload (sin columnas extra)
-        const _payload = entry.isGifAnim ? _payloadBase : {
-          ..._payloadBase,
-          ...(entry.fillLayerData ? { _fillLayerData: entry.fillLayerData } : {}),
-          ...(entry.orientation   ? { _orientation:   entry.orientation   } : {}),
-          ...(entry.isGroup       ? { _isGroup: true, _layers: entry.layers } : {}),
-        };
+        // APNG animado de biblioteca: subir al bucket 'anims' (si el objeto trae el binario en memoria)
+        const _animUrl = await _bibEntryApngUpload(entry, _st);
+        // Payload (ver _bibEntryPayloadStr): para GIF/APNG todo lo necesario para re-edición;
+        // para items con fill, fillLayerData embebido en el payload.
         // Comprimir cualquier payload >=512 bytes antes de subir — mismo criterio
         // que _uploadPanels() para panel_layers (ver supabase-client.js ~línea 590).
         // Antes solo se comprimían las animaciones (isGifAnim); los grupos (que
         // pueden incluir varias capas con dataUrl de trazo/relleno/acuarela) se
         // subían siempre sin comprimir, con riesgo real de exceder el límite
         // práctico de tamaño de petición y fallar la sincronización sin avisar.
-        const _ldRaw = JSON.stringify(_payload);
+        const _ldRaw = _bibEntryPayloadStr(entry);
         const _ld = _ldRaw.length >= _CZ_MIN ? await _czCompress(_ldRaw) : _ldRaw;
         // BUG CORREGIDO — el cuello de botella real de "la biblioteca no
         // sincroniza" (reportado por Alberto tras varios intentos previos
@@ -1906,7 +2190,7 @@ const SupabaseClient = (() => {
           row: {
             id:          prefix + entry.id,
             author_id:   authorId,
-            layer_type:  entry.isGifAnim ? 'gif' : ((entry.layerData && entry.layerData.type) || 'unknown'),
+            layer_type:  _bibRowType(entry),
             layer_data:  _ld,
             anim_url:    _animUrl,
             thumb:       entry.thumb,
@@ -1956,19 +2240,8 @@ const SupabaseClient = (() => {
     for (const b of _built) {
       if (!b.needAnim) continue;
       const _prev = _oldById.get(b.row.id) || _oldById.get(b.entry.id);
-      if (_prev && _prev.anim_url) { b.row.anim_url = _prev.anim_url; _st.apngKept++; continue; }
-      const _key = b.entry._apngIdbKey || b.entry.animKey;
-      if (!_key || !window._sbAnimIdbLoad) continue;
-      try {
-        const _d = await window._sbAnimIdbLoad(_key);
-        // _d puede ser string (APNG completo) o array (frames PNG sueltos)
-        const _du = (typeof _d === 'string') ? _d
-          : (Array.isArray(_d) && _d.length > 1 ? await _buildApngFromFrames(_d, b.entry.gcpFrameDelay || 100, b.entry.gcpFrameHolds) : null);
-        if (_du) {
-          b.row.anim_url = await _animUpload('bib_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8), _du);
-          _st.apngIdb++;
-        }
-      } catch(e) { console.warn('bibSync APNG (IndexedDB):', e); }
+      const _u = await _bibAnimReuseOrIdb(b.entry, _prev && _prev.anim_url, _st);
+      if (_u) b.row.anim_url = _u;
     }
 
     if (!rows.length) {
@@ -2011,12 +2284,6 @@ const SupabaseClient = (() => {
         _st.ms.orphans = Math.round(performance.now() - _tOr);
       }
     } catch(_e) { /* no bloquear si falla la limpieza */ }
-    } catch (e) {
-      _st.error = String((e && e.message) || e).slice(0, 200);
-      throw e;
-    } finally {
-      _st.ms.total = Math.round(performance.now() - _t0);
-    }
   }
 
   // Descarga biblioteca desde Supabase y reconstruye la estructura de carpetas.
