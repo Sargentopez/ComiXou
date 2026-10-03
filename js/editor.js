@@ -1962,8 +1962,47 @@ class ImageLayer extends BaseLayer {
       if (result.frames.length) {
         this._oc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
       }
+      // v41.57 — la caja del objeto SIEMPRE se recalcula contra el raster real que acaba de
+      // decodificarse (ver _gcpReconcileRaster). Cubre cualquier ruta que cargue fotogramas
+      // (deshacer/rehacer, recuperación del autoguardado, reapertura, nube...).
+      this._gcpReconcileRaster(result.width, result.height);
       cb && cb();
     }).catch(function(e) { console.warn('ApngDecoder error:', e); cb && cb(); });
+  }
+
+  // ── v41.57 — caja ↔ raster ──────────────────────────────────────────────────────────
+  // BUG (reportado por Alberto: «he acortado la distancia entre los objetos de una
+  // animación en el editor de animaciones y, al insertarla de nuevo en el canvas, los
+  // objetos aparecen aplastados en su longitud — debe recalcularse siempre la dimensión
+  // antes de insertarse»). Al guardar una animación desde el editor de animaciones, su
+  // caja (width/height/_gcpRefW/H) se calcula del recorte REAL de los fotogramas, y ese
+  // recorte (en px) se anota en _gcpRasterW/H. ImageLayer.draw() estira el raster dentro de
+  // la caja, así que cualquier ruta que acabe cargando fotogramas DISTINTOS de aquellos
+  // para los que se calculó la caja (la causa raíz concreta —fotogramas viejos en una
+  // clave secundaria de IndexedDB tras reeditar— se corrige en _gcpSaveToLib, pero esto es
+  // la red de seguridad para cualquier otra) los pintaba deformados: raster viejo (ancho)
+  // dentro de una caja nueva (estrecha) = objetos aplastados.
+  // Aquí se compara el tamaño decodificado con el anotado y, si difiere, la caja (y su
+  // referencia de contenedor, para no alterar la escala que el usuario le diera después
+  // en el editor general) se reescalan por el MISMO factor que el raster: el raster
+  // vuelve a pintarse sin deformación. Es reversible (multiplicativo): si una decodificación
+  // vieja que seguía en vuelo llega antes que la buena, la buena lo deshace exactamente.
+  // Si solo cambió la RESOLUCIÓN (mismo aspecto: p. ej. el mismo recorte a otra escala), el
+  // raster ya se pinta sin deformar dentro de la caja y esta NO se toca (solo se re-anota).
+  // Solo actúa con _gcpRasterW/H anotado (animaciones guardadas desde el editor de
+  // animaciones a partir de esta versión) — el resto de capas no se tocan.
+  _gcpReconcileRaster(rw, rh) {
+    const ew = this._gcpRasterW, eh = this._gcpRasterH;
+    if (!(ew > 0) || !(eh > 0) || !(rw > 0) || !(rh > 0)) return false;
+    if (Math.abs(rw - ew) <= 1 && Math.abs(rh - eh) <= 1) return false; // coincide (±1 px de redondeo)
+    const fx = rw / ew, fy = rh / eh;
+    this._gcpRasterW = rw; this._gcpRasterH = rh;
+    if (Math.abs(fx / fy - 1) < 0.02) return false; // mismo aspecto: solo cambió la resolución
+    if (this.width  > 0) this.width  *= fx;
+    if (this.height > 0) this.height *= fy;
+    if (this._gcpRefW > 0) this._gcpRefW *= fx;
+    if (this._gcpRefH > 0) this._gcpRefH *= fy;
+    return true;
   }
 
   // ── _applyFrame: IDÉNTICO a GifLayer._applyFrame — putImageData en _oc único
@@ -4394,6 +4433,9 @@ function _edSnapLayerFragment(l){
       if(l._gcpRefY != null) o._gcpRefY = l._gcpRefY;
       if(l._gcpRefW != null) o._gcpRefW = l._gcpRefW;
       if(l._gcpRefH != null) o._gcpRefH = l._gcpRefH;
+      // v41.57 — recorte real (px) con el que se calculó la caja: sin esto, un deshacer/rehacer
+      // reconstruye la capa sin saber contra qué raster se calculó (ver ImageLayer._gcpReconcileRaster).
+      if(l._gcpRasterW > 0 && l._gcpRasterH > 0) { o._gcpRasterW = l._gcpRasterW; o._gcpRasterH = l._gcpRasterH; }
     }
     // Trayectoria de animación — presente en cualquier tipo de capa
     if(l._motionPath && l._motionPath.length >= 2) o._motionPath = _edCopyMotionPathPts(l._motionPath);
@@ -31095,6 +31137,7 @@ function edSerLayer(l, skipCompress){
     if(l._gcpRefY != null) _r._gcpRefY = l._gcpRefY;
     if(l._gcpRefW != null) _r._gcpRefW = l._gcpRefW;
     if(l._gcpRefH != null) _r._gcpRefH = l._gcpRefH;
+    if(l._gcpRasterW > 0 && l._gcpRasterH > 0) { _r._gcpRasterW = l._gcpRasterW; _r._gcpRasterH = l._gcpRasterH; } // v41.57
     if(l._gcpFrameDelay   != null) _r._gcpFrameDelay   = l._gcpFrameDelay;
     if(l._gcpFrameHolds && l._gcpFrameHolds.length) _r._gcpFrameHolds = l._gcpFrameHolds;
     if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
@@ -31608,6 +31651,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._gcpRefY != null) l._gcpRefY = d._gcpRefY;
     if(d._gcpRefW != null) l._gcpRefW = d._gcpRefW;
     if(d._gcpRefH != null) l._gcpRefH = d._gcpRefH;
+    if(d._gcpRasterW > 0 && d._gcpRasterH > 0) { l._gcpRasterW = d._gcpRasterW; l._gcpRasterH = d._gcpRasterH; } // v41.57
     if(d._gcpFrameDelay   != null) l._gcpFrameDelay   = d._gcpFrameDelay;
     if(Array.isArray(d._gcpFrameHolds)) l._gcpFrameHolds = d._gcpFrameHolds;
     if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
@@ -38923,6 +38967,10 @@ function edBibGuardar() {
     // Tamaño real para inserción correcta (normW/normH usados por el código de inserción)
     if (_la2.width  != null) entry.normW = _la2.width;
     if (_la2.height != null) entry.normH = _la2.height;
+    // v41.57 — recorte real (px) con el que se calculó esa caja: al insertar desde la biblioteca la
+    // capa lo hereda y ImageLayer._gcpReconcileRaster recalcula la caja si los fotogramas que
+    // acaban cargándose son de otro tamaño (deformación) — ver ImageLayer._gcpReconcileRaster.
+    if (_la2._gcpRasterW > 0 && _la2._gcpRasterH > 0) { entry.gcpRasterW = _la2._gcpRasterW; entry.gcpRasterH = _la2._gcpRasterH; }
     // gifDataUrl: primer frame como fallback (requerido para animaciones de 1 frame y para la.src)
     entry.gifDataUrl = (_la2._pngFrames && _la2._pngFrames[0]) || _la2.src || '';
     _bibGetAnimFolder(data).items.push(entry);
@@ -39352,6 +39400,7 @@ function _bibRenderPanel(panel) {
                 // contenedor si esta animación se mueve en el editor general antes de
                 // reeditarla (ver invariante junto a _gcpApplyContainerDelta en gcpOpen).
                 la2._gcpRefX=0.5; la2._gcpRefY=0.5; la2._gcpRefW=fW; la2._gcpRefH=fH;
+                if(entry.gcpRasterW>0&&entry.gcpRasterH>0){ la2._gcpRasterW=entry.gcpRasterW; la2._gcpRasterH=entry.gcpRasterH; } // v41.57
                 // BUG CORREGIDO (Alberto: animaciones insertadas desde biblioteca
                 // se quedaban fijas en su primer fotograma tras guardar y reabrir
                 // la obra). Antes: la2._pngFrames=[entry.apngSrc] envolvía el APNG
@@ -39451,6 +39500,7 @@ function _bibRenderPanel(panel) {
           la._isGcpImage = true;
           // Ref de línea base — misma razón que en la rama async de arriba.
           la._gcpRefX = 0.5; la._gcpRefY = 0.5; la._gcpRefW = finalW; la._gcpRefH = finalH;
+          if (entry.gcpRasterW > 0 && entry.gcpRasterH > 0) { la._gcpRasterW = entry.gcpRasterW; la._gcpRasterH = entry.gcpRasterH; } // v41.57
           // BUG CORREGIDO (Alberto: animaciones insertadas desde biblioteca se
           // quedaban fijas en su primer fotograma tras guardar y reabrir la
           // obra). Antes, la rama de apngSrc hacía ADEMÁS
@@ -47069,12 +47119,36 @@ function _gcpSaveToLib(onDone) {
     // caminos vuelvan a reconstruir el APNG desde _pngFrames/_gcpFrameHolds
     // actuales, ya sea localmente o al volver a exportar/subir.
     existingLayer._apngSrc = null;
-    { const _reIdbKey = existingLayer.animKey || existingLayer._pngFramesKey;
-      if (_reIdbKey && window._sbAnimIdbSave) {
-        window._sbAnimIdbSave(_reIdbKey, pngFrames).catch(function(e){ console.warn('GCP IDB re-save (reedición):', e); });
+    // v41.57 — CAUSA RAÍZ del bug «he acortado la distancia entre los objetos de una
+    // animación, la reinserto en el canvas y los objetos aparecen aplastados en su
+    // longitud» (Alberto). Una capa de animación puede tener VARIAS claves de IndexedDB
+    // hacia los mismos fotogramas: animKey (la de la inserción original) y, tras cualquier
+    // guardado/autoguardado, _pngFramesKey (con prioridad sobre animKey en todo lo que
+    // vuelve a cargar fotogramas: deshacer/rehacer —CUALQUIER deshacer de la hoja, aunque
+    // sea de un texto—, recuperación del autoguardado, carga diferida de hojas, nube...).
+    // Esta reedición refrescaba SOLO UNA de ellas («animKey || _pngFramesKey») y dejaba la
+    // otra con los fotogramas VIEJOS: la animación se pintaba bien hasta el primer
+    // deshacer/rehacer o recuperación, y entonces reaparecían los fotogramas anchos de
+    // antes dentro de la caja ya estrecha de ahora (medido: raster 298×70 en caja 133×70 →
+    // proporción 0,446). El autoguardado, además, daba por buena esa clave sin comprobarla
+    // (_asExternalize: «ya tiene clave IDB → solo usar la clave») y tiraba los fotogramas
+    // nuevos que sí estaban en memoria.
+    // Arreglo: los fotogramas de IndexedDB son INMUTABLES por clave. Reeditar escribe los
+    // nuevos bajo una clave NUEVA y la capa queda exactamente como una animación recién
+    // insertada (animKey nueva, sin _pngFramesKey/_apngIdbKey): el siguiente
+    // guardado/autoguardado externaliza desde los fotogramas en memoria, que son los buenos.
+    // Reescribir la clave en sitio habría arreglado la carga pero habría roto el deshacer
+    // de esta misma reedición (instantáneas anteriores con la caja vieja leerían fotogramas
+    // nuevos) y a cualquier ítem de biblioteca que comparta la clave (edBibGuardar copia
+    // animKey/_apngIdbKey de la capa): ambos conservan así sus fotogramas de siempre.
+    { const _newAnimKey = _edAnimKey('gcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+      existingLayer.animKey = _newAnimKey;
+      delete existingLayer._pngFramesKey;
+      delete existingLayer._apngIdbKey;
+      if (window._sbAnimIdbSave) {
+        window._sbAnimIdbSave(_newAnimKey, pngFrames).catch(function(e){ console.warn('GCP IDB save (reedición):', e); });
       }
     }
-    // animKey se preserva si ya existía
     existingLayer._gcpFrameDelay   = window._gcpFrameDelay;
     existingLayer._gcpFrameHolds   = window._gcpFrameHolds.slice();
     existingLayer._gcpRepeatCount  = window._gcpRepeatCount;
@@ -47099,6 +47173,10 @@ function _gcpSaveToLib(onDone) {
       // a reeditarla, gcpOpen sabrá cuánto ha cambiado el contenedor desde este guardado.
       existingLayer._gcpRefX = _gcpCenterX; existingLayer._gcpRefY = _gcpCenterY;
       existingLayer._gcpRefW = _gcpNormW;   existingLayer._gcpRefH = _gcpNormH;
+      // v41.57 — tamaño en px del recorte REAL con el que se calcularon la caja y la referencia
+      // (ver ImageLayer._gcpReconcileRaster): permite recalcular la caja siempre que se
+      // carguen fotogramas de otro tamaño.
+      existingLayer._gcpRasterW = cropW; existingLayer._gcpRasterH = cropH;
       edPushHistory(); requestAnimationFrame(()=>edRedraw());
       // Reconstruir _oc YA (mismo patrón que la rama "Animación nueva" más abajo en
       // esta función) — así el primer fotograma se pinta con el canvas offscreen
@@ -47106,6 +47184,11 @@ function _gcpSaveToLib(onDone) {
       // para que loadAnim() lo regenere (ver comentario junto a "_oc = null" más
       // arriba, donde se invalida).
       if (typeof existingLayer.loadAnim === 'function') {
+        // v41.57 — invalidar OTRA VEZ justo antes de decodificar: una decodificación vieja que
+        // estuviera en vuelo al pulsar «Actualizar» y terminara entre la invalidación de arriba
+        // y este onload dejaría _animReady=true con los fotogramas VIEJOS, y loadAnim
+        // («si ya está listo, reusar sin redecodificar») se saltaría la decodificación buena.
+        existingLayer._animReady = false; existingLayer._animFrames = null; existingLayer._oc = null;
         existingLayer.loadAnim(pngFrames, () => {
           existingLayer._playing = false;
           existingLayer._applyFrame(0);
@@ -47141,6 +47224,7 @@ function _gcpSaveToLib(onDone) {
       // en el editor general (mover/escalar la animación fuera del GCP).
       la._gcpRefX = _gcpCenterX; la._gcpRefY = _gcpCenterY;
       la._gcpRefW = _gcpNormW;   la._gcpRefH = _gcpNormH;
+      la._gcpRasterW = cropW;    la._gcpRasterH = cropH; // v41.57 — ver ImageLayer._gcpReconcileRaster
       la._gcpFrameDelay   = window._gcpFrameDelay;
       la._gcpFrameHolds   = window._gcpFrameHolds.slice();
       la._gcpRepeatCount  = window._gcpRepeatCount;
