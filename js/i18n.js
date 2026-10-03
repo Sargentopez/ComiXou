@@ -608,6 +608,9 @@ const TRANSLATIONS = {
     gcp_objectOrientation:  "Orientación del objeto",
     gcp_fixedOrientation:   "🧭 Fija",
     gcp_rotateAlongPath:    "🔄 Girar según trayectoria",
+    gcp_pathTimer:          "Temporizador",
+    gcp_pathTimerHint:      "Tiempo desde que se accede a la hoja hasta que empieza la trayectoria",
+    gcp_pathTimerTitle:     "Espera antes de iniciar la trayectoria (segundos)",
     gcp_saveBehavior:       "Guardar ✓",
 
     // Editor general — modales proyecto/guardado/atajos/ayuda/camara (Trozo D)
@@ -1738,6 +1741,9 @@ const TRANSLATIONS = {
     gcp_objectOrientation:  "Object orientation",
     gcp_fixedOrientation:   "🧭 Fixed",
     gcp_rotateAlongPath:    "🔄 Rotate along path",
+    gcp_pathTimer:          "Timer",
+    gcp_pathTimerHint:      "Time from entering the page until the path starts playing",
+    gcp_pathTimerTitle:     "Wait before the path starts (seconds)",
     gcp_saveBehavior:       "Save ✓",
 
     // General editor — project/save/shortcuts/help/camera modals (Chunk D)

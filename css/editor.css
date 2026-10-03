@@ -1386,6 +1386,31 @@ body.ed-scale-tablet {
   box-shadow: inset 4px 0 0 var(--black);
   font-weight: 900;
 }
+/* Temporizador de la trayectoria — mismo aspecto que el de animaciones (GCP):
+   deslizador 0–60 s con burbuja + campo numérico subrayado (décimas al teclear). */
+.mpbeh-timer-hint {
+  padding: 12px 18px 0;
+  font-family: var(--font-body); font-size: .73rem; line-height: 1.3;
+  color: var(--gray-500); text-align: center;
+}
+.mpbeh-timer-row {
+  display: flex; align-items: center; gap: 12px;
+  /* Hueco arriba: la burbuja del slider se dibuja por encima del thumb y el
+     acordeón recorta lo que sobresale (overflow:hidden). */
+  padding: 30px 18px 16px;
+}
+.mpbeh-timer-row .ed-slider-wrap { flex: 1; }
+.mpbeh-timer-row input[type="range"] { width: 100%; accent-color: var(--black); cursor: pointer; }
+.mpbeh-timer-val {
+  display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap;
+  font-family: var(--font-body); font-size: .9rem; font-weight: 900; color: var(--black);
+}
+.mpbeh-timer-val input {
+  width: 48px; text-align: right;
+  border: none; border-bottom: 1px dashed var(--gray-300); border-radius: 0;
+  background: transparent; color: inherit; font: inherit; padding: 0 1px;
+}
+.mpbeh-timer-val input:focus { outline: none; border-bottom: 1px solid var(--black); }
 
 #edProjectModal, #edSaveChoiceModal, #edAnimRangeModal {
   position: fixed; inset: 0;

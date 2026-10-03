@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.54</footer>
+    <footer class="app-version">v41.56</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -937,6 +937,27 @@ Router.register('editor', {
             <div class="mpbeh-options" id="mpbeh-orient-options">
               <button class="mpbeh-opt" data-mpbeh-orient="fixed" id="mpbeh-orient-fixed" data-i18n="gcp_fixedOrientation">🧭 Fija</button>
               <button class="mpbeh-opt" data-mpbeh-orient="path"  id="mpbeh-orient-path" data-i18n="gcp_rotateAlongPath">🔄 Girar según trayectoria</button>
+            </div>
+          </div>
+
+          <!-- Sección: Temporizador — espera desde que se accede a la hoja hasta que
+               empieza la trayectoria. Solo para objetos que NO son animación (en las
+               animaciones manda el temporizador del editor de animaciones, que la
+               trayectoria ya sigue): el JS oculta esta sección en ese caso. -->
+          <div class="mpbeh-section" id="mpbeh-timer-section" style="margin-top:10px">
+            <button class="mpbeh-header" id="mpbeh-timer-toggle">
+              <span class="mpbeh-header-label" data-i18n="gcp_pathTimer">Temporizador</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-timer-options">
+              <div class="mpbeh-timer-hint" data-i18n="gcp_pathTimerHint">Tiempo desde que se accede a la hoja hasta que empieza la trayectoria</div>
+              <div class="mpbeh-timer-row">
+                <div class="ed-slider-wrap">
+                  <input type="range" id="mpbeh-timer-slider" min="0" max="60" step="0.5" value="0" data-suffix="s">
+                  <span class="ed-slider-bubble"></span>
+                </div>
+                <span class="mpbeh-timer-val"><input id="mpbeh-timer-input" type="text" inputmode="decimal" maxlength="5" value="0" autocomplete="off" data-i18n-title="gcp_pathTimerTitle" title="Espera antes de iniciar la trayectoria (segundos)">s</span>
+              </div>
             </div>
           </div>
 

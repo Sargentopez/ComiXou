@@ -2641,7 +2641,10 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         // el path también debe esperar para reiniciarse sincrónicamente (FIX6).
         if (layer._animRestartAt) return;
         const { pw: _mpPw, ph: _mpPh } = _panelDims(pi);
-        const _mpElapsed = (now - layer._pathStartTime) / 1000;
+        // _pathStartTime puede estar en el futuro (Temporizador de la trayectoria, ver
+        // _rMpDelayMs): mientras tanto el progreso es 0 → el objeto espera en su punto de
+        // salida (ya orientado, si gira según la trayectoria) en vez de saltar al empezar.
+        const _mpElapsed = Math.max(0, now - layer._pathStartTime) / 1000;
         const _mpClosed  = layer._motionPathClosed || false;
         const _mpPts     = (_mpClosed && layer._motionPath.length >= 3)
           ? _bezierSampleClosed(layer._motionPath, 200)
@@ -4717,6 +4720,29 @@ function _initTextStep(idx) {
 }
 
 // Resetear animaciones de un panel al frame 0 para que se reproduzcan desde el inicio
+// ── Temporizador de la trayectoria (_motionPathDelay, segundos) ───────────────
+// Espera desde que se ACCEDE a la hoja hasta que la trayectoria empieza a
+// reproducirse. Solo para objetos que NO son animación: en las animaciones manda
+// el temporizador de inicio de la propia animación (_gcpStartDelay → _animStartAt),
+// que la trayectoria ya sigue. Solo retrasa el PRIMER arranque tras llegar a la hoja
+// (los reinicios del recorrido en modo «Reiniciar» no vuelven a esperar). Réplica de
+// _edMpDelayMs/_edMpIsAnim (editor.js) — mantener sincronizadas.
+function _rMpIsAnim(l) {
+  if (!l) return false;
+  if (l.type === 'gif') return true;
+  // _pngFrames/_pngFramesKey no se publican: llegan animKey/_apngIdbKey, los datos GCP y, ya
+  // descargado, _apngSrc.
+  return l.type === 'image' && !!(l._gcpLayersData || l._isGcpImage || l._pngFrames || l.animKey || l._apngIdbKey || l._apngSrc || l._animFrames);
+}
+function _rMpDelayMs(layer, layers) {
+  if (!layer || !layer._motionPath || layer._motionPath.length < 2) return 0;
+  if (_rMpIsAnim(layer)) return 0;
+  const sec = +layer._motionPathDelay;
+  if (!(sec > 0)) return 0;
+  if (layer.groupId && layers && layers.some(m => m && m.groupId === layer.groupId && _rMpIsAnim(m))) return 0;
+  return Math.round(sec * 1000);
+}
+
 function _resetPanelAnims(idx) {
   const panel = RS.panels[idx];
   if (!panel) return;
@@ -4771,7 +4797,11 @@ function _resetPanelAnims(idx) {
     // Trayectoria: reiniciar — si hay delay de inicio, el path espera junto a la animación
     if (layer._motionPath && layer._motionPath.length >= 2) {
       const _hasDelay = (layer._gcpStartDelay || 0) > 0;
-      layer._pathStartTime = _hasDelay ? null : Date.now();
+      // Temporizador de la trayectoria (objetos que no son animación): _pathStartTime queda
+      // en el FUTURO (ahora + espera) y _readerGifTick mantiene el objeto en su punto de
+      // salida hasta entonces. Una sola Date.now() por capa; los miembros de un grupo
+      // comparten el mismo valor de espera → arrancan a la vez (salvo el redondeo de ms).
+      layer._pathStartTime = _hasDelay ? null : Date.now() + _rMpDelayMs(layer, panel.layers);
       delete layer._pathStopped;
       delete layer._mpInvisTriggered; // permitir que "Invisibilidad → Al final" pueda dispararse de nuevo
       layer._pathCurX = layer.x || 0.5;

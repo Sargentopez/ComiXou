@@ -110,7 +110,7 @@
     // vieja; en cualquier otro caso (coincide, no aplica, o falla la
     // comprobación) si se llama, para no dejar la pantalla en blanco.
     (function () {
-      var READER_BUILD = '41.54';
+      var READER_BUILD = '41.55';
       var RETRY_KEY = 'cxReaderCacheRetry';
       if (/[?&]_cb=/.test(location.search)) {
         var clean = location.href.replace(/([?&])_cb=[^&]*&?/, '$1').replace(/[?&]$/, '');
@@ -158,12 +158,12 @@
        en vez de quitarlo del todo. -->
   <meta property="og:type"        content="website">
   <meta property="og:title"       content="Comxow">
-  <meta property="og:image"       content="https://comxow.com/og-card.png?v=41.54">
+  <meta property="og:image"       content="https://comxow.com/og-card.png?v=41.55">
   <meta property="og:image:width"  content="1200">
   <meta property="og:image:height" content="388">
   <meta property="og:url"         content="https://comxow.com/reader/">
   <meta name="twitter:card"       content="summary_large_image">
-  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=41.54">
+  <meta name="twitter:image"      content="https://comxow.com/og-card.png?v=41.55">
 
   <!-- Icono de pestaña — antes ausente aquí (el lector nunca lo declaraba,
        a diferencia de la app principal), así que cada carga pedía de más
@@ -174,9 +174,9 @@
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/typefaces.css">
-  <link rel="stylesheet" href="reader.css?v=41.54">
+  <link rel="stylesheet" href="reader.css?v=41.55">
 </head>
-<script src="../js/i18n.js?v=41.54"></script>
+<script src="../js/i18n.js?v=41.55"></script>
 <script>
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
@@ -186,7 +186,7 @@
   <!-- CARGA -->
   <div id="loadingScreen" class="loading-screen">
     <div class="loading-logo">
-      <img src="../loading-icon.png?v=41.54" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
+      <img src="../loading-icon.png?v=41.55" data-i18n-alt="loadingAlt" alt="Cargando" style="height:40px;width:auto;">
       <img src="../logo.svg" alt="Comxow" style="height:40px;width:auto;">
     </div>
     <div id="loadingMsg" class="loading-msg" data-i18n="reader_loadingWork">Cargando obra...</div>
@@ -245,12 +245,12 @@
 
   </div>
 
-  <script src="../js/pako.min.js?v=41.54"></script>
-  <script src="../js/UPNG.js?v=41.54"></script>
-  <script src="../js/fullscreen.js?v=41.54"></script>
-  <script src="../js/logo-data.js?v=41.54"></script>
-  <script src="../js/icon-data.js?v=41.54"></script>
-  <script src="../js/anim-clock.js?v=41.54"></script>
-  <script src="reader.js?v=41.54"></script>
+  <script src="../js/pako.min.js?v=41.55"></script>
+  <script src="../js/UPNG.js?v=41.55"></script>
+  <script src="../js/fullscreen.js?v=41.55"></script>
+  <script src="../js/logo-data.js?v=41.55"></script>
+  <script src="../js/icon-data.js?v=41.55"></script>
+  <script src="../js/anim-clock.js?v=41.55"></script>
+  <script src="reader.js?v=41.55"></script>
 </body>
 </html>

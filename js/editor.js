@@ -3586,6 +3586,9 @@ class StrokeLayer extends BaseLayer {
       dl._uid = this._uid || this._fillLayerId;
       dl._fromStroke = true;
     }
+    // v41.56 — la trayectoria viaja con el dibujo durante la sesión de edición
+    // (_edFreezeDrawLayer la pasa al StrokeLayer resultante).
+    _edCarryMotionPath(this, dl);
     return dl;
   }
   draw(ctx){
@@ -4276,6 +4279,7 @@ function _edSnapLayerFragment(l){
         _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
         _motionPathEnd: l._motionPathEnd||undefined,
         _motionPathAccel: l._motionPathAccel||undefined,
+        _motionPathDelay: l._motionPathDelay||undefined,
         _motionPathOrient: l._motionPathOrient||false,
         _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
         _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -4292,6 +4296,7 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathDelay: l._motionPathDelay||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -4307,6 +4312,7 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathDelay: l._motionPathDelay||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -4324,6 +4330,7 @@ function _edSnapLayerFragment(l){
       _motionSpeed: l._motionSpeed != null ? l._motionSpeed : undefined,
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
+      _motionPathDelay: l._motionPathDelay||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -4394,6 +4401,7 @@ function _edSnapLayerFragment(l){
     if(l._motionSpeed != null) o._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathDelay) o._motionPathDelay = l._motionPathDelay;
     if(l._motionPathOrient) o._motionPathOrient = true;
     // BUG CORREGIDO (reportado por Alberto: "el número de ciclos en las
     // trayectorias se sigue perdiendo"). _motionCycles/_motionCyclesDur eran
@@ -5017,7 +5025,7 @@ function edApplyHistory(snapshot){
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'shape') {
@@ -5031,7 +5039,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'line') {
@@ -5052,7 +5060,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'fill') {
@@ -8698,6 +8706,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   dlOutside._ctx.drawImage(drawOutside, 0, 0);
   dlOutside.opacity = dl.opacity ?? 1;
   dlOutside.locked  = dl.locked || false;
+  _edCarryMotionPath(dl, dlOutside); // v41.56: el resto del dibujo recortado (el original) conserva su trayectoria
   if (fillOutside || pencilOutside || wcOutside) {
     const uidOut = (Date.now()+1).toString(36) + '_co_' + Math.random().toString(36).slice(2,5);
     dlOutside._uid               = uidOut;
@@ -12368,7 +12377,11 @@ function _edViewerMpTick() {
     // esté parada. Al disparar _restartTimer se borra _pathStartTime (v31.50 FIX3)
     // y el path reinicia desde 0 junto a la animación.
     if (l._restartTimer) return;
-    const _elapsed  = (now - l._pathStartTime) / 1000;
+    // Temporizador de la trayectoria (_motionPathDelay): al entrar en la hoja,
+    // _edStartPageAnims deja _pathStartTime EN EL FUTURO (ahora + espera). Mientras
+    // no llega, el progreso es 0: el objeto espera ya en su punto de salida (y
+    // orientado, si gira según la trayectoria) en vez de saltar al empezar.
+    const _elapsed  = Math.max(0, now - l._pathStartTime) / 1000;
     const _totalPx  = _edPathArcLengthPx(l._motionPath, l._motionPathClosed || false, _vpw, _vph);
     // Usar ciclos si la capa tiene duración de ciclo guardada; si no, fallback a velocidad
     const _vCycleDurMs = _edGetCycleDurationMs(l) || l._motionCyclesDur || 0;
@@ -12695,6 +12708,30 @@ function _edCopyMotionPathPts(pts) {
   return pts.map(p => p.sharp ? { x: p.x, y: p.y, sharp: true } : { x: p.x, y: p.y });
 }
 
+// v41.56 — Traspasa la trayectoria (todos sus campos persistentes) de una capa a otra.
+// Cualquier flujo de edición que SUSTITUYA una capa por un objeto nuevo —congelar un dibujo
+// reeditado, pasar una forma a recta, «Editar relleno» de una forma/recta, simetría de grupo,
+// reedición de una animación GIF— debe llamarla con la capa vieja y la nueva; si no, el objeto
+// «pierde» su trayectoria y hay que volver a crearla (bug reportado por Alberto: «hay que
+// volver a crearla cada vez que se le hace un cambio al objeto»). Es el espejo de lo que ya
+// copian la serialización, el historial y la propagación a grupos (mismos campos). Sin
+// trayectoria en el origen no hace nada. Solo datos persistentes: el estado de reproducción
+// (_pathCurX/_pathStartTime…) lo recalcula el visor al entrar en la hoja.
+function _edCarryMotionPath(src, dst) {
+  if (!src || !dst || src === dst) return dst;
+  if (!(src._motionPath && src._motionPath.length >= 2)) return dst;
+  dst._motionPath       = _edCopyMotionPathPts(src._motionPath);
+  dst._motionPathClosed = src._motionPathClosed || false;
+  dst._motionSpeed      = src._motionSpeed || 100;
+  if (src._motionCycles != null) dst._motionCycles    = src._motionCycles;
+  if (src._motionCyclesDur)      dst._motionCyclesDur = src._motionCyclesDur;
+  if (src._motionPathEnd)        dst._motionPathEnd   = src._motionPathEnd;
+  if (src._motionPathAccel)      dst._motionPathAccel = src._motionPathAccel;
+  if (src._motionPathDelay)      dst._motionPathDelay = src._motionPathDelay;
+  if (src._motionPathOrient)     dst._motionPathOrient = src._motionPathOrient;
+  return dst;
+}
+
 function _edAlignPathToGuides(rawPts, bx, by) {
   if (!edRules.length || edRulesHidden) return rawPts;
   const ALIGN_PX = _ED_SNAP_THRESHOLD_PX * 3; // umbral de release = 3× el de drag
@@ -12965,6 +13002,48 @@ function _mpbehClose() {
   if (_m) _m.classList.remove('open');
 }
 
+// ── Temporizador de la trayectoria (_motionPathDelay, en segundos) ─────────────
+// Espera desde que se ACCEDE a la hoja (visor del editor / lector externo) hasta
+// que la trayectoria empieza a reproducirse. Solo se aplica a objetos que NO son
+// animación: en las animaciones manda el temporizador de inicio del editor de
+// animaciones (_gcpStartDelay), que la trayectoria ya sigue (_startDelayTimer en
+// el visor, _animStartAt en el lector). Solo retrasa el PRIMER arranque tras
+// entrar en la hoja: los reinicios del propio recorrido (modo "Reiniciar") no
+// vuelven a esperar.
+// `layers` (opcional) = capas de la hoja, para detectar si el objeto forma parte
+// de un grupo que contiene una animación (el grupo sigue entonces el temporizador
+// de la animación, no este).
+function _edMpDelayMs(l, layers) {
+  if (!l || !l._motionPath || l._motionPath.length < 2) return 0;
+  if (_edMpIsAnim(l)) return 0;
+  const sec = +l._motionPathDelay;
+  if (!(sec > 0)) return 0;
+  if (l.groupId && layers && layers.some(m => m && m.groupId === l.groupId && _edMpIsAnim(m))) return 0;
+  return Math.round(sec * 1000);
+}
+// ¿Es una animación a efectos del Temporizador? _edIsAnimLayer (GIF, o imagen con
+// datos GCP/frames) + las claves de una animación aún sin frames cargados (carga
+// diferida desde IndexedDB): así el resultado no depende de si ya se montó.
+function _edMpIsAnim(l) {
+  return _edIsAnimLayer(l) || !!(l && l.type === 'image' && (l.animKey || l._pngFramesKey || l._apngIdbKey || l._apngSrc || l._animDeferred));
+}
+// ¿Se ofrece el Temporizador en el modal para esta capa? No si es una animación
+// ni si forma parte de un grupo que contiene alguna.
+function _edMpTimerAvailable(la) {
+  if (!la || _edMpIsAnim(la)) return false;
+  if (la.groupId) return !_edGroupMemberIdxs(la.groupId).some(i => _edMpIsAnim(edLayers[i]));
+  return true;
+}
+// Valor pendiente (segundos) del Temporizador mientras el modal está abierto;
+// solo se vuelca a la capa al pulsar "Guardar".
+let _mpbehTimerVal = 0;
+function _mpbehTimerSync() {
+  const sl = document.getElementById('mpbeh-timer-slider');
+  const inp = document.getElementById('mpbeh-timer-input');
+  if (sl) { sl.value = Math.min(60, Math.max(0, _mpbehTimerVal)); if (typeof _edUpdateBubble === 'function') _edUpdateBubble(sl, 's'); }
+  if (inp && document.activeElement !== inp) inp.value = String(_mpbehTimerVal);
+}
+
 function _edEndMotionPath(save) {
   if (save && _edMotionPathTarget >= 0) {
     const la = edLayers[_edMotionPathTarget];
@@ -12991,7 +13070,7 @@ function _edEndMotionPath(save) {
         if (_cDurNow > 0) la._motionCyclesDur = _cDurNow;
       } else {
         delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
-        delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel;
+        delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel; delete la._motionPathDelay;
         delete la._motionPathOrient; delete la._pathCurRotDeg;
         delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime; delete la._pathStopped;
       }
@@ -13009,6 +13088,7 @@ function _edEndMotionPath(save) {
             _m._motionSpeed      = la._motionSpeed || 100;
             if (la._motionPathEnd)    _m._motionPathEnd    = la._motionPathEnd;    else delete _m._motionPathEnd;
             if (la._motionPathAccel)  _m._motionPathAccel  = la._motionPathAccel;  else delete _m._motionPathAccel;
+            if (la._motionPathDelay)  _m._motionPathDelay  = la._motionPathDelay;  else delete _m._motionPathDelay;
             if (la._motionPathOrient) _m._motionPathOrient = la._motionPathOrient; else delete _m._motionPathOrient;
             // _motionCycles/_motionCyclesDur: si la (el objeto cuya trayectoria se
             // acaba de editar) es una animación sincronizada por ciclos, el resto
@@ -13020,7 +13100,7 @@ function _edEndMotionPath(save) {
             if (la._motionCyclesDur) _m._motionCyclesDur = la._motionCyclesDur; else delete _m._motionCyclesDur;
           } else {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
-            delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel;
+            delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay;
             delete _m._motionPathOrient; delete _m._pathCurRotDeg;
             delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
           }
@@ -13298,6 +13378,7 @@ function _edDissolveJoined(la) {
     sub.opacity   = la.opacity ?? 1;
     sub.rotation  = la.rotation || 0;
     sub.x = la.x; sub.y = la.y;   // mismo origen; _updateBbox los recentrará
+    _edCarryMotionPath(la, sub);  // v41.56: cada sub-camino conserva la trayectoria del objeto unido
     sub.closed    = st.closed !== undefined ? st.closed : la.closed;
     sub.cornerRadii = {};
     let localIdx = 0;
@@ -17551,6 +17632,7 @@ function _vsSerLayer(l) {
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    if (l._motionPathDelay) _s._motionPathDelay = l._motionPathDelay;
     if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
@@ -17573,6 +17655,7 @@ function _vsSerLayer(l) {
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
+    if (l._motionPathDelay) _s._motionPathDelay = l._motionPathDelay;
     if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
@@ -21252,6 +21335,7 @@ function _edShapeToLineLayer(s) {
   if (s.groupId) l.groupId = s.groupId;
   if (s.locked)  l.locked  = true;
   if (s._fusionId) l._fusionId = s._fusionId;
+  _edCarryMotionPath(s, l); // v41.56: forma → recta no borra la trayectoria
   // Generar puntos en coords locales (relativas al centro, normalizadas a página)
   const hw = s.width  / 2;  // half-width  en coords normalizadas
   const hh = s.height / 2;  // half-height en coords normalizadas
@@ -22244,14 +22328,7 @@ function _edTextToDrawing(idx) {
   if (la.groupId)     sl.groupId     = la.groupId;
   if (la.locked)      sl.locked      = true;
   if (la.hidden)      sl.hidden      = true;
-  if (la._motionPath) {
-    sl._motionPath       = _edCopyMotionPathPts(la._motionPath);
-    sl._motionPathClosed = la._motionPathClosed || false;
-    sl._motionSpeed      = la._motionSpeed || 100;
-    if (la._motionPathEnd)    sl._motionPathEnd    = la._motionPathEnd;
-    if (la._motionPathAccel)  sl._motionPathAccel  = la._motionPathAccel;
-    if (la._motionPathOrient) sl._motionPathOrient = la._motionPathOrient;
-  }
+  _edCarryMotionPath(la, sl); // v41.56: mismo traspaso único (antes copiaba a mano y olvidaba _motionCycles/_motionCyclesDur)
 
   // ── Helper: recortar canvas workspace al bbox ─────────────────────────────
   const _cropWs = (srcCanvas) => {
@@ -22462,6 +22539,7 @@ function _edFreezeDrawLayer(){
     if(dl._fillLayerId)       _slE._fillLayerId       = dl._fillLayerId;
     if(dl._pencilLayerId)     _slE._pencilLayerId     = dl._pencilLayerId;
     if(dl._watercolorLayerId) _slE._watercolorLayerId = dl._watercolorLayerId;
+    _edCarryMotionPath(dl, _slE); // v41.56: la reedición no borra la trayectoria del dibujo
     // Recortar cada sub-capa al union bbox (si existe)
     const _cropSubE = (la, refId) => {
       if (!la) return;
@@ -22571,6 +22649,7 @@ function _edFreezeDrawLayer(){
   if(dl._fillLayerId)       sl._fillLayerId       = dl._fillLayerId;
   if(dl._pencilLayerId)     sl._pencilLayerId     = dl._pencilLayerId;
   if(dl._watercolorLayerId) sl._watercolorLayerId = dl._watercolorLayerId;
+  _edCarryMotionPath(dl, sl); // v41.56: la reedición no borra la trayectoria del dibujo
 
   // ── Helper: recortar una capa del grupo al bbox union ─────────────────────
   // DIAGNÓSTICO v40.90: el registro (_edFCL) estaba condicionado a _isFillLa,
@@ -24207,7 +24286,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click',()=>{
       const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
-      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edRenderOptionsPanel('text-props');
     });
     $('pp-path-speed')?.addEventListener('input',(ev)=>{
@@ -24409,6 +24488,7 @@ function edRenderOptionsPanel(mode){
             _newSl._fillLayerId=m._fillLayerId;
             _newSl._pencilLayerId=m._pencilLayerId;
             _newSl._watercolorLayerId=m._watercolorLayerId;
+            _edCarryMotionPath(m, _newSl); // v41.56: la simetría de grupo no borra la trayectoria de los dibujos
             if(_mIdx>=0) _pg.layers.splice(_mIdx,1,_newSl);
             // Sub-capas: objetos nuevos limpios
             if(_uid){
@@ -24518,7 +24598,7 @@ function edRenderOptionsPanel(mode){
         edPushHistory();
         _idxsGrp.forEach(i => {
           const _m = edLayers[i]; if (!_m) return;
-          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathOrient; delete _m._pathCurRotDeg; delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
+          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay; delete _m._motionPathOrient; delete _m._pathCurRotDeg; delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
         });
         edRenderOptionsPanel('props');
       });
@@ -24974,7 +25054,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click', () => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
-      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
+      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edPushHistory();
       edRenderOptionsPanel('props');
     });
@@ -25060,6 +25140,7 @@ function edRenderOptionsPanel(mode){
           _dl._uid = _la2._uid || ('dl_' + Date.now().toString(36));
           _dl._fillLayerId = _dl._uid;
           _dl._fromStroke = true;
+          _edCarryMotionPath(_la2, _dl); // v41.56: «Editar relleno» de una forma/recta no borra su trayectoria
           const _fillCanvas = document.createElement('canvas');
           _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
           const _fillCtx = _fillCanvas.getContext('2d');
@@ -30966,6 +31047,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed != null) _g._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _g._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _g._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathDelay) _g._motionPathDelay = l._motionPathDelay;
     if(l._motionPathOrient) _g._motionPathOrient = true;
     if(l._motionCycles!=null) _g._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _g._motionCyclesDur=l._motionCyclesDur;
@@ -31028,6 +31110,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed != null) _r._motionSpeed = l._motionSpeed;
     if(l._motionPathEnd)   _r._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _r._motionPathAccel = l._motionPathAccel;
+    if(l._motionPathDelay) _r._motionPathDelay = l._motionPathDelay;
     if(l._motionPathOrient) _r._motionPathOrient = true;
     if(l._motionCycles!=null) _r._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _r._motionCyclesDur=l._motionCyclesDur;
@@ -31055,6 +31138,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _o._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay;
     if(l._motionPathOrient)_o._motionPathOrient=true;
     if(l._motionCycles!=null)_o._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur;
@@ -31134,6 +31218,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed!=null)_bobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _bobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_bobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathDelay)_bobj._motionPathDelay=l._motionPathDelay;
     if(l._motionPathOrient)_bobj._motionPathOrient=true;
     if(l._motionCycles!=null)_bobj._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_bobj._motionCyclesDur=l._motionCyclesDur;
@@ -31150,10 +31235,10 @@ function edSerLayer(l, skipCompress){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -31191,6 +31276,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed!=null)_sobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _sobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_sobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathDelay)_sobj._motionPathDelay=l._motionPathDelay;
     if(l._motionPathOrient)_sobj._motionPathOrient=true;
     return _sobj;
   }
@@ -31241,6 +31327,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionSpeed!=null)_lobj._motionSpeed=l._motionSpeed;
     if(l._motionPathEnd)  _lobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_lobj._motionPathAccel=l._motionPathAccel;
+    if(l._motionPathDelay)_lobj._motionPathDelay=l._motionPathDelay;
     if(l._motionPathOrient)_lobj._motionPathOrient=true;
     return _lobj;
   }
@@ -31367,6 +31454,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null) dl._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)       dl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     dl._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)     dl._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)    dl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      dl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         dl._motionCyclesDur  = d._motionCyclesDur;
@@ -31401,6 +31489,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null) sl._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)       sl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     sl._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)     sl._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)    sl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      sl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         sl._motionCyclesDur  = d._motionCyclesDur;
@@ -31421,6 +31510,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -31449,6 +31539,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -31493,6 +31584,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null)   l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -31531,6 +31623,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionSpeed != null)    l._motionSpeed      = d._motionSpeed;
     if(d._motionPathEnd)          l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)        l._motionPathAccel  = d._motionPathAccel;
+    if(d._motionPathDelay)        l._motionPathDelay  = d._motionPathDelay;
     if(d._motionPathOrient)       l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)         l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)            l._motionCyclesDur  = d._motionCyclesDur;
@@ -33483,6 +33576,20 @@ function _edStartPageAnims(pageIdx) {
   _edViewerMpTickStart();
   const page = edPages[pageIdx];
   if (!page) return;
+  // Temporizador de la trayectoria (_motionPathDelay, objetos que NO son animación):
+  // se arma AQUÍ, al acceder a la hoja y antes de cualquier salida temprana por carga
+  // diferida (si la hoja aún se está montando, la re-entrada de más abajo vuelve a
+  // armarlo con el instante real en que la hoja queda lista). _pathStartTime queda en
+  // el futuro y _edViewerMpTick mantiene el objeto en su punto de salida hasta
+  // entonces; una sola Date.now() para todas las capas → los miembros de un grupo
+  // arrancan a la vez. Las animaciones siguen su propio temporizador (_startDelayTimer).
+  {
+    const _tmrNow = Date.now();
+    page.layers.forEach(l => {
+      const _dMs = _edMpDelayMs(l, page.layers);
+      if (_dMs > 0) l._pathStartTime = _tmrNow + _dMs;
+    });
+  }
 
   // BUG CORREGIDO (v38.14 — Alberto: el temporizador de inicio no se respeta
   // si se navega muy rápido entre hojas, "no da tiempo a montarse
@@ -35889,6 +35996,15 @@ function EditorView_init(){
     document.querySelectorAll('[data-mpbeh-orient]').forEach(b => {
       b.classList.toggle('active', b.dataset.mpbehOrient === _curOrient);
     });
+    // Temporizador: solo para objetos que no son animación (ver _edMpTimerAvailable)
+    const _tmrSec = $('mpbeh-timer-section');
+    if (_tmrSec) {
+      const _tmrOk = _edMpTimerAvailable(_mla);
+      _tmrSec.style.display = _tmrOk ? '' : 'none';
+      if (!_tmrOk) _tmrSec.classList.remove('open');
+    }
+    _mpbehTimerVal = Math.max(0, +(_mla?._motionPathDelay) || 0);
+    _mpbehTimerSync();
     _modal.classList.add('open');
   });
 
@@ -35901,6 +36017,8 @@ function EditorView_init(){
     $('mpbeh-close')?.addEventListener('click',  _mpbehClose);
     $('mpbeh-cancel')?.addEventListener('click', _mpbehClose);
     $('mpbeh-ok')?.addEventListener('click', () => {
+      // Si se estaba tecleando el Temporizador, confirmar ese valor antes de leerlo
+      { const _ti = $('mpbeh-timer-input'); if (_ti && document.activeElement === _ti) _ti.blur(); }
       const _mbLa = edLayers[_edMotionPathTarget];
       if (_mbLa) {
         const _endBtn    = document.querySelector('[data-mpbeh-end].active');
@@ -35914,6 +36032,11 @@ function EditorView_init(){
         _mbLa._motionPathOrient = _orientVal;
         // Al desactivar orientación, limpiar el giro que pudiera seguir visible
         if (!_orientVal) delete _mbLa._pathCurRotDeg;
+        // Temporizador (0 = sin espera → se borra el campo). Si la sección no se
+        // ofrece (animación / grupo con animación) no se toca el valor existente.
+        const _tmrOn  = _edMpTimerAvailable(_mbLa);
+        const _tmrSec = _mpbehTimerVal > 0 ? _mpbehTimerVal : 0;
+        if (_tmrOn) { if (_tmrSec > 0) _mbLa._motionPathDelay = _tmrSec; else delete _mbLa._motionPathDelay; }
         if (_mbLa.groupId) {
           _edGroupMemberIdxs(_mbLa.groupId).forEach(i => {
             const _gm = edLayers[i];
@@ -35921,6 +36044,7 @@ function EditorView_init(){
               _gm._motionPathEnd = _endVal; _gm._motionPathAccel = _accelVal;
               _gm._motionPathOrient = _orientVal;
               if (!_orientVal) delete _gm._pathCurRotDeg;
+              if (_tmrOn) { if (_tmrSec > 0) _gm._motionPathDelay = _tmrSec; else delete _gm._motionPathDelay; }
             }
           });
         }
@@ -35961,6 +36085,44 @@ function EditorView_init(){
       document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
       if (!_isOpen) _sec.classList.add('open');
     });
+
+    // Toggle sección "Temporizador"
+    $('mpbeh-timer-toggle')?.addEventListener('click', () => {
+      const _sec = $('mpbeh-timer-toggle').closest('.mpbeh-section');
+      const _isOpen = _sec.classList.contains('open');
+      document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
+      if (!_isOpen) _sec.classList.add('open');
+    });
+
+    // Temporizador: slider 0–60 s (paso 0,5) + campo numérico (décimas al teclear;
+    // el número escrito manda aunque supere el tope del slider) — mismo criterio
+    // que el temporizador del editor de animaciones (_gcpCommitSumInput).
+    {
+      const _tmrSl  = $('mpbeh-timer-slider');
+      const _tmrInp = $('mpbeh-timer-input');
+      if (_tmrSl) _edInitSliderBubbles($('mpbeh-timer-options'));
+      _tmrSl?.addEventListener('input', () => {
+        _mpbehTimerVal = Math.max(0, parseFloat(_tmrSl.value) || 0);
+        if (_tmrInp) _tmrInp.value = String(_mpbehTimerVal);
+      });
+      if (_tmrInp) {
+        _tmrInp.addEventListener('pointerdown', e => e.stopPropagation());
+        _tmrInp.addEventListener('focus', () => _tmrInp.select());
+        const _tmrCommit = () => {
+          const n = parseFloat(String(_tmrInp.value).replace(',', '.'));
+          if (!isNaN(n)) {
+            const v = Math.round(Math.max(0, n) * 10) / 10;  // décimas; evita 2.5000000000000004
+            _mpbehTimerVal = v;
+          }
+          _mpbehTimerSync();   // entrada inválida: revierte al valor anterior
+        };
+        _tmrInp.addEventListener('blur', _tmrCommit);
+        _tmrInp.addEventListener('keydown', e => {
+          e.stopPropagation();
+          if (e.key === 'Enter') { e.preventDefault(); _tmrInp.blur(); }
+        });
+      }
+    }
 
     // Selección de opción "Al final de la trayectoria"
     document.querySelectorAll('[data-mpbeh-end]').forEach(btn => {
@@ -46863,6 +47025,7 @@ function _gcpSaveToLib(onDone) {
       _converted.hidden   = existingLayer.hidden;
       _converted.locked   = existingLayer.locked;
       _converted.name     = existingLayer.name;
+      _edCarryMotionPath(existingLayer, _converted); // v41.56: reeditar un GIF en GCP no borra su trayectoria
       if (window._gcpEdLayerIdx >= 0) edLayers[window._gcpEdLayerIdx] = _converted;
       existingLayer = _converted;
     }
