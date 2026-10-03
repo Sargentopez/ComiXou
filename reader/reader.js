@@ -891,7 +891,7 @@ function _capScaleTabletPC(scale, vw, vh) {
 }
 
 // ── ESTADO ──────────────────────────────────────────────────
-// Imagen del logo — se precarga completamente en preloadImages() antes de mostrar créditos
+// Imagen del logo — se precarga completamente (_plPreloadBrand) antes de abrir el lector, o sea antes de mostrar créditos
 let _logoImg = null;
 // Icono estático (sin animar) — misma hoja de créditos, junto al logo
 let _iconImg = null;
@@ -900,9 +900,10 @@ let _iconImg = null;
 // misma idea que _tdImgCache en editor.js: caché GLOBAL por src (data URL),
 // porque el mismo objeto de biblioteca puede insertarse varias veces en un
 // mismo documento. A diferencia de editor.js (carga perezosa + redibujado al
-// cargar), aquí se precarga entera en preloadImages() antes de renderizar,
-// igual que el resto de imágenes de capas — así _drawRichTextLines() nunca
-// dibuja a medias ni necesita su propio bucle de redibujado.
+// cargar), aquí se precarga entera al preparar cada hoja (_plDecode, hoja a hoja
+// desde v41.52) antes de que la hoja pase a «lista» y se dibuje, igual que el
+// resto de imágenes de capas — así _drawRichTextLines() nunca dibuja a medias
+// ni necesita su propio bucle de redibujado.
 const _tdImgCache = Object.create(null);
 
 const RS = {
@@ -1207,29 +1208,25 @@ async function loadWork(workId) {
     if (!work || !work.length) { showError(I18n.t('reader_errorWorkNotFound')); return; }
 
     setLoadingMsg(I18n.t('reader_loadingPages'));
-    await _loadPanels(workId);
+    // v41.52 — CARGA PROGRESIVA (ver el bloque «CARGA PROGRESIVA» más abajo): solo la lista de hojas
+    // (ligera); las capas/textos/imágenes se piden hoja a hoja. El lector se abre en cuanto la hoja 1
+    // está lista y el resto se va trayendo en segundo plano.
+    const _panelRows = await _plFetchPanelList(sbGet, workId);
+    if (!_panelRows || !_panelRows.length) { showError(I18n.t('reader_errorNoPages')); return; }
     document.title = (work[0].title || I18n.t('reader_defaultWorkTitle')) + ' — ComXow';
     RS._workId     = workId;
     RS._workAuthor = work[0].author_name || "";
     RS._workSocial = work[0].social      || "";
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
-    // Copia "limpia" de los paneles tal como quedan justo aquí — sin el
-    // estado de ejecución (frames decodificados, canvases offscreen, etc.)
-    // que preloadImages() añade a continuación. Es la base de la que parte
-    // la descarga para lectura offline (ver _buildOfflineSnapshot) — así no
-    // hay que filtrar campos de ejecución de un objeto ya mutado, ni
-    // mantener una lista de qué excluir cada vez que algo nuevo se añada
-    // al pipeline de precarga.
-    RS._sourcePanels = JSON.parse(JSON.stringify(RS.panels));
     // Actualizar meta OG con datos reales de la obra
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
-    // Añadir hoja de créditos como último panel — se trata como hoja normal
-    const _lastPanel = RS.panels[RS.panels.length - 1];
-    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-    setLoadingMsg(I18n.t('reader_preparingImages'));
-    await preloadImages();
+    // Esqueletos de todas las hojas + hoja de créditos como último panel (se trata como hoja normal) y
+    // hoja 1 lista. La copia "limpia" para la descarga offline (RS._sourcePanels) la va dejando cada hoja
+    // al prepararse, justo antes de que la decodificación añada estado de ejecución a sus capas.
+    await _plBoot(_panelRows, sbGet);
     startReader();
+    _plStartBackground();
 
   } catch(err) {
     console.error('Error:', err);
@@ -1263,23 +1260,24 @@ async function loadDraft(token) {
     }
 
     setLoadingMsg(I18n.t('reader_loadingPages'));
-    await _loadPanels(token, useAuth);
+    // Carga progresiva — ver el mismo criterio en loadWork(). Con el JWT del autor si hizo falta para
+    // leer la obra, también para las peticiones hoja a hoja.
+    const _sbFetchPanels = useAuth ? sbGetAuth : sbGet;
+    const _panelRows = await _plFetchPanelList(_sbFetchPanels, token);
+    if (!_panelRows || !_panelRows.length) { showError(I18n.t('reader_errorNoPages')); return; }
     document.title = (work[0].title || I18n.t('reader_defaultDraftTitle')) + ' — ComXow';
     RS._workId     = token;
     RS._workAuthor = work[0].author_name || '';
     RS._workSocial = work[0].social      || '';
     RS._workTitle  = work[0].title       || '';
     RS.navMode     = work[0].nav_mode    || 'fixed';
-    // Copia limpia para descarga/exportación offline — ver el mismo criterio
-    // en loadWork(). Alberto: los borradores también deben poder descargarse
+    // Copia limpia para descarga/exportación offline (RS._sourcePanels, la deja cada hoja al prepararse)
+    // — ver el mismo criterio en loadWork(). Alberto: los borradores también deben poder descargarse
     // (un autor puede querer probar la distribución antes de publicar).
-    RS._sourcePanels = JSON.parse(JSON.stringify(RS.panels));
     _updateOGMeta(work[0].title, work[0].author_name, work[0].cover_url);
-    const _lastPanel = RS.panels[RS.panels.length - 1];
-    RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-    setLoadingMsg(I18n.t('reader_preparingImages'));
-    await preloadImages();
+    await _plBoot(_panelRows, _sbFetchPanels);
     startReader();
+    _plStartBackground();
   } catch(err) {
     console.error('Error loadDraft:', err);
     try {
@@ -1352,16 +1350,24 @@ async function _offlineDelete(workId) {
   } catch(e) { return false; }
 }
 
-// Construye la instantánea a partir de RS._sourcePanels (copia limpia,
-// tomada justo tras _loadPanels — ver loadWork). Lo único que en ese punto
-// todavía es una URL de red sin resolver es el GIF importado (layer._gifUrl,
-// bucket 'anims') — las imágenes estáticas ya vienen como data URL embebida
-// en layer_data, y el APNG animado ya se resolvió a _apngSrc durante
-// _loadPanels. Se descarga aquí, una sola vez, específicamente para la
-// instantánea (evita depender del estado ya decodificado en RS.panels, que
-// mezclaría campos de ejecución difíciles de enumerar por completo).
+// Construye la instantánea a partir de RS._sourcePanels (copia limpia que
+// deja cada hoja al prepararse, justo antes de decodificarla — ver
+// _plParse). Lo único que en ese punto todavía es una URL de red sin
+// resolver es el GIF importado (layer._gifUrl, bucket 'anims') — las
+// imágenes estáticas ya vienen como data URL embebida en layer_data, y el
+// APNG animado ya se resolvió a _apngSrc al bajar la hoja (_plFetchRaw).
+// Se descarga aquí, una sola vez, específicamente para la instantánea
+// (evita depender del estado ya decodificado en RS.panels, que mezclaría
+// campos de ejecución difíciles de enumerar por completo).
+//
+// v41.52: con la carga progresiva las hojas llegan de una en una, así que
+// antes de nada se fuerza (sin pausas por interacción) a tener TODAS —
+// una copia para leer sin conexión con hojas a medias no serviría de nada.
+// Si alguna no se puede traer, no se genera la copia (el llamador avisa).
 async function _buildOfflineSnapshot() {
   if (!RS._sourcePanels) return null;
+  if (!(await _plEnsureAll())) return null;
+  if (RS._sourcePanels.some(p => !p)) return null;
   const panels = await Promise.all(RS._sourcePanels.map(async panel => {
     const layers = await Promise.all((panel.layers || []).map(async layer => {
       if (layer.type === 'gif' && layer._gifUrl) {
@@ -1394,10 +1400,11 @@ async function _buildOfflineSnapshot() {
 }
 
 // Arranca el lector a partir de una instantánea guardada (sin red). Reusa
-// preloadImages() tal cual: layer._gifUrl con un data: URL en vez de una
-// URL http funciona igual con fetch() (los data: URL están soportados de
-// forma nativa), así que no hace falta ninguna rama de código aparte para
-// decodificar GIF/APNG sin conexión.
+// la decodificación de siempre (_plDecode): layer._gifUrl con un data: URL
+// en vez de una URL http funciona igual con fetch() (los data: URL están
+// soportados de forma nativa), así que no hace falta ninguna rama de código
+// aparte para decodificar GIF/APNG sin conexión. v41.52: la hoja 1 se
+// prepara ya y las demás en segundo plano, como cuando la obra viene de la red.
 //
 // opts.standalone: true cuando se arranca desde un archivo HTML autónomo
 // exportado con _buildStandaloneBundle (obra + lector + fuentes incrustados
@@ -1414,20 +1421,17 @@ async function _startFromOfflineSnapshot(snapshot, opts) {
   RS._workTitle  = snapshot.title   || '';
   RS.navMode     = snapshot.navMode || 'fixed';
   document.title = (snapshot.title || I18n.t('reader_defaultWorkTitle')) + ' — ComXow';
-  // Clonar antes de usar — RS._sourcePanels debe quedar limpio para que una
-  // futura re-descarga desde esta misma copia offline no arrastre estado.
-  RS.panels        = JSON.parse(JSON.stringify(snapshot.panels));
-  RS._sourcePanels = JSON.parse(JSON.stringify(snapshot.panels));
-  const _lastPanel = RS.panels[RS.panels.length - 1];
-  RS.panels.push({ id: 'credits', isCredits: true, orientation: _lastPanel?.orientation || 'v', layers: [], texts: [] });
-  setLoadingMsg(I18n.t('reader_preparingImages'));
-  await preloadImages();
+  // Las capas de trabajo se clonan (_plSkeletonFromData) — RS._sourcePanels
+  // (= snapshot.panels) debe quedar limpio para que una futura re-descarga
+  // desde esta misma copia offline no arrastre estado.
+  await _plBootOffline(snapshot.panels);
   // Fijar ANTES de startReader(): esa función ya llama a _setupOfflineBtn()
   // internamente, que se apoya en esta bandera para mantener oculto el
   // botón de descarga (ni hay red que usar en un repliegue offline, ni
   // tiene sentido "volver a exportar" desde dentro de un archivo standalone).
   RS._isOfflineSession = true;
   startReader();
+  _plStartBackground();
   if (!standalone) _readerToast(I18n.t('reader_viewingOfflineCopy'), 3500);
 }
 
@@ -1507,189 +1511,319 @@ async function _czDecompress(str) {
   } catch(e) { return str; }
 }
 
-async function _loadPanels(workId, useAuth) {
-  const _sbFetch = useAuth ? sbGetAuth : sbGet;
-  const panels = await _sbFetch('panels?work_id=eq.' + workId + '&order=panel_order.asc');
-  if (!panels || !panels.length) { showError(I18n.t('reader_errorNoPages')); return; }
+// ══════════════════════════════════════════════════════════════════════════
+// CARGA PROGRESIVA (v41.52) — el lector se abre en cuanto la hoja 1 está lista
+//
+// Petición de Alberto: «Los tiempos de carga son excesivos [...] que la obra se abra cuando esté
+// cargada la primera hoja y que las siguientes se vayan cargando en segundo plano, algo parecido a
+// lo que hemos hecho para la edición» (v41.44/v41.45 en el editor).
+//
+// ANTES (todo o nada): una única petición panel_layers?panel_id=in.(TODAS) con las capas de todas las
+// hojas (decenas de MB en una obra grande), descompresión + JSON.parse de TODAS, copia profunda de
+// todo (RS._sourcePanels), descarga de cada APNG, decodificación de TODAS las imágenes/GIF/APNG y,
+// en modo scroll, el dibujado de todas las hojas — y solo entonces se enseñaba la hoja 1.
+//
+// AHORA: se pide solo la lista de hojas (sin las miniaturas) y las capas/textos de la hoja 1; en
+// cuanto está lista se abre el lector. El resto se va trayendo en segundo plano, hoja a hoja:
+//   · Orden: de las más cercanas a la hoja que se está viendo (con preferencia hacia delante) a las
+//     más lejanas. Al navegar, el orden se recalcula; si se llega a una hoja que aún no está, se enseña
+//     «Cargando hoja N…» y se carga YA (prioridad máxima, sin pausas) — al terminar se pinta sola.
+//   · Dos carriles: RED (hasta _PL.netMax descargas a la vez, con un tope de hojas descargadas a la
+//     espera de ser preparadas, para acotar la memoria) y CPU (descomprimir/parsear/decodificar, de
+//     una en una y troceado). Las fuentes de cada hoja se esperan fuera del carril de CPU.
+//   · Como en el editor (v41.45), el trabajo de CPU en segundo plano NO compite con el usuario: se
+//     detiene mientras haya puntero pulsado, gesto/pellizco, scroll o fundido en curso, entrada
+//     reciente (calma mínima), pestaña oculta o entrada pendiente (isInputPending) y trabaja en los
+//     huecos del navegador (requestIdleCallback). La hoja que se está viendo no espera nunca, y
+//     mientras ella esté cargándose el segundo plano se queda quieto para dejarle toda la capacidad.
+//   · Fallos de red: cada hoja se reintenta sola con espera creciente (también al volver la red); la
+//     hoja que se está viendo enseña el aviso de error mientras tanto.
+//   · Scroll (horizontal/vertical): al recorrer de golpe varias hojas sin cargar solo se pide la hoja
+//     donde se detiene el desplazamiento (_plSettleWait), no cada una por la que se pasa.
+//
+// Lo que NO cambia: el dibujado (_render y sus funciones, idéntico al del editor), la navegación, los
+// botones de autor, los créditos, la descarga offline (espera a tener todas las hojas — ver
+// _buildOfflineSnapshot) ni el archivo standalone. La fuente de cada hoja sigue siendo exactamente la
+// misma (panel_layers/panel_texts de esa hoja), solo que pedida hoja a hoja.
+//
+// Estados de una hoja (panel._st): 'idle' (sin datos) → 'fetching' → 'fetched' (datos en memoria,
+// sin decodificar) → 'preparing' → 'ready'. Un fallo la devuelve a 'idle'/'fetched' con espera
+// (panel._retryAt); 'error' = reintentos agotados (se reintenta al llegar a ella o al volver la red).
+// ══════════════════════════════════════════════════════════════════════════
+const _PL = {
+  on:        false,   // el planificador solo actúa una vez abierto el lector (la hoja 1 tiene prioridad absoluta antes)
+  bg:        false,   // trabajo en segundo plano permitido (tras un breve calentamiento al abrir)
+  forceAll:  false,   // descarga offline pedida: traer TODO ya, sin pausas por interacción
+  netMax:    3,       // hojas descargándose a la vez en segundo plano
+  bufMax:    3,       // hojas descargadas a la espera de preparación (acota la memoria)
+  cpuMax:    1,       // hojas preparándose a la vez en segundo plano
+  maxTries:  6,       // reintentos antes de rendirse con una hoja que no es la actual
+  netActive: 0, cpuActive: 0,
+  scheduled: false, retryTimer: null, busyTimer: null, settleTimer: null,
+  lastInput: 0, ptrDown: 0, scrollUntil: 0, lastScroll: 0, arrIdx: -1, arrivedAt: 0, watching: false,
+  allWaiters: [],
+  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, paused: {} },
+};
+// Descarga ya hecha (data URL) del GIF de una capa — se baja en el carril de RED y se decodifica en el de CPU.
+const _plGifDl = new WeakMap();
 
-  const panelIds = panels.map(p => p.id).join(',');
-
-  // Descargar capas del editor y textos del reader en paralelo
-  const [layerRows, texts] = await Promise.all([
-    _sbFetch('panel_layers?panel_id=in.(' + panelIds + ')&order=layer_order.asc&select=*'),
-    _sbFetch('panel_texts?panel_id=in.('  + panelIds + ')&order=text_order.asc'),
-  ]);
-
-  RS.panels = await Promise.all(panels.map(async panel => {
-    // Capas del editor: parsear layer_data JSON
-    const layers = (await Promise.all((layerRows || [])
-      .filter(r => r.panel_id === panel.id)
-      .sort((a, b) => a.layer_order - b.layer_order)
-      .map(async r => {
-        try {
-          const _raw = await _czDecompress(r.layer_data);
-          const l = JSON.parse(_raw);
-          if (!l) return null;
-          if (l.type === 'gif' && r.gif_url) l._gifUrl = r.gif_url;
-          if (l.type === 'image' && r.anim_url) {
-            try {
-              const _apngDl = await _animDownload(r.anim_url);
-              if (_apngDl) l._apngSrc = _apngDl;
-            } catch(e) {}
-          }
-          return l;
-        } catch(e) { return null; }
-      })
-    )).filter(Boolean);
-
-    // Textos para lógica sequential
-    const panelTexts = (texts || [])
-      .filter(t => t.panel_id === panel.id)
-      .sort((a, b) => (a.text_order||0) - (b.text_order||0));
-
-    // Asociar panel_texts con sus panel_layers correspondientes.
-    // panel_layers incluye bubbles sin texto; panel_texts solo incluye los que tienen texto.
-    // Usar _hasText para sincronizar correctamente.
-    const bubbleLayers = layers.filter(l => l.type==='bubble' || l.type==='text');
-    const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
-    panelTexts.forEach((t, i) => {
-      const bl = bubbleLayersWithText[i];
-      if (bl && bl.renderDataUrl) t._hasRenderLayer = true;
-    });
-
-    return {
-      ...panel,
-      layers,
-      texts: panelTexts,
-    };
-  }));
-
-
-
+function _plSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+// Cede hasta que el navegador esté libre (requestIdleCallback; sin él, un respiro corto) — mismo patrón que _edBgIdle (editor).
+function _plIdle(timeout) {
+  return new Promise(res => {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(() => res(), { timeout: timeout || 300 });
+    else setTimeout(res, 30);
+  });
 }
 
-async function preloadImages() {
-  // Precargar todos los data base64 de capas image/draw/stroke de todos los paneles.
-  // RS.panels[i].layerImgs[j] = Image | null para cada capa del panel i.
-  RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
+// Copia estructural de datos JSON (capas/textos recién parseados). Equivale a JSON.parse(JSON.stringify(x))
+// para esos datos, pero las cadenas (los dataUrl de varios MB) se COMPARTEN en vez de duplicarse y no hay
+// que serializar y volver a leer decenas de MB en el hilo principal.
+function _cloneJson(v) {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) { const a = new Array(v.length); for (let i = 0; i < v.length; i++) a[i] = _cloneJson(v[i]); return a; }
+  const o = {};
+  for (const k in v) { if (Object.prototype.hasOwnProperty.call(v, k)) o[k] = _cloneJson(v[k]); }
+  return o;
+}
 
-  // Precargar el logo aquí, garantizando que complete=true antes de mostrar créditos
-  if (typeof _LOGO_DATA_URL !== 'undefined') {
-    await new Promise(resolve => {
-      const img = new Image();
-      img.onload  = () => { _logoImg = img; resolve(); };
-      img.onerror = () => resolve(); // no bloquear si falla
-      img.src = _LOGO_DATA_URL;
-    });
+// Hoja «esqueleto» a partir de la fila de la tabla panels (aún sin capas ni textos).
+function _plSkeleton(row) {
+  return Object.assign({}, row, { layers: [], texts: [], layerImgs: [], _row: row, _raw: null, _st: 'idle', _tries: 0, _retryAt: 0 });
+}
+// Hoja a partir de datos ya en memoria (copia offline / archivo standalone): sin red, solo falta prepararla.
+function _plSkeletonFromData(p) {
+  const row = {};
+  for (const k of Object.keys(p)) { if (k !== 'layers' && k !== 'texts') row[k] = p[k]; }
+  return Object.assign({}, row, { layers: _cloneJson(p.layers || []), texts: _cloneJson(p.texts || []), layerImgs: [], _row: row, _raw: null, _st: 'fetched', _tries: 0, _retryAt: 0 });
+}
+function _plAddCredits() {
+  const last = RS.panels[RS.panels.length - 1];
+  RS.panels.push({ id: 'credits', isCredits: true, orientation: last?.orientation || 'v', layers: [], texts: [], _st: 'ready' });
+}
+
+// Lista de hojas SIN la miniatura (data_url, cientos de KB por hoja que el lector no usa salvo en una
+// hoja sin capas — esa se pide aparte, ver _plFetchRaw). Las columnas son las mismas que pide el propio
+// editor al descargar una obra (downloadDraftAsEditorData); si aun así la consulta ligera falla, se
+// repite con la completa de siempre.
+async function _plFetchPanelList(sbFetch, workId) {
+  const base = 'panels?work_id=eq.' + workId + '&order=panel_order.asc';
+  try { return await sbFetch(base + '&select=id,panel_order,orientation,text_mode'); }
+  catch (_) { return await sbFetch(base); }
+}
+
+// Logo e icono de la hoja de créditos (data URL, instantáneos): deben estar listos antes de llegar a ella.
+async function _plPreloadBrand() {
+  const load = (src, set) => new Promise(resolve => {
+    const img = new Image();
+    img.onload  = () => { set(img); resolve(); };
+    img.onerror = () => resolve(); // no bloquear si falla
+    img.src = src;
+  });
+  const jobs = [];
+  if (typeof _LOGO_DATA_URL !== 'undefined') jobs.push(load(_LOGO_DATA_URL, i => { _logoImg = i; }));
+  if (typeof _ICON_DATA_URL !== 'undefined') jobs.push(load(_ICON_DATA_URL, i => { _iconImg = i; }));
+  await Promise.all(jobs);
+}
+
+// ── Carril de RED: capas y textos de UNA hoja (+ sus APNG/GIF) ───────────────
+async function _plFetchRaw(panel) {
+  const f = RS._sbFetch;
+  const [rows, texts] = await Promise.all([
+    f('panel_layers?panel_id=eq.' + panel.id + '&order=layer_order.asc&select=*'),
+    f('panel_texts?panel_id=eq.'  + panel.id + '&order=text_order.asc'),
+  ]);
+  const layerRows = (rows || []).slice().sort((a, b) => a.layer_order - b.layer_order);
+  // Animaciones: se bajan aquí (red), en paralelo, para que el carril de CPU no se quede esperando.
+  // cache:'no-store' (ver _animDownload). Un fallo aislado deja esa capa sin animación, como siempre.
+  const dl = [];
+  for (const r of layerRows) {
+    if (r.anim_url) dl.push(_animDownload(r.anim_url).then(d => { if (d) r._apngDl = d; }, () => {}));
+    if (r.gif_url)  dl.push(_animDownload(r.gif_url).then(d => { if (d) r._gifDl = d; }, () => {}));
   }
-  // Precargar el icono estático (misma hoja de créditos, junto al logo)
-  if (typeof _ICON_DATA_URL !== 'undefined') {
-    await new Promise(resolve => {
-      const img = new Image();
-      img.onload  = () => { _iconImg = img; resolve(); };
-      img.onerror = () => resolve();
-      img.src = _ICON_DATA_URL;
-    });
+  if (dl.length) await Promise.all(dl);
+  // Hoja sin capas: se dibuja su miniatura (data_url), como siempre — única razón de pedirla.
+  if (!layerRows.length && panel._row.data_url === undefined) {
+    const d = await f('panels?id=eq.' + panel.id + '&select=data_url');
+    panel._row.data_url = (d && d[0] && d[0].data_url) || null;
+    panel.data_url = panel._row.data_url;
   }
+  panel._raw = { layerRows, texts: texts || [] };
+}
 
-  // Contar hojas con contenido real (excluir créditos y hojas sin capas)
-  const totalPanels = RS.panels.filter(p => !p.isCredits && (p.layers||[]).length > 0).length;
-  let loadedPanels = 0;
-  setLoadingProgress(0, '');
+// ── Carril de CPU ─────────────────────────────────────────────────────────────
+function _plIsCurrent(panel) { return RS.panels[RS.idx] === panel; }
 
-  // Cargar todos los paneles en paralelo (máximo rendimiento)
-  // El progreso se actualiza con un contador atómico conforme cada panel termina.
-  // Esto evita el problema de cargar secuencialmente (N veces más lento).
-  setLoadingMsg(I18n.t('reader_loadingImages'));
-  await Promise.all(RS.panels.map(async (panel, pi) => {
-    panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
-      // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
-      if (layer.type === 'gif') {
-        if (!layer._gifUrl) return Promise.resolve(null);
-        // cache:'no-store' — mismo motivo que _animDownload arriba.
-        return fetch(layer._gifUrl, { cache: 'no-store' })
-          .then(r => r.blob())
-          .then(blob => new Promise(res => {
-            const fr = new FileReader();
-            fr.onload = e => res(e.target.result);
-            fr.readAsDataURL(blob);
-          }))
-          .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
-          .then(decoded => {
-            if (!decoded || !decoded.frames.length) return null;
-            // Crear canvas offscreen con el primer frame
-            const oc = document.createElement('canvas');
-            oc.width = decoded.width; oc.height = decoded.height;
-            oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
-            // Guardar todos los frames para animación
-            layer._gifFrames = decoded.frames;
-            layer._gifIdx    = 0;
-            layer._gifOc     = oc;
-            layer._gifReady  = true;
-            return oc; // devolver el canvas como 'img' para layerImgs[j]
-          })
-          .catch(() => null);
-      }
-      // APNG: decodificar con ApngDecoder
-      if (layer._apngSrc && window.ApngDecoder) {
-        return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
-          .then(function(result) {
-            layer._animFrames    = result.frames;
-            layer._animIdx       = 0;
-            layer._animLastTick  = 0;
-            layer._animPlayCount = 0;
-            layer._animOc        = document.createElement('canvas');
-            layer._animOc.width  = result.width;
-            layer._animOc.height = result.height;
-            layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
-            layer._animReady     = true;
-            return layer._animOc;
-          }).catch(function() { return null; });
-      }
+// Motivo por el que NO conviene hacer trabajo pesado en segundo plano ahora (null = vía libre).
+function _plBusy() {
+  if (_PL.forceAll) return null;
+  if (document.hidden) return 'hidden';
+  // La hoja que se está viendo aún no está lista: toda la capacidad es para ella.
+  const cur = RS.panels[RS.idx];
+  if (cur && !cur.isCredits && cur._st !== 'ready') return 'current';
+  const t = performance.now();
+  if (_PL.ptrDown > 0) {
+    if (t - _PL.lastInput > 8000) _PL.ptrDown = 0; // seguro por si se perdió un «up»
+    else return 'pointer';
+  }
+  if (t - _PL.lastInput < 220) return 'cooldown';
+  if (t < _PL.scrollUntil) return 'scroll';
+  if (RS.fadeRaf) return 'fade';
+  if (_rzPinch) return 'pinch';
+  try {
+    if (navigator.scheduling && navigator.scheduling.isInputPending && navigator.scheduling.isInputPending({ includeContinuous: true })) return 'input';
+  } catch (_) {}
+  return null;
+}
+function _plNotePause(why) { _PL.stats.paused[why] = (_PL.stats.paused[why] || 0) + 1; }
 
-      // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
-      const src = layer.renderDataUrl || layer.src || layer.dataUrl;
-      if (!src) return Promise.resolve(null);
-      const needsImg = layer.renderDataUrl ||
-        layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
-        layer.type === 'line' || layer.type === 'shape' || layer.type === 'fill' ||
-        layer.type === 'pencil' || layer.type === 'watercolor';
-      if (!needsImg) return Promise.resolve(null);
-      return new Promise(resolve => {
-        const img = new Image();
-        img.onload  = () => resolve(img);
-        img.onerror = () => resolve(null);
-        img.src = src;
-      });
-    }));
-    // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
-
-    // Cachear referencia de imagen en capas botón para alpha hit testing en trayectorias
-    (panel.layers || []).forEach((layer, j) => {
-      if (layer._buttonAction && panel.layerImgs[j]) layer._btnHitImg = panel.layerImgs[j];
-    });
-
-    // Actualizar progreso conforme cada panel termina (paralelo — orden no garantizado)
-    if (!panel.isCredits && (panel.layers||[]).length > 0) {
-      loadedPanels++;
-      const pct = totalPanels > 0 ? (loadedPanels / totalPanels) * 95 : 0;
-      setLoadingMsg(I18n.t('reader_loadingPageOf', { loaded: loadedPanels, total: totalPanels }));
-      setLoadingProgress(pct, '');
+// Espera un momento sin interacción y con el navegador libre (trabajo de fondo que no es de la hoja actual).
+// stillWanted() → false cancela la espera (devuelve false).
+async function _plWaitQuiet(stillWanted) {
+  for (;;) {
+    if (!stillWanted()) return false;
+    const why = _plBusy();
+    if (!why) {
+      await _plIdle(300);
+      if (!stillWanted()) return false;
+      if (!_plBusy()) return true;
+      continue;
     }
-  }));
+    _plNotePause(why);
+    await _plSleep(why === 'hidden' ? 400 : 60);
+  }
+}
 
-  // Precargar imágenes insertadas en el flujo de texto (hoja de texto,
-  // richLines) de todas las capas de texto de todos los paneles — ver
-  // _tdImgCache más arriba. Recogidas y deduplicadas primero (un mismo
-  // objeto de biblioteca puede insertarse varias veces) para no descargar
-  // la misma data URL dos veces.
+// Punto de cesión entre trozos de trabajo síncrono de CPU. La hoja que se está viendo solo hace un
+// respiro corto (la pantalla de carga y los gestos siguen vivos); las de segundo plano trabajan en
+// trozos de ≈8 ms y, entre trozos, esperan a que no haya interacción y a un hueco del navegador.
+let _plSliceT0 = 0;
+async function _plStep(panel) {
+  const t = performance.now();
+  if (_plIsCurrent(panel)) {
+    if (t - _plSliceT0 > 12) { await _plSleep(0); _plSliceT0 = performance.now(); }
+    return;
+  }
+  if (t - _plSliceT0 < 8 && !_plBusy()) return;
+  // Si el usuario llega a esta hoja mientras espera, sigue sin pausas.
+  await _plWaitQuiet(() => !_plIsCurrent(panel));
+  _plSliceT0 = performance.now();
+}
+
+// Descomprime y parsea las capas de la hoja, asocia sus textos y guarda la copia LIMPIA para la descarga
+// offline (antes de que la decodificación añada estado de ejecución a las capas — ver loadWork antes de v41.52).
+async function _plParse(panel, pi) {
+  const raw = panel._raw;
+  const layers = [];
+  for (const r of raw.layerRows) {
+    try {
+      const l = JSON.parse(await _czDecompress(r.layer_data));
+      if (l) {
+        if (l.type === 'gif' && r.gif_url) { l._gifUrl = r.gif_url; if (r._gifDl) _plGifDl.set(l, r._gifDl); }
+        if (l.type === 'image' && r._apngDl) l._apngSrc = r._apngDl;
+        layers.push(l);
+      }
+    } catch (e) { /* capa ilegible: se omite, como siempre */ }
+    await _plStep(panel);
+  }
+  // Textos para la lógica sequential
+  const panelTexts = (raw.texts || []).slice().sort((a, b) => (a.text_order || 0) - (b.text_order || 0));
+  // Asociar panel_texts con sus panel_layers correspondientes.
+  // panel_layers incluye bubbles sin texto; panel_texts solo incluye los que tienen texto.
+  // Usar _hasText para sincronizar correctamente.
+  const bubbleLayers = layers.filter(l => l.type === 'bubble' || l.type === 'text');
+  const bubbleLayersWithText = bubbleLayers.filter(l => l._hasText !== false);
+  panelTexts.forEach((t, i) => {
+    const bl = bubbleLayersWithText[i];
+    if (bl && bl.renderDataUrl) t._hasRenderLayer = true;
+  });
+  RS._sourcePanels[pi] = Object.assign({}, panel._row, { layers: _cloneJson(layers), texts: _cloneJson(panelTexts) });
+  panel.layers = layers;
+  panel.texts  = panelTexts;
+}
+
+// Decodifica las imágenes/GIF/APNG de la hoja (RS.panels[i].layerImgs[j] = Image | canvas | null) —
+// el cuerpo por hoja de lo que antes hacía preloadImages() para todas a la vez (hasta v41.51).
+async function _plDecode(panel) {
+  panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
+    // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
+    if (layer.type === 'gif') {
+      if (!layer._gifUrl) return Promise.resolve(null);
+      // Ya descargado en el carril de red; si aquella descarga falló, se intenta aquí como siempre.
+      // cache:'no-store' — mismo motivo que _animDownload.
+      const _pre = _plGifDl.get(layer);
+      const _dataP = _pre ? Promise.resolve(_pre) : fetch(layer._gifUrl, { cache: 'no-store' })
+        .then(r => r.blob())
+        .then(blob => new Promise(res => {
+          const fr = new FileReader();
+          fr.onload = e => res(e.target.result);
+          fr.readAsDataURL(blob);
+        }));
+      return _dataP
+        .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
+        .then(decoded => {
+          _plGifDl.delete(layer);
+          if (!decoded || !decoded.frames.length) return null;
+          // Crear canvas offscreen con el primer frame
+          const oc = document.createElement('canvas');
+          oc.width = decoded.width; oc.height = decoded.height;
+          oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
+          // Guardar todos los frames para animación
+          layer._gifFrames = decoded.frames;
+          layer._gifIdx    = 0;
+          layer._gifOc     = oc;
+          layer._gifReady  = true;
+          return oc; // devolver el canvas como 'img' para layerImgs[j]
+        })
+        .catch(() => null);
+    }
+    // APNG: decodificar con ApngDecoder
+    if (layer._apngSrc && window.ApngDecoder) {
+      return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
+        .then(function(result) {
+          layer._animFrames    = result.frames;
+          layer._animIdx       = 0;
+          layer._animLastTick  = 0;
+          layer._animPlayCount = 0;
+          layer._animOc        = document.createElement('canvas');
+          layer._animOc.width  = result.width;
+          layer._animOc.height = result.height;
+          layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+          layer._animReady     = true;
+          return layer._animOc;
+        }).catch(function() { return null; });
+    }
+
+    // Si tiene renderDataUrl (bitmap prerenderizado), cargarlo
+    const src = layer.renderDataUrl || layer.src || layer.dataUrl;
+    if (!src) return Promise.resolve(null);
+    const needsImg = layer.renderDataUrl ||
+      layer.type === 'image' || layer.type === 'draw' || layer.type === 'stroke' ||
+      layer.type === 'line' || layer.type === 'shape' || layer.type === 'fill' ||
+      layer.type === 'pencil' || layer.type === 'watercolor';
+    if (!needsImg) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }));
+  // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
+
+  // Cachear referencia de imagen en capas botón para alpha hit testing en trayectorias
+  (panel.layers || []).forEach((layer, j) => {
+    if (layer._buttonAction && panel.layerImgs[j]) layer._btnHitImg = panel.layerImgs[j];
+  });
+
+  // Imágenes insertadas en el flujo de texto (hoja de texto, richLines) de las capas de texto de esta
+  // hoja — ver _tdImgCache más arriba. Deduplicadas (un mismo objeto de biblioteca puede insertarse
+  // varias veces) y sin repetir las que ya están en la caché global (de esta u otra hoja).
   const _richImgSrcs = new Set();
-  RS.panels.forEach(panel => {
-    (panel.layers || []).forEach(layer => {
-      if (!Array.isArray(layer.richLines)) return;
-      layer.richLines.forEach(line => {
-        if (line.kind === 'image' && line.src) _richImgSrcs.add(line.src);
-      });
+  (panel.layers || []).forEach(layer => {
+    if (!Array.isArray(layer.richLines)) return;
+    layer.richLines.forEach(line => {
+      if (line.kind === 'image' && line.src && !_tdImgCache[line.src]) _richImgSrcs.add(line.src);
     });
   });
   if (_richImgSrcs.size) {
@@ -1701,24 +1835,19 @@ async function preloadImages() {
     })));
   }
 
-  // Precargar y decodificar las animaciones insertadas DENTRO de un flujo de
-  // texto (gifUrl en cada línea de richLines — ver _tdInsertGif en
-  // editor-textdoc.js y la subida del binario en supabase-client.js).
-  // Petición explícita de Alberto: deben reproducirse con el mismo
-  // comportamiento que cualquier otra animación (fundido, repeticiones,
-  // parada, reinicio) — por eso se decodifican con la nomenclatura _anim*
-  // (no _gif*), para que _animTickOne (extraída más arriba, misma función
-  // que usan las capas de nivel superior) las anime tal cual, sin ninguna
-  // versión reducida aparte. No se deduplica por URL a propósito (a
-  // diferencia de las imágenes estáticas de arriba): cada inserción anima de
-  // forma independiente, más simple y sin compartir estado entre ellas.
+  // Animaciones insertadas DENTRO de un flujo de texto (gifUrl en cada línea de richLines — ver
+  // _tdInsertGif en editor-textdoc.js y la subida del binario en supabase-client.js).
+  // Petición explícita de Alberto: deben reproducirse con el mismo comportamiento que cualquier otra
+  // animación (fundido, repeticiones, parada, reinicio) — por eso se decodifican con la nomenclatura
+  // _anim* (no _gif*), para que _animTickOne (extraída más arriba, misma función que usan las capas de
+  // nivel superior) las anime tal cual, sin ninguna versión reducida aparte. No se deduplica por URL a
+  // propósito (a diferencia de las imágenes estáticas de arriba): cada inserción anima de forma
+  // independiente, más simple y sin compartir estado entre ellas.
   const _richAnimLines = [];
-  RS.panels.forEach(panel => {
-    (panel.layers || []).forEach(layer => {
-      if (!Array.isArray(layer.richLines)) return;
-      layer.richLines.forEach(line => {
-        if (line.kind === 'image' && line.gifUrl) _richAnimLines.push(line);
-      });
+  (panel.layers || []).forEach(layer => {
+    if (!Array.isArray(layer.richLines)) return;
+    layer.richLines.forEach(line => {
+      if (line.kind === 'image' && line.gifUrl) _richAnimLines.push(line);
     });
   });
   if (_richAnimLines.length && window.GifDecoder) {
@@ -1745,22 +1874,18 @@ async function preloadImages() {
     ));
   }
 
-  // Mismo mecanismo, para animaciones APNG/GCP insertadas en un flujo de
-  // texto (animUrl en vez de gifUrl — ver _tdInsertFromBib en
-  // editor-textdoc.js). Único decodificador distinto (ApngDecoder, con el
-  // retardo explícito: a diferencia de un GIF real, un APNG/frames sueltos
-  // de GCP no traen el delay embebido de la misma forma) — el resto
-  // (_animFrames/_animOc/_animReady/_animTickOne) es exactamente el mismo
-  // camino, así que las opciones GCP (repetición, parada, fundido, ya
-  // presentes en la propia línea como _gcpStopAtEnd etc., ver
-  // editor-textdoc.js) se respetan sin ningún código adicional.
+  // Mismo mecanismo, para animaciones APNG/GCP insertadas en un flujo de texto (animUrl en vez de
+  // gifUrl — ver _tdInsertFromBib en editor-textdoc.js). Único decodificador distinto (ApngDecoder,
+  // con el retardo explícito: a diferencia de un GIF real, un APNG/frames sueltos de GCP no traen el
+  // delay embebido de la misma forma) — el resto (_animFrames/_animOc/_animReady/_animTickOne) es
+  // exactamente el mismo camino, así que las opciones GCP (repetición, parada, fundido, ya presentes
+  // en la propia línea como _gcpStopAtEnd etc., ver editor-textdoc.js) se respetan sin ningún código
+  // adicional.
   const _richApngLines = [];
-  RS.panels.forEach(panel => {
-    (panel.layers || []).forEach(layer => {
-      if (!Array.isArray(layer.richLines)) return;
-      layer.richLines.forEach(line => {
-        if (line.kind === 'image' && line.animUrl) _richApngLines.push(line);
-      });
+  (panel.layers || []).forEach(layer => {
+    if (!Array.isArray(layer.richLines)) return;
+    layer.richLines.forEach(line => {
+      if (line.kind === 'image' && line.animUrl) _richApngLines.push(line);
     });
   });
   if (_richApngLines.length && window.ApngDecoder) {
@@ -1787,21 +1912,387 @@ async function preloadImages() {
     ));
   }
 
-  setLoadingProgress(100, '');
+  // Fallback: si la hoja no tiene capas, precargar data_url como antes
+  if (!panel.layers || !panel.layers.length) {
+    if (panel.data_url) {
+      const img = new Image();
+      img.src = panel.data_url;
+      panel.layerImgs = [img];
+      panel.layers    = [{ type: 'image', src: panel.data_url, x:0.5, y:0.5, width:1, height:1 }];
+    } else {
+      panel.layerImgs = [];
+    }
+  }
+}
 
-  // Fallback: si algún panel no tiene capas, precargar data_url como antes
-  RS.panels.forEach((panel, i) => {
-    if (!panel.layers || !panel.layers.length) {
-      if (panel.data_url) {
-        const img = new Image();
-        img.src = panel.data_url;
-        panel.layerImgs = [img];
-        panel.layers    = [{ type: 'image', src: panel.data_url, x:0.5, y:0.5, width:1, height:1 }];
-      } else {
-        panel.layerImgs = [];
+// Parte de CPU de la preparación de una hoja descargada: parsear → decodificar.
+async function _plPrepareData(panel) {
+  const pi = RS.panels.indexOf(panel);
+  if (panel._raw) await _plParse(panel, pi);
+  await _plDecode(panel);
+  panel._raw = null;
+}
+// Fuentes de ESTA hoja (antes se pedían las de toda la obra de una vez) — misma razón que _ensureFontsLoaded.
+// Es espera de red/del navegador, no de CPU: se hace fuera del carril de CPU para no frenar a la hoja siguiente.
+async function _plFonts(panel) {
+  try { await _ensureFontsLoaded([panel]); } catch (_) {}
+}
+
+// Carga una hoja «ya», sin planificador y con un reintento (la hoja 1 antes de abrir el lector, y todas
+// las de una copia offline). Si falla, la excepción sube a loadWork/loadDraft, que recurren a la copia
+// offline si la hay. onStage('fetched'|'decoded') alimenta la barra de progreso de la pantalla de carga.
+async function _plLoadNow(panel, onStage) {
+  const stage = n => { try { if (onStage) onStage(n); } catch (_) {} };
+  for (let k = 0; ; k++) {
+    try {
+      if (panel._st === 'idle' || panel._st === 'fetching') { panel._st = 'fetching'; await _plFetchRaw(panel); panel._st = 'fetched'; }
+      stage('fetched');
+      panel._st = 'preparing';
+      await _plPrepareData(panel);
+      stage('decoded');
+      await _plFonts(panel);
+      panel._st = 'ready';
+      return;
+    } catch (e) {
+      panel._st = panel._raw ? 'fetched' : 'idle';
+      if (k >= 1) throw e;
+      await _plSleep(700);
+    }
+  }
+}
+
+// ── Planificador ──────────────────────────────────────────────────────────────
+function _plCursor() { return Math.max(0, Math.min(RS.panels.length - 1, RS.idx || 0)); }
+// Prioridad de la hoja i (menor = antes): las de delante primero; las de detrás cuestan algo más.
+function _plKey(i) { const d = i - _plCursor(); return d >= 0 ? d : (-d) * 1.6 + 0.5; }
+function _plBest(state) {
+  let best = null, bk = Infinity;
+  const now = Date.now();
+  for (let i = 0; i < RS.panels.length; i++) {
+    const p = RS.panels[i];
+    if (p.isCredits || p._st !== state || p._retryAt > now) continue;
+    const k = _plKey(i);
+    if (k < bk) { bk = k; best = p; }
+  }
+  return best;
+}
+function _plCount(state) { let n = 0; for (const p of RS.panels) if (!p.isCredits && p._st === state) n++; return n; }
+
+function _plSchedule() {
+  if (_PL.scheduled || !_PL.on) return;
+  _PL.scheduled = true;
+  Promise.resolve().then(() => { _PL.scheduled = false; _plPump(); });
+}
+
+function _plPump() {
+  if (!_PL.on) return;
+  const now = Date.now();
+  // 1) La hoja que se está viendo: prioridad absoluta, sin límites de carril.
+  const cur = RS.panels[RS.idx];
+  const curPending = !!cur && !cur.isCredits && cur._st !== 'ready';
+  if (curPending && !(cur._retryAt > now)) {
+    const wait = _plSettleWait();
+    if (wait > 0) _plArmSettle(wait);
+    else if (cur._st === 'idle') _plStartFetch(cur);
+    else if (cur._st === 'fetched') _plStartPrepare(cur);
+  }
+  // 2) Segundo plano — solo cuando la hoja actual ya está lista (o en la descarga offline, que lo pide todo)
+  if (_PL.bg && (!curPending || _PL.forceAll)) {
+    // Carril de red
+    while (_PL.netActive < _PL.netMax && _plCount('fetched') < _PL.bufMax) {
+      const p = _plBest('idle'); if (!p) break;
+      _plStartFetch(p);
+    }
+    // Carril de CPU. Una hoja de fondo no arranca con el usuario interactuando (ni su primera capa compite
+    // con el gesto): se reintenta en cuanto acabe — ver _plArmBusyRetry.
+    if (_PL.cpuActive < _PL.cpuMax) {
+      const p = _plBest('fetched');
+      if (p) {
+        const why = _plBusy();
+        if (why) { _plNotePause(why); _plArmBusyRetry(why); }
+        else _plStartPrepare(p);
       }
     }
+  }
+  _plArmRetry();
+}
+
+// Vuelve a mirar al planificador cuando el motivo de la pausa (gesto, scroll, pestaña oculta…) haya pasado.
+function _plArmBusyRetry(why) {
+  if (_PL.busyTimer) return;
+  _PL.busyTimer = setTimeout(() => { _PL.busyTimer = null; _plSchedule(); }, why === 'hidden' ? 400 : 90);
+}
+
+// Modo scroll: mientras el scroll nativo sigue en marcha (un «fling» por varias hojas aún sin cargar) no se pide cada
+// hoja por la que se pasa —cada una competiría por la red con la hoja donde acaba parándose el usuario (medido: 7,8 s
+// frente a 1,2 s con red lenta)— sino solo la que queda donde se para (≈90 ms sin eventos de scroll). Tope de 400 ms
+// desde la llegada a la hoja, para que un arrastre lento y continuo sobre una hoja sin cargar no la deje esperando.
+// Devuelve los ms que aún hay que esperar (≤ 0: pedirla ya). En modo fixed no hay scroll: sin espera.
+function _plSettleWait() {
+  if (!RS._scroll || _PL.forceAll) return 0;
+  const t = performance.now();
+  const quiet = 90 - (t - _PL.lastScroll);
+  const cap   = 400 - (t - (_PL.arrIdx === RS.idx ? _PL.arrivedAt : 0));
+  return Math.min(quiet, cap);
+}
+function _plArmSettle(ms) {
+  if (_PL.settleTimer) return;
+  _PL.settleTimer = setTimeout(() => { _PL.settleTimer = null; _plSchedule(); }, Math.max(20, ms + 3));
+}
+
+// Despierta al planificador cuando venza la espera de la hoja que antes falló.
+function _plArmRetry() {
+  clearTimeout(_PL.retryTimer); _PL.retryTimer = null;
+  let next = Infinity; const now = Date.now();
+  for (const p of RS.panels) { if (!p.isCredits && p._retryAt > now && (p._st === 'idle' || p._st === 'fetched') && p._retryAt < next) next = p._retryAt; }
+  if (next < Infinity) _PL.retryTimer = setTimeout(_plSchedule, Math.max(50, next - now));
+}
+
+async function _plStartFetch(panel) {
+  panel._st = 'fetching'; _PL.netActive++;
+  try {
+    await _plFetchRaw(panel);
+    panel._st = 'fetched'; panel._tries = 0; _PL.stats.fetched++;
+  } catch (e) { _plFail(panel, 'idle', e); }
+  finally { _PL.netActive--; _plSchedule(); }
+}
+
+async function _plStartPrepare(panel) {
+  panel._st = 'preparing'; _PL.cpuActive++;
+  let ok = false;
+  try { await _plPrepareData(panel); ok = true; }
+  catch (e) { _plFail(panel, panel._raw ? 'fetched' : 'idle', e); }
+  finally { _PL.cpuActive--; _plSchedule(); }
+  if (!ok) return;
+  await _plFonts(panel);
+  panel._st = 'ready'; panel._tries = 0; _PL.stats.prepared++;
+  try { _plOnReady(panel); } catch (e) { console.error('[reader] hoja lista:', e); }
+  _plSchedule(); // si era la hoja actual, el segundo plano estaba en pausa mientras se cargaba: que siga
+}
+
+function _plFail(panel, backTo, e) {
+  panel._tries = (panel._tries || 0) + 1;
+  _PL.stats.errors++;
+  panel._err = String((e && e.message) || e).slice(0, 160);
+  if (panel._tries >= _PL.maxTries && !_plIsCurrent(panel)) { panel._st = 'error'; return; }
+  _PL.stats.retries++;
+  panel._st = backTo;
+  panel._retryAt = Date.now() + Math.min(15000, 800 * Math.pow(2, panel._tries - 1)); // 0,8 · 1,6 · 3,2 · 6,4 · 12,8 · 15 s
+  // La hoja que se está viendo cambia su aviso a «No se pudo cargar…» mientras reintenta.
+  if (_plIsCurrent(panel) && RS.ctx) _render();
+}
+
+// El lector ha llegado a una hoja (cualquier vía: avanzar, retroceder, saltar, scroll): si no está lista,
+// que se cargue ya — sin esperar a la cola ni a los reintentos pendientes. dir = sentido de llegada
+// ('fwd' | 'back'), que decide qué textos secuenciales quedan revelados cuando la hoja termine de cargar.
+function _plOnArrive(idx, dir) {
+  RS._arrDir = dir || 'fwd';
+  if (_PL.arrIdx !== idx) { _PL.arrIdx = idx; _PL.arrivedAt = performance.now(); }
+  const p = RS.panels[idx];
+  if (!p || p.isCredits || p._st === 'ready') return;
+  if (p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
+  p._retryAt = 0;
+  _plSchedule();
+}
+
+// ¿Está la hoja ACTUAL aún cargándose sin haber fallado? (avanzar queda en espera; si ya ha fallado, se deja pasar)
+function _plCurrentLoading() {
+  const p = RS.panels[RS.idx];
+  return !!p && !p.isCredits && p._st !== 'ready' && !(p._tries > 0) && p._st !== 'error';
+}
+
+// Textos revelados al llegar a una hoja según el sentido de llegada — misma lógica que advance()/goBack()
+// y que el detector de scroll (modo scroll): hacia delante, el primero; hacia atrás, todos.
+function _plArrivalTextStep(panel, dir) {
+  const seq = (panel.text_mode || 'sequential') === 'sequential';
+  const n = (panel.texts || []).length;
+  if (!seq || !n) return 0;
+  return dir === 'back' ? n : 1;
+}
+
+// Marcador de una hoja que aún no está lista: página en blanco con el aviso centrado. Se redibuja solo
+// cuando cambia su estado (carga/error) y desaparece al quedar lista la hoja (ver _plOnReady).
+function _plDrawPlaceholder(ctx, pw, ph, panel) {
+  const failed = (panel._tries > 0) || panel._st === 'error';
+  const n = RS.panels.indexOf(panel) + 1;
+  const msg = I18n.t(failed ? 'reader_sheetLoadError' : 'reader_sheetLoading', { n });
+  ctx.save();
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+  const fs = Math.round(pw * 0.052); // proporcional al ancho: en pantalla se ve igual de grande en hojas verticales y horizontales
+  ctx.font = '500 ' + fs + 'px Arial, Helvetica, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = failed ? '#b3261e' : '#8a8a8a';
+  const maxW = pw * 0.8, lines = []; let cur = '';
+  msg.split(' ').forEach(w => {
+    const t = cur ? cur + ' ' + w : w;
+    if (cur && ctx.measureText(t).width > maxW) { lines.push(cur); cur = w; } else cur = t;
   });
+  if (cur) lines.push(cur);
+  const lh = fs * 1.4, y0 = ph / 2 - (lines.length - 1) * lh / 2;
+  lines.forEach((l, i) => ctx.fillText(l, pw / 2, y0 + i * lh));
+  ctx.restore();
+}
+
+// Pinta el canvas de la hoja i en modo scroll SIN moverse a ella (mismo cambio temporal de RS.idx/RS.ctx que
+// usa _readerGifTick para redibujar en segundo plano). RS.isCredits se aparta mientras: _render() lo
+// interpretaría como «se sale de los créditos» y quitaría sus botones aunque sigan en pantalla.
+function _plRenderSlide(pi, textStep) {
+  const panel = RS.panels[pi];
+  if (!panel || !panel._scrollCtx) return;
+  const sIdx = RS.idx, sCtx = RS.ctx, sStep = RS.textStep, sCred = RS.isCredits;
+  RS.idx = pi; RS.ctx = panel._scrollCtx; RS.textStep = textStep || 0;
+  if (!panel.isCredits) RS.isCredits = false;
+  _pageNavSuppressUpdate = true;
+  try { _render(); }
+  finally { _pageNavSuppressUpdate = false; RS.idx = sIdx; RS.ctx = sCtx; RS.textStep = sStep; RS.isCredits = sCred; }
+}
+// Igual, pero esperando un hueco sin interacción (una hoja de segundo plano recién lista, que no es la que se
+// está viendo): su primer dibujado decodifica imágenes grandes y no debe caer en medio de un gesto.
+async function _plPreRender(pi) {
+  const panel = RS.panels[pi];
+  if (!panel) return;
+  const wanted = () => RS.panels[pi] === panel && pi !== RS.idx && !!RS._scroll; // si el usuario ya está en ella, se pintó al llegar
+  if (!(await _plWaitQuiet(wanted))) return;
+  _plRenderSlide(pi, 0);
+}
+
+// Reloj de animaciones: se arranca una sola vez, cuando la obra tiene (o recibe, al cargar una hoja de
+// segundo plano) alguna animación o trayectoria.
+function _ensureGifLoop() {
+  if (RS._gifLoopOn) return;
+  RS._gifLoopOn = true;
+  requestAnimationFrame(_readerGifTick);
+}
+function _plHasAnimated(panel) {
+  return (panel.layers || []).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2));
+}
+
+// Una hoja de segundo plano (o la que se esperaba) acaba de quedar lista.
+function _plOnReady(panel) {
+  const pi = RS.panels.indexOf(panel);
+  if (_plHasAnimated(panel)) _ensureGifLoop();
+  const scroll = RS._scroll;
+  // Botones «ir a hoja» de la hoja recién cargada: si hay alguno, el destino de ese salto (y esta misma
+  // hoja) quedan con scroll-snap-stop forzoso y la hoja actual puede pasar a ser destino de salto.
+  const hasPageBtn = (panel.layers || []).some(l => l && l._buttonAction && l._buttonAction.type === 'page');
+  if (scroll && hasPageBtn) { _plRefreshSnapStops(); _updateContainerTouchAction(); }
+  if (pi === RS.idx) {
+    // Es la hoja que se está viendo (el usuario esperaba): se completa la llegada que no pudo hacerse sin
+    // sus datos — textos revelados según el sentido, animaciones desde el principio y primer dibujado.
+    RS.textStep = _plArrivalTextStep(panel, RS._arrDir);
+    RS.fadeAlpha = 0;
+    _resetPanelAnims(pi);
+    if (scroll) { scroll.activate(pi); _updateContainerTouchAction(); }
+    else _resizeCanvas();
+    _render();
+    if (scroll) scroll.updateOverlay();
+  } else if (scroll) {
+    _plPreRender(pi).catch(() => {}); // su canvas ya queda pintado cuando se llegue a ella
+  }
+  _pageNavUpdate();
+  _plCheckAllLoaded();
+}
+
+function _plRefreshSnapStops() {
+  const container = document.getElementById('scrollReader');
+  if (!container) return;
+  Array.from(container.children).forEach((slide, pi) => {
+    const p = RS.panels[pi]; if (!p) return;
+    slide.style.scrollSnapStop = (_panelHasNavButton(p) || _panelIsJumpTarget(pi)) ? 'always' : '';
+  });
+}
+
+function _plCheckAllLoaded() {
+  if (RS._allLoadedAt) return;
+  for (const p of RS.panels) { if (!p.isCredits && p._st !== 'ready') return; }
+  RS._allLoadedAt = Math.round(performance.now());
+  const w = _PL.allWaiters.splice(0);
+  w.forEach(fn => fn(true));
+}
+
+// Espera a tener TODAS las hojas listas (descarga offline): sin pausas por interacción, con más descargas
+// a la vez. Resuelve false si no se consigue en el plazo (hoja que no se puede traer).
+function _plEnsureAll(timeoutMs) {
+  if (RS._allLoadedAt) return Promise.resolve(true);
+  _PL.forceAll = true; _PL.netMax = 4; _PL.bg = true;
+  for (const p of RS.panels) {
+    if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
+    if (!p.isCredits && p._st !== 'ready') p._retryAt = 0;
+  }
+  _plSchedule();
+  return new Promise(res => {
+    const t = setTimeout(() => { const i = _PL.allWaiters.indexOf(fn); if (i >= 0) _PL.allWaiters.splice(i, 1); res(false); }, timeoutMs || 180000);
+    const fn = v => { clearTimeout(t); res(v); };
+    _PL.allWaiters.push(fn);
+  }).finally(() => { _PL.forceAll = false; _PL.netMax = 3; });
+}
+
+// Detecta interacción del usuario para no competir con ella (ver _plBusy).
+function _plWatchInput() {
+  if (_PL.watching) return;
+  _PL.watching = true;
+  const mark = () => { _PL.lastInput = performance.now(); };
+  const o = { capture: true, passive: true };
+  window.addEventListener('pointerdown',   () => { _PL.ptrDown++; mark(); }, o);
+  const up = () => { _PL.ptrDown = Math.max(0, _PL.ptrDown - 1); mark(); };
+  window.addEventListener('pointerup', up, o);
+  window.addEventListener('pointercancel', up, o);
+  window.addEventListener('touchstart', mark, o);
+  window.addEventListener('touchmove',  mark, o);
+  window.addEventListener('wheel',      mark, o);
+  window.addEventListener('keydown',    mark, o);
+  // Un scroll (nativo, con inercia y scroll-snap) mantiene a raya el trabajo de fondo mientras dura.
+  window.addEventListener('scroll', () => { const t = performance.now(); _PL.scrollUntil = t + 250; _PL.lastScroll = t; }, o);
+  // Al volver a la pestaña, el segundo plano sigue sin esperar al temporizador.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) _plSchedule(); });
+  // Al volver la red, las hojas rendidas se reintentan.
+  window.addEventListener('online', () => {
+    for (const p of RS.panels) { if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; p._retryAt = 0; } }
+    _plSchedule();
+  });
+}
+
+// Arranca el trabajo en segundo plano (el lector ya está abierto con la hoja 1).
+function _plStartBackground() {
+  _PL.on = true;
+  _plWatchInput();
+  _plCheckAllLoaded(); // obra de una sola hoja
+  // Breve calentamiento: que el primer dibujado y los gestos iniciales no compitan con las primeras respuestas.
+  setTimeout(() => { _PL.bg = true; _plSchedule(); }, 250);
+}
+
+// Arranque común de loadWork/loadDraft/copia offline: la hoja 1 «ya» (y logo/icono de créditos), con la
+// barra de progreso de la pantalla de carga. RS.panels ya está montado (esqueletos + créditos).
+async function _plBootFirst() {
+  RS._arrDir = 'fwd';
+  setLoadingMsg(I18n.t('reader_preparingImages'));
+  setLoadingProgress(15, '');
+  const first = RS.panels.find(p => !p.isCredits);
+  await Promise.all([
+    _plPreloadBrand(),
+    first ? _plLoadNow(first, st => setLoadingProgress(st === 'fetched' ? 55 : 90, '')) : Promise.resolve(),
+  ]);
+  setLoadingProgress(100, '');
+}
+// Obra de la red: esqueletos de todas las hojas a partir de la lista de la tabla panels.
+async function _plBoot(panelRows, sbFetch) {
+  RS._sbFetch = sbFetch;
+  RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
+  RS.panels = panelRows.map(_plSkeleton);
+  RS._sourcePanels = new Array(RS.panels.length).fill(null); // se va rellenando hoja a hoja (ver _plParse)
+  _plAddCredits();
+  await _plBootFirst();
+}
+// Copia offline / archivo standalone: los datos ya están en memoria; solo falta prepararlos (hoja 1 ya,
+// el resto en segundo plano, igual que desde la red).
+async function _plBootOffline(snapshotPanels) {
+  RS.images = [];
+  RS.panels = snapshotPanels.map(_plSkeletonFromData);
+  RS._sourcePanels = snapshotPanels; // copia limpia: _plSkeletonFromData clona las capas, esta no se toca
+  _plAddCredits();
+  await _plBootFirst();
 }
 
 // sbGet / sbGetAuth: timeout de 12s con AbortController para evitar freeze en Android
@@ -2418,11 +2909,13 @@ function startReader() {
   _setupPageNavBar();
   _setupOfflineBtn();
 
-  // Arrancar loop de animación GIF si hay alguno en la obra
+  // Arrancar loop de animación GIF si hay alguno en las hojas ya cargadas — con la carga progresiva
+  // (v41.52) en este punto solo está lista la hoja 1; las hojas que se cargan después arrancan el
+  // reloj por su cuenta si traen animaciones (_plOnReady → _ensureGifLoop).
   const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2)));
   if (_hasGifs) {
     _resetPanelAnims(0); // inicializar animaciones del primer panel
-    requestAnimationFrame(_readerGifTick);
+    _ensureGifLoop();
   }
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
@@ -2437,10 +2930,10 @@ function startReader() {
   RS.textStep = _initTextStep(0);
 
   _resizeCanvas();
-  _ensureFontsLoaded(RS.panels).then(() => {
-    _render();
-    _showControls();
-  });
+  // v41.52: la hoja 1 ya está lista y con sus fuentes cargadas (_plLoadNow) — primer dibujado directo.
+  // Las fuentes de cada hoja posterior se cargan al prepararla, antes de pasar a «lista».
+  _render();
+  _showControls();
   _setupControls();
   requestAnimationFrame(_positionBtns);
 
@@ -2552,26 +3045,26 @@ function _startScrollReader() {
     overlay.style.pointerEvents = active ? 'all' : 'none';
   }
 
-  // ── Render inicial de todos los slides ──
-  _ensureFontsLoaded(RS.panels).then(() => {
-    // Paso 1: renderizar todos los panels sin textos secuenciales
-    RS.panels.forEach((panel, pi) => {
-      _activateCanvas(pi);
-      RS.idx      = pi;
-      RS.textStep = 0;
-      _render();
-    });
-    // Paso 2: panel 0 con el primer texto visible (igual que el visor del editor)
-    RS.idx      = 0;
-    RS.textStep = _initTextStep(0);
-    _activateCanvas(0);
-    _render();
-    _updateOverlay();
-    // Forzar posición inicial al panel 0
-    container.scrollLeft = 0;
-    container.scrollTop  = 0;
-    _positionBtns();
-  });
+  // API para la carga progresiva (v41.52, ver _plOnReady): activar el canvas de una hoja y refrescar el
+  // overlay de toques cuando la hoja que se estaba esperando termina de cargar.
+  RS._scroll = { activate: _activateCanvas, updateOverlay: _updateOverlay };
+
+  // ── Render inicial ──
+  // v41.52: la hoja 1 ya está lista (startReader solo se llama con ella cargada, fuentes incluidas).
+  // Las demás hojas enseñan «Cargando hoja N…» (y la hoja de créditos se pinta ya) hasta que el
+  // planificador de carga las va trayendo; al quedar lista, cada una se pinta sola (_plOnReady).
+  // Antes se dibujaban aquí TODAS las hojas, tras esperar a las fuentes de toda la obra.
+  RS.panels.forEach((panel, pi) => { if (pi !== 0) _plRenderSlide(pi, 0); });
+  // Panel 0 con el primer texto visible (igual que el visor del editor)
+  RS.idx      = 0;
+  RS.textStep = _initTextStep(0);
+  _activateCanvas(0);
+  _render();
+  _updateOverlay();
+  // Forzar posición inicial al panel 0
+  container.scrollLeft = 0;
+  container.scrollTop  = 0;
+  _positionBtns();
 
   // ── Swipe en el overlay ──
   let _osx = null, _osy = null;
@@ -2689,6 +3182,7 @@ function _startScrollReader() {
   // compruebe en un único sitio por dirección, no en cada llamador.
   function _vsForward() {
     if (_navBlockedFwd()) return;
+    if (_plCurrentLoading()) return; // la hoja actual aún se está cargando: no saltársela (v41.52)
     if (_hasPendingTexts()) {
       _startFade();
       RS.textStep++;
@@ -2791,6 +3285,9 @@ function _startScrollReader() {
       }
       _render();
       _updateOverlay();
+      // v41.52: si la hoja aún no está cargada se enseña «Cargando hoja N…» (en _render) y se carga YA;
+      // al terminar, _plOnReady completa la llegada (textos según el sentido, animaciones, dibujado).
+      _plOnArrive(si, goingBack ? 'back' : 'fwd');
       // Si es la hoja de créditos en modo scroll, esperar a que el scroll
       // se detenga completamente antes de montar los botones interactivos
       if (RS.panels[si]?.isCredits) {
@@ -3643,6 +4140,10 @@ function _render() {
   const { pw, ph } = _panelDims(RS.idx);
   const ctx = RS.ctx;
 
+  // v41.52 (carga progresiva): hoja que aún no está lista → página en blanco con «Cargando hoja N…»
+  // (o el aviso de error si ha fallado y reintenta). Se pinta sola al quedar lista — ver _plOnReady.
+  if (panel._st && panel._st !== 'ready') { _plDrawPlaceholder(ctx, pw, ph, panel); return; }
+
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
@@ -4120,7 +4621,7 @@ function _drawRichTextLines(ctx, t, w, h, textColor_) {
   (t.richLines || []).forEach(line => {
     // Imagen insertada en el flujo de texto (ver _tdParseBlocks/_tdLayoutPages
     // en editor-textdoc.js) — se dibuja con drawImage, no con fillText. La
-    // imagen ya está precargada en _tdImgCache por preloadImages() (más
+    // imagen ya está precargada en _tdImgCache por _plDecode() (más
     // arriba), a diferencia de editor.js que la carga de forma perezosa —
     // aquí no hace falta redibujar al cargar porque ya está lista antes de
     // la primera pasada de render.
@@ -4563,10 +5064,13 @@ function _rGoToPanel(idx) {
   _resetPanelAnims(idx);
   _resizeCanvas();
   _render();
+  _plOnArrive(idx, 'fwd'); // hoja aún sin cargar: se carga ya (ver _plOnReady)
 }
 
 function advance() {
   if (_navBlockedFwd()) return;
+  // v41.52: la hoja actual aún se está cargando (sin haber fallado): no saltársela con toques repetidos.
+  if (_plCurrentLoading()) return;
   if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
   const panel = RS.panels[RS.idx];
   const tl    = panel?.texts || [];
@@ -4579,6 +5083,7 @@ function advance() {
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resetPanelAnims(RS.idx); // reiniciar animaciones desde frame 0
     _resizeCanvas(); _render();
+    _plOnArrive(RS.idx, 'fwd'); // hoja aún sin cargar: se carga ya (ver _plOnReady)
   }
 }
 
@@ -4600,6 +5105,7 @@ function goBack() {
     RS.fadeAlpha = 0;
     _resetPanelAnims(RS.idx); // reiniciar animaciones desde frame 0
     _resizeCanvas(); _render();
+    _plOnArrive(RS.idx, 'back'); // hoja aún sin cargar: se carga ya (ver _plOnReady)
   }
 }
 
