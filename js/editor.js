@@ -12782,7 +12782,17 @@ function _edAlignPathToGuides(rawPts, bx, by) {
   const threshold = ALIGN_PX / edCamera.z;
   const visibleRules = edRules.filter(r => !r.hidden);
 
-  return rawPts.map(p => {
+  return rawPts.map((p, _pi) => {
+    // v41.58 — El PRIMER punto es el origen de la trayectoria (0,0), es decir, el propio
+    // objeto/grupo, y NO se ajusta nunca a una guía. Si se proyectaba sobre una guía cercana
+    // (hasta 3× el umbral de arrastre), el primer punto quedaba desplazado unos píxeles del
+    // objeto y en la reproducción el objeto/grupo partía de ese punto desplazado en vez de
+    // su posición real: al entrar en la hoja (sobre todo con Temporizador, que lo mantiene
+    // quieto en ese punto durante la espera) aparecía «ligeramente desplazado de su posición»
+    // respecto al editor (bug reportado por Alberto con un grupo copiado/pegado en la misma
+    // posición de otra hoja). _edEndMotionPath documenta el invariante: «el primer punto es
+    // siempre (0,0)». Los demás puntos sí se ajustan a las guías como siempre.
+    if (_pi === 0) return { x: p.x, y: p.y };
     const wx = mx + (bx + p.x) * pw;
     const wy = my + (by + p.y) * ph;
 
@@ -12976,7 +12986,10 @@ function _edStartMotionPath(idx) {
   _edMotionPathMode    = true;
   _edMotionPathTarget  = idx;
   // Cargar el path existente si lo hay — solo se borra con el botón 🗑
-  _edMotionPathPts     = la._motionPath ? _edCopyMotionPathPts(la._motionPath) : [];
+  // v41.58 — pinOrigin: una trayectoria guardada con el primer punto desplazado (bug del
+  // ajuste a guías de versiones anteriores) se carga ya con el primer punto en el origen,
+  // y así queda saneada al volver a guardar.
+  _edMotionPathPts     = la._motionPath ? AnimClock.pinOrigin(_edCopyMotionPathPts(la._motionPath)) : [];
   _edMotionPathRaw     = [];
   _edMotionPathDrawing = false;
   _edMotionPathClosed  = la._motionPathClosed || false;
@@ -13262,6 +13275,9 @@ function _edMpRotateUpdate(e) {
 function _edDrawMotionPath(pts, closed, editing, layerIdx) {
   if (!pts && !editing) return;
   if (!pts) pts = [];
+  // v41.58 — el trazado dibujado es el que se reproduce: el primer punto siempre en el
+  // origen (ver AnimClock.pinOrigin), también en trayectorias guardadas con él desplazado.
+  pts = AnimClock.pinOrigin(pts);
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   const _la = (layerIdx != null && layerIdx >= 0) ? edLayers[layerIdx] : null;

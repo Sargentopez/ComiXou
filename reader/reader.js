@@ -2646,9 +2646,12 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
         // salida (ya orientado, si gira según la trayectoria) en vez de saltar al empezar.
         const _mpElapsed = Math.max(0, now - layer._pathStartTime) / 1000;
         const _mpClosed  = layer._motionPathClosed || false;
-        const _mpPts     = (_mpClosed && layer._motionPath.length >= 3)
-          ? _bezierSampleClosed(layer._motionPath, 200)
-          : (_mpClosed ? [...layer._motionPath, layer._motionPath[0]] : layer._motionPath);
+        // v41.58 — primer punto anclado al origen (AnimClock.pinOrigin), igual que en
+        // pathPositionAt: la longitud de arco y la posición deben salir del mismo trazado.
+        const _mpSrcPts  = AnimClock.pinOrigin(layer._motionPath);
+        const _mpPts     = (_mpClosed && _mpSrcPts.length >= 3)
+          ? _bezierSampleClosed(_mpSrcPts, 200)
+          : (_mpClosed ? [..._mpSrcPts, _mpSrcPts[0]] : _mpSrcPts);
         let _mpTotalPx = 0;
         for (let _i = 1; _i < _mpPts.length; _i++)
           _mpTotalPx += Math.hypot((_mpPts[_i].x - _mpPts[_i-1].x) * _mpPw,

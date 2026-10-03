@@ -82,11 +82,34 @@ const AnimClock = (() => {
     return result;
   }
 
+  // ── Motion path: el primer punto es SIEMPRE el origen (0,0) ─────────────
+  // v41.58 — Invariante de las trayectorias (ver _edEndMotionPath en editor.js): los
+  // puntos son relativos al objeto/grupo y el PRIMER punto es el propio origen (0,0),
+  // de modo que en t=0 el objeto está exactamente donde se ve en el editor. Una
+  // trayectoria guardada con el primer punto desplazado (el ajuste a guías de versiones
+  // anteriores lo proyectaba sobre una guía cercana; las primeras versiones compensaban
+  // la posición del objeto) hacía que el objeto/grupo se viera «ligeramente desplazado»
+  // al entrar en la hoja — sobre todo con Temporizador, que lo mantiene quieto en t=0
+  // durante la espera. Esta función devuelve los puntos con el primero anclado a (0,0)
+  // sin tocar los demás (los extremos de la trayectoria no cambian) y sin modificar el
+  // array original. Si ya está en (0,0) —lo normal— devuelve el mismo array (sin copiar).
+  // La usan pathPositionAt y pathArcLengthPx, así el visor interno, la previsualización
+  // y el lector externo se corrigen a la vez, también con las trayectorias ya guardadas.
+  function pinOrigin(points) {
+    if (!points || points.length === 0) return points;
+    const p0 = points[0];
+    if (!p0 || (p0.x === 0 && p0.y === 0)) return points;
+    const out = points.slice();
+    out[0] = p0.sharp ? { x: 0, y: 0, sharp: true } : { x: 0, y: 0 };
+    return out;
+  }
+
   // ── Motion path: interpolación por longitud de arco en espacio píxel ────
   // pw/ph: dimensiones reales del lienzo en px (corrige anisotropía horizontal/vertical)
   function pathPositionAt(points, closed, t, pw, ph) {
     if (!points || points.length === 0) return null;
     if (points.length === 1) return { x: points[0].x, y: points[0].y };
+    points = pinOrigin(points);
     const _pw = pw || 360, _ph = ph || 780;
     const pts = (closed && points.length >= 3)
       ? bezierSampleClosed(points, 200)
@@ -124,6 +147,7 @@ const AnimClock = (() => {
   // cerrados (misma base que pathPositionAt, garantizando velocidad constante)
   function pathArcLengthPx(points, closed, pw, ph) {
     if (!points || points.length < 2) return 1;
+    points = pinOrigin(points);   // mismo criterio que pathPositionAt (velocidad constante)
     const _pw = pw || 360, _ph = ph || 780;
     const pts = (closed && points.length >= 3)
       ? bezierSampleClosed(points, 200)
@@ -449,7 +473,7 @@ const AnimClock = (() => {
   }
 
   return {
-    bezierSampleClosed, pathPositionAt, pathTangentDeg, pathOrientDelta, pathArcLengthPx,
+    bezierSampleClosed, pinOrigin, pathPositionAt, pathTangentDeg, pathOrientDelta, pathArcLengthPx,
     easeT, layerCumTimeMs, getCycleDurationMs, layerTotalFrames, frameProgressAt,
     applyHoldFreeze, mpSyncFrame, pathPhaseAt, applyPathOffset
   };
