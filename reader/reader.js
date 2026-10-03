@@ -3263,7 +3263,12 @@ function _startScrollReader() {
           }
         }
       }
-      const goingBack = si < _prevSI;
+      // v41.53/41.54: un salto DELIBERADO (botón «ir a hoja», barra de hojas, «Volver a leer» de los créditos)
+      // no es un retroceso aunque el destino quede detrás: la hoja llega con el primer texto (secuencial), igual
+      // que en modo fixed — ver _rGoToPanel (_markFreshArrival). El retroceso natural (swipe/flecha) sigue
+      // dejando todos los textos revelados.
+      const _freshArrival = _consumeFreshArrival(si);
+      const goingBack = si < _prevSI && !_freshArrival;
       // Zoom del contenido: nunca debe sobrevivir a un cambio de hoja — se
       // resetea la hoja que se abandona, así que si se vuelve a visitar más
       // tarde aparece de nuevo a tamaño normal (pedido explícito de Alberto).
@@ -5016,6 +5021,20 @@ function _navBlockedFwd() {
   return _navLocked || _panelHasNavButton(RS.panels[RS.idx]);
 }
 
+// v41.54 — Marca «la próxima llegada a la hoja idx es un salto deliberado, no un retroceso» (ver _rGoToPanel).
+// El listener de scroll la consume al llegar (_consumeFreshArrival); caduca sola (1,5 s) por si el salto no se
+// produjera, para que un deslizamiento posterior hacia esa hoja no se confunda con un salto.
+const _FRESH_ARRIVAL_MS = 1500;
+function _markFreshArrival(idx) {
+  RS._arrFresh = { idx, t: performance.now() };
+}
+function _consumeFreshArrival(si) {
+  const f = RS._arrFresh;
+  if (!f || f.idx !== si) return false;
+  RS._arrFresh = null;
+  return (performance.now() - f.t) < _FRESH_ARRIVAL_MS;
+}
+
 // Navegar a un panel específico respetando el estado del reader
 function _rGoToPanel(idx) {
   if (idx < 0 || idx >= RS.panels.length) return;
@@ -5047,11 +5066,19 @@ function _rGoToPanel(idx) {
     // intermedias — el slider llega directo al valor final. El ARRASTRE del
     // slider en sí (evento 'input', que solo previsualiza la etiqueta sin
     // llamar aquí) no se toca y sigue exactamente igual.
+    //
+    // v41.54 — Petición de Alberto («hazlo con todos»): un salto DELIBERADO (botón «ir a hoja» del autor,
+    // barra de hojas, «Volver a leer» de los créditos) no es «retroceder»: la hoja destino debe llegar como
+    // en modo fixed (_initTextStep → primer texto si es secuencial, 0 si no), aunque el destino quede
+    // detrás de la hoja actual. El listener 'scroll' de _startScrollReader trata cualquier movimiento hacia
+    // atrás como retroceso natural (swipe/flecha) y deja TODOS los textos revelados; _markFreshArrival le
+    // avisa de que esta llegada es nueva. El retroceso natural (_snapTo) no pasa por aquí y no cambia.
     const container = document.getElementById('scrollReader');
     if (container) {
       const isH   = RS.navMode === 'horizontal';
       const size  = isH ? container.clientWidth : container.clientHeight;
       if (size) {
+        if (idx !== RS.idx) _markFreshArrival(idx);
         container.scrollTo({ left: isH ? idx * size : 0, top: isH ? 0 : idx * size, behavior: 'instant' });
         return;
       }
@@ -5386,6 +5413,14 @@ function _creditsClick() {
   // cada navegación (avanzar/retroceder/saltar) ya reinicia SIEMPRE la hoja de
   // llegada a frame 0 — ver el comentario de RZ más arriba — así que no hace falta
   // reiniciarlas todas de golpe aquí, solo la que se visita.
+  //
+  // v41.53 — Petición de Alberto: «los textos de la hoja 1 deben volver a verse secuencialmente si así
+  // está establecido». En modo fixed ya era así (_rGoToPanel → _initTextStep → primer texto), pero en
+  // scroll horizontal/vertical la llegada la resuelve el listener 'scroll' de _startScrollReader, que
+  // trata cualquier movimiento hacia atrás (créditos → hoja 1) como «retroceder» y deja TODOS los textos
+  // revelados (textStep = nº de textos). Aquí no se retrocede: se vuelve a empezar.
+  // v41.54: esa marca de «llegada nueva» ya la pone _rGoToPanel para TODOS los saltos deliberados (botones
+  // del autor, barra de hojas y este reinicio), así que aquí basta con navegar.
   _navGoToPanelLocked(0);
 }
 
