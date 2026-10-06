@@ -1,6 +1,6 @@
 /* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /* ============================================================
-   editor-animctl.js — «Ver control de animaciones» del editor (v41.60)
+   editor-animctl.js — «Ver control de animaciones» del editor (v41.60, tiempo por hoja v41.61)
 
    Qué es
    ──────
@@ -13,6 +13,12 @@
    ve al iniciarse la reproducción de la hoja en el visor (p. ej. un objeto con «Invisibilidad antes
    del inicio» aparece oculto en el 0). Sin duración máxima: avanza mientras se mantenga pulsado.
    Al desmarcar el checkbox todo vuelve a verse en su fotograma inicial, como siempre.
+
+   v41.61 — CADA HOJA TIENE SU PROPIO INSTANTE. El tiempo se guarda por hoja (WeakMap hoja→ms): al cambiar de
+   hoja la anterior se queda congelada donde estaba y la nueva empieza en su propio 0 (o en el instante que
+   ya se le hubiera fijado); al volver a una hoja se recupera el suyo. Con el papel cebolla (transparencia de
+   hojas contiguas) el fantasma de cada vecina se pinta en SU instante congelado (ghostStates / ghostFrames,
+   ver _edOnionRenderPage en editor.js). Desmarcar el checkbox (o salir del editor) descarta todos los instantes.
 
    Cómo está hecho (y por qué así)
    ───────────────────────────────
@@ -47,8 +53,10 @@ const EdAnimCtl = (() => {
   const FADE_OUT_MS = 150;   // = ImageLayer._applyFrame/_edViewerMpTick: desvanecimiento «Invisibilidad al final»
 
   let _on = false;           // ¿control activo (checkbox marcado)?
-  let _t = 0;                // ms desde que «empieza» la hoja (0 = lo que se ve al iniciarse la reproducción)
-  let _pageIdx = -1;         // hoja a la que corresponde _t (al cambiar de hoja se vuelve a 0)
+  // v41.61 — instante de CADA hoja: hoja (objeto de edPages) → ms desde que «empieza» (0 = lo que se ve al iniciarse la
+  // reproducción de la hoja). Sin entrada = 0. Vive aquí, nunca en la hoja: no se guarda, no se serializa, no se copia.
+  let _times = new WeakMap();
+  let _shown = null;         // hoja cuyo instante se está mostrando en el reloj (para detectar el cambio de hoja)
   let _pv = new WeakMap();   // capa → { oc, arr, idx }: lienzo PROPIO con el fotograma mostrado (nunca se toca el _oc real)
   let _hold = null;          // pulsación sostenida en curso { dir, t0, n, timer }
   let _els = null;           // elementos del DOM { chk, bar, back, fwd, clock }
@@ -56,12 +64,16 @@ const EdAnimCtl = (() => {
   const _pos = v => { v = +v; return v > 0 ? v : 0; };
 
   // ── Fuente de fotogramas (mismas condiciones que _edStartPageAnims para arrancar una animación) ──
-  function frameSource(l) {
+  // ov (v41.61, opcional): Map capa→fotogramas leídos aparte para las animaciones de una hoja contigua cuyos
+  // fotogramas no están en memoria (ver ghostFrames). Los fotogramas ya cargados de la capa mandan siempre.
+  function frameSource(l, ov) {
     if (l.type === 'gif') {
       return (l._ready && l._frames && l._frames.length) ? { arr: l._frames, gif: true } : null;
     }
     if (l.type === 'image') {
-      return (l._animReady && l._animFrames && l._animFrames.length) ? { arr: l._animFrames, gif: false } : null;
+      if (l._animReady && l._animFrames && l._animFrames.length) return { arr: l._animFrames, gif: false };
+      const pf = ov && ov.get(l);
+      return (pf && pf.length) ? { arr: pf, gif: false } : null;
     }
     return null;
   }
@@ -188,12 +200,15 @@ const EdAnimCtl = (() => {
   }
 
   // Lienzo propio con el fotograma idx (se reutiliza mientras no cambie el fotograma ni el array de fotogramas).
-  function ensureOc(l, fs, idx) {
+  // store: dónde se guarda (por defecto _pv, el de la hoja en vigor; el fantasma de una hoja contigua usa uno
+  // desechable para no retener lienzos de fotograma de otras hojas).
+  function ensureOc(l, fs, idx, store) {
     const fr = fs.arr[idx];
     const id = fr && fr.imageData;
     if (!id) return null;
-    let pv = _pv.get(l);
-    if (!pv) { pv = { oc: document.createElement('canvas'), arr: null, idx: -1 }; _pv.set(l, pv); }
+    store = store || _pv;
+    let pv = store.get(l);
+    if (!pv) { pv = { oc: document.createElement('canvas'), arr: null, idx: -1 }; store.set(l, pv); }
     if (pv.oc.width !== id.width || pv.oc.height !== id.height) { pv.oc.width = id.width; pv.oc.height = id.height; pv.idx = -1; }
     if (pv.arr !== fs.arr || pv.idx !== idx) {
       pv.oc.getContext('2d').putImageData(id, 0, 0);
@@ -209,15 +224,19 @@ const EdAnimCtl = (() => {
   //   fade   : factor de opacidad (null = la natural)
   //   px/py  : posición de la capa (fracción de hoja) por trayectoria / grupo — null si no se mueve
   //   rot    : grados extra de la orientación automática (null = 0)
-  function evaluate(page, t, pw, ph, withCanvases) {
+  // opts (v41.61, solo el fantasma de una hoja contigua): { frames: Map capa→fotogramas leídos aparte, store: almacén
+  // desechable de lienzos de fotograma }.
+  function evaluate(page, t, pw, ph, withCanvases, opts) {
     const layers = (page && page.layers) || [];
+    const ov = (opts && opts.frames) || null;
+    const store = (opts && opts.store) || null;
     const map = new Map();
     const owners = [];
     for (let i = 0; i < layers.length; i++) {
       const l = layers[i];
       if (!l) continue;
       const hasPath = !!(l._motionPath && l._motionPath.length >= 2);
-      const fs = frameSource(l);
+      const fs = frameSource(l, ov);
       if (!hasPath && !fs) continue;
       const st = { idx: null, fade: null, px: null, py: null, rot: null, oc: null };
       map.set(l, st);
@@ -289,8 +308,8 @@ const EdAnimCtl = (() => {
     if (withCanvases !== false) {
       map.forEach((st, l) => {
         if (st.idx == null) return;
-        const fs = frameSource(l);
-        if (fs) st.oc = ensureOc(l, fs, st.idx);
+        const fs = frameSource(l, ov);
+        if (fs) st.oc = ensureOc(l, fs, st.idx, store);
       });
     }
     return map;
@@ -298,18 +317,84 @@ const EdAnimCtl = (() => {
 
   // ── Interfaz con el compositor del editor (_edAnimCtlBegin en editor.js) ──
   function isActive() { return _on; }
-  function getTime() { return _t; }
 
-  // Estados de la hoja en vigor en el instante actual, o null si no hay nada que animar / control inactivo.
+  // Hoja en vigor (la que se edita y se pinta en el canvas).
+  function _curPage() {
+    return (typeof edPages !== 'undefined' && typeof edCurrentPage !== 'undefined') ? (edPages[edCurrentPage] || null) : null;
+  }
+  // Instante (ms) de una hoja: el que se le fijó con la botonera, o 0 si nunca se le ha fijado ninguno.
+  function timeOf(page) { return (page && _times.get(page)) || 0; }
+  // Instante de la hoja en vigor (el del reloj).
+  function getTime() { return timeOf(_curPage()); }
+
+  // Estados de la hoja en vigor en SU instante, o null si no hay nada que animar / control inactivo.
   function statesFor(page) {
     if (!_on || !page) return null;
-    if (typeof edCurrentPage !== 'undefined' && edCurrentPage !== _pageIdx) {
-      // Cada hoja empieza su propia reproducción en el 0.
-      _pageIdx = edCurrentPage;
-      if (_t !== 0) { _t = 0; _syncClock(); }
+    if (page !== _shown) {
+      // Cambio de hoja: el reloj pasa a mostrar el instante de ESA hoja (0 si no se le ha fijado ninguno; la hoja que
+      // se deja conserva el suyo) y una pulsación sostenida no puede seguir moviendo el tiempo de la hoja nueva.
+      _shown = page;
+      _holdStop();
+      _syncClock();
     }
-    const map = evaluate(page, _t, edPageW(), edPageH(), true);
+    const map = evaluate(page, timeOf(page), edPageW(), edPageH(), true);
     return map.size ? map : null;
+  }
+
+  // ── Hojas contiguas (papel cebolla) en SU instante congelado — v41.61 ──────────────────────────────────────────
+  // Estados de OTRA hoja (no la de vigor) en el instante que tiene fijado (0 si ninguno). pw/ph: dimensiones de ESA hoja
+  // (su orientación). frames: ver ghostFrames. null si el control está inactivo o no hay nada que animar en la hoja.
+  function ghostStates(page, pw, ph, frames) {
+    if (!_on || !page) return null;
+    const map = evaluate(page, timeOf(page), pw, ph, true, { frames: frames || null, store: new Map() });
+    return map.size ? map : null;
+  }
+
+  // Una animación de fotogramas cuyos fotogramas NO están en memoria (se sueltan al salir de una hoja, ver
+  // _edUnloadPageAnims) pero de la que hay datos para leerlos.
+  function _needsFrames(l) {
+    return !!l && l.type === 'image' && !(l._animReady && l._animFrames && l._animFrames.length) &&
+      !!(l._animDeferred || l._apngSrc || (l._pngFrames && l._pngFrames.length) || l._pngFramesKey || l.animKey);
+  }
+  function ghostNeedsFrames(page) {
+    return !!(_on && page && page.layers && page.layers.some(_needsFrames));
+  }
+
+  // Datos de una animación aún sin decodificar: los mismos orígenes y el mismo orden que _edLoadPageAnims.
+  async function _frameInput(l) {
+    if (l._apngSrc) return l._apngSrc;
+    if (l._pngFrames && l._pngFrames.length) return l._pngFrames;
+    const key = l._pngFramesKey || l.animKey;
+    if (!key || typeof _edAnimIdbLoad !== 'function') return null;
+    const data = await _edAnimIdbLoad(key);
+    return (typeof data === 'string') ? data : ((Array.isArray(data) && data.length) ? data : null);
+  }
+
+  // Fotogramas de las animaciones de una hoja contigua, leídos y decodificados APARTE (ApngDecoder.decode no comparte
+  // estado): no se toca ningún campo de las capas (_animFrames/_animReady/_animDeferred/_oc, ni la caja del objeto), así
+  // que no interfiere con la carga real que hará la hoja cuando se entre en ella ni con el visor. El resultado solo vive
+  // lo que tarde en pintarse el fantasma. isStale(): ¿ya no hace falta (se cambió de hoja, se desactivó el control…)?
+  // Devuelve Map capa→fotogramas, o null si dejó de hacer falta a mitad.
+  async function ghostFrames(page, isStale) {
+    const out = new Map();
+    if (!_on || !page || !page.layers || !window.ApngDecoder) return out;
+    for (const l of page.layers) {
+      if (!_needsFrames(l)) continue;
+      if (isStale && isStale()) return null;
+      try {
+        const input = await _frameInput(l);
+        if (!input) continue;
+        if (isStale && isStale()) return null;
+        // Mismo retardo por fotograma que ImageLayer.loadAnim (uniforme, o por fotograma con las pausas T de la Matriz).
+        const uni = l._gcpFrameDelay || window._gcpFrameDelay || 100;
+        const delay = (Array.isArray(input) && l._gcpFrameHolds && l._gcpFrameHolds.length)
+          ? input.map((_, fi) => l._gcpFrameHolds[fi] || uni) : uni;
+        const res = await window.ApngDecoder.decode(input, delay);
+        if (res && res.frames && res.frames.length) out.set(l, res.frames);
+      } catch (_) { /* una animación ilegible se queda como está en el fantasma; el resto sigue */ }
+    }
+    if (isStale && isStale()) return null;
+    return out;
   }
 
   // ── Reloj ──
@@ -320,7 +405,7 @@ const EdAnimCtl = (() => {
     return h > 0 ? (h + ':' + (m < 10 ? '0' : '') + m + ':' + ss + '.' + d) : (m + ':' + ss + '.' + d);
   }
   function _syncClock() {
-    if (_els && _els.clock) _els.clock.textContent = fmt(_t);
+    if (_els && _els.clock) _els.clock.textContent = fmt(getTime());
   }
 
   function _invalidateCaches() {
@@ -330,10 +415,14 @@ const EdAnimCtl = (() => {
     if (typeof _edPaintStatic !== 'undefined') _edPaintStatic.valid = false;
   }
 
+  // Fija el instante de la HOJA EN VIGOR (cada hoja guarda el suyo).
   function setTime(ms) {
+    const pg = _curPage();
+    if (!pg) return;
     ms = Math.max(0, Math.round(+ms || 0));
-    if (ms === _t) return;
-    _t = ms;
+    if (ms === timeOf(pg)) return;
+    if (ms > 0) _times.set(pg, ms); else _times.delete(pg);
+    _shown = pg;
     _syncClock();
     if (!_on) return;
     _invalidateCaches();
@@ -345,19 +434,17 @@ const EdAnimCtl = (() => {
     if (on === _on) return;
     _on = on;
     _holdStop();
-    if (on) {
-      _t = 0;
-      _pageIdx = (typeof edCurrentPage !== 'undefined') ? edCurrentPage : -1;
-    } else {
-      _t = 0;
-      _pv = new WeakMap();                    // libera los lienzos de fotograma
-    }
+    _times = new WeakMap();                   // al activarlo o desactivarlo, todas las hojas vuelven a su 0
+    _shown = on ? _curPage() : null;
+    if (!on) _pv = new WeakMap();             // libera los lienzos de fotograma
     if (_els) {
       if (_els.chk && _els.chk.checked !== on) _els.chk.checked = on;
       _els.bar.classList.toggle('visible', on);
     }
     _syncClock();
     _invalidateCaches();
+    // El fantasma del papel cebolla depende de este control (instante de cada hoja contigua): se rehace.
+    if (typeof _edOnionAnimCtlChanged === 'function') _edOnionAnimCtlChanged();
     if (typeof edRedraw === 'function') edRedraw();
   }
 
@@ -366,7 +453,7 @@ const EdAnimCtl = (() => {
   // avance mantenga la velocidad real aunque algún temporizador llegue tarde (se aplican de golpe los pasos debidos).
   function _holdStart(dir) {
     _holdStop();
-    _hold = { dir, t0: performance.now(), n: 0, timer: 0 };
+    _hold = { dir, t0: performance.now(), n: 0, timer: 0, page: _curPage() };
     const b = _els && (dir < 0 ? _els.back : _els.fwd);
     if (b) b.classList.add('held');                         // se ve «pulsado» mientras dure la pulsación
     _holdTick();
@@ -374,13 +461,16 @@ const EdAnimCtl = (() => {
   function _holdTick() {
     const h = _hold;
     if (!h) return;
+    // v41.61: si se cambia de hoja con el botón aún pulsado (p. ej. con otro dedo en Android), la pulsación no sigue
+    // moviendo el reloj de la hoja nueva (cada hoja tiene el suyo): hay que soltar y volver a pulsar.
+    if (_curPage() !== h.page) { _holdStop(); return; }
     try {
       const now = performance.now();
       const due = Math.floor((now - h.t0) / STEP_MS) + 1;     // el +1 es el paso inmediato del instante 0
       const steps = due - h.n;
       if (steps > 0) {
         h.n = due;
-        setTime(_t + h.dir * steps * STEP_MS);
+        setTime(getTime() + h.dir * steps * STEP_MS);
       }
     } finally {
       // Se reprograma siempre (aunque el redibujado fallara) salvo que la pulsación ya se haya cancelado.
@@ -422,7 +512,7 @@ const EdAnimCtl = (() => {
     btn.addEventListener('click', e => {
       if (e.detail > 0 || e.pointerType) return;
       if (performance.now() - lastPtrAt < 250) return;          // el clic de un puntero llega a los pocos ms del pointerup
-      setTime(_t + dir * STEP_MS);
+      setTime(getTime() + dir * STEP_MS);
     });
   }
 
@@ -460,13 +550,14 @@ const EdAnimCtl = (() => {
     _holdStop();
     document.removeEventListener('visibilitychange', _onHidden);
     window.removeEventListener('blur', _holdStop);
-    _on = false; _t = 0; _pageIdx = -1;
+    _on = false; _times = new WeakMap(); _shown = null;
     _pv = new WeakMap();
     if (_els && _els.bar) _els.bar.classList.remove('visible');
     _els = null;
   }
 
-  return { STEP_MS, evaluate, statesFor, isActive, getTime, setTime, setActive, initUI, destroy, fmt };
+  return { STEP_MS, evaluate, statesFor, isActive, getTime, timeOf, setTime, setActive, initUI, destroy, fmt,
+           ghostStates, ghostNeedsFrames, ghostFrames };
 })();
 
 if (typeof window !== 'undefined') window.EdAnimCtl = EdAnimCtl;

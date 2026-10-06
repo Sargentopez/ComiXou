@@ -9518,7 +9518,11 @@ function _edBgInfo() {
 // Reutiliza _pgRenderThumbLive (editor-pages.js) — el mismo render que usan
 // las miniaturas del panel Hojas — a una resolución adecuada para verse
 // bien en el lienzo principal, no al tamaño diminuto de una miniatura.
-function _edOnionRenderPage(page) {
+// v41.61 — Con «Ver control de animaciones» activo la hoja contigua se pinta en SU instante congelado (el que se le fijó
+// con la botonera; 0 si nunca se le fijó ninguno): fotograma de sus animaciones, posición de sus trayectorias, invisibilidades…
+// `frames` = fotogramas leídos aparte de sus animaciones que no están en memoria (ver _edOnionRenderAsync). Sin el control
+// activo se pinta como siempre (fotograma inicial).
+function _edOnionRenderPage(page, frames) {
   if (!page || !page.layers || typeof _pgRenderThumbLive !== 'function') return null;
   // ED_CANVAS_W/ED_CANVAS_H son constantes globales del área de trabajo, iguales
   // para CUALQUIER página sea cual sea su orientación (es la propia página quien
@@ -9538,17 +9542,40 @@ function _edOnionRenderPage(page) {
   // un fallo ahí dejaría edOrientation/edCurrentPage apuntando a la hoja contigua
   // durante el resto del frame de la hoja EN VIGOR.
   const _savedOrient = edOrientation, _savedPage = edCurrentPage;
+  let _gPrev = null;
   try {
     const off = document.createElement('canvas');
     off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
+    _gPrev = _edAnimCtlGhostBegin(page, frames); // v41.61: estado de ESA hoja en su instante (null = como siempre)
     _pgRenderThumbLive(off, page, true); // true = área de trabajo completa (antes: solo la página)
     return off;
   } catch(_) {
     return null; // no se muestra el onion skin de esa hoja, pero el resto del frame sigue
   } finally {
+    _edAnimCtlGhostEnd(_gPrev);
     edOrientation = _savedOrient;
     edCurrentPage = _savedPage;
   }
+}
+
+// v41.61 — Entrega a `done(canvas)` el fantasma de una hoja contigua. Si el control de animaciones está activo y esa hoja
+// tiene animaciones cuyos fotogramas no están en memoria (se sueltan al salir de una hoja), primero se leen aparte
+// (EdAnimCtl.ghostFrames: no tocan el estado de sus capas) y el fantasma se pinta con ellos; los fotogramas se sueltan en
+// cuanto se ha pintado. En cualquier otro caso es síncrono, igual que antes. `isCurrent()`: ¿esa hoja sigue siendo la
+// contigua? (si no, se abandona sin pintar).
+function _edOnionRenderAsync(page, isCurrent, done) {
+  if (!isCurrent()) return;
+  if (typeof EdAnimCtl === 'undefined' || !EdAnimCtl.ghostNeedsFrames(page)) { done(_edOnionRenderPage(page)); return; }
+  EdAnimCtl.ghostFrames(page, () => !isCurrent()).then(fr => {
+    if (fr === null || !isCurrent()) return;
+    done(_edOnionRenderPage(page, fr));
+  }, () => { if (isCurrent()) done(_edOnionRenderPage(page)); });
+}
+
+// v41.61 — El fantasma depende del control de animaciones (instante de cada hoja contigua): al activarlo o desactivarlo
+// se descartan las hojas contiguas en caché y _edOnionSkinEnsure las reconstruye en el siguiente fotograma.
+function _edOnionAnimCtlChanged() {
+  _edOnionPrevSrc = _edOnionNextSrc = null;
 }
 
 // Mantiene _edOnionPrevCanvas/_edOnionNextCanvas al día con la hoja anterior
@@ -9611,6 +9638,8 @@ function _edOnionSkinEnsure() {
     if (prevPage) {
       requestAnimationFrame(() => {
         if (prevPage !== _edOnionPrevSrc) return; // otra navegación ya reemplazó esta referencia mientras esperaba
+        // v41.61: con animaciones por leer (control de animaciones) lo pinta _edOnionReloadThenRefresh, ya con sus fotogramas
+        if (_edOnionDefersToReload(prevPage)) return;
         _edOnionPrevCanvas = _edOnionRenderPage(prevPage);
         edRedraw();
       });
@@ -9623,12 +9652,19 @@ function _edOnionSkinEnsure() {
     if (nextPage) {
       requestAnimationFrame(() => {
         if (nextPage !== _edOnionNextSrc) return;
+        if (_edOnionDefersToReload(nextPage)) return; // v41.61 (ver arriba)
         _edOnionNextCanvas = _edOnionRenderPage(nextPage);
         edRedraw();
       });
       _edOnionReloadThenRefresh(nextIdx, nextPage);
     }
   }
+}
+// v41.61 — ¿Debe el pintado rápido (RAF) de _edOnionSkinEnsure dejar esta hoja a _edOnionReloadThenRefresh? Sí si el control
+// de animaciones está activo y la hoja tiene animaciones sin fotogramas en memoria: un primer pintado sin ellos mostraría un
+// instante sus objetos en el fotograma que no es y luego «saltarían»; además así los fotogramas se leen UNA sola vez.
+function _edOnionDefersToReload(page) {
+  return typeof _edLoadPageCanvases === 'function' && typeof EdAnimCtl !== 'undefined' && EdAnimCtl.ghostNeedsFrames(page);
 }
 
 // v41.45 — Suelta TODO el estado del onion skin (lienzos de las dos hojas contiguas, ~25 MB cada
@@ -9725,8 +9761,10 @@ function _edDrawOnionGhost(ctx) {
 function _edOnionReloadThenRefresh(pageIdx, page) {
   if (typeof _edLoadPageCanvases !== 'function') return;
   _edLoadPageCanvases(pageIdx).then(() => {
-    if (page === _edOnionPrevSrc) { _edOnionPrevCanvas = _edOnionRenderPage(page); edRedraw(); }
-    else if (page === _edOnionNextSrc) { _edOnionNextCanvas = _edOnionRenderPage(page); edRedraw(); }
+    // v41.61: _edOnionRenderAsync = el mismo pintado de siempre (síncrono) salvo que el control de animaciones necesite
+    // leer antes los fotogramas de esa hoja.
+    if (page === _edOnionPrevSrc) _edOnionRenderAsync(page, () => page === _edOnionPrevSrc, c => { _edOnionPrevCanvas = c; edRedraw(); });
+    else if (page === _edOnionNextSrc) _edOnionRenderAsync(page, () => page === _edOnionNextSrc, c => { _edOnionNextCanvas = c; edRedraw(); });
   });
 }
 
@@ -12390,6 +12428,30 @@ function _edAnimCtlEnd(_on) {
   if (!_on) return;
   _edAnimCtlRender = false;
   _edAnimCtlStates = null;
+}
+// v41.61 — Lo mismo para el FANTASMA de una hoja contigua (papel cebolla): mientras se pinta esa hoja (ver
+// _edOnionRenderPage) los draw() ven el estado de ESA hoja en SU instante congelado, no el de la hoja en vigor.
+// `frames` = fotogramas leídos aparte de sus animaciones no cargadas (EdAnimCtl.ghostFrames). Devuelve lo que había
+// (para restaurarlo en _edAnimCtlGhostEnd) o null si no hay nada que aplicar (control inactivo / nada que animar).
+function _edAnimCtlGhostBegin(page, frames) {
+  if (!page || typeof EdAnimCtl === 'undefined' || !EdAnimCtl.isActive()) return null;
+  // Las dimensiones en px (p. ej. la longitud de las trayectorias) son las de ESA hoja: su propia orientación.
+  const _so = edOrientation;
+  let _st = null;
+  try {
+    edOrientation = page.orientation || edOrientation;
+    _st = EdAnimCtl.ghostStates(page, edPageW(), edPageH(), frames);
+  } finally { edOrientation = _so; }
+  if (!_st) return null;
+  const _prev = { r: _edAnimCtlRender, s: _edAnimCtlStates };
+  _edAnimCtlStates = _st;
+  _edAnimCtlRender = true;
+  return _prev;
+}
+function _edAnimCtlGhostEnd(_prev) {
+  if (!_prev) return;
+  _edAnimCtlRender = _prev.r;
+  _edAnimCtlStates = _prev.s;
 }
 // Estado del reloj para una capa (null fuera del compositor o si la capa no se anima).
 function _edACS(l) {
@@ -49244,8 +49306,12 @@ async function _edRunDiag() {
     [edCurrentPage - 1, edCurrentPage + 1].forEach(ix => {
       const pp = edPages[ix]; if (!pp) return;
       const cnt = {}; (pp.layers || []).forEach(l => { cnt[l.type] = (cnt[l.type] || 0) + 1; });
-      L('  contigua ' + (ix + 1) + ': ' + (Object.keys(cnt).map(k => k + '×' + cnt[k]).join(', ') || '(vacía)'));
+      L('  contigua ' + (ix + 1) + ': ' + (Object.keys(cnt).map(k => k + '×' + cnt[k]).join(', ') || '(vacía)') +
+        // v41.61: instante congelado con el que se pinta su fantasma («Ver control de animaciones»)
+        ((typeof EdAnimCtl !== 'undefined' && EdAnimCtl.isActive()) ? ' · instante ' + EdAnimCtl.fmt(EdAnimCtl.timeOf(pp)) +
+          (EdAnimCtl.ghostNeedsFrames(pp) ? ' · con animaciones sin cargar (se leen aparte)' : '') : ''));
     });
+    L('  control de animaciones: ' + ((typeof EdAnimCtl !== 'undefined' && EdAnimCtl.isActive()) ? 'activo · instante de la hoja en vigor ' + EdAnimCtl.fmt(EdAnimCtl.getTime()) : 'inactivo'));
     const _sp = $('esb-slider-panel'), _cb = $('esb-curve'), _sb = $('edShapeBar');
     const _sel = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     L('  nodos: barra vectorial ' + (_sb && _sb.classList.contains('visible') ? 'visible' : 'oculta') +

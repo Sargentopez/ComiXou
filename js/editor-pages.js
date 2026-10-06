@@ -490,14 +490,19 @@ function _pgRenderThumbLive(canvas, page, full) {
   const _drawGroupLayer = (la) => {
     if (!la || !la._canvas || la._canvas.width === 0) return;
     const _src = (la._previewSx != null && la._srcCanvas) ? la._srcCanvas : la._canvas;
-    const _lpx = edMarginX() + la.x * pw;
-    const _lpy = edMarginY() + la.y * ph;
+    // v41.61 — Fantasma del papel cebolla con «Ver control de animaciones»: el relleno/lápiz/acuarela de un dibujo con
+    // trayectoria se mueve con ella igual que en el canvas (FillLayer.draw). Solo si hay un estado de ese reloj para la
+    // capa (_edACS); en cualquier otro caso (miniaturas, exportación…) se pinta en su sitio de siempre.
+    const _acsG = (typeof _edACS === 'function') ? _edACS(la) : null;
+    const _lpx = edMarginX() + ((_acsG && _acsG.px != null) ? _acsG.px : la.x) * pw;
+    const _lpy = edMarginY() + ((_acsG && _acsG.py != null) ? _acsG.py : la.y) * ph;
     const _lw  = la.width  * pw;
     const _lh  = la.height * ph;
+    const _rotG = (la.rotation || 0) + ((_acsG && _acsG.px != null && !la._isWorkspaceCanvas) ? (_acsG.rot || 0) : 0);
     offCtx.save();
     offCtx.globalAlpha = la.opacity ?? 1;
     offCtx.translate(_lpx, _lpy);
-    if (la.rotation) offCtx.rotate(la.rotation * Math.PI / 180);
+    if (_rotG) offCtx.rotate(_rotG * Math.PI / 180);
     offCtx.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
     offCtx.restore();
     offCtx.globalAlpha = 1;
