@@ -1917,18 +1917,21 @@ class ImageLayer extends BaseLayer {
   }
   draw(ctx,can){
     // Si hay canvas offscreen de animación PNG, usarlo (igual que GifLayer usa _oc)
-    const src = this._oc || this.img;
+    // v41.60: «Ver control de animaciones» — en el compositor del editor, fotograma y opacidad del instante elegido.
+    const _acs = _edACS(this);
+    const src = (_acs && _acs.oc) || this._oc || this.img;
     if (!src) return;
     if (src === this.img && (!this.img.complete || this.img.naturalWidth===0)) return;
     const pw=edPageW(), ph=edPageH();
     const w = this.width  * pw;
     const h = this.height * ph;
-    const _iCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _iCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _iCurX = _edCurX(this);
+    const _iCurY = _edCurY(this);
     const px = edMarginX() + _iCurX*pw;
     const py = edMarginY() + _iCurY*ph;
     ctx.save();
-    ctx.globalAlpha = this._animFadeOpacity != null ? this._animFadeOpacity : (this.opacity ?? 1);
+    ctx.globalAlpha = (_acs && _acs.fade != null) ? (this.opacity ?? 1) * _acs.fade
+                    : (this._animFadeOpacity != null ? this._animFadeOpacity : (this.opacity ?? 1));
     if(this._blendMode) ctx.globalCompositeOperation = this._blendMode;
     ctx.translate(px,py);
     ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
@@ -2271,15 +2274,16 @@ class GifLayer extends BaseLayer {
     const pw = edPageW(), ph = edPageH();
     const w  = this.width  * pw;
     const h  = this.height * ph;
-    const _gCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _gCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _gCurX = _edCurX(this);
+    const _gCurY = _edCurY(this);
     const px = edMarginX() + _gCurX * pw;
     const py = edMarginY() + _gCurY * ph;
+    const _gAcs = _edACS(this); // v41.60: fotograma del instante elegido en «Ver control de animaciones»
     ctx.save();
     ctx.globalAlpha = this.opacity ?? 1;
     ctx.translate(px, py);
     ctx.rotate(((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180);
-    ctx.drawImage(this._oc, -w/2, -h/2, w, h);
+    ctx.drawImage((_gAcs && _gAcs.oc) || this._oc, -w/2, -h/2, w, h);
     ctx.restore();
   }
   contains(px, py) { return super.contains(px, py); }
@@ -2520,8 +2524,8 @@ class TextLayer extends BaseLayer {
   draw(ctx,can){
     const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const _tlCurX=(_edViewerMode||_edMpPreviewActive)&&this._pathCurX!=null?this._pathCurX:this.x;
-    const _tlCurY=(_edViewerMode||_edMpPreviewActive)&&this._pathCurY!=null?this._pathCurY:this.y;
+    const _tlCurX=_edCurX(this);
+    const _tlCurY=_edCurY(this);
     const px=edMarginX()+_tlCurX*pw, py=edMarginY()+_tlCurY*ph;
     ctx.save();
     ctx.translate(px,py); ctx.rotate((this.rotation + _edLayerPathRotDeg(this))*Math.PI/180);
@@ -2851,8 +2855,8 @@ class BubbleLayer extends BaseLayer {
   draw(ctx,can){
     const pw=edPageW(), ph=edPageH();
     const w=this.width*pw, h=this.height*ph;
-    const _blCurX=(_edViewerMode||_edMpPreviewActive)&&this._pathCurX!=null?this._pathCurX:this.x;
-    const _blCurY=(_edViewerMode||_edMpPreviewActive)&&this._pathCurY!=null?this._pathCurY:this.y;
+    const _blCurX=_edCurX(this);
+    const _blCurY=_edCurY(this);
     const pos={x:edMarginX()+_blCurX*pw, y:edMarginY()+_blCurY*ph};
     const isSingle=this.text.trim().length===1&&/[a-zA-Z0-9]/.test(this.text.trim());
     ctx.save();ctx.translate(pos.x,pos.y);
@@ -3218,10 +3222,11 @@ class DrawLayer extends BaseLayer {
     // Pintar el workspace entero con el mismo transform de cámara ya activo en ctx
     ctx.save();
     // Motion path: trasladar el canvas workspace por el offset de la trayectoria
-    if ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) {
+    const _dpX = _edPathCurX(this);
+    if (_dpX != null) {
       const _mpPw = edPageW(), _mpPh = edPageH();
-      ctx.translate((this._pathCurX - (this.x || 0.5)) * _mpPw,
-                    (this._pathCurY - (this.y || 0.5)) * _mpPh);
+      ctx.translate((_dpX - (this.x || 0.5)) * _mpPw,
+                    (_edPathCurY(this) - (this.y || 0.5)) * _mpPh);
     }
     ctx.drawImage(this._canvas, 0, 0);
     ctx.restore();
@@ -3395,8 +3400,8 @@ class FillLayer extends BaseLayer {
     const w  = this.width  * pw;
     const h  = this.height * ph;
     // Motion path: usar _pathCurX/_pathCurY si disponible
-    const _flCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _flCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _flCurX = _edCurX(this);
+    const _flCurY = _edCurY(this);
     const px = edMarginX() + _flCurX * pw;
     const py = edMarginY() + _flCurY * ph;
     ctx.save();
@@ -3412,9 +3417,10 @@ class FillLayer extends BaseLayer {
     if (this._isWorkspaceCanvas) {
       // Fill vinculado a DrawLayer: canvas ED_CANVAS_W×H en coords workspace absolutas.
       // Motion path: trasladar por offset igual que DrawLayer.
-      if ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) {
-        ctx.translate((this._pathCurX - (this.x || 0.5)) * pw,
-                      (this._pathCurY - (this.y || 0.5)) * ph);
+      const _flPX = _edPathCurX(this);
+      if (_flPX != null) {
+        ctx.translate((_flPX - (this.x || 0.5)) * pw,
+                      (_edPathCurY(this) - (this.y || 0.5)) * ph);
       }
       ctx.drawImage(src, 0, 0);
     } else {
@@ -3636,8 +3642,8 @@ class StrokeLayer extends BaseLayer {
     const w = this.width  * pw;
     const h = this.height * ph;
     // Motion path: usar _pathCurX/_pathCurY si disponible
-    const _slCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _slCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _slCurX = _edCurX(this);
+    const _slCurY = _edCurY(this);
     const px = edMarginX() + _slCurX * pw;
     const py = edMarginY() + _slCurY * ph;
     ctx.save();
@@ -3754,8 +3760,8 @@ class ShapeLayer extends BaseLayer {
     const pw = edPageW(), ph = edPageH();
     const mx = edMarginX(), my = edMarginY();
     // Motion path: usar _pathCurX/_pathCurY si disponible
-    const _shCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _shCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _shCurX = _edCurX(this);
+    const _shCurY = _edCurY(this);
     const cx = mx + _shCurX * pw;
     const cy = my + _shCurY * ph;
     const w  = this.width  * pw;
@@ -3935,8 +3941,8 @@ class LineLayer extends BaseLayer {
     if (this.points.length < 2) return;
     const pw = edPageW(), ph = edPageH();
     // Motion path: usar _pathCurX/_pathCurY si disponible
-    const _lnCurX = ((_edViewerMode || _edMpPreviewActive) && this._pathCurX != null) ? this._pathCurX : this.x;
-    const _lnCurY = ((_edViewerMode || _edMpPreviewActive) && this._pathCurY != null) ? this._pathCurY : this.y;
+    const _lnCurX = _edCurX(this);
+    const _lnCurY = _edCurY(this);
     const cx = edMarginX() + _lnCurX * pw;
     const cy = edMarginY() + _lnCurY * ph;
     const rot = ((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180;
@@ -6022,72 +6028,73 @@ function _edRenderDrawTmp(ctx) {
 // Render paramétrico: fondo + capas (sin overlays UI ni scrollbars).
 // ctx             — contexto destino (edCtx para render normal; ctx estático para cache)
 // excludeLayerIdx — índice de la capa a omitir (-1 = ninguna)
-// drawTmpMode     — 'inline' (por defecto): compone el grupo de dibujo activo en su
-//                   posición de capa exacta — comportamiento normal.
-//                   'before': pinta fondo + SOLO las capas ANTERIORES al DrawLayer
-//                   activo (sin el propio grupo de dibujo, sin capas posteriores, sin
-//                   texto). Para el caché "por debajo" del trazo activo.
-//                   'after': pinta SOLO las capas POSTERIORES al DrawLayer activo +
-//                   texto/bocadillos. Pensado para pintarse en vivo ENCIMA del trazo —
-//                   así las capas superiores siguen viéndose con su dimming.
+// drawTmpMode     — 'inline' (por defecto): render completo. En una sesión de dibujo a mano,
+//                   el grupo de dibujo en edición (relleno/acuarela/lápiz/tinta, que viven en
+//                   _edTmp) se compone al FINAL, encima de todo — ver _edRenderDrawTmp.
+//                   'before': igual que 'inline' pero SIN el grupo de dibujo en edición ni el
+//                   fantasma de las hojas contiguas: es la caché estática de todo lo que NO se
+//                   edita (fondo + capas inferiores + capas superiores + textos, cada una con
+//                   su dimming), que el trazo activo reutiliza en cada fotograma mientras se
+//                   compone encima, en vivo, el grupo de dibujo (ver edRedraw).
+//                   v41.59: antes la caché solo guardaba las capas ANTERIORES al dibujo y las
+//                   posteriores (y los textos) se repintaban en vivo ENCIMA del trazo (modo
+//                   'after', retirado), así que tapaban el dibujo que se estaba editando.
 //                   Devuelve true si _editingDraw era cierto — el caller verifica esto
 //                   antes de marcar el caché 'before' como reutilizable.
 function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
+  // v41.60 — «Ver control de animaciones»: el estado del reloj solo existe mientras dura este render.
+  const _acOn = _edAnimCtlBegin();
+  try { return _edRenderFrameInner(ctx, excludeLayerIdx, drawTmpMode); }
+  finally { _edAnimCtlEnd(_acOn); }
+}
+function _edRenderFrameInner(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   const cw=ctx.canvas.width, ch=ctx.canvas.height;
   // ¿Sesión de dibujo a mano o vectorial? UNA sola evaluación por fotograma: manda
   // tanto el color de la zona de trabajo como la sombra de la hoja (v40.47/v40.48).
-  // El modo 'after' no pinta ninguno de los dos (solo capas por encima).
-  const _drawSession = drawTmpMode !== 'after' && _edInDrawingSession();
+  const _drawSession = _edInDrawingSession();
 
-  if (drawTmpMode !== 'after') {
-    // Reset transform → limpiar todo el viewport
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.clearRect(0,0,cw,ch);
-    // Fondo workspace (toda la pantalla) — SIEMPRE su color normal aquí.
-    // v40.47 pintaba TODA la pantalla blanca mientras se CREA o EDITA un dibujo
-    // a mano o vectorial. v40.95 — corrección de Alberto: eso era engañoso,
-    // porque sugería que se podía dibujar en cualquier parte de esa zona
-    // blanca, cuando en realidad solo se puede dibujar dentro del área de
-    // trabajo fija (ED_CANVAS_W×ED_CANVAS_H — ver su definición arriba, es el
-    // tamaño real del canvas interno de DrawLayer/FillLayer/etc.) que rodea la
-    // hoja. Así que aquí SIEMPRE se pinta el color normal para toda la
-    // pantalla, y más abajo (tras aplicar la cámara, con la hoja ya en curso)
-    // se repinta blanca SOLO esa área realmente dibujable — el resto (fuera
-    // de ED_CANVAS_W×H, solo visible con mucho zoom-out o paneo) se queda con
-    // el azul de siempre, que es lo que corresponde a una zona no dibujable.
-    ctx.fillStyle = ED_WORKSPACE_NORMAL;
-    ctx.fillRect(0,0,cw,ch);
-  } else {
-    // Modo 'after': se pinta encima de contenido ya existente — solo restablecer transform.
-    ctx.setTransform(1,0,0,1,0,0);
-  }
+  // Reset transform → limpiar todo el viewport
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cw,ch);
+  // Fondo workspace (toda la pantalla) — SIEMPRE su color normal aquí.
+  // v40.47 pintaba TODA la pantalla blanca mientras se CREA o EDITA un dibujo
+  // a mano o vectorial. v40.95 — corrección de Alberto: eso era engañoso,
+  // porque sugería que se podía dibujar en cualquier parte de esa zona
+  // blanca, cuando en realidad solo se puede dibujar dentro del área de
+  // trabajo fija (ED_CANVAS_W×ED_CANVAS_H — ver su definición arriba, es el
+  // tamaño real del canvas interno de DrawLayer/FillLayer/etc.) que rodea la
+  // hoja. Así que aquí SIEMPRE se pinta el color normal para toda la
+  // pantalla, y más abajo (tras aplicar la cámara, con la hoja ya en curso)
+  // se repinta blanca SOLO esa área realmente dibujable — el resto (fuera
+  // de ED_CANVAS_W×H, solo visible con mucho zoom-out o paneo) se queda con
+  // el azul de siempre, que es lo que corresponde a una zona no dibujable.
+  ctx.fillStyle = ED_WORKSPACE_NORMAL;
+  ctx.fillRect(0,0,cw,ch);
 
   // Aplicar cámara: escala + traslación
   ctx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
 
   const page=edPages[edCurrentPage]; if(!page) return false;
 
-  if (drawTmpMode !== 'after') {
-    // v40.95 — sesión de dibujo activa: pintar BLANCA solo el área realmente
-    // dibujable (el workspace fijo ED_CANVAS_W×ED_CANVAS_H en el que trabajan
-    // DrawLayer/FillLayer/PencilLayer/WatercolorLayer — su origen (0,0) es
-    // exactamente este mismo origen de coordenadas de mundo, ya con la cámara
-    // aplicada, así que no hace falta ningún desplazamiento). Fuera de ese
-    // rectángulo se deja el azul normal ya pintado arriba — ahí no se puede
-    // dibujar, así que ya no aparenta que se pueda.
-    if (_drawSession) {
-      ctx.fillStyle = ED_WORKSPACE_DRAWING;
-      ctx.fillRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
-    }
-    // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
-    // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
-    // shadowBlur en cada frame, una de las operaciones más costosas en Android.
-    _edDrawPageBackground(ctx, !_drawSession);
-    // Transparencia hojas contiguas (onion skin): v41.45 — YA NO se pinta aquí, debajo de
-    // las capas (una imagen pegada opaca, un relleno o un bocadillo la tapaban por
-    // completo y la transparencia no servía de nada). Se pinta al FINAL de esta función,
-    // encima de todo lo de la hoja en vigor — ver _edDrawOnionGhost.
+  // v40.95 — sesión de dibujo activa: pintar BLANCA solo el área realmente
+  // dibujable (el workspace fijo ED_CANVAS_W×ED_CANVAS_H en el que trabajan
+  // DrawLayer/FillLayer/PencilLayer/WatercolorLayer — su origen (0,0) es
+  // exactamente este mismo origen de coordenadas de mundo, ya con la cámara
+  // aplicada, así que no hace falta ningún desplazamiento). Fuera de ese
+  // rectángulo se deja el azul normal ya pintado arriba — ahí no se puede
+  // dibujar, así que ya no aparenta que se pueda.
+  if (_drawSession) {
+    ctx.fillStyle = ED_WORKSPACE_DRAWING;
+    ctx.fillRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
   }
+  // Lienzo blanco con sombra y esquinas redondeadas (solo fondo, sin clip).
+  // Cacheado en _edDrawPageBackground (definida arriba) — evita recalcular
+  // shadowBlur en cada frame, una de las operaciones más costosas en Android.
+  _edDrawPageBackground(ctx, !_drawSession);
+  // Transparencia hojas contiguas (onion skin): v41.45 — YA NO se pinta aquí, debajo de
+  // las capas (una imagen pegada opaca, un relleno o un bocadillo la tapaban por
+  // completo y la transparencia no servía de nada). Se pinta al FINAL de esta función,
+  // encima de todo lo de la hoja en vigor — ver _edDrawOnionGhost.
 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
@@ -6172,9 +6179,6 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     return true;
   };
 
-  let _drawTmpRendered = false;
-  let _reachedDraw = false; // true en cuanto el forEach pasa por el DrawLayer activo
-
   // ── v41.49 — OBJETO EN EDICIÓN SIEMPRE VISIBLE, ENCIMA DE TODO ──────────────────────────
   // Con el panel de propiedades de un objeto abierto ('props'/'text-props'), el objeto que se
   // edita se pinta el ÚLTIMO — encima de todos los demás, textos y bocadillos incluidos — al
@@ -6195,6 +6199,23 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
       if(_linkedPencil)     _liftSet.add(_linkedPencil);
       if(_linkedWatercolor) _liftSet.add(_linkedWatercolor);
     }
+  } else if(_anyEditing && _editingShape && !_editingDraw && drawTmpMode === 'inline'){
+    // v41.59 — EDICIÓN DE DIBUJO VECTORIAL (formas y rectas, nuevas o reeditadas): lo mismo que
+    // arriba para TODO lo que no se atenúa — el objeto en edición, el que se está construyendo
+    // (_edShapePreview/_edLineLayer), sus compañeros de fusión y los objetos vectoriales creados
+    // en la sesión. Se pintan los últimos, completos (100 %), encima de las capas atenuadas
+    // —inferiores, superiores y textos—, que conservan su 50 % y su orden relativo. Antes los
+    // objetos situados por encima (y los textos/bocadillos, que siempre van arriba) tapaban el
+    // dibujo en edición aunque estuvieran atenuados (Alberto: «las capas superiores hacen que no
+    // pueda visualizarse el dibujo […] vectorial que está editándose»). Se evalúa con el mismo
+    // _isDimmed que decide el 50 %, así lo que se pinta completo y lo que sube coinciden siempre.
+    // Con capa excluida (caché del arrastre) también aplica: esa capa se salta en todos los pases.
+    const _vecLift = new Set();
+    edLayers.forEach((l,i)=>{
+      if(l.hidden || i === excludeLayerIdx) return;
+      if(!_isDimmed(l, i)) _vecLift.add(l);
+    });
+    if(_vecLift.size) _liftSet = _vecLift;
   }
 
   // Pintado de una capa NO textual (imagen, trazo, dibujo, forma, línea, relleno, lápiz,
@@ -6229,42 +6250,41 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
 
   // Renderizar en orden del array: imagen, stroke y draw en su posición relativa.
   // Textos/bocadillos siempre al final (encima de todo).
-  // En modo draw, las capas temporales se insertan EN LA POSICIÓN del DrawLayer,
-  // de modo que capas superiores se sigan viendo (con dimming) por encima del dibujo.
+  // v41.59 — en una sesión de dibujo a mano, el grupo en edición (DrawLayer + relleno/acuarela/
+  // lápiz vinculados) NO se pinta aquí como capas: sus lienzos temporales (_edTmp) se componen al
+  // FINAL (más abajo), encima de TODO lo demás — también de las capas superiores y de los textos,
+  // que quedan por debajo con su atenuación. Antes se insertaban EN LA POSICIÓN del DrawLayer, de
+  // modo que las capas superiores (y los textos) se veían por encima del dibujo en edición.
+  // Excepción: con el cuentagotas activo (_anyEditing=false: todo al 100 %, sin atenuar) se ve la
+  // apariencia REAL de la hoja para elegir colores — ahí el grupo sigue en su posición de capa.
+  const _drawInPlace = _editingDraw && !_anyEditing;
+  let _drawTmpPlaced = false;
   edLayers.forEach((l,i)=>{
     if(l.type==='text'||l.type==='bubble') return; // los textos se dibujan después
     if(i === excludeLayerIdx) return; // capa excluida (drag) — se pinta aparte
     if(_liftSet && _liftSet.has(l)) return; // v41.49: el objeto en edición se pinta al final, encima de todo
-    // En modo draw: al llegar al DrawLayer, pintar los temporales en su z-order correcto
+    // En modo draw: las 4 capas del grupo se pintan como temporales (al final), omitir aquí
     if(_editingDraw && l.type==='draw'){
-      _reachedDraw = true;
-      if(drawTmpMode === 'inline') _edRenderDrawTmp(ctx);
-      _drawTmpRendered = true;
+      if(_drawInPlace && drawTmpMode === 'inline'){ _edRenderDrawTmp(ctx); _drawTmpPlaced = true; }
       return;
     }
-    // En modo draw: las 4 capas del grupo se pintan como temporales, omitir aquí
     if(_editingDraw && l.type==='fill'       && _linkedFill       && l===_linkedFill)       return;
     if(_editingDraw && l.type==='pencil'     && _linkedPencil     && l===_linkedPencil)     return;
     if(_editingDraw && l.type==='watercolor' && _linkedWatercolor && l===_linkedWatercolor) return;
-    // 'before'/'after': pintar solo la mitad correspondiente respecto al DrawLayer
-    if(drawTmpMode === 'before' && _reachedDraw)  return; // eso ya es zona "after"
-    if(drawTmpMode === 'after'  && !_reachedDraw) return; // eso es zona "before", ya cacheada
     if(l.hidden) return; // capa oculta por el usuario desde el panel de capas
     _paintNonTextLayer(l, _isDimmed(l, i) ? 0.5 : 1);
   });
-  // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo).
-  // En modo 'before' se omiten — van encima del trazo, los pinta el modo 'after'.
-  if(drawTmpMode !== 'before'){
-    _textLayers.forEach(l=>{
-      if(l.hidden) return; // capa oculta por el usuario
-      const i = edLayers.indexOf(l);
-      if(i === excludeLayerIdx) return; // capa excluida (drag)
-      if(_liftSet && _liftSet.has(l)) return; // v41.49: el objeto en edición se pinta al final
-      const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
-      ctx.globalAlpha = _textGroupAlpha * dimFactor;
-      l.draw(ctx, edCanvas);
-    });
-  }
+  // Textos/bocadillos: aplicar dimming individual por capa (siempre encima de todo, salvo del
+  // dibujo en edición). También en la caché 'before': contiene todo lo que no se edita.
+  _textLayers.forEach(l=>{
+    if(l.hidden) return; // capa oculta por el usuario
+    const i = edLayers.indexOf(l);
+    if(i === excludeLayerIdx) return; // capa excluida (drag)
+    if(_liftSet && _liftSet.has(l)) return; // v41.49: el objeto en edición se pinta al final
+    const dimFactor = _isDimmed(l, i) ? 0.5 : 1;
+    ctx.globalAlpha = _textGroupAlpha * dimFactor;
+    l.draw(ctx, edCanvas);
+  });
   ctx.globalAlpha = 1;
   // v41.49 — objeto en edición (panel de propiedades abierto) y sus capas vinculadas: lo último
   // que se pinta, al 100 %, de modo que ningún otro objeto lo cubre (ver _liftSet arriba). Primero
@@ -6282,9 +6302,10 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
     });
     ctx.globalAlpha = 1;
   }
-  // Fallback: si el DrawLayer no estaba en edLayers (no debería ocurrir), pintar al final.
-  // Solo en modo 'inline' (en 'before'/'after' no se compone el trazo aquí).
-  if(_editingDraw && !_drawTmpRendered && drawTmpMode === 'inline'){
+  // v41.59 — dibujo a mano en edición: su grupo (relleno → acuarela → lápiz → tinta) se compone
+  // el ÚLTIMO, completo, encima de todas las capas (atenuadas) y de los textos. Solo en 'inline':
+  // en 'before' (caché) lo compone edRedraw en vivo sobre la caché.
+  if(_editingDraw && drawTmpMode === 'inline' && !_drawTmpPlaced){
     _edRenderDrawTmp(ctx);
   }
   // ── Transparencia hojas contiguas (onion skin) — v41.45: ENCIMA de todo ──────────
@@ -6298,8 +6319,8 @@ function _edRenderFrame(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') {
   // transparencia no servía de nada (fallo reportado por Alberto, probando v41.43).
   // Reparto por modo (ver edRedraw):
   //   'inline' — render completo: aquí.
-  //   'before' — caché estática de lo que va POR DEBAJO del trazo: no se pinta.
-  //   'after'  — lo que va por encima del trazo en vivo: aquí (un único blit por fotograma).
+  //   'before' — caché estática de lo que NO se edita (la del trazo activo): no se pinta; edRedraw
+  //              lo pinta en vivo tras el trazo, encima de todo (un único blit por fotograma).
   //   excludeLayerIdx>=0 — caché estática del arrastre: no se pinta; el camino rápido del
   //              arrastre lo pinta tras la capa arrastrada (también va por encima de ella).
   if (drawTmpMode !== 'before' && excludeLayerIdx < 0) _edDrawOnionGhost(ctx);
@@ -6437,7 +6458,8 @@ function edRedraw(){
     if (la) {
       edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
       edCtx.globalAlpha = la.opacity ?? 1;
-      la.draw(edCtx, edCanvas);
+      const _acD = _edAnimCtlBegin(); // v41.60: la capa arrastrada también se pinta en el instante del reloj
+      try { la.draw(edCtx, edCanvas); } finally { _edAnimCtlEnd(_acD); }
       edCtx.globalAlpha = 1;
       // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
     }
@@ -6474,7 +6496,8 @@ function edRedraw(){
         edCtx.drawImage(_edDragStatic.canvas, 0,0);
         edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
         edCtx.globalAlpha = (_la.opacity ?? 1);
-        _la.draw(edCtx, edCanvas);
+        const _acD2 = _edAnimCtlBegin(); // v41.60 (ver arriba)
+        try { _la.draw(edCtx, edCanvas); } finally { _edAnimCtlEnd(_acD2); }
         edCtx.globalAlpha = 1;
         // NO resetear aquí: _edRenderOverlays espera el transform de cámara activo
         _edDrawOnionGhost(edCtx); // v41.45 (ver arriba)
@@ -6496,10 +6519,10 @@ function edRedraw(){
     const cw = edCanvas.width, ch = edCanvas.height;
     edCtx.setTransform(1,0,0,1,0,0);
     edCtx.clearRect(0,0,cw,ch);
-    edCtx.drawImage(_edPaintStatic.canvas, 0,0); // capas POR DEBAJO del trazo (cacheadas)
+    edCtx.drawImage(_edPaintStatic.canvas, 0,0); // TODO lo que no se edita (cacheado): capas inferiores y superiores + textos, atenuados
     edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
-    _edRenderDrawTmp(edCtx);              // trazo activo, en vivo
-    _edRenderFrame(edCtx, -1, 'after');   // capas POR ENCIMA del trazo, en vivo (con dimming)
+    _edRenderDrawTmp(edCtx);              // trazo activo, en vivo — v41.59: encima de TODO (antes las capas superiores se repintaban encima)
+    _edDrawOnionGhost(edCtx);             // fantasma de las hojas contiguas, por encima de todo (v41.45)
     _edRenderOverlays();
     return;
   }
@@ -6515,9 +6538,9 @@ function edRedraw(){
       _edPaintStatic.ctx = _edPaintStatic.canvas.getContext('2d');
     }
     if (_edPaintStatic.ctx) {
-      // drawTmpMode='before' cachea solo fondo + capas ANTERIORES al DrawLayer activo.
-      // Las capas POSTERIORES se pintan en vivo con 'after' — así siguen viéndose
-      // con su dimming por encima del trazo, igual que en el render completo.
+      // drawTmpMode='before' cachea fondo + TODAS las capas que no se editan (inferiores,
+      // superiores y textos, cada una con su atenuación) — v41.59. Solo el grupo de dibujo
+      // activo se compone en vivo, ENCIMA de la caché, igual que en el render completo.
       const _hadGap = _edRenderFrame(_edPaintStatic.ctx, -1, 'before');
       if (_hadGap) {
         _edPaintStatic.cameraZ = edCamera.z;
@@ -6529,7 +6552,7 @@ function edRedraw(){
         edCtx.drawImage(_edPaintStatic.canvas, 0,0);
         edCtx.setTransform(edCamera.z, 0, 0, edCamera.z, edCamera.x, edCamera.y);
         _edRenderDrawTmp(edCtx);
-        _edRenderFrame(edCtx, -1, 'after');
+        _edDrawOnionGhost(edCtx);
         _edRenderOverlays();
         return;
       }
@@ -12340,8 +12363,52 @@ function _edPathOrientDelta(points, closed, t, pw, ph) {
 // (0 si no está en reproducción de trayectoria o si la capa no tiene orientación activa).
 // Único punto de verdad usado por los draw() de todos los tipos de capa rotables.
 function _edLayerPathRotDeg(la) {
+  const _s = _edACS(la); // v41.60: orientación por trayectoria en el instante de «Ver control de animaciones»
+  if (_s && _s.px != null) return _s.rot || 0;
   return ((_edViewerMode || _edMpPreviewActive) && la._pathCurRotDeg != null) ? la._pathCurRotDeg : 0;
 }
+
+// ── v41.60 — «Ver control de animaciones» (Animar → checkbox; lógica en js/editor-animctl.js) ──────────────────
+// Con el control activo el canvas del EDITOR muestra la hoja en el instante t del reloj: fotograma de las
+// animaciones, posición/giro de los objetos con trayectoria, invisibilidades… Esos valores NO se escriben nunca en
+// las capas (viven en un Map capa→estado que calcula EdAnimCtl.evaluate) y solo los lee el dibujo mientras
+// _edAnimCtlRender está en true, es decir, SOLO dentro del compositor del editor (_edRenderFrame y el repintado de
+// la capa arrastrada en edRedraw). Miniaturas, exportación, autoguardado, deshacer, copiar, visor y lector pintan con
+// las capas tal cual → siguen viendo siempre el fotograma inicial.
+let _edAnimCtlRender = false;   // true solo mientras el compositor del editor pinta con el estado del reloj
+let _edAnimCtlStates = null;    // Map<capa, { idx, fade, px, py, rot, oc }> de la evaluación en curso
+function _edAnimCtlBegin() {
+  if (typeof EdAnimCtl === 'undefined' || !EdAnimCtl.isActive()) return false;
+  if (_edViewerMode || _edMpPreviewActive || _edMotionPathMode) return false; // visor / edición de trayectoria: motor propio
+  const _st = EdAnimCtl.statesFor(edPages[edCurrentPage]);
+  if (!_st) return false;
+  _edAnimCtlStates = _st;
+  _edAnimCtlRender = true;
+  return true;
+}
+function _edAnimCtlEnd(_on) {
+  if (!_on) return;
+  _edAnimCtlRender = false;
+  _edAnimCtlStates = null;
+}
+// Estado del reloj para una capa (null fuera del compositor o si la capa no se anima).
+function _edACS(l) {
+  return (_edAnimCtlRender && _edAnimCtlStates) ? (_edAnimCtlStates.get(l) || null) : null;
+}
+// Posición de trayectoria de la capa (fracción de hoja) o null si se pinta en su sitio. Única fuente para los draw():
+// reloj de animaciones → visor / vista previa de trayectoria (_pathCurX/Y) → null.
+function _edPathCurX(l) {
+  const s = _edACS(l);
+  if (s && s.px != null) return s.px;
+  return ((_edViewerMode || _edMpPreviewActive) && l._pathCurX != null) ? l._pathCurX : null;
+}
+function _edPathCurY(l) {
+  const s = _edACS(l);
+  if (s && s.py != null) return s.py;
+  return ((_edViewerMode || _edMpPreviewActive) && l._pathCurY != null) ? l._pathCurY : null;
+}
+function _edCurX(l) { const v = _edPathCurX(l); return v != null ? v : l.x; }
+function _edCurY(l) { const v = _edPathCurY(l); return v != null ? v : l.y; }
 
 // ── Easing para trayectorias: reasigna t dentro de [0,1] sin cambiar la duración ─
 // v38.06: delega en AnimClock — ver js/anim-clock.js.
@@ -26195,6 +26262,9 @@ function edInitRules() {
     });
   }
   _edOnionSyncUI();
+  // v41.60 — «Ver control de animaciones» (checkbox del menú Animar + botonera inferior). Estado solo de sesión:
+  // nunca se guarda con la obra y arranca desmarcado en cada apertura del editor. Ver js/editor-animctl.js.
+  if (typeof EdAnimCtl !== 'undefined') EdAnimCtl.initUI();
 }
 
 // v41.47 — Refleja en el menú Animar el estado del papel cebolla de LA HOJA EN VIGOR: el deslizador de
@@ -34739,6 +34809,7 @@ function EditorView_destroy(){
     window._edQuotaFn = null;
   }
   _edSizeMonitorStop();
+  if (typeof EdAnimCtl !== 'undefined') EdAnimCtl.destroy(); // v41.60: «Ver control de animaciones»
   if(window._edPointerTypeFn){
     document.removeEventListener('pointerdown', window._edPointerTypeFn, true);
     window._edPointerTypeFn = null;

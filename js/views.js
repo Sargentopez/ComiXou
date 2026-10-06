@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.58</footer>
+    <footer class="app-version">v41.60</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -450,6 +450,13 @@ Router.register('editor', {
                        style="flex:1;min-width:80px;accent-color:#1a8cff;cursor:pointer" data-i18n-aria="ed_onionOpacity" aria-label="Opacidad">
                 <span id="dd-onionskin-alpha-val" style="min-width:36px;text-align:right;font-variant-numeric:tabular-nums">40%</span>
               </div>
+              <div class="ed-dropdown-sep"></div>
+              <!-- v41.60: «Ver control de animaciones» — muestra bajo el canvas una botonera ◀ reloj ▶ para ver la hoja en
+                   cualquier instante de su reproducción (ver js/editor-animctl.js). Estado solo de sesión, no se guarda. -->
+              <label class="ed-dropdown-item" id="dd-animctl-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+                <input type="checkbox" id="dd-animctl-check" style="width:16px;height:16px;accent-color:#1a8cff;cursor:pointer;flex-shrink:0">
+                <span data-i18n="ed_animCtlShow">Ver control de animaciones</span>
+              </label>
             </div>
           </div>
           <div class="ed-menu-sep"></div>
@@ -640,6 +647,16 @@ Router.register('editor', {
       <div id="edPageJumpBar" class="ed-pagejump-bar" style="display:none">
         <div class="ed-pagejump-bar-label" id="edPageJumpLabel"></div>
         <input type="range" id="edPageJumpSlider" class="ed-pagejump-slider" min="1" max="1" value="1" step="1" data-i18n-aria="reader_selectPageLabel" aria-label="Seleccionar hoja">
+      </div>
+
+      <!-- v41.60 — Botonera «Ver control de animaciones» (checkbox del menú Animar): ◀ retroceder · reloj · ▶ avanzar.
+           Mantener pulsado ▶/◀ mueve el tiempo a 10 fotogramas/s; el 0 es lo que se ve al iniciarse la reproducción de la
+           hoja. Es DOM fuera del canvas: no entra en miniaturas, exportación ni guardado, y recoge sus propios toques
+           (edStopCanvasLeak) para que no lleguen al canvas. Ver js/editor-animctl.js. -->
+      <div id="edAnimCtlBar" class="ed-animctl-bar" role="group" data-i18n-aria="ed_animCtlTitle" aria-label="Control de animaciones">
+        <button type="button" class="ed-animctl-btn" id="edAnimCtlBack" data-i18n-title="ed_animCtlBack" data-i18n-aria="ed_animCtlBack" title="Retroceder (mantén pulsado)" aria-label="Retroceder (mantén pulsado)"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M17 5.5v13a1 1 0 0 1-1.55.83l-9.6-6.5a1 1 0 0 1 0-1.66l9.6-6.5A1 1 0 0 1 17 5.5z" fill="currentColor"/></svg></button>
+        <div class="ed-animctl-clock" id="edAnimCtlClock" role="timer" data-i18n-aria="ed_animCtlClock" aria-label="Tiempo de la hoja">0:00.0</div>
+        <button type="button" class="ed-animctl-btn" id="edAnimCtlFwd" data-i18n-title="ed_animCtlFwd" data-i18n-aria="ed_animCtlFwd" title="Avanzar (mantén pulsado)" aria-label="Avanzar (mantén pulsado)"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M7 5.5v13a1 1 0 0 0 1.55.83l9.6-6.5a1 1 0 0 0 0-1.66l-9.6-6.5A1 1 0 0 0 7 5.5z" fill="currentColor"/></svg></button>
       </div>
 
       <!-- ── PANEL DE OPCIONES CONTEXTUAL ── -->

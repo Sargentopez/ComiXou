@@ -1775,6 +1775,76 @@ body.ed-scale-tablet .ed-modal-sheet {
 }
 
 /* ══════════════════════════════════════════════════════
+   v41.60 — BOTONERA «VER CONTROL DE ANIMACIONES» (menú Animar)
+   Pastilla centrada bajo el canvas: ◀ retroceder · reloj · ▶ avanzar. Mantener pulsado ▶/◀ mueve el tiempo de la
+   hoja a 10 fotogramas/s (js/editor-animctl.js). Es un elemento del DOM por encima del canvas, NO se pinta en él:
+   no entra en miniaturas, exportación ni guardado. touch-action:none + captura de puntero + edStopCanvasLeak (JS)
+   para que sus toques no pasen al canvas ni al gesto del navegador. Se escala en tablet igual que las barras
+   flotantes (--edb-scale). Queda por encima de las barras de dibujo (51) y por debajo del panel de opciones (200),
+   del visor (400) y de la barra «ir a hoja» (800); 52px de margen inferior para no pisar el aviso #edToast.
+   ══════════════════════════════════════════════════════ */
+.ed-animctl-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 55;
+  display: none;
+  align-items: center;
+  gap: calc(4px * var(--edb-scale, 1));
+  padding: calc(4px * var(--edb-scale, 1));
+  background: rgba(20,20,20,.93);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 100px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ed-animctl-bar.visible { display: flex; }
+.ed-animctl-btn {
+  width: calc(46px * var(--edb-scale, 1));
+  height: calc(46px * var(--edb-scale, 1));
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s, color .1s;
+}
+.ed-animctl-btn svg { pointer-events: none; display: block; }
+.ed-animctl-btn.held,
+.ed-animctl-btn:active { background: #FFE135; color: #111; }
+@media (hover: hover) {
+  .ed-animctl-btn:hover { background: rgba(255,255,255,.22); }
+  .ed-animctl-btn.held:hover { background: #FFE135; }
+}
+.ed-animctl-clock {
+  min-width: calc(80px * var(--edb-scale, 1));
+  padding: 0 calc(6px * var(--edb-scale, 1));
+  text-align: center;
+  color: #fff;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+  font-size: calc(.95rem * var(--edb-scale, 1));
+  font-weight: 800;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* Mientras otro modo ocupa el editor (animaciones GCP, editor de textos, edición de trayectoria) no se muestra. */
+#editorShell.gcp-open .ed-animctl-bar,
+#editorShell.td-open .ed-animctl-bar,
+#editorShell.mp-active .ed-animctl-bar { display: none !important; }
+
+/* ══════════════════════════════════════════════════════
    OVERLAYS DE CAPAS Y HOJAS
    Pantalla completa sobre el editor, mismo estilo que
    los modales de "nueva creación"
