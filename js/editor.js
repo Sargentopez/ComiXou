@@ -5429,6 +5429,17 @@ function edFitCanvas(resetCamera){
   _edScrollbarsUpdate();
   // Siempre redibujar tras ajustar el canvas
   edRedraw();
+  // v41.63 — con el editor de animaciones abierto, el bloque de arriba que
+  // sincroniza gcpCanvas le asigna width/height, y asignar width/height a un
+  // <canvas> SIEMPRE reinicia su bitmap (aunque el valor sea el mismo): el
+  // lienzo de animación quedaba VACÍO tras cualquier edFitCanvas() — cerrar la
+  // biblioteca con ✕ (_bibClose), un evento resize (en Android, p. ej., al
+  // aparecer/ocultarse la barra del navegador), abrir/cerrar un panel… — hasta
+  // que algo lo redibujara por su cuenta (cualquier toque). edRedraw() no lo
+  // cubre: solo delega en _gcpRedraw() con _edRedrawOverride (activo únicamente
+  // dentro de _gcpWithEditorContext). Quien vacía el canvas es quien debe
+  // repintarlo — mismo patrón que _edResetCameraToFit (más abajo).
+  if (window._gcpActive && !window._edRedrawOverride && typeof _gcpRedraw === 'function') _gcpRedraw();
 }
 
 /* ── Recentra el canvas como la lupa: ajusta cámara al lienzo y redibuja ── */
@@ -37373,6 +37384,17 @@ function EditorView_init(){
         if (typeof _bibDragCancel === 'function') _bibDragCancel();
         _bib.classList.remove('open'); _bib.innerHTML = ''; delete _bib.dataset.mode;
         window._gcpUiClosedAt = Date.now();
+        // v41.63 — BUG CORREGIDO (Alberto: "al insertar dos objetos de la
+        // biblioteca, se cierra la biblioteca, pero el color de fondo se queda
+        // tapando la parte del canvas sobre la que se encontraba abierta"):
+        // con el panel abierto edFitCanvas deja sitio al panel (el lienzo baja
+        // y se acorta su altura, y cada evento resize —p. ej. la barra del
+        // navegador en Android— lo vuelve a medir con el panel ya desplegado).
+        // Este cierre al tocar fuera vaciaba el panel pero NUNCA reajustaba el
+        // lienzo (solo el botón ✕, _bibClose, lo hacía): el lienzo seguía
+        // desplazado/acortado y donde estaba el panel quedaba una banda con el
+        // color de fondo del área de trabajo. Mismo cierre que _bibClose.
+        requestAnimationFrame(edFitCanvas);
         if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
       }
       // Ignorar taps en UI del editor GIF — dejar que sus propios listeners actúen.
@@ -37421,6 +37443,7 @@ function EditorView_init(){
           // vaciar el panel, para no dejarlo "colgado".
           if (typeof _bibDragCancel === 'function') _bibDragCancel();
           _bibGen.classList.remove('open'); _bibGen.innerHTML = ''; delete _bibGen.dataset.mode;
+          requestAnimationFrame(edFitCanvas); // v41.63 — ver el cierre en contexto GCP (más arriba): reajustar el lienzo al quitar el panel
           if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
         }
       }
@@ -45312,13 +45335,17 @@ function _gcpRenderLayersDropdown(dd) {
 // Las capas con dataUrl (stroke, fill, pencil, watercolor, draw) se cargan en paralelo
 // para resolver el problema de carga asíncrona de fromDataUrl.
 // Las capas vectoriales (shape, line, text, bubble, sin dataUrl) se dibujan con la.draw().
-// _gcpMergeLayersToImage — gcpInsertFromBib usa el tope de tamaño (recorta a
-// máx. 90% de la página) porque ahí un grupo de la Biblioteca aterriza en una
-// composición nueva y conviene que quepa con margen. `opts.preserveSize`
-// (usado por _gcpCpFlattenPrepared, la conversión "Hojas → animación") desactiva
-// ese tope: ahí el objetivo es reproducir el tamaño EXACTO que ya tenía en su
-// hoja de origen, nunca reducirlo — cambiar esta función en vez de escribir
-// una copia sería reinventar la rueda, así que se parametriza en su lugar.
+// _gcpMergeLayersToImage — por defecto aplica un tope de tamaño (reduce la
+// imagen resultante a máx. 90% de la página). `opts.preserveSize` desactiva ese
+// tope y reproduce el tamaño EXACTO que tenían las capas: lo usan
+// _gcpCpFlattenPrepared (la conversión "Hojas → animación") y, desde v41.63,
+// también gcpInsertFromBib — Alberto: "los objetos no aparecen dimensionados y
+// ubicados respecto al lienzo como estaban cuando se guardaron en la
+// biblioteca" — un grupo guardado que ocupaba más del 90 % de la página (p. ej.
+// un cuadrado del tamaño del lienzo) se insertaba reducido, y un objeto de la
+// biblioteca debe aparecer tal cual lo guardó, nunca "con margen". Cambiar esta
+// función en vez de escribir una copia sería reinventar la rueda, así que se
+// parametriza en su lugar.
 // Busca el bbox (por alpha>10) del contenido ya dibujado en un contexto de
 // canvas, en DOS pasadas — coarse-to-fine — en vez de un único recorrido
 // manual sobre TODOS los píxeles del canvas (lo que hacían, cada una por su
@@ -45518,8 +45545,11 @@ function _gcpMergeLayersToImage(items, cb, opts) {
     const dataUrl = crop.toDataURL('image/png');
     crop.width = 0; crop.height = 0;
 
-    const _wsCx = (x0 + x1) / 2 - offX;
-    const _wsCy = (y0 + y1) / 2 - offY;
+    // Centro REAL del recorte: x0..x1 y y0..y1 son INCLUSIVOS (cw = x1-x0+1),
+    // así que el centro es x0+cw/2, no (x0+x1)/2 (que se quedaba medio píxel
+    // corto). v41.63.
+    const _wsCx = x0 + cw / 2 - offX;
+    const _wsCy = y0 + ch / 2 - offY;
     const _nx = (_wsCx - mx) / pw;
     const _ny = (_wsCy - my) / ph;
     const normW = cw / pw, normH = ch / ph;
@@ -45596,11 +45626,20 @@ function _gcpVectorToImage(la, cb) {
   // (más notorio cuanto más pequeño es el objeto respecto al padding fijo de 4px).
   const finalW = cw / pw;
   const finalH = ch / ph;
+  // v41.63 — la imagen se centra en el centro REAL del recorte, no en la.x/la.y:
+  // el recorte (bbox de los píxeles pintados + 4 px) solo coincide con el
+  // centro de la capa si el dibujo es simétrico respecto a él. Un bocadillo con
+  // cola, un texto con su caja, una línea con curvas… tienen contenido pintado
+  // descentrado respecto a (x,y) — centrar la imagen en (x,y) lo desplazaba la
+  // mitad de esa diferencia respecto a como estaba en el lienzo al guardarlo.
+  // Con el centro del recorte, el contenido queda exactamente donde estaba.
+  const _cxFrac = ((x0 + cw / 2 - offX) - mx) / pw;
+  const _cyFrac = ((y0 + ch / 2 - offY) - my) / ph;
 
   // Crear ImageLayer con proporciones correctas
   const img = new Image();
   img.onload = () => {
-    const imgLayer = new ImageLayer(img, la.x, la.y, finalW);
+    const imgLayer = new ImageLayer(img, _cxFrac, _cyFrac, finalW);
     imgLayer.height = finalH;
     // La rotación ya quedó horneada en el recorte (la.draw() la aplicó al renderizar sobre
     // el canvas axis-aligned) — volver a asignarla aquí duplicaría el giro.
@@ -45722,7 +45761,9 @@ function gcpInsertFromBib(entry) {
       })
       .filter(Boolean);
     if (_grpItems.length) {
-      _gcpMergeLayersToImage(_grpItems, imgLayer => doInsert(imgLayer));
+      // v41.63 — preserveSize: el grupo se inserta con el tamaño y la posición
+      // EXACTOS con que se guardó (sin el tope del 90 % de la página).
+      _gcpMergeLayersToImage(_grpItems, imgLayer => doInsert(imgLayer), { preserveSize: true });
     }
   } else {
     const la = edDeserLayer(entry.layerData, edOrientation);
@@ -45768,13 +45809,23 @@ function gcpInsertFromBib(entry) {
         crop.width=cw;crop.height=ch;
         crop.getContext('2d').drawImage(off,x0,y0,cw,ch,0,0,cw,ch);
         const dataUrl=crop.toDataURL('image/png');
+        // v41.63 — tamaño y posición EXACTOS de lo guardado (Alberto: "los
+        // objetos no aparecen dimensionados y ubicados respecto al lienzo como
+        // estaban cuando se guardaron en la biblioteca"). Tres fallos aquí:
+        //  1) tope del 90 % de la página: un dibujo+relleno que ocupaba (casi)
+        //     todo el lienzo se reducía al insertarlo;
+        //  2) centro en la.x/la.y en vez de en el centro REAL del recorte (la
+        //     unión de trazo+relleno+acuarela+lápiz no tiene por qué ser
+        //     simétrica respecto al centro del trazo);
+        //  3) imgLayer.rotation=la.rotation: la rotación YA está horneada en
+        //     el recorte (_tmpSl.draw / _tmp.draw de más abajo la aplican al
+        //     pintar los bitmaps) — asignarla otra vez giraba el objeto doble.
         const normW=cw/pw,normH=ch/ph;
-        const scale=Math.max(normW/0.9,normH/0.9,1);
+        const _cxFrac=((x0+cw/2-offX)-mx)/pw, _cyFrac=((y0+ch/2-offY)-my)/ph;
         const img=new Image();
         img.onload=()=>{
-          const imgLayer=new ImageLayer(img,la.x,la.y,normW/scale);
-          imgLayer.height=normH/scale;
-          imgLayer.rotation=la.rotation||0;
+          const imgLayer=new ImageLayer(img,_cxFrac,_cyFrac,normW);
+          imgLayer.height=normH;
           imgLayer.opacity=la.opacity??1;
           imgLayer.src=dataUrl;
           imgLayer._keepSize=true;

@@ -1,6 +1,6 @@
 /* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /* ============================================================
-   editor-animctl.js — «Ver control de animaciones» del editor (v41.60, tiempo por hoja v41.61)
+   editor-animctl.js — «Ver control de animaciones» del editor (v41.60, tiempo por hoja v41.61, oculto al dibujar v41.62)
 
    Qué es
    ──────
@@ -19,6 +19,9 @@
    ya se le hubiera fijado); al volver a una hoja se recupera el suyo. Con el papel cebolla (transparencia de
    hojas contiguas) el fantasma de cada vecina se pinta en SU instante congelado (ghostStates / ghostFrames,
    ver _edOnionRenderPage en editor.js). Desmarcar el checkbox (o salir del editor) descarta todos los instantes.
+
+   v41.62 — LA BOTONERA SE OCULTA MIENTRAS SE EDITA UN DIBUJO A MANO O VECTORIAL (solo CSS, ver editor.css junto a
+   .ed-animctl-bar): el control sigue activo y los instantes no cambian; la botonera vuelve sola al terminar la sesión.
 
    Cómo está hecho (y por qué así)
    ───────────────────────────────
@@ -464,6 +467,10 @@ const EdAnimCtl = (() => {
     // v41.61: si se cambia de hoja con el botón aún pulsado (p. ej. con otro dedo en Android), la pulsación no sigue
     // moviendo el reloj de la hoja nueva (cada hoja tiene el suyo): hay que soltar y volver a pulsar.
     if (_curPage() !== h.page) { _holdStop(); return; }
+    // v41.62: si la botonera se oculta con la pulsación en marcha (p. ej. otro dedo abre una sesión de dibujo, ver
+    // editor.css), el elemento oculto puede perder el seguimiento del puntero sin avisar: se suelta aquí para que el
+    // reloj no siga corriendo solo.
+    if (_els && _els.bar && !_els.bar.getClientRects().length) { _holdStop(); return; }
     try {
       const now = performance.now();
       const due = Math.floor((now - h.t0) / STEP_MS) + 1;     // el +1 es el paso inmediato del instante 0

@@ -1843,6 +1843,17 @@ body.ed-scale-tablet .ed-modal-sheet {
 #editorShell.gcp-open .ed-animctl-bar,
 #editorShell.td-open .ed-animctl-bar,
 #editorShell.mp-active .ed-animctl-bar { display: none !important; }
+/* v41.62 — tampoco mientras se EDITA un dibujo a mano o vectorial (sesión de dibujo: panel de opciones en modo
+   draw/shape/line, o sus barras flotantes al minimizar el panel). Mismos selectores que _edInDrawingSession() (editor.js)
+   y que la regla de #edQuickTools más arriba: la botonera (z-index 55) quedaba encima de las barras de dibujo (51).
+   Solo se oculta la botonera: el control SIGUE ACTIVO (casilla marcada, cada hoja conserva su instante congelado y el
+   lienzo lo sigue mostrando) y la botonera reaparece sola al pulsar OK/cancelar. No se acota por data-mode="props":
+   con un dibujo solo seleccionado (sin edición) debe seguir visible. */
+#editorShell:has(> #edDrawBar.visible) .ed-animctl-bar,
+#editorShell:has(> #edShapeBar.visible) .ed-animctl-bar,
+#editorShell:has(> #edOptionsPanel.open[data-mode="draw"])  .ed-animctl-bar,
+#editorShell:has(> #edOptionsPanel.open[data-mode="shape"]) .ed-animctl-bar,
+#editorShell:has(> #edOptionsPanel.open[data-mode="line"])  .ed-animctl-bar { display: none !important; }
 
 /* ══════════════════════════════════════════════════════
    OVERLAYS DE CAPAS Y HOJAS
