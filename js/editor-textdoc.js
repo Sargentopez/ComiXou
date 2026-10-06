@@ -3011,6 +3011,24 @@ function _tdBibAnimAspectRatio(entry){
 // objeto ya tenía en la página (ver _tdInsertImage/pageWidthFrac).
 function _tdInsertFromBib(entry){
   if(!entry) return;
+  // v41.64 — animación «por instrucciones» (ver AnimProc en editor.js): el flujo de texto guarda sus animaciones como
+  // fotogramas sueltos (richLines → animKey), así que AQUÍ se pintan una vez y se sigue por el camino de siempre con
+  // una COPIA de la entrada (entry vive en _bibCache: no se le puede añadir pngFrames). Si falla, queda el póster.
+  if(entry.isGifAnim && entry.gcpProc && window.AnimProc && entry.gcpProcGeo &&
+     Array.isArray(entry.gcpLayersData) && Array.isArray(entry.gcpFramesData)){
+    const _pProbe = { _gcpProc: true, _gcpProcGeo: entry.gcpProcGeo, _gcpLayersData: entry.gcpLayersData,
+                      _gcpFramesData: entry.gcpFramesData, _gcpRasterW: entry.gcpRasterW, _gcpRasterH: entry.gcpRasterH };
+    const _pN = AnimProc.totalFrames(entry.gcpFramesData), _pU = entry.gcpFrameDelay || 100;
+    const _pD = (entry.gcpFrameHolds && entry.gcpFrameHolds.length)
+      ? Array.from({ length: _pN }, (_, i) => entry.gcpFrameHolds[i] || _pU) : _pU;
+    AnimProc.bakePng(_pProbe, _pD).then(frames => {
+      _tdInsertFromBib(Object.assign({}, entry, { gcpProc: false, pngFrames: frames }));
+    }).catch(e => {
+      _tdLogImg('insertar animación por instrucciones: no se pudo pintar', String((e && e.message) || e) + ' — se inserta el póster');
+      _tdInsertFromBib(Object.assign({}, entry, { gcpProc: false, isGifAnim: false }));
+    });
+    return;
+  }
   _tdLogImg('insertar desde biblioteca', 'id=' + entry.id + ' isGroup=' + !!entry.isGroup + ' isGifAnim=' + !!entry.isGifAnim + ' orientation=' + entry.orientation);
 
   // El objeto guardó su x/y/width/height como fracción de la página que

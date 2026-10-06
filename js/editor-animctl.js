@@ -207,14 +207,18 @@ const EdAnimCtl = (() => {
   // desechable para no retener lienzos de fotograma de otras hojas).
   function ensureOc(l, fs, idx, store) {
     const fr = fs.arr[idx];
-    const id = fr && fr.imageData;
-    if (!id) return null;
+    // v41.64 — un fotograma «por instrucciones» (ver AnimProc) no tiene ImageData guardado: se pinta directo en el lienzo
+    // propio (y sus dimensiones se leen sin pintarlo). El resto (APNG/GIF) sigue con su ImageData.
+    const _proc = !!(fr && typeof fr.paint === 'function');
+    const id = (!fr || _proc) ? null : fr.imageData;
+    if (!fr || (!_proc && !id)) return null;
+    const _fw = _proc ? fr.width : id.width, _fh = _proc ? fr.height : id.height;
     store = store || _pv;
     let pv = store.get(l);
     if (!pv) { pv = { oc: document.createElement('canvas'), arr: null, idx: -1 }; store.set(l, pv); }
-    if (pv.oc.width !== id.width || pv.oc.height !== id.height) { pv.oc.width = id.width; pv.oc.height = id.height; pv.idx = -1; }
+    if (pv.oc.width !== _fw || pv.oc.height !== _fh) { pv.oc.width = _fw; pv.oc.height = _fh; pv.idx = -1; }
     if (pv.arr !== fs.arr || pv.idx !== idx) {
-      pv.oc.getContext('2d').putImageData(id, 0, 0);
+      if (_proc) fr.paint(pv.oc.getContext('2d')); else pv.oc.getContext('2d').putImageData(id, 0, 0);
       pv.arr = fs.arr; pv.idx = idx;
     }
     return pv.oc;
@@ -357,8 +361,10 @@ const EdAnimCtl = (() => {
   // _edUnloadPageAnims) pero de la que hay datos para leerlos.
   function _needsFrames(l) {
     return !!l && l.type === 'image' && !(l._animReady && l._animFrames && l._animFrames.length) &&
-      !!(l._animDeferred || l._apngSrc || (l._pngFrames && l._pngFrames.length) || l._pngFramesKey || l.animKey);
+      !!(l._animDeferred || l._apngSrc || (l._pngFrames && l._pngFrames.length) || l._pngFramesKey || l.animKey || _isProc(l));
   }
+  // v41.64 — animación «por instrucciones» (ver AnimProc en editor.js): sus fotogramas se pintan desde la propia capa.
+  function _isProc(l) { return typeof _edIsProcAnim === 'function' && _edIsProcAnim(l); }
   function ghostNeedsFrames(page) {
     return !!(_on && page && page.layers && page.layers.some(_needsFrames));
   }
@@ -385,6 +391,18 @@ const EdAnimCtl = (() => {
       if (!_needsFrames(l)) continue;
       if (isStale && isStale()) return null;
       try {
+        // v41.64 — por instrucciones: AnimProc.load decodifica los objetos APARTE (no toca la capa) y devuelve
+        // fotogramas «virtuales» que se pintan al pedirlos — no hay nada que leer de IndexedDB.
+        if (_isProc(l) && window.AnimProc) {
+          const _u = l._gcpFrameDelay || window._gcpFrameDelay || 100;
+          const _n = AnimProc.totalFrames(l._gcpFramesData);
+          const _d = (l._gcpFrameHolds && l._gcpFrameHolds.length)
+            ? Array.from({ length: _n }, (_, fi) => l._gcpFrameHolds[fi] || _u) : _u;
+          const _r = await AnimProc.load(l, _d);
+          if (isStale && isStale()) return null;
+          if (_r && _r.frames && _r.frames.length) out.set(l, _r.frames);
+          continue;
+        }
         const input = await _frameInput(l);
         if (!input) continue;
         if (isStale && isStale()) return null;

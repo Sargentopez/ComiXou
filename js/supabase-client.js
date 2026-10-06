@@ -1829,7 +1829,7 @@ const SupabaseClient = (() => {
   // fillLayerData, orientation e isGroup embebidos en el payload (sin columnas extra).
   function _bibEntryPayloadStr(entry) {
     const _payloadBase = entry.isGifAnim
-      ? { isGifAnim:      true,
+      ? Object.assign({ isGifAnim:      true,
           gifDataUrl:     entry.gifDataUrl,
           gcpFrameDelay:  entry.gcpFrameDelay,
           gcpRepeatCount: entry.gcpRepeatCount,
@@ -1838,7 +1838,25 @@ const SupabaseClient = (() => {
           gcpFramesData:  entry.gcpFramesData  || null,
           gcpLayerNames:  entry.gcpLayerNames  || null,
           normW:          entry.normW           || null,
-          normH:          entry.normH           || null }
+          normH:          entry.normH           || null },
+          // v41.64 — animación «por instrucciones» (ver AnimProc en editor.js): SIN fotogramas ni APNG; la entrada ES los
+          // objetos (gcpLayersData) + las transformaciones (gcpFramesData), más lo necesario para pintarla igual en
+          // otro dispositivo (geometría del recorte, pausas por fotograma, comportamiento y orientación de origen).
+          // Las animaciones con fotogramas de siempre no cambian (mismo payload, mismo content_sha).
+          entry.gcpProc ? {
+            gcpProc:             true,
+            gcpProcGeo:          entry.gcpProcGeo || null,
+            gcpRasterW:          entry.gcpRasterW || null,
+            gcpRasterH:          entry.gcpRasterH || null,
+            gcpFrameHolds:       (entry.gcpFrameHolds && entry.gcpFrameHolds.length) ? entry.gcpFrameHolds : null,
+            gcpRestartDelay:     entry.gcpRestartDelay || null,
+            gcpStartDelay:       entry.gcpStartDelay || null,
+            gcpInvisBeforeStart: entry.gcpInvisBeforeStart || null,
+            gcpInvisAtEnd:       entry.gcpInvisAtEnd || null,
+            gcpInvisGradual:     entry.gcpInvisGradual === false ? false : null,
+            gcpCircularEnd:      entry.gcpCircularEnd || null,
+            orientation:         entry.orientation || null,
+          } : null)
       : entry.layerData;
     const _payload = entry.isGifAnim ? _payloadBase : {
       ..._payloadBase,
@@ -1881,6 +1899,7 @@ const SupabaseClient = (() => {
   // conservar el archivo que esa fila ya tenía en la nube (prevUrl); si no tenía ninguno, último recurso:
   // leer el APNG de IndexedDB y subirlo. Devuelve la URL, o null si no hay forma de conseguir el archivo.
   async function _bibAnimReuseOrIdb(entry, prevUrl, st) {
+    if (entry && entry.gcpProc) return null; // v41.64: por instrucciones no hay archivo en el bucket (un anim_url viejo queda huérfano y se limpia)
     if (prevUrl) { st.apngKept++; return prevUrl; }
     const _key = entry._apngIdbKey || entry.animKey;
     if (!_key || !window._sbAnimIdbLoad) return null;
@@ -2313,7 +2332,7 @@ continue;
         // Descargar APNG desde bucket si tiene anim_url
         let _pngFrames = ld.pngFrames || null;
         let _apngSrc = null;
-        if (r.anim_url) {
+        if (r.anim_url && !ld.gcpProc) { // v41.64: una entrada por instrucciones no usa el APNG (si lo hubiera, es de una versión anterior de la fila)
           try {
             _apngSrc = await _animDownload(r.anim_url);
           } catch(e) { console.warn('bibDownload APNG:', e); }
@@ -2322,7 +2341,7 @@ continue;
         // mismo criterio que ya se usa arriba para folder_id/fid, para que
         // el id local reconstruido sea idéntico al que tenía antes de subir.
         const _rid = prefix && r.id.startsWith(prefix) ? r.id.slice(prefix.length) : r.id;
-        folderMap.get(fid).items.push({
+        const _animItem = {
           id:             _rid,
           timestamp:      new Date(r.created_at).getTime(),
           isGroup:        false,
@@ -2340,7 +2359,22 @@ continue;
           normH:          ld.normH           || null,
           layerData:      null,
           thumb:          r.thumb,
-        });
+        };
+        // v41.64 — animación por instrucciones: lo que hace falta para pintarla sin fotogramas (ver _bibEntryPayloadStr).
+        if (ld.gcpProc && ld.gcpProcGeo) {
+          _animItem.gcpProc    = true;
+          _animItem.gcpProcGeo = ld.gcpProcGeo;
+          if (ld.gcpRasterW > 0 && ld.gcpRasterH > 0) { _animItem.gcpRasterW = ld.gcpRasterW; _animItem.gcpRasterH = ld.gcpRasterH; }
+          if (Array.isArray(ld.gcpFrameHolds) && ld.gcpFrameHolds.length) _animItem.gcpFrameHolds = ld.gcpFrameHolds;
+          if (ld.gcpRestartDelay)     _animItem.gcpRestartDelay = ld.gcpRestartDelay;
+          if (ld.gcpStartDelay)       _animItem.gcpStartDelay = ld.gcpStartDelay;
+          if (ld.gcpInvisBeforeStart) _animItem.gcpInvisBeforeStart = true;
+          if (ld.gcpInvisAtEnd)       _animItem.gcpInvisAtEnd = true;
+          if (ld.gcpInvisGradual === false) _animItem.gcpInvisGradual = false;
+          if (ld.gcpCircularEnd)      _animItem.gcpCircularEnd = true;
+          if (ld.orientation)         _animItem.orientation = ld.orientation;
+        }
+        folderMap.get(fid).items.push(_animItem);
       } else {
         // Extraer campos embebidos en el payload
         const _fillData    = ld._fillLayerData || null;

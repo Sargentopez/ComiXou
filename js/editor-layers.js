@@ -1169,7 +1169,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   } else if (la.type === 'gif') {
     name.textContent = '🎬 ' + (la.name ? la.name : I18n.t('ly_gifDefault', { n: realIdx + 1 })) + _grpTag;
   } else {
-    const _isApng = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length);
+    const _isApng = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length) || la._gcpProc; // v41.64: _gcpProc = animación por instrucciones
     const _imgIcon = _isApng ? '📽️ ' : '';
     const _imgDefaultTxt = _isApng ? I18n.t('ly_apngDefault', { n: realIdx + 1 }) : I18n.t('ly_imageDefault', { n: realIdx + 1 });
     name.textContent = _imgIcon + (la.name ? la.name : _imgDefaultTxt) + _grpTag;
@@ -1496,7 +1496,7 @@ function _lyBuildImgItem(la, realIdx, selected) {
   info.className = 'ed-layer-info';
   const name = document.createElement('span');
   name.className = 'ed-layer-name';
-  const _isApngPanel = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length);
+  const _isApngPanel = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length) || la._gcpProc; // v41.64
   name.textContent = (_isApngPanel ? '📽️ APNG ' : 'Imagen ') + (realIdx + 1);
   info.appendChild(name);
 

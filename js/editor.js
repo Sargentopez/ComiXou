@@ -836,6 +836,208 @@ window.ApngDecoder = (function(){
 })();
 /* ── fin ApngDecoder ── */
 
+/* ── AnimProc — animaciones «por instrucciones» (v41.64) ──────────────────────────────────────────────
+   Una animación del editor de animaciones es: N objetos (cada uno un bitmap, UNA sola vez) y, por objeto y
+   fotograma, una transformación {x, y, width, height, rotation, opacity, _interp?, _blur?} (o null = ese objeto
+   no existe en ese fotograma). Eso es justo lo que ya se guardaba para poder reeditarla (_gcpLayersData +
+   _gcpFramesData, ≈2 KB de transformaciones). Además se guardaba UN PNG por fotograma ya pintado (IndexedDB
+   ×2, APNG en la nube y ≈18 MB decodificados en RAM): una interpolación de 20 fotogramas pesaba 20 imágenes
+   completas aunque solo cambiara una transformación.
+   Ahora el fotograma se PINTA al reproducir a partir de las instrucciones (la misma técnica de las
+   trayectorias, que solo guardan el trazado). Misma firma de salida que ApngDecoder.decode —
+   {frames:[{delay, imageData, paint}], width, height}— para que el resto de la reproducción no cambie:
+   «imageData» es perezoso (se pinta al pedirlo) y «paint(ctx)» pinta directamente en el canvas de destino.
+   Geometría (g = _gcpProcGeo, fijada al guardar y nunca tocada después): pw/ph = píxeles de la página con los
+   que se compuso la animación y ox/oy = esquina superior izquierda del recorte, en esos píxeles, relativa a la
+   página. El recorte mide _gcpRasterW × _gcpRasterH px. Es EXACTAMENTE la transformación con la que se
+   horneaban los fotogramas (ImageLayer.draw sobre el lienzo de trabajo) → mismo resultado.
+   COPIA IDÉNTICA en reader/reader.js (entre estos mismos marcadores): mantenerlas sincronizadas. */
+window.AnimProc = (function(){
+  'use strict';
+  var LRU_MAX = 3;      // fotogramas pedidos como ImageData que se conservan (el resto se vuelve a pintar)
+  var DEG = Math.PI / 180;
+
+  // ¿La capa (viva o serializada) lleva instrucciones suficientes para pintarse sin fotogramas?
+  function isProc(l){
+    if (!l || !l._gcpProc) return false;
+    var g = l._gcpProcGeo;
+    return !!(Array.isArray(l._gcpLayersData) && l._gcpLayersData.length &&
+              Array.isArray(l._gcpFramesData) &&
+              g && g.pw > 0 && g.ph > 0 &&
+              l._gcpRasterW > 0 && l._gcpRasterH > 0);
+  }
+
+  // Nº de fotogramas = el de la fila (objeto) más larga; mínimo 1.
+  function totalFrames(framesData){
+    var n = 0;
+    for (var i = 0; i < framesData.length; i++) {
+      var a = framesData[i];
+      if (a && a.length > n) n = a.length;
+    }
+    return n || 1;
+  }
+
+  // Transformación del objeto en el fotograma i; null = no se pinta. Mismas reglas que _gcpApplyFrame.
+  function snapAt(o, i){
+    var fr = o.frames;
+    if (!fr) return o.base;                 // sin fotogramas propios: siempre visible, con su transformación guardada
+    if (i >= fr.length) return null;
+    var s = fr[i];
+    if (!s || s.visible === false) return null;
+    return s;
+  }
+
+  // Pinta el objeto con la transformación s (opacidad × mul) — ImageLayer.draw sobre el recorte.
+  function drawObj(ctx, S, o, s, mul){
+    var w = (s.width || 0) * S.pw, h = (s.height || 0) * S.ph;
+    ctx.save();
+    ctx.globalAlpha = (s.opacity == null ? 1 : s.opacity) * mul;
+    ctx.globalCompositeOperation = o.blend || 'source-over';
+    ctx.translate((s.x || 0) * S.pw - S.ox, (s.y || 0) * S.ph - S.oy);
+    ctx.rotate((s.rotation || 0) * DEG);
+    ctx.drawImage(o.img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+
+  // Pinta el fotograma i entero en ctx (que debe medir S.w × S.h).
+  function paint(S, i, ctx){
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, S.w, S.h);
+    for (var k = 0; k < S.objs.length; k++) {
+      var o = S.objs[k];
+      if (o.hidden || !o.img) continue;
+      var s = snapAt(o, i);
+      if (!s) continue;
+      var fr = o.frames;
+      // Desenfoque de movimiento por acumulación: mismo algoritmo que _gcpSaveToLib/_gcpRedraw (rastro de un
+      // fotograma, desde i-1 hasta i, con la velocidad medida en píxeles de página).
+      if (fr && i > 0 && fr[i]) {
+        var show = false;
+        if (fr[i]._blur) show = true;
+        else if (!fr[i]._interp) show = !!(fr[i - 1] && fr[i - 1]._interp && fr[i - 1]._blur);
+        var far = show ? fr[i - 1] : null;
+        if (far) {
+          var dist = Math.hypot((s.x - far.x) * S.pw, (s.y - far.y) * S.ph);
+          var vel = Math.max(0, Math.min(1, (dist - 3) / 60));
+          if (vel > 0.01) {
+            var M = Math.round(6 + vel * 8), tot = 0.12 + vel * 0.28, wSum = M * (M + 1) / 2;
+            var fw = far.width || s.width, fh = far.height || s.height;
+            var fz = far.rotation || 0, sz = s.rotation || 0;
+            var fo = far.opacity == null ? 1 : far.opacity, so = s.opacity == null ? 1 : s.opacity;
+            for (var si = 0; si < M; si++) {
+              var t = si / M;
+              drawObj(ctx, S, o, {
+                x:        far.x + t * (s.x - far.x),
+                y:        far.y + t * (s.y - far.y),
+                width:    fw + t * (s.width  - fw),
+                height:   fh + t * (s.height - fh),
+                rotation: fz + t * (sz - fz),
+                opacity:  fo + t * (so - fo)
+              }, Math.max(0.004, tot * (si + 1) / wSum));
+            }
+          }
+        }
+      }
+      drawObj(ctx, S, o, s, 1);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // Fuente de fotogramas de una animación: objetos ya decodificados + su geometría.
+  function Source(g, rw, rh, objs, total){
+    this.pw = g.pw; this.ph = g.ph; this.ox = g.ox || 0; this.oy = g.oy || 0;
+    this.w = rw; this.h = rh; this.objs = objs; this.total = total;
+    this._lru = []; this._sc = null; this._sx = null;
+  }
+  Source.prototype.paint = function(i, ctx){ paint(this, i, ctx); };
+  // Fotograma como ImageData (para quien lo pida): se pinta en un lienzo propio; se recuerdan los últimos LRU_MAX.
+  Source.prototype.imageData = function(i){
+    var L = this._lru;
+    for (var j = 0; j < L.length; j++) {
+      if (L[j].i === i) { var e = L.splice(j, 1)[0]; L.unshift(e); return e.d; }
+    }
+    if (!this._sc) {
+      this._sc = document.createElement('canvas');
+      this._sc.width = this.w; this._sc.height = this.h;
+      this._sx = this._sc.getContext('2d', { willReadFrequently: true });
+    }
+    paint(this, i, this._sx);
+    var d = this._sx.getImageData(0, 0, this.w, this.h);
+    L.unshift({ i: i, d: d });
+    if (L.length > LRU_MAX) L.pop();
+    return d;
+  };
+
+  function VFrame(S, i, delay){ this._s = S; this.i = i; this.delay = delay; }
+  Object.defineProperty(VFrame.prototype, 'imageData', { get: function(){ return this._s.imageData(this.i); } });
+  // Tamaño del fotograma sin pintarlo (quien solo necesita las dimensiones no debe forzar un imageData).
+  Object.defineProperty(VFrame.prototype, 'width',  { get: function(){ return this._s.w; } });
+  Object.defineProperty(VFrame.prototype, 'height', { get: function(){ return this._s.h; } });
+  VFrame.prototype.paint = function(ctx){ this._s.paint(this.i, ctx); };
+
+  function loadImg(src){
+    return new Promise(function(res){
+      var im = new Image();
+      im.onload  = function(){ if (im.decode) im.decode().then(function(){ res(im); }, function(){ res(im); }); else res(im); };
+      im.onerror = function(){ res(null); };
+      im.src = src;
+    });
+  }
+
+  // Prepara la animación: decodifica cada objeto UNA vez y devuelve la misma forma que ApngDecoder.decode.
+  // delay: número (uniforme) o array (uno por fotograma: las pausas de la Matriz).
+  function load(l, delay){
+    if (!isProc(l)) return Promise.reject(new Error('AnimProc: sin instrucciones'));
+    var datas = l._gcpLayersData, fdata = l._gcpFramesData, cache = {};
+    var jobs = datas.map(function(ld, k){
+      if (!ld || ld.type !== 'image' || typeof ld.src !== 'string' || !ld.src) return Promise.reject(new Error('AnimProc: objeto no admitido'));
+      var p = cache[ld.src] || (cache[ld.src] = loadImg(ld.src));   // objetos duplicados comparten bitmap
+      return p.then(function(img){
+        if (!img) throw new Error('AnimProc: imagen ilegible');
+        var fr = fdata[k];
+        return {
+          img: img, hidden: !!ld.hidden, blend: ld._blendMode || null,
+          // copia de las transformaciones (≈ unos KB): la animación ya preparada no depende de que los datos de la capa
+          // se muten después (reedición, duplicado…)
+          frames: (fr && fr.length) ? fr.map(function(s){ return s ? Object.assign({}, s) : s; }) : null,
+          base: { x: ld.x, y: ld.y, width: ld.width, height: ld.height, rotation: ld.rotation || 0, opacity: ld.opacity == null ? 1 : ld.opacity }
+        };
+      });
+    });
+    return Promise.all(jobs).then(function(objs){
+      var total = totalFrames(fdata);
+      var S = new Source(l._gcpProcGeo, l._gcpRasterW, l._gcpRasterH, objs, total);
+      var frames = [];
+      for (var i = 0; i < total; i++) frames.push(new VFrame(S, i, Array.isArray(delay) ? (delay[i] || 100) : (delay || 100)));
+      return { frames: frames, width: S.w, height: S.h, proc: S };
+    });
+  }
+
+  // Pinta el fotograma f en el canvas de destino: directo si es por instrucciones, putImageData si es de un APNG/GIF.
+  function blit(f, canvas){
+    if (!f || !canvas) return;
+    var ctx = canvas.getContext('2d');
+    if (typeof f.paint === 'function') f.paint(ctx);
+    else ctx.putImageData(f.imageData, 0, 0);
+  }
+
+  // Hornea todos los fotogramas a PNG (dataURL). Solo para lo que necesita fotogramas sueltos de verdad
+  // (animaciones dentro de un flujo de texto…): el resto reproduce por instrucciones.
+  function bakePng(l, delay){
+    return load(l, delay).then(function(r){
+      var c = document.createElement('canvas'); c.width = r.width; c.height = r.height;
+      var ctx = c.getContext('2d');
+      return r.frames.map(function(f){ f.paint(ctx); return c.toDataURL('image/png'); });
+    });
+  }
+
+  return { isProc: isProc, totalFrames: totalFrames, load: load, blit: blit, bakePng: bakePng };
+})();
+/* ── fin AnimProc ── */
+
 /* ============================================================
    editor.js — ComXow v5.4
    Motor canvas fiel al referEditor.
@@ -1940,6 +2142,9 @@ class ImageLayer extends BaseLayer {
   }
   // ── loadAnim: carga frames en _animFrames + _oc único — patrón idéntico a GifLayer.load()
   loadAnim(input, cb) {
+    // v41.64 — animación «por instrucciones» (ver AnimProc): no hay fotogramas guardados que decodificar;
+    // se pintan al reproducir desde _gcpLayersData/_gcpFramesData. `input` se ignora (solo es un marcador).
+    if (this._gcpProc && window.AnimProc && AnimProc.isProc(this)) { this._loadProcAnim(cb); return; }
     if (!input || (Array.isArray(input) && !input.length)) { cb && cb(); return; }
     // Si ya está listo Y no fue reseteado por stopAnim, reusar sin redecodificar
     if (this._animReady && this._animFrames && this._animFrames.length) { cb && cb(); return; }
@@ -1955,6 +2160,9 @@ class ImageLayer extends BaseLayer {
       ? input.map((_, fi) => this._gcpFrameHolds[fi] || uniformDelay)
       : uniformDelay;
     window.ApngDecoder.decode(input, delay).then((result) => {
+      // v41.64 — si mientras tanto la capa pasó a «por instrucciones» (reedición guardada desde el editor de
+      // animaciones), este resultado es de los fotogramas viejos: se descarta (la preparación buena es _loadProcAnim).
+      if (this._gcpProc && window.AnimProc && AnimProc.isProc(this)) { cb && cb(); return; }
       this._animFrames = result.frames;
       this._fIdx  = 0;
       this._oc    = document.createElement('canvas');
@@ -1971,6 +2179,43 @@ class ImageLayer extends BaseLayer {
       this._gcpReconcileRaster(result.width, result.height);
       cb && cb();
     }).catch(function(e) { console.warn('ApngDecoder error:', e); cb && cb(); });
+  }
+
+  // v41.64 — carga de una animación por instrucciones: decodifica sus objetos UNA vez y deja _animFrames con
+  // fotogramas «virtuales» (se pintan al pedirlos) y _oc del tamaño del recorte (_gcpRasterW × _gcpRasterH).
+  // Varias llamadas a la vez comparten la misma preparación; si los datos de la capa se reemplazan mientras tanto
+  // (reedición en el editor de animaciones) el resultado viejo se descarta y se prepara el nuevo.
+  _loadProcAnim(cb) {
+    const ld = this._gcpLayersData, fd = this._gcpFramesData;
+    if (this._animReady && this._animFrames && this._animFrames.length && this._procFor === fd) { cb && cb(); return; }
+    let w = this._procWait;
+    if (w && w.ld === ld && w.fd === fd) { if (cb) w.cbs.push(cb); return; }
+    w = this._procWait = { ld, fd, cbs: cb ? [cb] : [] };
+    const fire = () => w.cbs.forEach(f => { try { f(); } catch (e) { console.warn('AnimProc cb:', e); } });
+    // Mismo retardo por fotograma que loadAnim: uniforme, o por fotograma con las pausas de la Matriz (botón T).
+    const uniformDelay = this._gcpFrameDelay || window._gcpFrameDelay || 100;
+    const total = AnimProc.totalFrames(fd);
+    const delay = (this._gcpFrameHolds && this._gcpFrameHolds.length)
+      ? Array.from({ length: total }, (_, fi) => this._gcpFrameHolds[fi] || uniformDelay)
+      : uniformDelay;
+    AnimProc.load(this, delay).then((result) => {
+      if (this._procWait === w) {
+        this._procWait = null;
+        this._animFrames = result.frames;
+        this._procFor = fd;
+        this._fIdx = 0;
+        this._oc = document.createElement('canvas');
+        this._oc.width = result.width;
+        this._oc.height = result.height;
+        this._animReady = true;
+        AnimProc.blit(result.frames[0], this._oc);   // fotograma 0 en _oc para que draw() tenga contenido ya
+      }
+      fire();
+    }, (e) => {
+      if (this._procWait === w) this._procWait = null;
+      console.warn('AnimProc error:', e);
+      fire();
+    });
   }
 
   // ── v41.57 — caja ↔ raster ──────────────────────────────────────────────────────────
@@ -2024,7 +2269,7 @@ class ImageLayer extends BaseLayer {
         // Con stopAtEnd: detener en el último frame (comportamiento explícito).
         const _circEnd = !stopAtEnd && repeatCount > 0 && (this._gcpCircularEnd || false);
         this._fIdx = _circEnd ? 0 : total - 1;
-        this._oc.getContext('2d').putImageData(this._animFrames[this._fIdx].imageData, 0, 0);
+        AnimProc.blit(this._animFrames[this._fIdx], this._oc); // v41.64: por instrucciones se pinta directo; APNG/GIF: putImageData
         this._playing = false;
         // Fade out si gcpInvisAtEnd y reproducción finita (inmediato si Gradual está desmarcado)
         if (this._gcpInvisAtEnd && repeatCount > 0) {
@@ -2113,7 +2358,7 @@ class ImageLayer extends BaseLayer {
     }
     this._fIdx = idx;
     const frame = this._animFrames[this._fIdx];
-    this._oc.getContext('2d').putImageData(frame.imageData, 0, 0);
+    AnimProc.blit(frame, this._oc);
     if (!this._playing) return;
     if (this._timer) clearTimeout(this._timer);
     const delay = frame.delay || this._gcpFrameDelay || window._gcpFrameDelay || 100;
@@ -2164,7 +2409,7 @@ class ImageLayer extends BaseLayer {
     this._animFadeOpacity = null; // Cancelar cualquier fade activo
     this._animNextT = null; // reanclar el temporizador autocorrectivo para el próximo play
     if (this._animReady && this._animFrames && this._animFrames.length) {
-      this._oc.getContext('2d').putImageData(this._animFrames[0].imageData, 0, 0);
+      AnimProc.blit(this._animFrames[0], this._oc);
     }
     if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
   }
@@ -4442,6 +4687,9 @@ function _edSnapLayerFragment(l){
       // v41.57 — recorte real (px) con el que se calculó la caja: sin esto, un deshacer/rehacer
       // reconstruye la capa sin saber contra qué raster se calculó (ver ImageLayer._gcpReconcileRaster).
       if(l._gcpRasterW > 0 && l._gcpRasterH > 0) { o._gcpRasterW = l._gcpRasterW; o._gcpRasterH = l._gcpRasterH; }
+      // v41.64 — animación por instrucciones: sin estos dos campos, un deshacer/rehacer reconstruiría la capa
+      // sin saber que se pinta desde _gcpLayersData/_gcpFramesData (y se quedaría en el póster estático).
+      if(l._gcpProc && l._gcpProcGeo) { o._gcpProc = true; o._gcpProcGeo = l._gcpProcGeo; }
     }
     // Trayectoria de animación — presente en cualquier tipo de capa
     if(l._motionPath && l._motionPath.length >= 2) o._motionPath = _edCopyMotionPathPts(l._motionPath);
@@ -5210,6 +5458,16 @@ function edApplyHistory(snapshot){
         img.src = o._imgSrc;
       });
       imgPromises.push(p);
+    }
+    // v41.64 — animación por instrucciones: no hay fotogramas guardados que traer de IDB; se prepara de nuevo
+    // desde sus propios datos (objetos + transformaciones, ya copiados arriba con el resto de campos de `o`).
+    if(o.type === 'image' && o._gcpProc && window.AnimProc && AnimProc.isProc(l)) {
+      const _wasPlayingP = o._playing || false;
+      l.loadAnim(_ED_PROC_INPUT, () => {
+        l._playing = _wasPlayingP;
+        if(_wasPlayingP) l._applyFrame(l._fIdx || 0);
+        edRedraw();
+      });
     }
     // Restaurar animación APNG desde IDB
     if(o.type === 'image' && (o.animKey || o._pngFramesKey || o._apngIdbKey)) {
@@ -9788,7 +10046,9 @@ function _edUnloadPageAnims(pageIdx) {
     // El guard original requería _animReady=true pero podía fallar si la carga
     // aún estaba en curso. Ahora liberamos si hay frames O si tiene clave IDB para recargar.
     const hasFrames  = l._animFrames && l._animFrames.length > 0;
-    const canReload  = l._pngFramesKey || l.animKey; // tiene clave para recargar de IDB
+    // v41.64 — por instrucciones: se puede recargar siempre (todo está en la propia capa); soltar los objetos
+    // decodificados al salir de la hoja libera RAM igual que soltar los fotogramas de una animación normal.
+    const canReload  = l._pngFramesKey || l.animKey || (l._gcpProc && window.AnimProc && AnimProc.isProc(l));
     if ((hasFrames || l._animReady) && canReload) {
       // _oc mantiene el último frame pintado → draw() sigue funcionando para thumbnails
       l._animFrames   = null;
@@ -9806,6 +10066,8 @@ async function _edLoadPageAnims(pageIdx) {
   (page.layers || []).forEach(l => {
     if (!l || l.type !== 'image' || !l._animDeferred) return;
     l._animDeferred = false;
+    // Caso 0 (v41.64): animación por instrucciones — se prepara desde sus propios datos, sin IDB.
+    if (_edIsProcAnim(l)) { promises.push(new Promise(res => l.loadAnim(_ED_PROC_INPUT, res))); return; }
     // Caso 1: ya tiene _apngSrc o _pngFrames en memoria (diferido con datos)
     const _inMem = l._apngSrc || (l._pngFrames && l._pngFrames.length);
     if (_inMem) {
@@ -12617,7 +12879,7 @@ function _edViewerMpTick() {
         l._playing = false;
         if (_mpSyncF !== l._fIdx) {
           l._fIdx = _mpSyncF;
-          l._oc.getContext('2d').putImageData(_syncFs[_mpSyncF].imageData, 0, 0);
+          AnimProc.blit(_syncFs[_mpSyncF], l._oc); // v41.64: por instrucciones se pinta directo; APNG/GIF: putImageData
           _mpUpdated = true;
         }
         // "Invisibilidad → Al final" (l._gcpInvisAtEnd): esa lógica solo
@@ -12775,7 +13037,7 @@ function _edMpPreviewTick() {
       la._playing = false;
       if (_pSyncF !== la._fIdx) {
         la._fIdx = _pSyncF;
-        la._oc.getContext('2d').putImageData(_pSyncFs[_pSyncF].imageData, 0, 0);
+        AnimProc.blit(_pSyncFs[_pSyncF], la._oc); // v41.64
       }
       // "Invisibilidad → Al final" — mismo criterio que _edViewerMpTick.
       const _pRepeatCnt = la._gcpRepeatCount || 0;
@@ -26365,6 +26627,21 @@ function _edGetCycleDurationMs(la) {
   return AnimClock.getCycleDurationMs(la);
 }
 // Comprueba si una capa es una animación (GIF o APNG/GCP).
+// ── v41.64 — animaciones «por instrucciones» (ver AnimProc, al principio de este archivo) ──────────
+// Una animación del editor de animaciones se guarda como sus objetos (una vez) + las transformaciones por
+// fotograma (_gcpLayersData/_gcpFramesData, que ya se guardaban para reeditarla) y se PINTA al reproducir:
+// sin un PNG por fotograma en IndexedDB, en la nube (APNG) ni en memoria. La marca es _gcpProc (+ _gcpProcGeo:
+// geometría del recorte, fijada al guardar). Las animaciones guardadas antes (con fotogramas) siguen igual.
+const _ED_PROC_INPUT = Object.freeze(['proc']); // marcador para loadAnim (que lo ignora en una capa por instrucciones)
+function _edIsProcAnim(l) { return !!(l && l.type === 'image' && l._gcpProc && window.AnimProc && AnimProc.isProc(l)); }
+// Lo que hay que pasar a loadAnim: APNG/fotogramas guardados o, si la capa es por instrucciones, el marcador. null = nada.
+function _edAnimSrc(l) {
+  if (!l) return null;
+  if (l._apngSrc) return l._apngSrc;
+  if (l._pngFrames && l._pngFrames.length) return l._pngFrames;
+  return _edIsProcAnim(l) ? _ED_PROC_INPUT : null;
+}
+
 function _edIsAnimLayer(la) {
   if (!la) return false;
   return la.type === 'gif' ||
@@ -31297,6 +31574,9 @@ function edSerLayer(l, skipCompress){
     if(l._gcpRefW != null) _r._gcpRefW = l._gcpRefW;
     if(l._gcpRefH != null) _r._gcpRefH = l._gcpRefH;
     if(l._gcpRasterW > 0 && l._gcpRasterH > 0) { _r._gcpRasterW = l._gcpRasterW; _r._gcpRasterH = l._gcpRasterH; } // v41.57
+    // v41.64 — animación por instrucciones: marca + geometría del recorte (el resto —objetos y transformaciones—
+    // ya viaja en _gcpLayersData/_gcpFramesData). Con _gcpProc no hay _pngFrames/animKey: la obra no guarda fotogramas.
+    if(l._gcpProc && l._gcpProcGeo) { _r._gcpProc = true; _r._gcpProcGeo = l._gcpProcGeo; }
     if(l._gcpFrameDelay   != null) _r._gcpFrameDelay   = l._gcpFrameDelay;
     if(l._gcpFrameHolds && l._gcpFrameHolds.length) _r._gcpFrameHolds = l._gcpFrameHolds;
     if(l._gcpRepeatCount  != null) _r._gcpRepeatCount  = l._gcpRepeatCount;
@@ -31811,6 +32091,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._gcpRefW != null) l._gcpRefW = d._gcpRefW;
     if(d._gcpRefH != null) l._gcpRefH = d._gcpRefH;
     if(d._gcpRasterW > 0 && d._gcpRasterH > 0) { l._gcpRasterW = d._gcpRasterW; l._gcpRasterH = d._gcpRasterH; } // v41.57
+    if(d._gcpProc && d._gcpProcGeo) { l._gcpProc = true; l._gcpProcGeo = d._gcpProcGeo; } // v41.64 — animación por instrucciones
     if(d._gcpFrameDelay   != null) l._gcpFrameDelay   = d._gcpFrameDelay;
     if(Array.isArray(d._gcpFrameHolds)) l._gcpFrameHolds = d._gcpFrameHolds;
     if(d._gcpRepeatCount  != null) l._gcpRepeatCount  = d._gcpRepeatCount;
@@ -31851,6 +32132,13 @@ function edDeserLayer(d, pageOrientation, light){
         l._fIdx = 0;
         l.loadAnim(l._pngFrames, () => { if(typeof edRedraw==='function') edRedraw(); });
       }
+    }
+    // v41.64 — animación por instrucciones: nada que traer de IndexedDB ni de la nube (la obra solo guarda los
+    // objetos una vez + las transformaciones); se prepara desde sus propios datos. Hoja no activa → diferida
+    // (_edLoadPageAnims la prepara al llegar a ella, igual que las animaciones con fotogramas).
+    if(l._gcpProc && window.AnimProc && AnimProc.isProc(l)) {
+      if (window._edDeserPageIdx > 0) l._animDeferred = true;
+      else l.loadAnim(_ED_PROC_INPUT, () => { if(typeof edRedraw==='function') edRedraw(); });
     }
     // Cargar desde _apngIdbKey (animaciones de biblioteca en dispositivo B)
     if(d._apngIdbKey && !d.animKey && !d._pngFramesKey && !d._pngFrames && !d._apngSrc && window._sbAnimIdbLoad) {
@@ -32047,6 +32335,7 @@ function _edCloneLayerAnimData(layer) {
   if (layer._gcpLayersData) layer._gcpLayersData = JSON.parse(JSON.stringify(layer._gcpLayersData));
   if (layer._gcpLayerNames) layer._gcpLayerNames = JSON.parse(JSON.stringify(layer._gcpLayerNames));
   if (layer._gcpFrameHolds) layer._gcpFrameHolds = layer._gcpFrameHolds.slice();
+  if (layer._gcpProcGeo)    layer._gcpProcGeo    = Object.assign({}, layer._gcpProcGeo); // v41.64
 }
 
 // Convierte el resultado de GifDecoder.decode/ApngDecoder.decode
@@ -32065,7 +32354,7 @@ function _edFramesResultToPngArray(result) {
   _fc.width = result.width; _fc.height = result.height;
   const _fctx = _fc.getContext('2d');
   return result.frames.map(fr => {
-    _fctx.putImageData(fr.imageData, 0, 0);
+    AnimProc.blit(fr, _fc); // v41.64: acepta también los fotogramas «virtuales» de una animación por instrucciones
     return _fc.toDataURL('image/png');
   });
 }
@@ -33107,15 +33396,15 @@ function _edGifSetPlaying(playing) {
       }
       // Animación PNG (APNG desde biblioteca, importado, o descargado de nube)
       // _animReady cubre el caso de frames externalizados a IDB y ya decodificados en memoria
-      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady)) {
+      if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady || _edIsProcAnim(l))) {
         if (playing) {
           l._fIdx = 0;
           l._gcpPlayCount = 0;
           l._playing = true;
           if (l._animReady && l._animFrames && l._animFrames.length > 0) {
             l._applyFrame(0); // frames ya decodificados — arrancar directamente
-          } else if (l._apngSrc || l._pngFrames) {
-            l.loadAnim(l._apngSrc || l._pngFrames, () => {
+          } else if (_edAnimSrc(l)) {   // v41.64: incluye las animaciones por instrucciones (se preparan al vuelo)
+            l.loadAnim(_edAnimSrc(l), () => {
               if (l._playing) l._applyFrame(0);
             });
           }
@@ -33753,7 +34042,7 @@ function _edResetPageAnims(pageIdx) {
   if (!page) return;
   page.layers.forEach(function(l) {
     if (l.type === 'gif' && l._ready) { l.stopAnim(); }
-    if (l.type === 'image' && (l._pngFrames || l._apngSrc)) { l.stopAnim(); }
+    if (l.type === 'image' && (l._pngFrames || l._apngSrc || l._gcpProc)) { l.stopAnim(); }
     // Resetear trayectoria: al salir de una hoja, limpiar tiempos para que al volver
     // la trayectoria empiece desde el principio.
     if (l._motionPath && l._motionPath.length >= 2) {
@@ -33831,7 +34120,7 @@ function _edStartPageAnims(pageIdx) {
       l._playing = true;
       l._applyFrame(0);
     }
-    if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady)) {
+    if (l.type === 'image' && ((l._pngFrames && l._pngFrames.length > 1) || l._apngSrc || l._animReady || _edIsProcAnim(l))) {
       l._fIdx = 0;
       l._gcpPlayCount = 0;
       // Cancelar timers pendientes del ciclo anterior
@@ -33871,8 +34160,8 @@ function _edStartPageAnims(pageIdx) {
         }
         if (l._animReady && l._animFrames && l._animFrames.length > 0) {
           l._applyFrame(0);
-        } else if (l._apngSrc || l._pngFrames) {
-          l.loadAnim(l._apngSrc || l._pngFrames, () => {
+        } else if (_edAnimSrc(l)) {   // v41.64: incluye las animaciones por instrucciones
+          l.loadAnim(_edAnimSrc(l), () => {
             if (l._playing) l._applyFrame(0);
           });
         }
@@ -36123,12 +36412,12 @@ function EditorView_init(){
         // Arrancar también la animación sincronizada con la trayectoria
         if (_pla.type === 'gif' && _pla._ready) {
           _pla._fIdx = 0; _pla._playing = true; _pla._applyFrame(0);
-        } else if (_pla.type === 'image' && (_pla._animReady || _pla._apngSrc || _pla._pngFrames)) {
+        } else if (_pla.type === 'image' && (_pla._animReady || _pla._apngSrc || _pla._pngFrames || _edIsProcAnim(_pla))) {
           _pla._fIdx = 0; _pla._gcpPlayCount = 0; _pla._playing = true;
           if (_pla._animReady && _pla._animFrames?.length) {
             _pla._applyFrame(0);
-          } else if (_pla._apngSrc || _pla._pngFrames) {
-            _pla.loadAnim(_pla._apngSrc || _pla._pngFrames, () => { if (_pla._playing) _pla._applyFrame(0); });
+          } else if (_edAnimSrc(_pla)) {   // v41.64: incluye las animaciones por instrucciones
+            _pla.loadAnim(_edAnimSrc(_pla), () => { if (_pla._playing) _pla._applyFrame(0); });
           }
         }
       }
@@ -39109,18 +39398,34 @@ function edBibGuardar() {
   // guardarlo directamente en la carpeta Animaciones igual que los GIFs.
   // Los grupos nunca son animaciones directas — solo layers individuales type=image.
   const _la2 = (!entry.isGroup) ? edLayers[edSelectedIdx] : null;
+  // v41.64 — animación «por instrucciones» (ver AnimProc): la entrada lleva sus objetos + transformaciones, sin fotogramas.
+  const _isProcEntry = !!(_la2 && _edIsProcAnim(_la2));
   const _isAnimEntry = _la2 && _la2.type === 'image' &&
-    ((_la2._pngFrames && _la2._pngFrames.length > 1) ||
+    (_isProcEntry ||
+     (_la2._pngFrames && _la2._pngFrames.length > 1) ||
      _la2._apngSrc || _la2._animReady || _la2.animKey);
 
   if (_isAnimEntry) {
     // Marcar como animación y guardar en carpeta Animaciones
     entry.isGifAnim = true;
+    if (_isProcEntry) {
+      entry.gcpProc = true;
+      entry.gcpProcGeo = { ..._la2._gcpProcGeo };
+      // layerData de la entrada = solo el PÓSTER estático (alternativa si algo falla al insertar): los objetos y las
+      // transformaciones ya viajan en gcpLayersData/gcpFramesData; no se guardan dos veces.
+      if (entry.layerData) {
+        const _ldLight = Object.assign({}, entry.layerData);
+        delete _ldLight._pngFrames; delete _ldLight._gcpLayersData; delete _ldLight._gcpFramesData;
+        delete _ldLight._gcpProc; delete _ldLight._gcpProcGeo;
+        entry.layerData = _ldLight;
+      }
+    } else {
     // Preservar los frames en el entry para que se puedan reproducir al insertar
     if (_la2._apngSrc) entry.apngSrc = _la2._apngSrc;
     if (_la2._pngFrames && _la2._pngFrames.length) entry.pngFrames = _la2._pngFrames;
     if (_la2.animKey) entry.animKey = _la2.animKey;
     if (_la2._pngFramesKey) entry._apngIdbKey = _la2._pngFramesKey;
+    }
     if (_la2._gcpFrameDelay   != null) entry.gcpFrameDelay   = _la2._gcpFrameDelay;
     if (_la2._gcpFrameHolds && _la2._gcpFrameHolds.length) entry.gcpFrameHolds = _la2._gcpFrameHolds;
     if (_la2._gcpRepeatCount  != null) entry.gcpRepeatCount  = _la2._gcpRepeatCount;
@@ -39528,6 +39833,49 @@ function _bibRenderPanel(panel) {
         const _pwS = _o === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
         const _phS = _o === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
         return { w: w * _pwS / edPageW(), h: h * _phS / edPageH() };
+      }
+      // v41.64 — animación «por instrucciones» (ver AnimProc): se inserta SIN fotogramas (ni IndexedDB ni APNG); la capa
+      // lleva sus objetos + transformaciones, que se pintan al reproducir. entry vive en _bibCache y puede insertarse
+      // más veces → todo se clona (_edCloneLayerAnimData). Si no hay datos suficientes cae a la inserción de siempre.
+      if (entry.isGifAnim && entry.gcpProc && entry.gcpProcGeo && entry.gifDataUrl && window.AnimProc &&
+          Array.isArray(entry.gcpLayersData) && entry.gcpLayersData.length && Array.isArray(entry.gcpFramesData) &&
+          entry.gcpRasterW > 0 && entry.gcpRasterH > 0) {
+        const _imgP = new Image();
+        _imgP.onload = function() {
+          const pw = edPageW(), ph = edPageH();
+          let fW = entry.normW || 0.7, fH = entry.normH || fW * (_imgP.naturalHeight / Math.max(_imgP.naturalWidth, 1)) * (pw / ph);
+          if (entry.normW != null && entry.normH != null) { const _cv = _convAnimSize(fW, fH); fW = _cv.w; fH = _cv.h; }
+          const laP = new ImageLayer(_imgP, 0.5, 0.5, fW); laP.height = fH;
+          laP.src = entry.gifDataUrl;
+          laP._keepSize = true; laP._isGcpImage = true;
+          laP._gcpRefX = 0.5; laP._gcpRefY = 0.5; laP._gcpRefW = fW; laP._gcpRefH = fH;
+          laP._gcpRasterW = entry.gcpRasterW; laP._gcpRasterH = entry.gcpRasterH;
+          laP._gcpLayersData = entry.gcpLayersData;
+          laP._gcpFramesData = entry.gcpFramesData;
+          if (entry.gcpLayerNames) laP._gcpLayerNames = entry.gcpLayerNames;
+          if (entry.gcpFrameDelay != null) laP._gcpFrameDelay = entry.gcpFrameDelay;
+          if (Array.isArray(entry.gcpFrameHolds)) laP._gcpFrameHolds = entry.gcpFrameHolds;
+          _edCloneLayerAnimData(laP);
+          laP._gcpProc = true; laP._gcpProcGeo = { ...entry.gcpProcGeo };
+          if (entry.gcpRepeatCount != null) laP._gcpRepeatCount = entry.gcpRepeatCount;
+          if (entry.gcpStopAtEnd)           laP._gcpStopAtEnd = true;
+          if (entry.gcpRestartDelay)        laP._gcpRestartDelay = entry.gcpRestartDelay;
+          if (entry.gcpStartDelay)          laP._gcpStartDelay = entry.gcpStartDelay;
+          if (entry.gcpInvisBeforeStart)    laP._gcpInvisBeforeStart = true;
+          if (entry.gcpInvisAtEnd)          laP._gcpInvisAtEnd = true;
+          if (entry.gcpInvisGradual === false) laP._gcpInvisGradual = false;
+          if (entry.gcpCircularEnd)         laP._gcpCircularEnd = true;
+          laP._fIdx = 0;
+          const _fiP = edLayers.findIndex(l => l.type === 'text' || l.type === 'bubble');
+          if (_fiP >= 0) { edLayers.splice(_fiP, 0, laP); edSelectedIdx = _fiP; }
+          else { edLayers.push(laP); edSelectedIdx = edLayers.length - 1; }
+          edPushHistory();
+          requestAnimationFrame(edRedraw);   // póster ya visible mientras se prepara la animación
+          laP.loadAnim(_ED_PROC_INPUT, function() { laP._playing = false; laP._applyFrame(0); edRedraw(); });
+        };
+        _imgP.src = entry.gifDataUrl;
+        edToast(I18n.t('ed_animationInserted'));
+        return;
       }
       if (entry.isGifAnim && (entry.gifDataUrl || entry.apngSrc || entry._apngIdbKey || entry.animKey || (entry.pngFrames && entry.pngFrames.length))) {
         // Si el APNG/frames están solo en IDB (dispositivo B — entry.pngFrames vacío)
@@ -47083,6 +47431,23 @@ function gcpClose() {
   });
 }
 
+// v41.64 — ¿esta animación puede guardarse «por instrucciones» (sin un PNG por fotograma, ver AnimProc)?
+// Solo si TODOS sus objetos son imágenes estáticas ya cargadas, serializadas como data:URL y sin animación propia:
+// así lo que se pinta al reproducir (AnimProc) es exactamente lo que ImageLayer.draw pintaría. Cualquier otra
+// cosa (GIF o animaciones dentro de la animación, trazos, rellenos…) sigue guardándose con fotogramas, como siempre.
+function _gcpProcEligible(layers, ser) {
+  if (!window.AnimProc || !Array.isArray(layers) || !layers.length || !Array.isArray(ser) || ser.length !== layers.length) return false;
+  return layers.every((l, i) => {
+    const d = ser[i];
+    return !!(l && d && l.type === 'image' && d.type === 'image' &&
+      !l._oc && !l._animReady && !l._playing && !l._apngSrc && !(l._pngFrames && l._pngFrames.length) &&
+      !l._gcpProc && !l.animKey && !l._pngFramesKey && !l._apngIdbKey &&
+      l.img && l.img.complete && l.img.naturalWidth > 0 &&
+      typeof d.src === 'string' && d.src.indexOf('data:image/') === 0 &&
+      !d._pngFrames && !d._gcpLayersData);
+  });
+}
+
 function _gcpSaveToLib(onDone) {
   window._gcpDirty = false; // marcar como guardado
   if (!window._gcpLayers.length || !gcpCanvas || !gcpCtx) { onDone && onDone(); return; }
@@ -47166,10 +47531,22 @@ function _gcpSaveToLib(onDone) {
     return fc;
   };
 
+  // Serializar capas para re-edición
+  // v41.64 — movido ANTES de renderizar (sin cambio de comportamiento: solo importa para los objetos sin fotogramas
+  // propios, que _gcpApplyFrame nunca modifica; los demás reciben su transformación de _gcpFramesData) para saber
+  // ya si la animación puede guardarse «por instrucciones» (ver AnimProc) y, en ese caso, no conservar todos los
+  // fotogramas pintados: basta medir el recorte de cada uno y quedarse con el primero (el «póster»).
+  const gcpLayersData = window._gcpLayers
+    .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
+  // Serializar frames por layer (nuevo formato: array de arrays)
+  const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>s?{...s}:null));
+  // Preservar nombres de capas (_gcpName no lo guarda edSerLayer)
+  const gcpLayerNames = window._gcpLayers.map(la => la._gcpName || null);
+  const _procOK = _gcpProcEligible(layers, gcpLayersData);
+
   // Renderizar todos los frames globales
-  const renderedFrames = Array.from({length: totalFrames}, (_, fi) => renderSnap(null, fi));
   let minX=wsW, minY=wsH, maxX=0, maxY=0;
-  renderedFrames.forEach(fc => {
+  const _measureCrop = (fc) => {
     const d = fc.getContext('2d').getImageData(0,0,wsW,wsH).data;
     for (let y=0; y<wsH; y++) for (let x=0; x<wsW; x++) {
       if (d[(y*wsW+x)*4+3] > 10) {
@@ -47177,7 +47554,20 @@ function _gcpSaveToLib(onDone) {
         if (y<minY) minY=y; if (y>maxY) maxY=y;
       }
     }
-  });
+  };
+  let renderedFrames;
+  if (_procOK) {
+    // Por instrucciones: cada fotograma se pinta, se mide y se descarta; solo se conserva el primero (póster/miniatura).
+    renderedFrames = [];
+    for (let fi = 0; fi < totalFrames; fi++) {
+      const fc = renderSnap(null, fi);
+      _measureCrop(fc);
+      if (fi === 0) renderedFrames.push(fc);
+    }
+  } else {
+    renderedFrames = Array.from({length: totalFrames}, (_, fi) => renderSnap(null, fi));
+    renderedFrames.forEach(_measureCrop);
+  }
   if (maxX<minX || maxY<minY) {
     minX=marginX+offX; minY=marginY+offY;
     maxX=minX+pageW-1; maxY=minY+pageH-1;
@@ -47188,12 +47578,18 @@ function _gcpSaveToLib(onDone) {
   const cropH=Math.min(wsH,maxY+pad+1)-cropY;
 
   // Convertir cada frame renderizado a PNG dataUrl recortado y transparente
-  const pngFrames = renderedFrames.map(fc => {
+  const _cropPng = fc => {
     const c = document.createElement('canvas');
     c.width=cropW; c.height=cropH;
     c.getContext('2d').drawImage(fc, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
     return c.toDataURL('image/png');
-  });
+  };
+  // v41.64 — por instrucciones NO hay un PNG por fotograma: solo el primero (póster: la imagen estática de la capa).
+  const pngFrames = _procOK ? null : renderedFrames.map(_cropPng);
+  const posterUrl = _procOK ? _cropPng(renderedFrames[0]) : pngFrames[0];
+  // Geometría con la que se compuso el recorte (AnimProc): px de página y esquina del recorte en esos px — exactamente
+  // lo que usa ImageLayer.draw sobre el lienzo de trabajo (edMarginX()+x*pw − cropX + offX), sin redondeos.
+  const _procGeo = _procOK ? { pw: edPageW(), ph: edPageH(), ox: cropX - offX - edMarginX(), oy: cropY - offY - edMarginY() } : null;
 
   // Miniatura desde el primer frame
   const S=80;
@@ -47223,14 +47619,6 @@ function _gcpSaveToLib(onDone) {
     // Fallback: ocupar el centro de la página
     _gcpNormW = 1; _gcpNormH = 1; _gcpCenterX = 0.5; _gcpCenterY = 0.5;
   }
-
-  // Serializar capas para re-edición
-  const gcpLayersData = window._gcpLayers
-    .map(l => { try { return edSerLayer(l); } catch(e) { return null; } }).filter(Boolean);
-  // Serializar frames por layer (nuevo formato: array de arrays)
-  const gcpFramesData = window._gcpLayers.map(la => (la._frames||[]).map(s=>s?{...s}:null));
-  // Preservar nombres de capas (_gcpName no lo guarda edSerLayer)
-  const gcpLayerNames = window._gcpLayers.map(la => la._gcpName || null);
 
   // Restaurar estado del frame activo
   _gcpApplyFrame(window._gcpGlobalFrameIdx);
@@ -47284,7 +47672,18 @@ function _gcpSaveToLib(onDone) {
     existingLayer._gcpFramesData=gcpFramesData;
     existingLayer._gcpLayerNames=gcpLayerNames;
     existingLayer._isGcpImage=true;
-    existingLayer._pngFrames=pngFrames;
+    // v41.64 — por instrucciones (_procOK): sin fotogramas; la capa lleva solo sus instrucciones (_gcpLayersData/
+    // _gcpFramesData + geometría del recorte). Si no es posible (objetos que no son imágenes), fotogramas como siempre.
+    if (_procOK) {
+      delete existingLayer._pngFrames;
+      existingLayer._gcpProc = true;
+      existingLayer._gcpProcGeo = _procGeo;
+      existingLayer._gcpRasterW = cropW; existingLayer._gcpRasterH = cropH; // ya: AnimProc.isProc los exige juntos
+    } else {
+      existingLayer._pngFrames=pngFrames;
+      delete existingLayer._gcpProc; delete existingLayer._gcpProcGeo;
+    }
+    existingLayer._procWait = null; existingLayer._procFor = null; // descartar cualquier preparación en vuelo con datos viejos
     existingLayer._animReady=false; existingLayer._animFrames=null;
     // BUG (reportado por Alberto): al reeditar una animación que sale y vuelve al
     // lienzo, el primer fotograma se veía deformado en el editor general hasta
@@ -47341,7 +47740,15 @@ function _gcpSaveToLib(onDone) {
     // de esta misma reedición (instantáneas anteriores con la caja vieja leerían fotogramas
     // nuevos) y a cualquier ítem de biblioteca que comparta la clave (edBibGuardar copia
     // animKey/_apngIdbKey de la capa): ambos conservan así sus fotogramas de siempre.
-    { const _newAnimKey = _edAnimKey('gcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+    if (_procOK) {
+      // v41.64 — por instrucciones no hay fotogramas en IndexedDB: se sueltan las claves (los fotogramas viejos que
+      // quedaran bajo ellas, p. ej. de un ítem de biblioteca que las comparta, no se tocan; si ya nadie los
+      // referencia, el limpiador de claves huérfanas los retira).
+      delete existingLayer.animKey;
+      delete existingLayer._pngFramesKey;
+      delete existingLayer._apngIdbKey;
+    } else {
+      const _newAnimKey = _edAnimKey('gcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
       existingLayer.animKey = _newAnimKey;
       delete existingLayer._pngFramesKey;
       delete existingLayer._apngIdbKey;
@@ -47362,7 +47769,7 @@ function _gcpSaveToLib(onDone) {
     // Cargar primer frame como imagen visible
     const img=new Image();
     img.onload=()=>{
-      existingLayer.img=img; existingLayer.src=pngFrames[0];
+      existingLayer.img=img; existingLayer.src=posterUrl;
       // Posición Y tamaño deben salir del MISMO recorte (_gcpCenterX/Y ↔ _gcpNormW/H) — si se
       // fuerza la x/y previa al guardado pero el tamaño se recalcula del recorte nuevo, ambos
       // quedan referidos a recortes distintos y el objeto se desplaza/deforma al reeditar.
@@ -47389,33 +47796,39 @@ function _gcpSaveToLib(onDone) {
         // y este onload dejaría _animReady=true con los fotogramas VIEJOS, y loadAnim
         // («si ya está listo, reusar sin redecodificar») se saltaría la decodificación buena.
         existingLayer._animReady = false; existingLayer._animFrames = null; existingLayer._oc = null;
-        existingLayer.loadAnim(pngFrames, () => {
+        existingLayer.loadAnim(_procOK ? _ED_PROC_INPUT : pngFrames, () => {
           existingLayer._playing = false;
           existingLayer._applyFrame(0);
           edRedraw();
         });
       }
     };
-    img.src=pngFrames[0];
+    img.src=posterUrl;
     edToast(I18n.t('gcp_animationUpdated'));
     onDone && onDone();
   } else {
     // Animación nueva: insertar directamente en el canvas del editor (no en biblioteca)
-    const _animKey = _edAnimKey('gcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
+    // v41.64 — por instrucciones: sin clave ni fotogramas en IndexedDB (ver _procOK arriba).
+    const _animKey = _procOK ? null : _edAnimKey('gcp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8));
     // Guardar frames en IDB para persistencia
-    if (window._sbAnimIdbSave) {
+    if (!_procOK && window._sbAnimIdbSave) {
       window._sbAnimIdbSave(_animKey, pngFrames).catch(function(e){ console.warn('GCP IDB save:', e); });
     }
     const img = new Image();
     img.onload = () => {
       const la = new ImageLayer(img, _gcpCenterX, _gcpCenterY, _gcpNormW);
       la.height = _gcpNormH;
-      la.src = pngFrames[0];
+      la.src = posterUrl;
       la._keepSize = true;
       la._isGcpImage = true;
-      la._pngFrames = pngFrames;
       la._fIdx = 0;
-      la.animKey = _animKey;
+      if (_procOK) {
+        la._gcpProc = true;
+        la._gcpProcGeo = _procGeo;
+      } else {
+        la._pngFrames = pngFrames;
+        la.animKey = _animKey;
+      }
       la._gcpLayersData = gcpLayersData;
       la._gcpFramesData = gcpFramesData;
       la._gcpLayerNames = gcpLayerNames;
@@ -47441,14 +47854,14 @@ function _gcpSaveToLib(onDone) {
       else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
       edPushHistory();
       // Cargar animación (no reproducir automáticamente en el canvas)
-      la.loadAnim(pngFrames, () => {
+      la.loadAnim(_procOK ? _ED_PROC_INPUT : pngFrames, () => {
         la._playing = false;
         la._applyFrame(0);
         edRedraw();
       });
       edToast(I18n.t('gcp_animationInsertedCanvas'));
     };
-    img.src = pngFrames[0];
+    img.src = posterUrl;
     onDone && onDone();
   }
 }
@@ -48983,13 +49396,16 @@ async function _edRunDiag() {
         if (l && l.type === 'image') {
           if (l._animFrames && l._animFrames.length) {
             const f = l._animFrames[0];
-            const _fb = f && f.imageData ? f.imageData.data.byteLength : 0;
+            // v41.64 — por instrucciones los fotogramas son «virtuales» (se pintan al pedirlos): no hay ImageData en RAM
+            // (pedirlo aquí lo pintaría solo para medirlo); la RAM real son los objetos decodificados, una vez.
+            const _isProcD = !!(l._gcpProc && f && typeof f.paint === 'function');
+            const _fb = (!_isProcD && f && f.imageData) ? f.imageData.data.byteLength : 0;
             const _bytes = _fb * l._animFrames.length;
             _totalFrames += l._animFrames.length;
             _totalBytes  += _bytes;
             _loaded++;
-            const _canRel = !!(l._pngFramesKey || l.animKey);
-            L('  P'+pi+'L'+li+': '+l._animFrames.length+' frames RAM (~'+Math.round(_bytes/1024)+'KB) animReady='+l._animReady+' canUnload='+_canRel);
+            const _canRel = !!(l._pngFramesKey || l.animKey || _isProcD);
+            L('  P'+pi+'L'+li+': '+l._animFrames.length+' frames '+(_isProcD ? 'POR INSTRUCCIONES (virtuales, '+(l._gcpLayersData||[]).length+' objetos)' : 'RAM (~'+Math.round(_bytes/1024)+'KB)')+' animReady='+l._animReady+' canUnload='+_canRel);
           } else if (l._animDeferred) {
             _deferred++;
             L('  P'+pi+'L'+li+': DIFERIDO pngKey='+(l._pngFramesKey?'sí':'no')+' animKey='+(l.animKey?'sí':'no'));
