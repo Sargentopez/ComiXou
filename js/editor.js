@@ -6679,6 +6679,23 @@ function _edRenderFrameInner(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') 
   return _editingDraw;
 }
 
+// v41.67 — RECTÁNGULO DE REFERENCIA DEL LIENZO (borde azul de la hoja). UNA sola definición para los dos
+// editores: el general (_edRenderOverlays) y el de animaciones (_gcpRedraw). Alberto: «al abrirse el editor de
+// animaciones también se vea el rectángulo de referencia y que esté correctamente ubicado, de forma que si se
+// establece ver el contenido del editor general, coincida absolutamente con el lienzo». Con "Visualizar contenido
+// del Editor" activado, #gcpCanvas (transparente) queda sobre #editorCanvas (al 50 %): si cada uno calculara el
+// rectángulo por su cuenta podrían separarse un píxel; compartiendo esta función coinciden por construcción —
+// mismo origen de coordenadas de mundo (edMarginX/Y), mismo tamaño (edPageW/H), misma cámara (edCamera) y
+// mismo trazo (1 px físico, independiente del zoom).
+// REQUISITO: ctx ya tiene aplicada la transformación de la cámara (setTransform(z,0,0,z,x,y)).
+function _edDrawCanvasBorder(ctx) {
+  ctx.save();
+  ctx.strokeStyle = '#1a8cff';
+  ctx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
+  ctx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
+  ctx.restore();
+}
+
 // Overlays baratos que siempre se dibujan sobre edCtx:
 // selección, cuadrícula, reglas, borde del lienzo, crop, motion path, scrollbars.
 function _edRenderOverlays() {
@@ -6739,11 +6756,8 @@ function _edRenderOverlays() {
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
-  edCtx.save();
-  edCtx.strokeStyle = '#1a8cff';
-  edCtx.lineWidth   = 1 / edCamera.z;   // 1px físico independiente del zoom
-  edCtx.strokeRect(edMarginX(), edMarginY(), edPageW(), edPageH());
-  edCtx.restore();
+  // (v41.67: misma función que usa el editor de animaciones — ver _edDrawCanvasBorder)
+  _edDrawCanvasBorder(edCtx);
   // Overlay de recorte: contorno del polígono + zona exterior oscurecida
   if (_edCropMode && _edCropLayer) _edCropDrawOverlay();
   // ── Overlay trayectoria de animación ──────────────────────────────────────
@@ -45682,6 +45696,11 @@ function _gcpRedraw() {
 
   // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
   _gcpDrawSel();
+  // v41.67 — rectángulo de referencia del lienzo (borde azul de la hoja), siempre encima como en el editor
+  // general y con LA MISMA función (_edDrawCanvasBorder): mismo origen, tamaño, cámara y trazo, de modo que
+  // con "Visualizar contenido del Editor" coincide al píxel con el lienzo de debajo. Solo se pinta en el
+  // canvas de pantalla (#gcpCanvas): el guardado/exportación componen sus fotogramas en lienzos aparte.
+  _edDrawCanvasBorder(gcpCtx);
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   // Mantener scrollbars sincronizadas con la cámara
   if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
@@ -46997,6 +47016,9 @@ function gcpOpen(edLayerIdx) {
 
   // Mostrar overlay y bloqueante
   shell.style.display = 'block';
+  // v41.67 — pintar YA el lienzo de animaciones: una sesión nueva (sin objetos) no llamaba a _gcpRedraw al
+  // abrir, así que el rectángulo de referencia de la hoja no aparecía hasta el primer toque.
+  _gcpRedraw();
   // Ayuda "Crear Animación" — se abre sola la primera vez (o siempre que no
   // se haya marcado "No volver a mostrar"), mismo sistema que el resto de
   // ayudas de la app (_edHelpContent/edHelpRefModal, ver más arriba en este
