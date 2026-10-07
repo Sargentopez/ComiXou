@@ -5044,6 +5044,88 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   // editor.js, la entrada ya no protegía nada real, así que se retira en vez
   // de dejarla como excepción muerta (un futuro uso legítimo de appConfirm()
   // dentro del editor merece revisión propia, no heredar esta exclusión).
+  //
+  // BUG CORREGIDO (v41.65 — Alberto: "Solo he abierto una obra y he utilizado
+  // los botones de avance de hoja, de previsualización y de control de
+  // animaciones, ninguna de esas cosas debe manchar la hoja, sin embargo me
+  // pregunta si guardar cambios"). Reproducido con clics reales: los botones de
+  // hoja (#edPagePrev/#edPageNext) y el botón de vista previa (#edPreviewBtn)
+  // YA estaban excluidos y no ensuciaban nada — lo que sumaba un toque a la
+  // hoja activa eran las superficies que cuelgan DESPUÉS de esos botones y que
+  // nadie añadió a esta lista cuando se crearon (el mismo hueco que
+  // #edPageJumpBar/#edMenuBar/GCP más arriba, otra vez por una vía nueva):
+  //   · #editorViewer — el visor de la vista previa entero (su canvas, ◀ ▶ ✕,
+  //     la capa de toques del modo scroll…). Es de solo lectura: mientras está
+  //     abierto tapa el editor y nada de lo que se toque dentro puede
+  //     modificar la obra. Cada toque para pasar de hoja o cerrarlo sumaba +1.
+  //   · #edAnimCtlBar — la botonera ◀ reloj ▶ de «Ver control de animaciones»
+  //     (v41.60). Por diseño NO toca las capas ni se guarda (ver
+  //     editor-animctl.js: el estado vive en un Map aparte); cada pulsación de
+  //     ◀/▶ sumaba +1.
+  // La auditoría de los demás controles de «solo mirar» (todos los elementos con
+  // escuchadores de puntero/clic que no estaban cubiertos) encontró más del
+  // mismo tipo, que se cierran aquí de una vez en vez de esperar al siguiente
+  // aviso:
+  //   · #edZoomResetBtn — la lupa «ver lienzo completo»: solo mueve la cámara
+  //     (igual que el pinch de edPinchEnd, que ya devuelve sus toques).
+  //   · #ed-hscroll / #ed-vscroll — barras de desplazamiento del lienzo (y sus
+  //     tiradores, que son descendientes): solo mueven la cámara.
+  //   · #edShortcutsModal — ventana de atajos de teclado (ayuda).
+  //   · #_edDiagPanel — la ventana del diagnóstico (Copiar / ✕). «Reparar IDs»
+  //     NO depende de este contador: pide confirmación y marca sucias todas las
+  //     hojas por su camino explícito (edPushHistory/_edMarkPageDirty).
+  //   · #installBanner — banner de «Instalar la app» del navegador.
+  //   · #_edCloudWait — «Esperar» del aviso «guardado en la nube en curso» que sale
+  //     al pulsar salir: ese toque llega con el guardado ya en marcha y edCloudSave
+  //     solo resta lo contado ANTES de empezar, así que la hoja se quedaba marcada
+  //     al terminar un guardado en el que no se había tocado nada.
+  // Ninguna de ellas modifica edPages/edLayers; las ediciones reales siguen
+  // marcando por su camino explícito y el resto del DOM sigue contando.
+  '#editorViewer', '#edAnimCtlBar', '#edZoomResetBtn', '#ed-hscroll', '#ed-vscroll',
+  '#edShortcutsModal', '#_edDiagPanel', '#installBanner', '#_edCloudWait',
+  //
+  // BUG CORREGIDO (v41.66 — Alberto: «No debería tocarse el editor de textos si
+  // se sale de él sin guardar nada, tampoco la biblioteca si no se añade ni se
+  // elimina nada»). Reproducido con clics reales sobre la v41.65: abrir el
+  // Editor de textos, tocar dentro y salir SIN aplicar (o escribir y elegir
+  // «Salir sin guardar») dejaba la hoja activa con 5 toques contados, y lo mismo
+  // pasaba con abrir la biblioteca, desplazarla, tocar el nombre de una carpeta
+  // y cerrarla — y el aviso «¿guardar cambios?» salía al salir de la obra. Dos
+  // superficies más que nadie añadió a esta lista cuando se crearon (mismo hueco
+  // que #edMenuBar/GCP/#editorViewer más arriba, por una vía nueva):
+  //   · #tdShell — el Editor de textos entero (barra, editor Trix, selector de
+  //     hoja, botones ✕/Aplicar…). Es un editor APARTE con su propio «sin
+  //     guardar» (_tdDirty → aviso «cambios sin guardar» al cerrar): lo que se
+  //     escribe vive en Trix y solo llega a edPages por _tdApplyToCanvas /
+  //     _tdReflowFlowInPlace, que marcan por su camino explícito (_edMarkPageDirty
+  //     por hoja tocada, hojas nuevas con _edMarkPagesStructureDirty y
+  //     edPushHistory) — ningún toque dentro puede modificar la obra por sí solo.
+  //   · #_tdSavePop / #_tdDiagPanel — sus dos ventanas sueltas en <body> (el aviso
+  //     «cambios sin guardar» con «Salir sin guardar»/«Aplicar», y su diagnóstico).
+  //   · #cxFontSearchModal — «🔍 Buscar más fuentes…» (_cxOpenFontSearch): ventana en
+  //     <body> que se abre desde el Editor de textos Y desde el panel de propiedades
+  //     del editor general. Solo ELIGE una fuente: no toca nada hasta «Usar», y entonces
+  //     su retorno de llamada marca por su camino explícito (en el editor general,
+  //     edPushHistory justo después de asignar fontFamily; en el Editor de textos el
+  //     cambio vive en Trix y llega a la obra solo al aplicar). Buscar, filtrar por
+  //     categoría o cancelar no modifican la hoja.
+  //   · #edOptionsPanel[data-mode="biblioteca"] — SOLO el panel genérico de
+  //     opciones cuando está haciendo de biblioteca (el mismo panel sirve para
+  //     propiedades, dibujo, etc., y esos siguen contando). Abrir, desplazar,
+  //     tocar un nombre, arrastrar un objeto a otra carpeta, crear/borrar carpetas
+  //     u objetos modifica la BIBLIOTECA (que se guarda aparte, en _bibSave), nunca
+  //     la hoja. Insertar un objeto en el lienzo SÍ ensucia la hoja de destino, pero
+  //     por su propio camino explícito (edPushHistory + _edMarkPageDirty en el
+  //     manejador de toque de ._bib-item) — ver ahí. Cubre también el panel cuando
+  //     se usa por encima del Editor de textos (td-open) o del editor de animaciones.
+  //   · #_bib-picker — «¿en qué carpeta?» de «Guardar en biblioteca» (ventana en <body>):
+  //     solo añade a la biblioteca.
+  //   · #edConfirmModal[data-no-tick] — la ventana de confirmación SOLO cuando la
+  //     abre la biblioteca para borrar una carpeta/objeto (edConfirm la marca con su
+  //     5.º parámetro y la desmarca al cerrarse); el resto de usos de edConfirm
+  //     siguen contando como siempre.
+  '#tdShell', '#_tdSavePop', '#_tdDiagPanel', '#cxFontSearchModal',
+  '#edOptionsPanel[data-mode="biblioteca"]', '#_bib-picker', '#edConfirmModal[data-no-tick]',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
@@ -35574,7 +35656,10 @@ function _edBtnHitTest(layers, tapPx, tapPy, pw, ph) {
   return null;
 }
 
-function edConfirm(msg, onOk, okLabel, onCancel){  // onCancel (opcional, v40.50): se llama al pulsar Cancelar
+// noTick (opcional, v41.66): true cuando lo que se confirma NO toca la hoja (p. ej. borrar de la biblioteca) — los toques de
+// esta ventana no cuentan como edición de la página (ver _ED_TICK_EXCLUDE_SELECTOR, '#edConfirmModal[data-no-tick]'). Se
+// desmarca siempre al abrir y al cerrar, así que nunca se hereda entre usos distintos de la misma ventana.
+function edConfirm(msg, onOk, okLabel, onCancel, noTick){  // onCancel (opcional, v40.50): se llama al pulsar Cancelar
   const overlay = $('edConfirmModal');
   const msgEl   = $('edConfirmMsg');
   const okBtn   = $('edConfirmOk');
@@ -35583,6 +35668,7 @@ function edConfirm(msg, onOk, okLabel, onCancel){  // onCancel (opcional, v40.50
   msgEl.textContent = msg;
   okBtn.textContent = okLabel || I18n.t('delete');
   _edConfirmCb = onOk;
+  if(noTick) overlay.setAttribute('data-no-tick', ''); else overlay.removeAttribute('data-no-tick');
   overlay.classList.add('open');
   // Absorber todos los eventos de puntero para que no lleguen al canvas/edOnStart
   const _stopAll = e => e.stopPropagation();
@@ -35590,6 +35676,7 @@ function edConfirm(msg, onOk, okLabel, onCancel){  // onCancel (opcional, v40.50
   // Listeners de un solo uso
   const close = (exec) => {
     overlay.classList.remove('open');
+    overlay.removeAttribute('data-no-tick');
     overlay.removeEventListener('pointerdown', _stopAll, { capture: true });
     okBtn.removeEventListener('click', onYes);
     cancelBtn.removeEventListener('click', onNo);
@@ -39730,10 +39817,15 @@ function _bibRenderPanel(panel) {
       inp.select();
       const confirm = () => {
         const nombre = inp.value.trim();
+        // v41.66 — «la biblioteca no se toca si no se añade ni se elimina nada»: solo se guarda si el nombre CAMBIA de
+        // verdad. Antes, tocar el nombre de una carpeta y soltar en otro sitio (blur) guardaba igualmente → sello
+        // _localModifiedAt nuevo con el contenido idéntico (hacía parecer «más reciente» a la copia local frente a la nube).
         if (nombre) {
           const d2 = _bibLoad();
-          if (d2.folders[fi]) d2.folders[fi].name = nombre;
-          _bibSave(d2);
+          if (d2.folders[fi] && d2.folders[fi].name !== nombre) {
+            d2.folders[fi].name = nombre;
+            _bibSave(d2);
+          }
         }
         _bibRenderPanel(panel);
       };
@@ -39759,7 +39851,7 @@ function _bibRenderPanel(panel) {
           _bibSave(d2);
           edToast(I18n.t('ed_folderDeleted'));
           _bibRenderPanel(panel);
-        });
+        }, undefined, undefined, true);   // v41.66: borrar de la biblioteca toca la biblioteca, no la hoja (noTick)
         return;
       }
       edConfirm(I18n.t('ed_confirmDeleteFolder', { name: folder.name }), ()=>{
@@ -39768,7 +39860,7 @@ function _bibRenderPanel(panel) {
         _bibSave(d2);
         edToast(I18n.t('ed_folderDeleted'));
         _bibRenderPanel(panel);
-      });
+      }, undefined, undefined, true);   // v41.66: noTick (ver edConfirm)
     });
   });
 
@@ -39785,7 +39877,7 @@ function _bibRenderPanel(panel) {
         _bibSave(d2);
         edToast(I18n.t('ed_deletedFromLibrary'));
         _bibRenderPanel(panel);
-      });
+      }, undefined, undefined, true);   // v41.66: noTick (ver edConfirm)
     });
   });
 
@@ -39870,6 +39962,9 @@ function _bibRenderPanel(panel) {
           if (_fiP >= 0) { edLayers.splice(_fiP, 0, laP); edSelectedIdx = _fiP; }
           else { edLayers.push(laP); edSelectedIdx = edLayers.length - 1; }
           edPushHistory();
+          // v41.66 — la hoja de destino se marca AQUÍ, por su camino explícito: los toques del panel de la biblioteca ya no
+          // cuentan como edición (_ED_TICK_EXCLUDE_SELECTOR), y edPushHistory() puede salir sin marcar (sesión de dibujo/vectorial).
+          _edMarkPageDirty(edCurrentPage);
           requestAnimationFrame(edRedraw);   // póster ya visible mientras se prepara la animación
           laP.loadAnim(_ED_PROC_INPUT, function() { laP._playing = false; laP._applyFrame(0); edRedraw(); });
         };
@@ -39891,16 +39986,26 @@ function _bibRenderPanel(panel) {
         // funciona igual sea cual sea el origen de la clave.
         const _bibFetchKey = entry._apngIdbKey || entry.animKey;
         if (_bibFetchKey && !entry.apngSrc && !(entry.pngFrames && entry.pngFrames.length) && window._sbAnimIdbLoad) {
+          // v41.66 — «la inserción de un objeto de la biblioteca no debe ensuciar la biblioteca» (Alberto). Antes, los
+          // fotogramas leídos de IndexedDB se ASIGNABAN a la propia entrada (entry.apngSrc / entry.pngFrames), y entry es
+          // el objeto vivo de _bibCache (_bibLoad lo devuelve por referencia): insertar una animación cambiaba el contenido
+          // de la biblioteca (huella _edBibContentHash distinta → el siguiente guardado en la nube volvía a subirla ENTERA,
+          // y cualquier _bibSave posterior habría grabado los fotogramas dentro de la biblioteca). Reproducido: tamaño de
+          // la biblioteca 379 206 → 380 135 tras insertar UNA animación. Ahora todo este bloque trabaja sobre una COPIA
+          // superficial (_eL): dentro de .finally el nombre `entry` apunta a esa copia (ver el const de su primera línea),
+          // así que el resto del bloque —que lee entry.* por todas partes— queda tal cual. La entrada original no se toca.
+          const _eL = Object.assign({}, entry);
           window._sbAnimIdbLoad(_bibFetchKey)
             .then(function(_data) {
               // _data puede ser string (APNG completo) o array (frames PNG individuales)
               if (_data) {
-                if (typeof _data === 'string') entry.apngSrc = _data;
-                else if (Array.isArray(_data) && _data.length) entry.pngFrames = _data;
+                if (typeof _data === 'string') _eL.apngSrc = _data;
+                else if (Array.isArray(_data) && _data.length) _eL.pngFrames = _data;
               }
             })
             .catch(function(){})
             .finally(function() {
+              const entry = _eL;   // sombra deliberada de la entrada de la biblioteca — ver el comentario de arriba
               // apngSrc o pngFrames ya cargado — continuar con la inserción normal
               const _img2 = new Image();
               const _src2 = entry.apngSrc || (entry.pngFrames && entry.pngFrames[0]) || entry.gifDataUrl;
@@ -39965,6 +40070,7 @@ function _bibRenderPanel(panel) {
                 if(fi2>=0){edLayers.splice(fi2,0,la2);edSelectedIdx=fi2;}
                 else{edLayers.push(la2);edSelectedIdx=edLayers.length-1;}
                 edPushHistory();
+                _edMarkPageDirty(edCurrentPage);   // v41.66 — ver la animación «por instrucciones» de arriba
                 la2.loadAnim(entry.apngSrc||_frames2,function(){la2._playing=false;la2._applyFrame(0);edRedraw();});
               };
               _img2.src=_src2;
@@ -40074,6 +40180,7 @@ function _bibRenderPanel(panel) {
           if (firstTextIdx >= 0) { edLayers.splice(firstTextIdx, 0, la); edSelectedIdx = firstTextIdx; }
           else { edLayers.push(la); edSelectedIdx = edLayers.length - 1; }
           edPushHistory();
+          _edMarkPageDirty(edCurrentPage);   // v41.66 — ver la animación «por instrucciones» de arriba
           // Dibujar el primer frame estático inmediatamente (antes de que loadAnim complete)
           // Garantiza visibilidad aunque loadAnim sea lento o falle
           requestAnimationFrame(edRedraw);
@@ -40256,7 +40363,9 @@ function _bibRenderPanel(panel) {
       }
 
       edSelectedIdx = -1;
-      edPushHistory(); edRedraw();
+      edPushHistory();
+      _edMarkPageDirty(edCurrentPage);   // v41.66 — ver la animación «por instrucciones» de arriba
+      edRedraw();
       edToast(I18n.t('ed_objectInsertedCanvas'));
     });
   });
