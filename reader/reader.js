@@ -1540,6 +1540,20 @@ async function _offlineLoad(workId) {
   } catch(e) { return null; }
 }
 
+// ¿Hay copia offline de esta obra? Solo comprueba que exista la clave: leer el registro entero (get) traería a memoria
+// TODAS las hojas de la copia solo para decidir si se enseña ⬇ o ✓ (v41.68).
+async function _offlineHas(workId) {
+  try {
+    const db = await _offlineDbOpen();
+    return await new Promise(resolve => {
+      const st  = db.transaction(_OFFLINE_STORE, 'readonly').objectStore(_OFFLINE_STORE);
+      const req = typeof st.getKey === 'function' ? st.getKey(workId) : st.get(workId);
+      req.onsuccess = () => resolve(req.result !== undefined && req.result !== null);
+      req.onerror   = () => resolve(false);
+    });
+  } catch(e) { return false; }
+}
+
 async function _offlineDelete(workId) {
   try {
     const db = await _offlineDbOpen();
@@ -1568,9 +1582,10 @@ async function _offlineDelete(workId) {
 // Si alguna no se puede traer, no se genera la copia (el llamador avisa).
 async function _buildOfflineSnapshot() {
   if (!RS._sourcePanels) return null;
-  if (!(await _plEnsureAll())) return null;
-  if (RS._sourcePanels.some(p => !p)) return null;
-  const panels = await Promise.all(RS._sourcePanels.map(async panel => {
+  // v41.68: las copias limpias de las hojas que no están en memoria se bajan y parsean aquí, sin decodificar (ver _plCollectSources).
+  const _srcs = await _plCollectSources();
+  if (!_srcs) return null;
+  const panels = await Promise.all(_srcs.map(async panel => {
     const layers = await Promise.all((panel.layers || []).map(async layer => {
       if (layer.type === 'gif' && layer._gifUrl) {
         try {
@@ -1764,8 +1779,14 @@ const _PL = {
   scheduled: false, retryTimer: null, busyTimer: null, settleTimer: null,
   lastInput: 0, ptrDown: 0, scrollUntil: 0, lastScroll: 0, arrIdx: -1, arrivedAt: 0, watching: false,
   allWaiters: [],
-  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, paused: {} },
+  keep: null,         // v41.68 — índices de hoja que pueden estar en memoria (ventana, ver _plKeepSet); null = sin límite
+  scanBusy: false,    // v41.68 — escaneo de botones «ir a hoja» de una hoja fuera de la ventana en curso (ver _plStartScan)
+  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, paused: {} },
 };
+// Interruptores de la ventana de memoria (v41.68), solo para pruebas y diagnóstico:
+//   ?rdwin=all → sin ventana (el comportamiento de antes de v41.68: todas las hojas acaban en memoria)
+//   ?rdahead=N · ?rdbehind=N · ?rdmem=MB → hojas por delante / por detrás / tope de memoria estimada
+const _PL_QS = (function () { try { return new URLSearchParams(location.search); } catch (_) { return new URLSearchParams(''); } })();
 // Descarga ya hecha (data URL) del GIF de una capa — se baja en el carril de RED y se decodifica en el de CPU.
 const _plGifDl = new WeakMap();
 
@@ -1789,6 +1810,18 @@ function _cloneJson(v) {
   return o;
 }
 
+// Resumen de los botones «ir a hoja» de una hoja: { btn: ¿tiene alguno?, targets: [hojas a las que saltan] }.
+// Es lo único que las reglas de navegación dirigida necesitan de las demás hojas (_panelHasNavButton /
+// _panelIsJumpTarget) y se conserva aunque la hoja se suelte de memoria (v41.68, ver _plEvict).
+function _plNavOf(layers) {
+  let btn = false; const targets = [];
+  for (let i = 0; i < (layers || []).length; i++) {
+    const a = layers[i] && layers[i]._buttonAction;
+    if (a && a.type === 'page') { btn = true; if (targets.indexOf(a.pageIdx) < 0) targets.push(a.pageIdx); }
+  }
+  return { btn, targets };
+}
+
 // Hoja «esqueleto» a partir de la fila de la tabla panels (aún sin capas ni textos).
 function _plSkeleton(row) {
   return Object.assign({}, row, { layers: [], texts: [], layerImgs: [], _row: row, _raw: null, _st: 'idle', _tries: 0, _retryAt: 0 });
@@ -1797,7 +1830,8 @@ function _plSkeleton(row) {
 function _plSkeletonFromData(p) {
   const row = {};
   for (const k of Object.keys(p)) { if (k !== 'layers' && k !== 'texts') row[k] = p[k]; }
-  return Object.assign({}, row, { layers: _cloneJson(p.layers || []), texts: _cloneJson(p.texts || []), layerImgs: [], _row: row, _raw: null, _st: 'fetched', _tries: 0, _retryAt: 0 });
+  const layers = _cloneJson(p.layers || []);
+  return Object.assign({}, row, { layers, texts: _cloneJson(p.texts || []), layerImgs: [], _row: row, _raw: null, _st: 'fetched', _tries: 0, _retryAt: 0, _nav: _plNavOf(layers) });
 }
 function _plAddCredits() {
   const last = RS.panels[RS.panels.length - 1];
@@ -1902,7 +1936,7 @@ async function _plWaitQuiet(stillWanted) {
 let _plSliceT0 = 0;
 async function _plStep(panel) {
   const t = performance.now();
-  if (_plIsCurrent(panel)) {
+  if (_plIsCurrent(panel) || panel._turbo) {   // _turbo: hoja «de usar y tirar» de la descarga offline (_plCollectOne), sin esperas
     if (t - _plSliceT0 > 12) { await _plSleep(0); _plSliceT0 = performance.now(); }
     return;
   }
@@ -2163,8 +2197,10 @@ async function _plDecode(panel) {
 async function _plPrepareData(panel) {
   const pi = RS.panels.indexOf(panel);
   if (panel._raw) await _plParse(panel, pi);
+  panel._nav = _plNavOf(panel.layers); // v41.68: se conserva aunque la hoja se suelte de memoria
   await _plDecode(panel);
   panel._raw = null;
+  panel._w = _plWeigh(panel);          // v41.68: lo que pesa en memoria, para el tope de la ventana (_plKeepSet)
 }
 // Fuentes de ESTA hoja (antes se pedían las de toda la obra de una vez) — misma razón que _ensureFontsLoaded.
 // Es espera de red/del navegador, no de CPU: se hace fuera del carril de CPU para no frenar a la hoja siguiente.
@@ -2202,15 +2238,203 @@ function _plKey(i) { const d = i - _plCursor(); return d >= 0 ? d : (-d) * 1.6 +
 function _plBest(state) {
   let best = null, bk = Infinity;
   const now = Date.now();
+  const keep = _PL.keep; // v41.68: solo se traen hojas de la ventana de memoria (null = todas)
   for (let i = 0; i < RS.panels.length; i++) {
     const p = RS.panels[i];
     if (p.isCredits || p._st !== state || p._retryAt > now) continue;
+    if (keep && !keep.has(i)) continue;
     const k = _plKey(i);
     if (k < bk) { bk = k; best = p; }
   }
   return best;
 }
 function _plCount(state) { let n = 0; for (const p of RS.panels) if (!p.isCredits && p._st === state) n++; return n; }
+
+// ══════════════════════════════════════════════════════════════════════════
+// VENTANA DE MEMORIA (v41.68)
+//
+// Alberto (Android): «cuando llevo un rato viendo la misma hoja en el reader, da un error en Chrome "se ha producido
+// un error al mostrar esta web" y sale del reader. Me pasa en android, no en PC». Ese aviso es el cierre del proceso
+// de la página por falta de memoria (no un error de JavaScript). Hasta v41.67 el segundo plano acababa teniendo
+// decodificadas TODAS las hojas a la vez —cadenas data-URL de las capas, los <img> que las decodifican (Blink guarda
+// además otras copias de cada URL), los fotogramas de cada GIF/APNG, la copia limpia para la descarga offline…— y
+// nada se soltaba jamás, así que la memoria solo podía crecer hasta que el móvil mataba el proceso. En un PC sobra
+// memoria y no se nota. (Medido en el banco de pruebas con la memoria acotada, v41.67: una obra de 34 hojas llegaba a
+// ≈550 MB y el proceso moría nada más acabar de cargarla.)
+//
+// AHORA solo permanecen en memoria la hoja actual y sus vecinas: hasta _plLimits().ahead hojas por delante y
+// .behind por detrás (con preferencia hacia delante, el mismo orden que _plKey), dentro de un tope de bytes que depende
+// de la memoria del dispositivo (navigator.deviceMemory). Las demás se sueltan (_plEvict) y, si el lector vuelve a ellas,
+// se cargan otra vez igual que la primera (con su aviso «Cargando hoja N…»). De cada hoja soltada se conserva un
+// resumen de sus botones «ir a hoja» (panel._nav) y las reglas de navegación dirigida (_panelHasNavButton /
+// _panelIsJumpTarget) siguen viendo TODA la obra: las hojas lejanas se escanean una a una solo para eso (_plStartScan).
+// La descarga offline ya no necesita tenerlo todo cargado a la vez (_plCollectSources).
+// ══════════════════════════════════════════════════════════════════════════
+function _plWinActive() { return !_PL.forceAll && _PL_QS.get('rdwin') !== 'all'; }
+
+function _plLimits() {
+  const dm = Number(navigator.deviceMemory) || 0; // GB (0.25–8); Safari y Firefox no lo exponen
+  const q = k => { const s = _PL_QS.get(k); const v = (s == null || s === '') ? NaN : parseFloat(s); return (isFinite(v) && v >= 0) ? v : null; };
+  let ahead  = q('rdahead');  if (ahead  == null) ahead  = (dm && dm <= 1) ? 2 : (dm && dm <= 2) ? 3 : 4;
+  let behind = q('rdbehind'); if (behind == null) behind = (dm && dm <= 2) ? 1 : 2;
+  let mb     = q('rdmem');    if (mb     == null) mb     = dm ? Math.max(48, Math.min(256, dm * 40)) : 120;
+  // Con la pestaña oculta (otra app delante) se queda lo mínimo: un proceso ligero tiene menos posibilidades de que Android lo mate.
+  if (document.hidden) { ahead = Math.min(ahead, 1); behind = 0; }
+  return { ahead, behind, bytes: mb * 1048576 };
+}
+
+// Estimación (en bytes) de lo que ocupa una hoja preparada: cadenas grandes de sus capas (data URLs; Blink las copia
+// al decodificarlas), píxeles de sus imágenes y los fotogramas de sus GIF/APNG.
+function _plWeigh(panel) {
+  let str = 0, px = 0;
+  const walk = (v, d) => {
+    if (typeof v === 'string') { if (v.length > 256) str += v.length; return; }
+    if (v === null || typeof v !== 'object' || d > 8) return;
+    if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) walk(v[i], d + 1); return; }
+    const pr = Object.getPrototypeOf(v);
+    if (pr !== Object.prototype && pr !== null) return; // ImageData, <img>, canvas, arrays tipados…: se cuentan aparte
+    for (const k in v) walk(v[k], d + 1);
+  };
+  const frameBytes = fr => { let b = 0; if (Array.isArray(fr)) for (const f of fr) b += (f && f.imageData && f.imageData.data) ? f.imageData.data.length : 0; return b; };
+  for (const l of (panel.layers || [])) {
+    if (!l) continue;
+    walk(l, 0);
+    px += frameBytes(l._gifFrames) + frameBytes(l._animFrames);
+    if (Array.isArray(l.richLines)) for (const rl of l.richLines) if (rl) px += frameBytes(rl._animFrames);
+  }
+  for (const im of (panel.layerImgs || [])) {
+    if (!im) continue;
+    px += ((im.naturalWidth || im.width || 0) * (im.naturalHeight || im.height || 0)) * 4;
+  }
+  return str * 2 + px;
+}
+
+// Hojas que pueden estar en memoria ahora: por orden de prioridad (_plKey) mientras quepan en la ventana y en el tope de
+// bytes. Siempre la actual y, aunque pesen mucho, la siguiente y la anterior.
+function _plKeepSet() {
+  const cur = _plCursor(), L = _plLimits(), keep = new Set([cur]);
+  const cand = [];
+  for (let i = 0; i < RS.panels.length; i++) {
+    if (RS.panels[i].isCredits || i === cur) continue;
+    const d = i - cur;
+    if (d > L.ahead || -d > L.behind) continue;
+    cand.push(i);
+  }
+  cand.sort((a, b) => _plKey(a) - _plKey(b));
+  // Lo que pesa una hoja aún no cargada se estima con la media de las que ya lo están.
+  let sum = 0, nW = 0;
+  for (const p of RS.panels) { if (!p.isCredits && p._st === 'ready' && p._w) { sum += p._w; nW++; } }
+  const avg = nW ? sum / nW : 0;
+  const wOf = i => { const p = RS.panels[i]; return (p._st === 'ready' && p._w) ? p._w : avg; };
+  let bytes = (RS.panels[cur] && !RS.panels[cur].isCredits) ? wOf(cur) : 0;
+  for (const i of cand) {
+    const must = (i === cur + 1 && L.ahead >= 1) || (i === cur - 1 && L.behind >= 1);
+    const w = wOf(i);
+    if (!must && bytes + w > L.bytes) break;
+    keep.add(i); bytes += w;
+  }
+  return keep;
+}
+
+// Fija la ventana vigente (_PL.keep) y suelta las hojas que han quedado fuera de ella. Barato: se llama desde el
+// planificador (tras cada llegada y cada hoja lista). Nunca suelta la hoja que se está viendo ni una que se está
+// descargando/preparando (esas se sueltan al terminar, cuando el planificador vuelve a pasar).
+function _plEnforce() {
+  if (!_PL.on) return;
+  if (!_plWinActive()) { _PL.keep = null; return; }
+  const keep = _PL.keep = _plKeepSet();
+  for (let i = 0; i < RS.panels.length; i++) {
+    const p = RS.panels[i];
+    if (p.isCredits || keep.has(i) || i === RS.idx) continue;
+    if (p._st === 'ready' || (p._st === 'fetched' && !RS._srcResident)) _plEvict(p, i);
+  }
+  if (RS._scroll) _plSlides(keep);
+}
+
+// Modo scroll: cada hoja tiene su lienzo (pw×ph) dentro de su slide, y antes se quedaban todos reservados para siempre
+// (1,1 MB cada uno con el tamaño de hoja actual, más su capa de composición): con obras largas, cientos de MB sin que
+// nadie los viera. Los de las hojas que quedan fuera de la ventana (y no son contiguas a la actual) se encogen a 1×1 en
+// blanco —el slide conserva su tamaño en pantalla por CSS, así que al pasar rápido por él se ve una hoja en blanco, igual que
+// el marcador sin su texto— y recuperan su tamaño antes de que nada pinte en ellos (ver _render / _plSlideFitCtx).
+function _plSlideShrink(pi) {
+  const x = RS.panels[pi] && RS.panels[pi]._scrollCtx;
+  if (!x || (x.canvas.width === 1 && x.canvas.height === 1)) return;
+  x.canvas.width = 1; x.canvas.height = 1;
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, 1, 1);
+}
+function _plSlideFit(pi) { // → true si estaba encogido y se le ha devuelto su tamaño
+  const x = RS.panels[pi] && RS.panels[pi]._scrollCtx;
+  if (!x) return false;
+  const { pw, ph } = _panelDims(pi), c = x.canvas;
+  if (c.width === pw && c.height === ph) return false;
+  c.width = pw; c.height = ph;
+  return true;
+}
+function _plSlides(keep) {
+  for (let i = 0; i < RS.panels.length; i++) {
+    if (keep.has(i) || Math.abs(i - RS.idx) <= 1) {
+      if (!_plSlideFit(i)) continue;
+      // recién devuelto: se rellena con el marcador (o con la hoja, si ya está lista; esa espera un hueco sin interacción)
+      if (RS.panels[i]._st === 'ready') _plPreRender(i); else _plRenderSlide(i, 0);
+    } else _plSlideShrink(i);
+  }
+}
+// Un lienzo de slide encogido recupera su tamaño antes de pintar en él (cualquier camino que llegue a _render).
+function _plSlideFitCtx(ctx, pi) {
+  if (!RS._scroll || !ctx || !ctx.canvas) return;
+  const { pw, ph } = _panelDims(pi), c = ctx.canvas;
+  if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; }
+}
+
+// Imágenes de flujo de texto que usan las capas de esta hoja (clave de _tdImgCache).
+function _plRichSrcs(panel) {
+  const out = [];
+  for (const layer of (panel.layers || [])) {
+    if (!layer || !Array.isArray(layer.richLines)) continue;
+    for (const line of layer.richLines) if (line && line.kind === 'image' && line.src) out.push(line.src);
+  }
+  return out;
+}
+
+// Suelta todo lo pesado de una hoja (imágenes decodificadas, fotogramas, datos de las capas, copia limpia) y la deja
+// como si no se hubiera cargado nunca; se conserva solo su resumen de navegación (_nav). Si el lector vuelve a ella,
+// el planificador la trae otra vez.
+function _plEvict(panel, pi) {
+  const mine = _plRichSrcs(panel);
+  for (const im of (panel.layerImgs || [])) {
+    if (!im) continue;
+    if (im.tagName === 'IMG') { im.onload = im.onerror = null; try { im.removeAttribute('src'); } catch (_) {} }
+    else if (im.getContext) { try { im.width = 0; im.height = 0; } catch (_) {} } // lienzo de un GIF/APNG: libera ya su memoria
+  }
+  for (const l of (panel.layers || [])) {
+    if (!l) continue;
+    if (l._btnAlphaOc) { try { l._btnAlphaOc.width = 0; l._btnAlphaOc.height = 0; } catch (_) {} }
+  }
+  panel.layerImgs = [];
+  if (RS._srcResident) {
+    // Sesión con copia offline: los datos viven en RS._sourcePanels (no hay de dónde volver a pedirlos); la hoja
+    // vuelve a 'fetched' con capas limpias, listas para decodificarse de nuevo.
+    const src = RS._sourcePanels && RS._sourcePanels[pi];
+    panel.layers = _cloneJson((src && src.layers) || []);
+    panel.texts  = _cloneJson((src && src.texts)  || []);
+    panel._st = 'fetched';
+  } else {
+    panel.layers = []; panel.texts = []; panel._raw = null;
+    if (RS._sourcePanels) RS._sourcePanels[pi] = null;
+    // Miniatura de una hoja sin capas: se vuelve a pedir si hace falta (ver _plFetchRaw).
+    if (panel._row) delete panel._row.data_url;
+    delete panel.data_url;
+    panel._st = 'idle';
+  }
+  panel._tries = 0; panel._retryAt = 0; panel._w = 0;
+  RS._allLoadedAt = 0;
+  _PL.stats.evicted++;
+  if (mine.length) {
+    const still = new Set();
+    for (const q of RS.panels) for (const s of _plRichSrcs(q)) still.add(s);
+    for (const s of mine) if (!still.has(s)) delete _tdImgCache[s];
+  }
+}
 
 function _plSchedule() {
   if (_PL.scheduled || !_PL.on) return;
@@ -2220,6 +2444,7 @@ function _plSchedule() {
 
 function _plPump() {
   if (!_PL.on) return;
+  _plEnforce(); // v41.68: ventana de memoria — fija _PL.keep y suelta las hojas que han quedado fuera
   const now = Date.now();
   // 1) La hoja que se está viendo: prioridad absoluta, sin límites de carril.
   const cur = RS.panels[RS.idx];
@@ -2245,6 +2470,16 @@ function _plPump() {
         const why = _plBusy();
         if (why) { _plNotePause(why); _plArmBusyRetry(why); }
         else _plStartPrepare(p);
+      }
+    }
+    // Escaneo de botones «ir a hoja» de las hojas que quedan fuera de la ventana — solo con la ventana ya servida
+    // (nada descargándose ni esperando), el usuario quieto y el navegador libre; de una en una.
+    if (_PL.keep && !_PL.scanBusy && _PL.netActive === 0 && _PL.cpuActive === 0 && !_plBest('idle') && !_plBest('fetched')) {
+      const p = _plScanNext();
+      if (p) {
+        const why = _plBusy();
+        if (why) { _plNotePause(why); _plArmBusyRetry(why); }
+        else _plStartScan(p);
       }
     }
   }
@@ -2316,6 +2551,59 @@ function _plFail(panel, backTo, e) {
   if (_plIsCurrent(panel) && RS.ctx) _render();
 }
 
+// ── Escaneo de navegación (v41.68) ────────────────────────────────────────────
+// Las reglas de navegación dirigida miran los botones «ir a hoja» de TODA la obra (una hoja es «destino de un salto»
+// si un botón de cualquier otra apunta a ella — ver _panelIsJumpTarget). Con la ventana de memoria las hojas lejanas no
+// se cargan, así que su resumen (_nav) se obtiene aparte: se baja solo la columna layer_data de la hoja, se descomprime
+// cada capa y solo si su JSON menciona un botón se parsea; nada se decodifica ni se guarda salvo el resumen. Una hoja cada
+// vez, con la red y el navegador libres; no en dispositivos de ≤1 GB ni con el ahorro de datos activado.
+// (Hasta v41.67 esa misma información llegaba porque el segundo plano cargaba todas las hojas.)
+function _plScanNext() {
+  if (_PL_QS.get('rdscan') === '0') return null;
+  const dm = Number(navigator.deviceMemory) || 0;
+  if (dm && dm <= 1) return null;
+  try { if (navigator.connection && navigator.connection.saveData) return null; } catch (_) {}
+  let best = null, bk = Infinity; const now = Date.now();
+  for (let i = 0; i < RS.panels.length; i++) {
+    const p = RS.panels[i];
+    if (p.isCredits || p._nav || p._st !== 'idle' || (p._scanTries || 0) >= 3 || (p._scanAt || 0) > now) continue;
+    const k = _plKey(i);
+    if (k < bk) { bk = k; best = p; }
+  }
+  return best;
+}
+async function _plScanNav(panel) {
+  const rows = await RS._sbFetch('panel_layers?panel_id=eq.' + panel.id + '&order=layer_order.asc&select=layer_data');
+  const layers = [];
+  for (const r of (rows || [])) {
+    let s = null;
+    try { s = await _czDecompress(r.layer_data); } catch (_) { s = null; }
+    if (s && s.indexOf('"_buttonAction"') >= 0) {
+      try { const l = JSON.parse(s); if (l) layers.push({ _buttonAction: l._buttonAction }); } catch (_) {}
+    }
+    s = null;
+    await _plStep(panel);
+  }
+  return _plNavOf(layers);
+}
+async function _plStartScan(panel) {
+  _PL.scanBusy = true;
+  try {
+    const nav = await _plScanNav(panel);
+    if (!panel._nav) { panel._nav = nav; _plNavLearned(panel); } // si mientras tanto se cargó entera, ya tiene el resumen exacto
+    _PL.stats.scanned++;
+  } catch (e) {
+    panel._scanTries = (panel._scanTries || 0) + 1;
+    panel._scanAt = Date.now() + 4000 * panel._scanTries;
+    setTimeout(_plSchedule, 4000 * panel._scanTries + 50);
+  } finally { _PL.scanBusy = false; _plSchedule(); }
+}
+// Una hoja con botones «ir a hoja» acaba de conocerse (cargada o escaneada): en modo scroll, las hojas implicadas pasan
+// a detenerse siempre al hacer scroll rápido y el contenedor recalcula sus gestos permitidos.
+function _plNavLearned(panel) {
+  if (RS._scroll && panel._nav && panel._nav.btn) { _plRefreshSnapStops(); _updateContainerTouchAction(); }
+}
+
 // El lector ha llegado a una hoja (cualquier vía: avanzar, retroceder, saltar, scroll): si no está lista,
 // que se cargue ya — sin esperar a la cola ni a los reintentos pendientes. dir = sentido de llegada
 // ('fwd' | 'back'), que decide qué textos secuenciales quedan revelados cuando la hoja termine de cargar.
@@ -2323,7 +2611,7 @@ function _plOnArrive(idx, dir) {
   RS._arrDir = dir || 'fwd';
   if (_PL.arrIdx !== idx) { _PL.arrIdx = idx; _PL.arrivedAt = performance.now(); }
   const p = RS.panels[idx];
-  if (!p || p.isCredits || p._st === 'ready') return;
+  if (!p || p.isCredits || p._st === 'ready') { _plSchedule(); return; } // la ventana de memoria se desplaza con la hoja actual
   if (p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
   p._retryAt = 0;
   _plSchedule();
@@ -2399,19 +2687,36 @@ function _ensureGifLoop() {
   RS._gifLoopOn = true;
   requestAnimationFrame(_readerGifTick);
 }
+// ¿Tiene la hoja algo que el reloj de animaciones deba mover? (GIF/APNG/animación por instrucciones, trayectoria o
+// animaciones dentro de un flujo de texto — las mismas cosas que _readerGifTick avanza).
 function _plHasAnimated(panel) {
-  return (panel.layers || []).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2));
+  return !!panel && (panel.layers || []).some(l => l && (l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2) ||
+    (Array.isArray(l.richLines) && l.richLines.some(rl => rl && rl._animReady))));
+}
+
+// Hojas cuyas animaciones hay que mover estando en la hoja idx: solo la actual — en modo scroll, además sus contiguas
+// MIENTRAS se desliza (con un gesto en curso o el scroll con inercia aún moviéndose: es cuando asoman). En reposo una hoja
+// contigua no se ve, y mantener su animación en marcha costaba un reloj a 60 fps, ~10 repintados y ~230 drawImage por
+// segundo en un lienzo fuera de pantalla, sin que nadie lo viera.
+function _plTickRange(idx) {
+  const peek = !!RS._scroll && (_PL.ptrDown > 0 || performance.now() < _PL.scrollUntil + 300);
+  return [Math.max(0, peek ? idx - 1 : idx), Math.min(RS.panels.length - 1, peek ? idx + 1 : idx)];
+}
+// ¿Hay algo que animar entre lo que se puede ver estando en la hoja idx?
+function _plVisibleAnimated(idx) {
+  const r = _plTickRange(idx);
+  for (let k = r[0]; k <= r[1]; k++) if (_plHasAnimated(RS.panels[k])) return true;
+  return false;
 }
 
 // Una hoja de segundo plano (o la que se esperaba) acaba de quedar lista.
 function _plOnReady(panel) {
   const pi = RS.panels.indexOf(panel);
-  if (_plHasAnimated(panel)) _ensureGifLoop();
+  if (_plHasAnimated(panel) && _plVisibleAnimated(RS.idx)) _ensureGifLoop(); // v41.68: una hoja animada lejana no pone en marcha el reloj
   const scroll = RS._scroll;
   // Botones «ir a hoja» de la hoja recién cargada: si hay alguno, el destino de ese salto (y esta misma
   // hoja) quedan con scroll-snap-stop forzoso y la hoja actual puede pasar a ser destino de salto.
-  const hasPageBtn = (panel.layers || []).some(l => l && l._buttonAction && l._buttonAction.type === 'page');
-  if (scroll && hasPageBtn) { _plRefreshSnapStops(); _updateContainerTouchAction(); }
+  _plNavLearned(panel);
   if (pi === RS.idx) {
     // Es la hoja que se está viendo (el usuario esperaba): se completa la llegada que no pudo hacerse sin
     // sus datos — textos revelados según el sentido, animaciones desde el principio y primer dibujado.
@@ -2438,19 +2743,26 @@ function _plRefreshSnapStops() {
   });
 }
 
+function _plAllReady() {
+  for (const p of RS.panels) { if (!p.isCredits && p._st !== 'ready') return false; }
+  return true;
+}
+// RS._allLoadedAt = instante en que estuvieron listas todas a la vez (con la ventana de memoria de v41.68 solo ocurre
+// en obras que caben en ella, con ?rdwin=all o durante _plEnsureAll; al soltar una hoja vuelve a 0).
 function _plCheckAllLoaded() {
-  if (RS._allLoadedAt) return;
-  for (const p of RS.panels) { if (!p.isCredits && p._st !== 'ready') return; }
-  RS._allLoadedAt = Math.round(performance.now());
+  if (!_plAllReady()) return;
+  if (!RS._allLoadedAt) RS._allLoadedAt = Math.round(performance.now());
   const w = _PL.allWaiters.splice(0);
   w.forEach(fn => fn(true));
 }
 
-// Espera a tener TODAS las hojas listas (descarga offline): sin pausas por interacción, con más descargas
+// Espera a tener TODAS las hojas listas a la vez: sin ventana de memoria, sin pausas por interacción y con más descargas
 // a la vez. Resuelve false si no se consigue en el plazo (hoja que no se puede traer).
+// OJO (v41.68): ya no la usa la descarga offline (_plCollectSources trae solo lo que falta, sin decodificar) — traerlo
+// todo a «lista» es justo lo que agota la memoria de un móvil. Se conserva para pruebas.
 function _plEnsureAll(timeoutMs) {
-  if (RS._allLoadedAt) return Promise.resolve(true);
-  _PL.forceAll = true; _PL.netMax = 4; _PL.bg = true;
+  if (_plAllReady()) return Promise.resolve(true);
+  _PL.forceAll = true; _PL.netMax = 4; _PL.bg = true; _PL.keep = null;
   for (const p of RS.panels) {
     if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
     if (!p.isCredits && p._st !== 'ready') p._retryAt = 0;
@@ -2463,13 +2775,60 @@ function _plEnsureAll(timeoutMs) {
   }).finally(() => { _PL.forceAll = false; _PL.netMax = 3; });
 }
 
+// Copias limpias de TODAS las hojas para la descarga offline (v41.68). Las hojas que están en memoria ya tienen la suya
+// (RS._sourcePanels[i]); las que se soltaron o nunca se cargaron se bajan y se parsean aquí, SIN decodificar ninguna
+// imagen y sin dejarlas en memoria al terminar — antes (v41.52, _plEnsureAll) la descarga lo traía todo a «lista» a la
+// vez, que es justo lo que agota la memoria de un móvil. Devuelve el array de copias (índice = hoja) o null si alguna
+// no se pudo traer en el plazo.
+async function _plCollectOne(i) {
+  const real = RS.panels[i];
+  for (let k = 0; ; k++) {
+    // Hoja «de usar y tirar»: comparte la fila (_row) con la real pero no entra en RS.panels.
+    const tmp = { id: real.id, orientation: real.orientation, text_mode: real.text_mode, _row: real._row, layers: [], texts: [], layerImgs: [], _raw: null, _turbo: true };
+    try {
+      await _plFetchRaw(tmp);
+      await _plParse(tmp, i); // deja la copia limpia en RS._sourcePanels[i]
+      const src = RS._sourcePanels[i];
+      if (real._st !== 'ready' && real._st !== 'preparing') {
+        // La hoja real no está en memoria: no se deja nada colgando (ni la copia ni la miniatura de una hoja sin capas).
+        if (RS._sourcePanels[i] === src) RS._sourcePanels[i] = null;
+        if (real._row) delete real._row.data_url;
+      }
+      return src;
+    } catch (e) {
+      if (k >= 2) return null;
+      await _plSleep(600 * (k + 1));
+    }
+  }
+}
+async function _plCollectSources() {
+  const n = RS._sourcePanels ? RS._sourcePanels.length : 0;
+  const out = new Array(n).fill(null), need = [];
+  for (let i = 0; i < n; i++) { if (RS._sourcePanels[i]) out[i] = RS._sourcePanels[i]; else need.push(i); }
+  let next = 0, failed = false;
+  const deadline = Date.now() + 180000;
+  const worker = async () => {
+    while (!failed) {
+      const j = next++;
+      if (j >= need.length) return;
+      if (Date.now() > deadline) { failed = true; return; }
+      const src = await _plCollectOne(need[j]);
+      if (!src) { failed = true; return; }
+      out[need[j]] = src;
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  if (failed || out.some(p => !p)) return null;
+  return out;
+}
+
 // Detecta interacción del usuario para no competir con ella (ver _plBusy).
 function _plWatchInput() {
   if (_PL.watching) return;
   _PL.watching = true;
   const mark = () => { _PL.lastInput = performance.now(); };
   const o = { capture: true, passive: true };
-  window.addEventListener('pointerdown',   () => { _PL.ptrDown++; mark(); }, o);
+  window.addEventListener('pointerdown',   () => { _PL.ptrDown++; mark(); if (RS._scroll) _ensureGifLoop(); }, o);
   const up = () => { _PL.ptrDown = Math.max(0, _PL.ptrDown - 1); mark(); };
   window.addEventListener('pointerup', up, o);
   window.addEventListener('pointercancel', up, o);
@@ -2478,9 +2837,10 @@ function _plWatchInput() {
   window.addEventListener('wheel',      mark, o);
   window.addEventListener('keydown',    mark, o);
   // Un scroll (nativo, con inercia y scroll-snap) mantiene a raya el trabajo de fondo mientras dura.
-  window.addEventListener('scroll', () => { const t = performance.now(); _PL.scrollUntil = t + 250; _PL.lastScroll = t; }, o);
-  // Al volver a la pestaña, el segundo plano sigue sin esperar al temporizador.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) _plSchedule(); });
+  window.addEventListener('scroll', () => { const t = performance.now(); _PL.scrollUntil = t + 250; _PL.lastScroll = t; if (RS._scroll) _ensureGifLoop(); }, o);
+  // Al volver a la pestaña, el segundo plano sigue sin esperar al temporizador; al ocultarla, la ventana de memoria
+  // se encoge (ver _plLimits) para que Android tenga menos motivos para matar el proceso en segundo plano.
+  document.addEventListener('visibilitychange', () => { _plSchedule(); });
   // Al volver la red, las hojas rendidas se reintentan.
   window.addEventListener('online', () => {
     for (const p of RS.panels) { if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; p._retryAt = 0; } }
@@ -2495,6 +2855,106 @@ function _plStartBackground() {
   _plCheckAllLoaded(); // obra de una sola hoja
   // Breve calentamiento: que el primer dibujado y los gestos iniciales no compitan con las primeras respuestas.
   setTimeout(() => { _PL.bg = true; _plSchedule(); }, 250);
+  try { _frStart(); } catch (e) { console.warn('[reader] registro de vuelo:', e); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// REGISTRO DE VUELO (v41.68)
+//
+// Un cierre de la página por falta de memoria (el «se ha producido un error al mostrar esta web» de Chrome) no deja
+// ninguna huella: no hay excepción, ni evento, ni consola. Para poder ver qué pasaba justo antes si volviera a ocurrir,
+// el lector apunta cada pocos segundos —en el propio dispositivo (localStorage), sin enviar nada a ningún sitio— cuántas
+// hojas tiene en memoria y cuáles, su peso estimado, la memoria de JavaScript (donde el navegador la da), la hoja que se
+// ve y si la pestaña estaba visible. Al cerrar con normalidad (pagehide) se marca la sesión como terminada; si al abrir
+// de nuevo la anterior NO está marcada, terminó de forma inesperada y sus últimas muestras dicen cómo estaba.
+// Se ve añadiendo ?diag=1 al enlace del lector (queda activado en ese dispositivo; ?diag=0 lo quita).
+// ══════════════════════════════════════════════════════════════════════════
+const _FR_KEY = 'cx_rd_flight', _FR_MAX = 36, _FR_EVERY = 5000;
+const _FR = { rec: null, prev: null, timer: null, on: false, box: null, boxTimer: null };
+
+function _frSample(tag) {
+  const m = performance.memory; // solo Chrome/Android
+  let w = 0; const res = [];
+  RS.panels.forEach((p, i) => { if (!p.isCredits && p._st === 'ready') { res.push(i + 1); w += p._w || 0; } });
+  return {
+    t: Math.round(performance.now() / 1000), tag: tag || '',
+    heap: m ? Math.round(m.usedJSHeapSize / 1048576) : null, tot: m ? Math.round(m.totalJSHeapSize / 1048576) : null,
+    idx: (RS.idx || 0) + 1, n: RS.panels.filter(p => !p.isCredits).length,
+    res: res.join(','), w: Math.round(w / 1048576), ev: _PL.stats.evicted, sc: _PL.stats.scanned, vis: document.hidden ? 'h' : 'v',
+  };
+}
+function _frPush(tag) {
+  const r = _FR.rec; if (!r) return;
+  r.samples.push(_frSample(tag)); if (r.samples.length > _FR_MAX) r.samples.shift();
+  r.last = Date.now();
+  try { localStorage.setItem(_FR_KEY, JSON.stringify(r)); } catch (_) {}
+}
+function _frStart() {
+  if (_FR.on) return; _FR.on = true;
+  try { const s = localStorage.getItem(_FR_KEY); _FR.prev = s ? JSON.parse(s) : null; } catch (_) { _FR.prev = null; }
+  _FR.rec = { v: 1, sid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), start: Date.now(), work: RS._workId || '',
+    mode: RS.navMode || 'fixed', dm: navigator.deviceMemory || null, dpr: window.devicePixelRatio || 1,
+    scr: [window.innerWidth, window.innerHeight], lim: (() => { const l = _plLimits(); return [l.ahead, l.behind, Math.round(l.bytes / 1048576)]; })(),
+    clean: false, last: Date.now(), samples: [] };
+  _frPush('start');
+  _FR.timer = setInterval(() => _frPush(''), _FR_EVERY);
+  document.addEventListener('visibilitychange', () => _frPush(document.hidden ? 'hide' : 'show'));
+  window.addEventListener('pagehide', () => { if (_FR.rec) { _FR.rec.clean = true; _frPush('end'); } });
+  window.addEventListener('pageshow', e => { if (_FR.rec && e.persisted) { _FR.rec.clean = false; _frPush('restore'); } });
+  if (_frDiagWanted()) _frDiagOpen();
+}
+function _frDiagWanted() {
+  const q = _PL_QS.get('diag');
+  try {
+    if (q === '1') { localStorage.setItem('cx_rd_diag', '1'); return true; }
+    if (q === '0') { localStorage.removeItem('cx_rd_diag'); return false; }
+    return localStorage.getItem('cx_rd_diag') === '1';
+  } catch (_) { return q === '1'; }
+}
+function _frFmt(s) {
+  return s.t + 's ' + s.vis + ' hoja ' + s.idx + '/' + s.n + ' en memoria [' + s.res + '] ≈' + s.w + 'MB · JS ' +
+    (s.heap == null ? '-' : s.heap + '/' + s.tot + 'MB') + ' · soltadas ' + s.ev + ' · escaneadas ' + s.sc + (s.tag ? ' (' + s.tag + ')' : '');
+}
+function _frReport() {
+  const out = [];
+  const head = r => 'obra ' + r.work + ' · modo ' + r.mode + ' · RAM ' + (r.dm || '?') + 'GB · DPR ' + r.dpr + ' · pantalla ' + r.scr.join('x') +
+    ' · ventana (delante/detrás/MB) ' + (r.lim || []).join('/');
+  out.push('— ' + I18n.t('reader_diagNow') + ' — ' + head(_FR.rec));
+  _FR.rec.samples.slice(-8).forEach(s => out.push(_frFmt(s)));
+  const p = _FR.prev;
+  if (p && p.samples) {
+    const age = Math.round((_FR.rec.start - p.last) / 1000);
+    out.push('— ' + I18n.t('reader_diagPrev') + ' (' + (p.clean ? I18n.t('reader_diagPrevClean') : I18n.t('reader_diagPrevAbnormal')) + ', hace ' + age + ' s del último dato) — ' + head(p));
+    p.samples.slice(-10).forEach(s => out.push(_frFmt(s)));
+  }
+  return out.join('\n');
+}
+function _frDiagOpen() {
+  if (_FR.box || !document.body) return;
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:6px;right:6px;top:6px;z-index:100000;max-height:42vh;overflow:auto;background:rgba(0,0,0,.82);color:#bff7b0;' +
+    'font:10px/1.35 monospace;padding:6px 8px;border-radius:8px;white-space:pre-wrap;word-break:break-word;pointer-events:auto;touch-action:pan-y;';
+  const pre = document.createElement('div');
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-bottom:4px;position:sticky;top:0;';
+  const mk = (txt, fn) => { const b = document.createElement('button'); b.textContent = txt; b.style.cssText = 'font:11px sans-serif;padding:3px 10px;border-radius:6px;border:1px solid #888;background:#222;color:#fff;'; b.addEventListener('click', e => { e.stopPropagation(); fn(b); }); b.addEventListener('touchend', e => e.stopPropagation(), { passive: true }); b.addEventListener('pointerdown', e => e.stopPropagation()); return b; };
+  const title = document.createElement('span'); title.textContent = I18n.t('reader_diagTitle'); title.style.cssText = 'flex:1;color:#fff;font:bold 11px sans-serif;align-self:center;';
+  bar.append(title,
+    mk(I18n.t('reader_diagCopy'), b => { const t = _frReport(); const done = () => { b.textContent = I18n.t('reader_diagCopied'); setTimeout(() => { b.textContent = I18n.t('reader_diagCopy'); }, 1500); }; try { navigator.clipboard.writeText(t).then(done, done); } catch (_) { done(); } }),
+    mk(I18n.t('reader_closeLabel'), () => _frDiagClose()));
+  box.append(bar, pre);
+  ['pointerdown', 'touchstart', 'touchmove', 'wheel', 'click'].forEach(ev => box.addEventListener(ev, e => e.stopPropagation(), { passive: true }));
+  document.body.appendChild(box);
+  _FR.box = box;
+  const upd = () => { try { pre.textContent = _frReport(); } catch (_) {} };
+  upd(); _FR.boxTimer = setInterval(upd, 1000);
+}
+function _frDiagClose() {
+  if (_FR.boxTimer) clearInterval(_FR.boxTimer);
+  _FR.boxTimer = null;
+  if (_FR.box) _FR.box.remove();
+  _FR.box = null;
+  try { localStorage.removeItem('cx_rd_diag'); } catch (_) {}
 }
 
 // Arranque común de loadWork/loadDraft/copia offline: la hoja 1 «ya» (y logo/icono de créditos), con la
@@ -2525,6 +2985,7 @@ async function _plBootOffline(snapshotPanels) {
   RS.images = [];
   RS.panels = snapshotPanels.map(_plSkeletonFromData);
   RS._sourcePanels = snapshotPanels; // copia limpia: _plSkeletonFromData clona las capas, esta no se toca
+  RS._srcResident = true;            // v41.68: los datos de todas las hojas ya están aquí — al soltar una hoja se vuelve a clonar de esta copia (ver _plEvict)
   _plAddCredits();
   await _plBootFirst();
 }
@@ -2798,7 +3259,15 @@ function _animTickOne(layer, now){
 // ── Animación GIF en el reproductor ─────────────────────────────────────────
 function _readerGifTick() {
   const now = Date.now();
+  // v41.68 — solo se anima lo que se puede ver: la hoja actual y, en modo scroll y mientras se desliza, sus contiguas (que asoman). Antes se avanzaban y repintaban las animaciones de TODAS las hojas ya visitadas aunque no se vieran
+  // (trabajo y memoria de lienzo gastados cada fotograma). Si lo visible no tiene nada que animar, el reloj se detiene
+  // y vuelve a arrancar solo al llegar a una hoja con animaciones (_resetPanelAnims / _plOnReady → _ensureGifLoop).
+  const _tr = _plTickRange(RS.idx), _tLo = _tr[0], _tHi = _tr[1];
+  let _tLive = false;
+  for (let k = _tLo; k <= _tHi; k++) { if (_plHasAnimated(RS.panels[k])) { _tLive = true; break; } }
+  if (!_tLive) { RS._gifLoopOn = false; return; }
   RS.panels.forEach((panel, pi) => {
+    if (pi < _tLo || pi > _tHi) return;
     let panelChanged = false;
     (panel.layers || []).forEach(layer => {
       // GIF importado (el ticker se suspende si el motion path con ciclos controla el frame)
@@ -3152,7 +3621,7 @@ function startReader() {
   // Arrancar loop de animación GIF si hay alguno en las hojas ya cargadas — con la carga progresiva
   // (v41.52) en este punto solo está lista la hoja 1; las hojas que se cargan después arrancan el
   // reloj por su cuenta si traen animaciones (_plOnReady → _ensureGifLoop).
-  const _hasGifs = RS.panels.some(p => (p.layers||[]).some(l => l._gifReady || l._animReady || (l._motionPath && l._motionPath.length >= 2)));
+  const _hasGifs = RS.panels.some(p => _plHasAnimated(p));
   if (_hasGifs) {
     _resetPanelAnims(0); // inicializar animaciones del primer panel
     _ensureGifLoop();
@@ -3214,6 +3683,9 @@ function _startScrollReader() {
 
   // ── Construir slides: uno por panel ──
   const _canvases = [];
+  // v41.68: solo las hojas cercanas a la primera tienen su lienzo a tamaño real; el resto nace encogido (ver _plSlideShrink)
+  const _L0 = _plWinActive() ? _plLimits() : null;
+  const _full0 = pi => !_L0 || pi <= _L0.ahead + 1;
 
   RS.panels.forEach((panel, pi) => {
     const { pw, ph } = _panelDims(pi);
@@ -3241,8 +3713,8 @@ function _startScrollReader() {
     if (_panelHasNavButton(panel) || _panelIsJumpTarget(pi)) slide.style.scrollSnapStop = 'always';
 
     const canvas = document.createElement('canvas');
-    canvas.width  = pw;
-    canvas.height = ph;
+    canvas.width  = _full0(pi) ? pw : 1;
+    canvas.height = _full0(pi) ? ph : 1;
     canvas.style.width  = Math.round(pw * scale) + 'px';
     canvas.style.height = Math.round(ph * scale) + 'px';
     canvas.style.pointerEvents = 'none';
@@ -3252,6 +3724,7 @@ function _startScrollReader() {
     _canvases.push(canvas);
     // Guardar ctx para que _readerGifTick pueda redibujar en modo scroll
     RS.panels[pi]._scrollCtx = canvas.getContext('2d');
+    if (!_full0(pi)) { RS.panels[pi]._scrollCtx.fillStyle = '#ffffff'; RS.panels[pi]._scrollCtx.fillRect(0, 0, 1, 1); }
   });
 
   // ── Overlay: intercepta toques cuando hay textos pendientes ──
@@ -3294,7 +3767,7 @@ function _startScrollReader() {
   // Las demás hojas enseñan «Cargando hoja N…» (y la hoja de créditos se pinta ya) hasta que el
   // planificador de carga las va trayendo; al quedar lista, cada una se pinta sola (_plOnReady).
   // Antes se dibujaban aquí TODAS las hojas, tras esperar a las fuentes de toda la obra.
-  RS.panels.forEach((panel, pi) => { if (pi !== 0) _plRenderSlide(pi, 0); });
+  RS.panels.forEach((panel, pi) => { if (pi !== 0 && _full0(pi)) _plRenderSlide(pi, 0); });
   // Panel 0 con el primer texto visible (igual que el visor del editor)
   RS.idx      = 0;
   RS.textStep = _initTextStep(0);
@@ -4287,7 +4760,7 @@ async function _setupOfflineBtn() {
   btn.classList.remove('hidden');
 
   const _refreshState = async () => {
-    const has = await _offlineLoad(RS._workId);
+    const has = await _offlineHas(RS._workId);
     btn.textContent = has ? '\u2713' : '\u2B07'; // ✓ : ⬇
     btn.classList.toggle('offline-dl-saved', !!has);
     btn.title = has
@@ -4367,6 +4840,7 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+  _plSlideFitCtx(RS.ctx, RS.idx); // v41.68: lienzo de slide encogido (hoja lejana, modo scroll) → recupera su tamaño
 
   // Mantener el contador de hoja (botón inferior izquierdo + barra, si está
   // abierta) siempre al día, sea cual sea la vía de navegación (swipe,
@@ -4983,6 +5457,9 @@ function _rMpDelayMs(layer, layers) {
 function _resetPanelAnims(idx) {
   const panel = RS.panels[idx];
   if (!panel) return;
+  // v41.68: el reloj se detiene si lo visible no anima nada — aquí se reanuda (si la hoja a la que se llega o, en modo scroll,
+  // alguna de sus contiguas, que asoman al deslizar, tiene animaciones).
+  if (_plVisibleAnimated(idx)) _ensureGifLoop();
   (panel.layers || []).forEach(layer => {
     if (layer._gifReady) {
       layer._gifIdx      = 0;
@@ -5209,7 +5686,9 @@ function _navGoToPanelLocked(idx) {
 // ofrece una salida real dentro del lector, así que su sola presencia no
 // debe dejar al lector atrapado sin más forma de avanzar/retroceder.
 function _panelHasNavButton(panel) {
-  if (!panel || !panel.layers) return false;
+  if (!panel) return false;
+  if (panel._nav) return panel._nav.btn; // v41.68: resumen que sobrevive a que la hoja se suelte de memoria (ver _plEvict)
+  if (!panel.layers) return false;
   return panel.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page');
 }
 
@@ -5225,9 +5704,10 @@ function _panelHasNavButton(panel) {
 // que mantener sincronizada al crear/editar/borrar botones, así que
 // funciona automáticamente con cualquier cambio guardado desde el editor.
 function _panelIsJumpTarget(idx) {
-  return RS.panels.some(p => p && p.layers && p.layers.some(
-    l => l && l._buttonAction && l._buttonAction.type === 'page' && l._buttonAction.pageIdx === idx
-  ));
+  // v41.68: con el resumen _nav de cada hoja (cargada o escaneada, ver _plScanNav); sin él, mirando sus capas.
+  return RS.panels.some(p => p && (p._nav
+    ? p._nav.targets.indexOf(idx) >= 0
+    : (p.layers && p.layers.some(l => l && l._buttonAction && l._buttonAction.type === 'page' && l._buttonAction.pageIdx === idx))));
 }
 
 // Fija el touch-action del contenedor de scroll según el sentido que la
