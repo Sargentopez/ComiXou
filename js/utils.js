@@ -707,6 +707,10 @@ let _cxLoadOverlayTimer    = null;
 let _cxLoadOverlaySecs     = 0;
 let _cxLoadOverlaySafety   = null;
 let _cxLoadOverlayOnCancel = null; // callback vigente del botón Cancelar (null = sin botón)
+// v41.69 — hora (Date.now) del último progreso REAL anotado (ver _cxLoadOverlayPoke) y tiempo sin ningún progreso
+// tras el cual la carga se da por colgada. «let» (no const) a propósito: las pruebas lo acortan.
+let _cxLoadOverlayLastProgress = 0;
+let _CX_LOAD_STALL_MS = 25000;
 
 // title: texto del overlay. onCancel (opcional, v40.09): si se pasa una
 // función, muestra un botón Cancelar que la ejecuta al tocarlo — para
@@ -780,12 +784,45 @@ function _cxLoadOverlayShow(title, onCancel) {
 // trabajo) reinicia este mismo plazo desde aquí — el aviso de "tardando más"
 // pasa a significar "25s SIN ningún progreso nuevo", no "25s en total desde
 // que empezó", que es lo que de verdad hace falta saber.
+//
+// v41.69 — Alberto (Android): al abrir una obra pesada con descarga lenta pero constante, el contador se cerraba
+// solo con el aviso de «tardando más de lo normal» y poco después la obra se abría bien. Causa: la descarga de la obra
+// (varias peticiones grandes) y la carga posterior del editor no avisaban de NINGÚN progreso, así que los 25 s corrían
+// desde el último aviso de título —antes de empezar a descargar— y se agotaban con la descarga avanzando con normalidad
+// (y además dejaban la app sin bloquear mientras la carga seguía, que es justo lo que el contador debe impedir).
+// Ahora el plazo mide de verdad «sin ningún progreso»:
+//   · quien trabaja avisa con _cxLoadOverlayPoke() (cada trozo de descarga que llega, cada capa procesada…);
+//   · si el temporizador llega MUY tarde es que el hilo principal estaba ocupado (decodificando/montando una obra
+//     pesada en un móvil lento): eso es trabajo en marcha, no un cuelgue, y cuenta como progreso;
+//   · solo si pasan 25 s sin trozos de descarga, sin avisos y con el hilo libre se da por colgado (como siempre).
 function _cxLoadOverlayArmSafety() {
   clearTimeout(_cxLoadOverlaySafety);
+  _cxLoadOverlayLastProgress = Date.now();
+  _cxLoadOverlayWatch(_CX_LOAD_STALL_MS);
+}
+
+function _cxLoadOverlayWatch(wait) {
+  const due = Date.now() + wait;
   _cxLoadOverlaySafety = setTimeout(() => {
+    const now = Date.now();
+    if (now - due > 1500) _cxLoadOverlayLastProgress = now; // hilo principal ocupado (o app en segundo plano): sigue vivo
+    const idle = now - _cxLoadOverlayLastProgress;
+    if (idle < _CX_LOAD_STALL_MS) { _cxLoadOverlayWatch(_CX_LOAD_STALL_MS - idle + 50); return; } // hubo progreso: esperar lo que falte
     _cxLoadOverlayHide();
     if (typeof showToast === 'function') showToast(I18n.t('loadingSlowWarn'));
-  }, 25000);
+  }, wait);
+}
+
+// Progreso real sin cambiar el título (barato: solo anota la hora). Lo llaman las descargas (cada trozo recibido) y
+// los procesos largos entre un aviso de título y el siguiente.
+function _cxLoadOverlayPoke() {
+  _cxLoadOverlayLastProgress = Date.now();
+}
+
+// ¿Está el contador bloqueante en pantalla? Las descargas solo leen por trozos (para poder avisar de progreso) mientras lo está.
+function _cxLoadOverlayActive() {
+  const ov = document.getElementById('_cxLoadOverlay');
+  return !!ov && ov.style.display !== 'none';
 }
 
 function _cxLoadOverlayUpdate(title) {

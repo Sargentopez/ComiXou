@@ -795,9 +795,15 @@ async function _mcResolveBiblioteca(comicToEdit) {
 
     if (cloudItems > 0) {
       const _bibIdbW = [];
+      // v41.72 — orientación de origen de las animaciones: las filas que subieron versiones anteriores no la traen. Si la copia
+      // LOCAL (la que este espejo va a sustituir) sí la tiene para ese mismo objeto, se conserva en vez de perderla para siempre.
+      const _localOri = new Map();
+      (localBib?.folders || []).forEach(f => (f.items || []).forEach(it => { if (it && it.isGifAnim && it.orientation) _localOri.set(it.id, it.orientation); }));
+      let _oriMerged = 0;
       const cleanFolders = cloudBib.folders.map(cf => ({
         ...cf,
         items: cf.items.map(item => {
+          if (item.isGifAnim && !item.orientation && _localOri.has(item.id)) { item.orientation = _localOri.get(item.id); _oriMerged++; }
           if (item.isGifAnim && item.apngSrc) {
             const _uid = _mcSessionUid();
             const _k = _uid + '__bib_' + item.id;
@@ -818,6 +824,7 @@ async function _mcResolveBiblioteca(comicToEdit) {
       else if (window._bibSave) await window._bibSave(_toSave);
       else { try { localStorage.setItem(_bibKey, JSON.stringify(_toSave)); } catch(e) {} }
       result.action = 'overwritten_from_cloud';
+      if (_oriMerged) result.orientMerged = _oriMerged; // lo local ya NO es idéntico a la nube (ver _edBibNoteMirroredSync)
     } else if (localItems === 0) {
       // Ambos vacíos — dejar un scaffold vacío limpio
       const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }], _localModifiedAt: 0 };
@@ -1252,6 +1259,10 @@ async function _mcOpenWorkForEdit(id) {
   // que antes solo avisaba de la descarga de la nube — ahora cubre TODA la
   // apertura, incluidas las obras que no necesitan descargarse.
   if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
+  // v41.69: cada etapa que termina (lectura de la obra, descarga, escrituras, biblioteca…) anota «progreso real» al
+  // contador: su red de seguridad (utils.js, _cxLoadOverlayArmSafety) solo da la carga por colgada tras 25 s SIN
+  // progreso; antes se agotaba durante aperturas lentas pero sanas (móvil con obra pesada y descarga lenta).
+  const _pk = () => { if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); };
   const _comicMeta = WorkStore.getById(id);
   if (!_comicMeta || !_mcOwns(_comicMeta)) {
     window._mcEditLock = false;
@@ -1261,6 +1272,7 @@ async function _mcOpenWorkForEdit(id) {
   const comicToEdit = WorkStore.getByIdFull
     ? (await WorkStore.getByIdFull(id))
     : WorkStore.getById(id);
+  _pk();
   // Si es cloudOnly (descargada de la nube sin editorData local), descargar primero.
   // También re-descargar si hay strokes en formato antiguo (sin x/y/width/height) —
   // esos strokes se renderizan incorrectamente con las versiones nuevas del editor.
@@ -1293,6 +1305,7 @@ async function _mcOpenWorkForEdit(id) {
     const _asRead = (typeof _edAutosaveRead === 'function') ? await _edAutosaveRead(id) : null;
     if (_asRead && _asRead.pages && _asRead.pages.length && _asRead.ts) _asPending = _asRead;
   } catch(_e) { /* sin acceso al autoguardado: se sigue como si no hubiera temporal */ }
+  _pk();
 
   const _hasLocalVersion = !!(comicToEdit.editorData?.pages?.length);
   let _cloudRow = null;         // fila `works` de la nube (null si la obra no existe allí)
@@ -1409,7 +1422,8 @@ async function _mcOpenWorkForEdit(id) {
       // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
       // conflictos con otras conexiones abiertas a cxAnims
       const _animIdbSave = (key, data) =>
-        window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve();
+        (window._sbAnimIdbSave ? window._sbAnimIdbSave(key, data).catch(() => {}) : Promise.resolve())
+          .then(_pk); // v41.69: cada animación escrita en IndexedDB = progreso para el contador de carga
       const _idbWrites = [];
       const _edataClean = {
         ...editorData,
@@ -1467,6 +1481,7 @@ async function _mcOpenWorkForEdit(id) {
       };
       // Esperar a que todos los writes de IDB terminen ANTES de abrir el editor
       if (_idbWrites.length) await Promise.all(_idbWrites);
+      _pk();
       // v40.45: las muestras de color de la obra (editorData._palette) solo se
       // guardan en local — la nube aún no las lleva. Al sustituir editorData por
       // lo descargado hay que conservarlas, o las muestras volverían a las de
@@ -1510,6 +1525,7 @@ async function _mcOpenWorkForEdit(id) {
         // cuando de verdad no hay nada más reciente que recuperar.
         localSavedAt: work.updated_at || new Date().toISOString(),
       });
+      _pk();
       // v40.49: revisión de la nube en la que se basa lo recién descargado
       // (ver WorkStore.getCloudRev): la próxima vez, si sigue igual, no ha
       // guardado nadie más y se puede abrir lo local con seguridad.
@@ -1536,6 +1552,7 @@ async function _mcOpenWorkForEdit(id) {
         }
       } catch(e) {}
       window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+      _pk();
       window._mcLastEditDecision.bib.branch = 'needsDownload';
     } catch(err) {
       window._mcEditLock = false;
@@ -1553,6 +1570,7 @@ async function _mcOpenWorkForEdit(id) {
       window._mcLastEditDecision.bib = { action: 'skipped_cloud_unreachable', branch: 'cloudUnreachable' };
     } else {
       window._mcLastEditDecision.bib = await _mcResolveBiblioteca(comicToEdit);
+      _pk();
       window._mcLastEditDecision.bib.branch = 'notNeedsDownload';
     }
   }

@@ -78,7 +78,34 @@ const WorkStore = (() => {
     // metadatos nunca llegaron a escribirse de verdad.
     if (c.coverDataUrl) c._hasCoverDataUrl = true;
     delete c.coverDataUrl;
+    // v41.69 — localEditorData = copia de la versión local anterior (botón «Recuperar versión del dispositivo»),
+    // que «Editar» deja al descargar la nube sobre una copia local (my-works.js, _mcOpenWorkForEdit). Esa copia
+    // viaja en ESTE índice de localStorage, que tiene ~5 M de caracteres para TODAS las obras: con una obra pesada
+    // (decenas de MB) el índice entero superaba la cuota, no se guardaba NADA de ese guardado (ni cloudOnly, ni
+    // localSavedAt, ni el título…) y salía el aviso «Sin espacio: reduce el tamaño de las imágenes o elimina
+    // páginas» justo antes de que la obra se abriera con normalidad (Alberto: «me dice que aligere la obra»).
+    // Si la copia no cabe se descarta (antes tampoco quedaba: se perdía junto con el resto del guardado).
+    if (c.localEditorData && _cxOverChars(c.localEditorData, _LOCAL_BACKUP_MAX_CHARS)) c.localEditorData = null;
     return c;
+  }
+
+  // ¿Ocupa `v` (datos JSON) más de `cap` caracteres? Cota inferior del JSON, sin serializar: recorre el árbol y se
+  // detiene en cuanto pasa del tope (una obra pesada se descarta tras mirar sus primeras imágenes, sin construir
+  // una cadena de decenas de MB solo para medirla).
+  const _LOCAL_BACKUP_MAX_CHARS = 1200000;
+  function _cxOverChars(v, cap) {
+    let n = 0, steps = 0;
+    const st = [v];
+    while (st.length) {
+      const x = st.pop();
+      if (typeof x === 'string') n += x.length + 2;
+      else if (x && typeof x === 'object') {
+        if (Array.isArray(x)) { n += 2 + x.length; for (let i = 0; i < x.length; i++) st.push(x[i]); }
+        else for (const k in x) { n += k.length + 4; st.push(x[k]); }
+      } else n += 5;
+      if (n > cap || ++steps > 4000000) return true;
+    }
+    return false;
   }
 
   function getAll() {

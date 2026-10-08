@@ -186,6 +186,42 @@ async function _sbPoolMap(items, limit, worker) {
   return results;
 }
 
+// ── Progreso real de descarga para el contador bloqueante (v41.69) ──────────
+// El contador de «Abriendo obra…» (utils.js, _cxLoadOverlay*) da la carga por colgada tras 25 s SIN progreso. Una
+// descarga lenta pero constante no es un cuelgue: mientras el contador está en pantalla, los cuerpos de respuesta se
+// leen por trozos (Streams API, el patrón estándar para medir progreso con fetch) y cada trozo que llega avisa de que
+// sigue llegando información (_cxLoadOverlayPoke). Con el contador oculto se lee como siempre (text()/blob()): mismo
+// resultado y mismo camino de siempre para los guardados y todo lo demás.
+function _sbDlWatched(res) {
+  return !!(res && res.body && typeof res.body.getReader === 'function' &&
+            typeof _cxLoadOverlayActive === 'function' && _cxLoadOverlayActive());
+}
+async function _sbDlChunks(res) {
+  const reader = res.body.getReader();
+  const chunks = [];
+  if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); // ya han llegado las cabeceras
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+    if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke();
+  }
+  return chunks;
+}
+async function _sbResText(res) {
+  if (!_sbDlWatched(res)) return res.text();
+  const chunks = await _sbDlChunks(res);
+  const dec = new TextDecoder('utf-8'); // quita el BOM inicial igual que Response.text()
+  let out = '';
+  for (const c of chunks) out += dec.decode(c, { stream: true });
+  return out + dec.decode();
+}
+async function _sbResBlob(res) {
+  if (!_sbDlWatched(res)) return res.blob();
+  const chunks = await _sbDlChunks(res);
+  return new Blob(chunks, { type: res.headers.get('content-type') || '' });
+}
+
 const SupabaseClient = (() => {
   const BASE    = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
   const STORAGE = 'https://qqgsbyylaugsagbxsetc.supabase.co/storage/v1';
@@ -308,7 +344,7 @@ const SupabaseClient = (() => {
   // Lee el cuerpo de la respuesta y, si hay registro, anota los bytes bajados y el tiempo total
   // (hasta tener el cuerpo entero, no solo la cabecera).
   async function _rqText(res) {
-    const txt = await res.text();
+    const txt = await _sbResText(res); // v41.69: con el contador de carga en pantalla, lee por trozos y avisa de progreso
     if (res.__rec) { res.__rec.down = txt.length; res.__rec.ms = Math.round(performance.now() - res.__rec.a); }
     return txt;
   }
@@ -598,7 +634,7 @@ const SupabaseClient = (() => {
     // biblioteca); no arriesgarse a servir una copia antigua desde caché.
     const r = await fetch(animUrl, { cache: 'no-store' });
     if (!r.ok) return null;
-    const blob = await r.blob();
+    const blob = await _sbResBlob(r); // v41.69: ver _sbResBlob (progreso para el contador de carga)
     return new Promise(res => {
       const reader = new FileReader();
       reader.onload = e => res(e.target.result);
@@ -1424,6 +1460,7 @@ const SupabaseClient = (() => {
     });
     const _flatResults = await _sbPoolMap(_flatLayers, 3, async ({ pi, li, row }) => {
       let layerObj = null;
+      if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); // v41.69: capa en marcha = hay progreso
       try {
         const _raw = await _czDecompress(row.layer_data);
         layerObj = JSON.parse(_raw);
@@ -1464,7 +1501,7 @@ const SupabaseClient = (() => {
           // reciente, no una copia obsoleta servida desde caché.
           const gifResp = await fetch(row.gif_url, { cache: 'no-store' });
           if (gifResp.ok) {
-            const blob   = await gifResp.blob();
+            const blob   = await _sbResBlob(gifResp); // v41.69: progreso para el contador de carga
             const reader = new FileReader();
             const dataUrl = await new Promise(res => {
               reader.onload = e => res(e.target.result);
@@ -1490,7 +1527,7 @@ const SupabaseClient = (() => {
             try {
               const _rlResp = await fetch(rl.gifUrl, { cache: 'no-store' });
               if (_rlResp.ok) {
-                const _rlBlob = await _rlResp.blob();
+                const _rlBlob = await _sbResBlob(_rlResp); // v41.69: progreso para el contador de carga
                 const _rlReader = new FileReader();
                 const _rlDataUrl = await new Promise(res => {
                   _rlReader.onload = e => res(e.target.result);
@@ -1507,6 +1544,7 @@ const SupabaseClient = (() => {
           }
         }
       }
+      if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); // v41.69: capa terminada
       return layerObj;
     });
 
@@ -1748,7 +1786,7 @@ const SupabaseClient = (() => {
         cache: 'no-store',
       });
       if (!r.ok) throw new Error(`bibFetch: ${r.status} ${await r.text()}`);
-      return r.json();
+      return JSON.parse(await _sbResText(r)); // v41.69: igual que r.json(), pero avisa de progreso al contador de carga
     };
     if (!workId) return _getRows('');
     // Incluir items con prefijo workId:: Y items legacy sin prefijo UUID
@@ -1827,7 +1865,8 @@ const SupabaseClient = (() => {
   // completo y el de diferencias: para GIF/APNG todo lo necesario para re-edición (pngFrames van al bucket,
   // gifDataUrl/thumb son pequeños, gcpLayersData/gcpFramesData son vectoriales); para el resto, layerData con
   // fillLayerData, orientation e isGroup embebidos en el payload (sin columnas extra).
-  function _bibEntryPayloadStr(entry) {
+  // noOrient (solo para calcular la huella «de antes»): omite la orientación de las animaciones que no son «por instrucciones».
+  function _bibEntryPayloadStr(entry, noOrient) {
     const _payloadBase = entry.isGifAnim
       ? Object.assign({ isGifAnim:      true,
           gifDataUrl:     entry.gifDataUrl,
@@ -1842,7 +1881,9 @@ const SupabaseClient = (() => {
           // v41.64 — animación «por instrucciones» (ver AnimProc en editor.js): SIN fotogramas ni APNG; la entrada ES los
           // objetos (gcpLayersData) + las transformaciones (gcpFramesData), más lo necesario para pintarla igual en
           // otro dispositivo (geometría del recorte, pausas por fotograma, comportamiento y orientación de origen).
-          // Las animaciones con fotogramas de siempre no cambian (mismo payload, mismo content_sha).
+          // v41.72 — las demás animaciones (GIF y con fotogramas) también guardan su orientación de origen, pero SOLO si
+          // la tienen (las de antes no: mismo payload, mismo content_sha). Sin ella, tras «Editar» (espejo de la nube) la
+          // orientación se perdía y, al insertar la animación en una hoja de otra orientación, no se convertía su tamaño.
           entry.gcpProc ? {
             gcpProc:             true,
             gcpProcGeo:          entry.gcpProcGeo || null,
@@ -1856,7 +1897,7 @@ const SupabaseClient = (() => {
             gcpInvisGradual:     entry.gcpInvisGradual === false ? false : null,
             gcpCircularEnd:      entry.gcpCircularEnd || null,
             orientation:         entry.orientation || null,
-          } : null)
+          } : ((entry.orientation && !noOrient) ? { orientation: entry.orientation } : null))
       : entry.layerData;
     const _payload = entry.isGifAnim ? _payloadBase : {
       ..._payloadBase,
@@ -2032,15 +2073,23 @@ const SupabaseClient = (() => {
       // Animación cuya fila en la nube NO tiene archivo pero el objeto sí puede darlo (en memoria o en IndexedDB):
       // se rehace para completarla, como hacía el modo completo en cada sincronización.
       const needBin = !!(w.entry.isGifAnim && !c.anim_url && (_bibEntryHasLocalApng(w.entry) || w.entry._apngIdbKey || w.entry.animKey));
+      // v41.72 — la fila es la de siempre salvo que el objeto ahora lleva su orientación (ver _bibEntryPayloadStr): se reescribe la
+      // fila (para que la nube la tenga) pero el archivo del bucket es el mismo ('meta'), igual que al cambiar de carpeta. La huella
+      // «de antes» (payload sin orientación) solo se calcula aquí, para las filas que NO coinciden: el caso normal no paga nada.
+      let metaOnly = false;
+      if (!sameSha && !needBin && c.anim_url && c.layer_type === w.type && typeof c.content_sha === 'string' &&
+          w.entry.isGifAnim && !w.entry.gcpProc && w.entry.orientation) {
+        metaOnly = c.content_sha === await _sha256Hex(_bibEntryPayloadStr(w.entry, true) + '\u001f' + (w.entry.thumb || ''));
+      }
       if (sameSha && sameFolder && !needBin) keptRows.push(c);
-      else toReplace.push({ w, c, why: (sameSha && !needBin) ? 'folder' : 'content' });
+      else toReplace.push({ w, c, why: (sameSha && !needBin) ? 'folder' : (metaOnly ? 'meta' : 'content') });
     }
     const wantIds = new Set(want.map(w => w.id));
     const toRemove = _own.filter(c => !wantIds.has(c.id));
     const toLegacy = [...prevLegacy.values()];
     _st.cloud = _own.length + prevLegacy.size;
     _st.kept = keptRows.length; _st.added = toAdd.length;
-    _st.replaced = toReplace.filter(x => x.why === 'content').length; _st.moved = toReplace.filter(x => x.why === 'folder').length;
+    _st.replaced = toReplace.filter(x => x.why === 'content' || x.why === 'meta').length; _st.moved = toReplace.filter(x => x.why === 'folder').length;
     _st.removed = toRemove.length; _st.legacy = toLegacy.length;
     const delRows = [...toReplace.map(x => x.c), ...toRemove, ...toLegacy]; // filas de la nube que dejan de existir tal cual
     _st.mode = 'diferencias';
@@ -2054,8 +2103,8 @@ const SupabaseClient = (() => {
       const entry = w.entry;
       let _animUrl = null;
       if (entry.isGifAnim) {
-        if (why === 'folder' && c && c.anim_url) {
-          // Solo cambió de carpeta: el archivo del bucket es el mismo, no se vuelve a subir.
+        if ((why === 'folder' || why === 'meta') && c && c.anim_url) {
+          // Solo cambió de carpeta (o solo se añade la orientación a la fila): el archivo del bucket es el mismo, no se vuelve a subir.
           _animUrl = c.anim_url; _st.apngKept++;
         } else {
           _animUrl = await _bibEntryApngUpload(entry, _st);
@@ -2349,9 +2398,14 @@ continue;
           gifDataUrl:     ld.gifDataUrl,
           pngFrames:      _pngFrames,
           apngSrc:        _apngSrc,
-          gcpFrameDelay:  ld.gcpFrameDelay  || 100,
-          gcpRepeatCount: ld.gcpRepeatCount || 0,
-          gcpStopAtEnd:   ld.gcpStopAtEnd   || false,
+          // v41.71 — SIN valores por defecto en estos tres: lo espejado debe devolver EXACTAMENTE el mismo payload (y la
+          // misma huella content_sha) que tenía el objeto antes de subirlo. Un GIF guardado con «guardar en biblioteca»
+          // no trae ningún gcp*; si el espejo le inyectaba 100/0/false, su huella dejaba de coincidir con la de la nube y
+          // la primera sincronización tras pulsar «Editar» lo resubía entero (gifDataUrl incluido). Quien lo consume
+          // ya trata «ausente» como el valor por defecto (insertar: «!= null» / «|| 100»; APNG: «|| 100»).
+          gcpFrameDelay:  ld.gcpFrameDelay,
+          gcpRepeatCount: ld.gcpRepeatCount,
+          gcpStopAtEnd:   ld.gcpStopAtEnd,
           gcpLayersData:  ld.gcpLayersData  || null,
           gcpFramesData:  ld.gcpFramesData  || null,
           gcpLayerNames:  ld.gcpLayerNames  || null,
@@ -2360,6 +2414,9 @@ continue;
           layerData:      null,
           thumb:          r.thumb,
         };
+        // v41.72 — orientación de origen de CUALQUIER animación (antes solo las «por instrucciones»; ver _bibEntryPayloadStr):
+        // sin ella, al insertar la animación en una hoja de otra orientación no se convertía su tamaño (se deformaba).
+        if (ld.orientation) _animItem.orientation = ld.orientation;
         // v41.64 — animación por instrucciones: lo que hace falta para pintarla sin fotogramas (ver _bibEntryPayloadStr).
         if (ld.gcpProc && ld.gcpProcGeo) {
           _animItem.gcpProc    = true;
@@ -2372,7 +2429,6 @@ continue;
           if (ld.gcpInvisAtEnd)       _animItem.gcpInvisAtEnd = true;
           if (ld.gcpInvisGradual === false) _animItem.gcpInvisGradual = false;
           if (ld.gcpCircularEnd)      _animItem.gcpCircularEnd = true;
-          if (ld.orientation)         _animItem.orientation = ld.orientation;
         }
         folderMap.get(fid).items.push(_animItem);
       } else {
