@@ -1551,15 +1551,29 @@ const SupabaseClient = (() => {
     // Reagrupar los resultados aplanados de vuelta en páginas, preservando el
     // orden original de panel_order/layer_order.
     let _cursor = 0;
+    // v41.77 — traza de esta descarga para el 🩺 «Calidad de dibujos» del editor (window._sbLastDownloadTrace):
+    // por hoja, filas leídas / capas legibles / descartadas y si se usó la miniatura de reserva (una hoja sin
+    // capas legibles se reconstruye con su miniatura JPEG como imagen — y un dibujo así sale difuso).
+    const _dlTrace = { at: new Date().toISOString(), supabaseId: supabaseId, pages: [] };
     const pages = panels.map((panel, pi) => {
       const _rowCount = (_layerRowsByPanel[pi] || []).length;
       const layers = _flatResults.slice(_cursor, _cursor + _rowCount).filter(Boolean);
       _cursor += _rowCount;
+      const _parsed = layers.length;
 
       // Fallback: si no hay panel_layers (obra antigua), usar data_url como ImageLayer
       if (layers.length === 0 && panel.data_url) {
         layers.push({ type: 'image', src: panel.data_url, x: 0.5, y: 0.5, width: 1.0, height: 1.0, _keepSize: true });
       }
+      try {
+        const _types = {}; layers.forEach(l => { _types[l.type] = (_types[l.type] || 0) + 1; });
+        let _maxLen = 0; (_layerRowsByPanel[pi] || []).forEach(r => { const n = (r && r.layer_data) ? r.layer_data.length : 0; if (n > _maxLen) _maxLen = n; });
+        _dlTrace.pages.push({ order: panel.panel_order, rows: _rowCount, parsed: _parsed, dropped: _rowCount - _parsed,
+          thumbFallback: _parsed === 0 && !!panel.data_url, hasThumb: !!panel.data_url, types: _types, maxKb: Math.round(_maxLen / 1024) });
+        if (_parsed === 0 && _rowCount > 0 && panel.data_url) {
+          console.warn('downloadDraftAsEditorData: hoja ' + panel.panel_order + ' sin capas legibles (' + _rowCount + ' fila(s) descartadas) — se usa su miniatura como imagen');
+        }
+      } catch (_te) {}
 
       const orient = panel.orientation === 'h' ? 'horizontal' : 'vertical';
       return {
@@ -1570,6 +1584,7 @@ const SupabaseClient = (() => {
       };
     });
 
+    try { window._sbLastDownloadTrace = _dlTrace; } catch (_te2) {}
     return {
       work,
       editorData: {

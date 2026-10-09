@@ -1499,8 +1499,12 @@ function _edValidateDrawLayerGroup(dl, page){
 
 // ── Serialización de _buttonAction ──────────────────────────────────────────
 const _edSerLayerOrig = edSerLayer;
-edSerLayer = function(l) {
-  const r = _edSerLayerOrig(l);
+// v41.77 — reenvía «skipCompress» (2.º parámetro de edSerLayer, v41.01). Este envoltorio y el de
+// l.name (más abajo) solo declaraban (l) y descartaban el segundo argumento: TODA llamada
+// edSerLayer(la, true) —duplicar, copiar/pegar, reflejar— llegaba a la función original sin él y
+// recomprimía la imagen igualmente (el arreglo de v41.01 nunca llegó a aplicarse).
+edSerLayer = function(l, skipCompress) {
+  const r = _edSerLayerOrig(l, skipCompress);
   if (r && l && l._buttonAction) r._buttonAction = Object.assign({}, l._buttonAction);
   return r;
 };
@@ -1516,8 +1520,8 @@ edDeserLayer = function(d, orient, light) { // v41.44: reenvía «light» (carga
 // de edSerLayer/edDeserLayer (una por tipo de capa). No se aplica a fill/
 // pencil/watercolor (subcapas de dibujo a mano — no son renombrables).
 const _edNameSerLayerOrig = edSerLayer;
-edSerLayer = function(l) {
-  const r = _edNameSerLayerOrig(l);
+edSerLayer = function(l, skipCompress) { // v41.77: reenvía skipCompress (ver el envoltorio de _buttonAction)
+  const r = _edNameSerLayerOrig(l, skipCompress);
   if (r && l && l.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
     r.name = l.name;
   }
@@ -3772,6 +3776,42 @@ class WatercolorLayer extends FillLayer {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   v41.77 — EL TRAZO CONSERVA SU RESOLUCIÓN ORIGINAL (no la de pantalla)
+   Un dibujo a mano es un bitmap (StrokeLayer._canvas, a 1 px de bitmap = 1 px de página cuando se
+   dibujó) con su geometría aparte en fracciones de página (x, y, width, height): al redimensionar
+   solo cambia la geometría y el bitmap se escala AL PINTAR (draw), nunca se toca. Pero al CARGAR
+   (abrir la obra, hojas en carga ligera, duplicar/pegar, deshacer/rehacer) el bitmap se estiraba
+   o encogía a round(width·pw)×round(height·ph), la medida en pantalla: un remuestreo bilinear sin
+   filtro previo (y luego otro al pintarlo en un desplazamiento fraccionario) que disolvía el núcleo
+   negro de la tinta —gris y difusa— y, en cuanto se guardaba, el daño era permanente (y el lector
+   enseñaba el PNG ya dañado). Ahora el canvas se crea con las dimensiones reales del PNG guardado y
+   se vuelca 1:1. No cambia el formato ni el peso de lo guardado: el PNG que se serializa es el mismo
+   que se cargó.
+   ══════════════════════════════════════════════════════════════════════════ */
+// Vuelca una imagen YA decodificada en el canvas de un trazo, a su resolución original (1:1).
+// El canvas se redimensiona (mismo objeto, por si alguien guarda su referencia) si no coincide.
+function _edStrokeFitImage(cv, img){
+  const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height;
+  if(!(nw > 0 && nh > 0)) return;
+  if(cv.width !== nw || cv.height !== nh){ cv.width = nw; cv.height = nh; }
+  cv.getContext('2d').drawImage(img, 0, 0);
+}
+// Tamaño en px de un PNG leyendo solo su cabecera IHDR (sin decodificarlo). null si no es un PNG
+// data: reconocible → quien llama usa entonces su estimación (la medida en pantalla).
+function _edPngSize(u){
+  try {
+    if(typeof u !== 'string' || u.charCodeAt(0) !== 100) return null;         // 'd' de "data:"
+    const i = u.indexOf('base64,');
+    if(i < 0 || i > 40) return null;
+    const b = atob(u.substr(i + 7, 36));                                       // 27 bytes: firma + IHDR
+    if(b.length < 24 || b.charCodeAt(0) !== 0x89 || b.substr(1, 3) !== 'PNG' || b.substr(12, 4) !== 'IHDR') return null;
+    const rd = o => ((b.charCodeAt(o) << 24) | (b.charCodeAt(o + 1) << 16) | (b.charCodeAt(o + 2) << 8) | b.charCodeAt(o + 3)) >>> 0;
+    const w = rd(16), h = rd(20);
+    return (w > 0 && h > 0 && w <= 16384 && h <= 16384) ? { w, h } : null;
+  } catch(_) { return null; }
+}
+
 class StrokeLayer extends BaseLayer {
   constructor(srcCanvas){
     // srcCanvas es el workspace completo (ED_CANVAS_W × ED_CANVAS_H)
@@ -3839,7 +3879,8 @@ class StrokeLayer extends BaseLayer {
     sl._canvas.height = bh;
     const img = new Image();
     img.onload = () => {
-      sl._canvas.getContext('2d').drawImage(img, 0, 0, bw, bh);
+      // v41.77: a la resolución ORIGINAL del PNG guardado, no estirado a bw×bh (ver _edStrokeFitImage)
+      _edStrokeFitImage(sl._canvas, img);
       if(typeof _edRedrawSoon === 'function') _edRedrawSoon();
       if(window._gcpActive && typeof _gcpRedraw === 'function') _gcpRedraw();
     };
@@ -3860,8 +3901,11 @@ class StrokeLayer extends BaseLayer {
     sl._ctx = ph1.getContext('2d');
     sl._unloadedDataUrl     = dataUrl;
     sl._unloadedFullDataUrl = dataUrl;
-    sl._unloadedCanvasW     = Math.max(1, Math.round(width  * _pw));
-    sl._unloadedCanvasH     = Math.max(1, Math.round(height * _ph));
+    // v41.77: medidas REALES del bitmap guardado (cabecera del PNG, sin decodificar), no las de pantalla:
+    // al reconstruirlo (_edBuildLayerCanvas) se vuelca 1:1 y el presupuesto de memoria cuenta lo que es.
+    const _nat = _edPngSize(dataUrl);
+    sl._unloadedCanvasW     = _nat ? _nat.w : Math.max(1, Math.round(width  * _pw));
+    sl._unloadedCanvasH     = _nat ? _nat.h : Math.max(1, Math.round(height * _ph));
     sl._canvasUnloaded      = true;
     return sl;
   }
@@ -4605,6 +4649,10 @@ function _edSnapLayerFragment(l){
         _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
     }
     if(l.type === 'stroke') return { type: 'stroke', dataUrl: l.toDataUrl(), frozenLine: l._frozenLine||null,
+      // v41.77: medidas REALES del bitmap (≠ las de pantalla si el dibujo se redimensionó): al restaurar se
+      // reutiliza el canvas vivo si coincide y, si no, se reconstruye a esta resolución (edApplyHistory)
+      cw: (l._canvasUnloaded ? l._unloadedCanvasW : (l._canvas && l._canvas.width)) || undefined,
+      ch: (l._canvasUnloaded ? l._unloadedCanvasH : (l._canvas && l._canvas.height)) || undefined,
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
       color:l.color||'#000000', lineWidth:l.lineWidth??3, locked:l.locked||false,
       hidden:l.hidden||false,
@@ -5392,8 +5440,10 @@ function edApplyHistory(snapshot){
       // Reconstruir stroke: buscar primero si el layer vivo actual tiene el mismo
       // dataUrl y reusar su canvas ya pintado (evita parpadeo/invisibilidad).
       // Solo reconstruir desde dataUrl si no hay canvas vivo reutilizable.
-      { const _bw = Math.max(1, Math.round(_lsw * _pw));
-        const _bh = Math.max(1, Math.round(_lsh * _ph));
+      // v41.77: el bitmap tiene SU resolución (cw/ch del snapshot), que no es la de pantalla si el dibujo se
+      // redimensionó; sin ellas (snapshots sin esos campos) se usa la de pantalla como siempre.
+      { const _bw = (o.cw > 0) ? o.cw : Math.max(1, Math.round(_lsw * _pw));
+        const _bh = (o.ch > 0) ? o.ch : Math.max(1, Math.round(_lsh * _ph));
         // Buscar canvas vivo en la misma posición del array de la página actual
         // (mismo índice y tipo stroke) para reusar sin comparar dataUrl (costoso).
         const _curPage = edPages[snapshot.pageIdx];
@@ -5415,7 +5465,7 @@ function edApplyHistory(snapshot){
             const _lRef = l;
             imgPromises.push(new Promise(res => {
               const _si = new Image();
-              _si.onload = () => { _lRef._canvas.getContext('2d').drawImage(_si, 0, 0, _bw, _bh); res(); };
+              _si.onload = () => { _edStrokeFitImage(_lRef._canvas, _si); res(); }; // v41.77: 1:1, sin remuestrear
               _si.onerror = () => res();
               _si.src = o.dataUrl;
             }));
@@ -6597,6 +6647,17 @@ function _edRenderFrameInner(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') 
       if(!_isDimmed(l, i)) _vecLift.add(l);
     });
     if(_vecLift.size) _liftSet = _vecLift;
+  }
+  // v41.77 — foto del estado de ATENUADO de este render completo, para el diagnóstico «Calidad de dibujos»
+  // (🩺): qué capas se pintan al 50 % y por qué, tal y como las vio el usuario (no recalculado después).
+  // Solo en el render 'inline' completo (el de pantalla), nunca en las cachés ('before' / capa excluida).
+  // Coste: asignar unos campos por fotograma.
+  if(drawTmpMode === 'inline' && excludeLayerIdx < 0){
+    const _R = window._edLastRender || (window._edLastRender = {});
+    _R.isDimmed = _isDimmed; _R.lift = _liftSet; _R.anyEditing = _anyEditing; _R.editingDraw = _editingDraw;
+    _R.editingShape = _editingShape; _R.editingProps = _editingProps; _R.manipulating = _manipulating;
+    _R.eyedrop = !!window._edEyedropActive; _R.panelOpen = !!_panelOpen; _R.panelMode = _panelMode;
+    _R.page = edCurrentPage; _R.layers = edLayers; _R.t = performance.now();
   }
 
   // Pintado de una capa NO textual (imagen, trazo, dibujo, forma, línea, relleno, lápiz,
@@ -9403,8 +9464,11 @@ async function _edLoadPageCanvases(pageIdx) {
 function _edBuildLayerCanvas(l, img) {
   if (!l._canvasUnloaded) return false;
   const cv = document.createElement('canvas');
-  cv.width  = l._unloadedCanvasW || img.naturalWidth  || img.width;
-  cv.height = l._unloadedCanvasH || img.naturalHeight || img.height;
+  // v41.77: un trazo se reconstruye SIEMPRE a la resolución real de su PNG (1:1), no a la medida en
+  // pantalla que estimó la carga ligera (ver _edStrokeFitImage: redimensionarlo no toca su bitmap).
+  const _strokeNat = l.type === 'stroke' && img.naturalWidth > 0 && img.naturalHeight > 0;
+  cv.width  = _strokeNat ? img.naturalWidth  : (l._unloadedCanvasW || img.naturalWidth  || img.width);
+  cv.height = _strokeNat ? img.naturalHeight : (l._unloadedCanvasH || img.naturalHeight || img.height);
   const ctx = cv.getContext('2d');
   if (l._unloadedIsCrop && !l._unloadedFullDataUrl) {
     // v41.44: el dataUrl guardado es el RECORTE de la página (DrawLayer cargado en
@@ -23466,6 +23530,7 @@ function _edFreezeDrawLayer(){
   window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
   edPushHistory(true); // force: el resultado del dibujo siempre se guarda
   edRedraw();
+  _edQualityCapture('tras OK del dibujo'); // v41.77: foto compacta para el 🩺 «Calidad de dibujos»
 }
 
 /* ══════════════════════════════════════════
@@ -30923,6 +30988,66 @@ let _edCmpFinal = false;
 // Memoria por capa (WeakMap: muere con la capa y no ensucia el objeto, así que ninguna copia o
 // serialización genérica de la capa la arrastra): origen → resultado de la compresión.
 const _edSerCmpMemo = new WeakMap();
+
+// v41.77 — RECOMPRESIÓN IDEMPOTENTE DE JPEG (pérdida acumulada al guardar y reabrir).
+// Una imagen JPEG de ≥200.000 caracteres (una foto de ~150 KB o más) se recodificaba a JPEG q0,82 en
+// CADA guardado posterior a una recarga: tras reabrir la obra la capa vuelve con el JPEG ya comprimido
+// (el que se guardó), y al guardar de nuevo se decodificaba y se comprimía otra vez — una generación
+// más de pérdida por cada ciclo guardar → cerrar → reabrir → guardar (bordes cada vez más difusos,
+// negros que se van a gris, artefactos de bloque). Solución estándar de la industria para no degradar
+// una imagen ya comprimida: NO volver a codificar un JPEG que ya cumple el objetivo (calidad ≤ la
+// pedida y tamaño ≤ máximo). La calidad se lee de las propias cabeceras del JPEG —tabla de cuantización
+// DQT, que con libjpeg (el codificador de Chrome) escala la calidad con la fórmula estándar IJG—, sin
+// decodificar la imagen. Si no se puede leer (formato raro, cabeceras muy largas) devuelve false y todo
+// sigue como antes. Una foto original de mayor calidad o mayor tamaño se comprime igual que siempre
+// (la primera vez), así que el peso de las obras no aumenta: solo deja de recodificarse lo que ya está.
+function _edJpegHeaderInfo(src){
+  // → {w,h,dc} (ancho y alto del marco y valor DC de la tabla de luminancia) o null si no se puede leer.
+  try{
+    if(typeof src !== 'string' || !src.startsWith('data:image/jpeg')) return null;
+    const comma = src.indexOf(',');
+    if(comma < 0 || src.lastIndexOf(';base64', comma) < 0) return null;
+    // Las cabeceras (SOI, APPn, DQT, SOF) van antes de los datos: basta un prefijo (múltiplo de 4
+    // caracteres = base64 válido sin relleno). 262144 caracteres ≈ 196 KB de binario.
+    const bin = atob(src.slice(comma + 1, comma + 1 + 262144));
+    const n = bin.length;
+    if(n < 4 || bin.charCodeAt(0) !== 0xFF || bin.charCodeAt(1) !== 0xD8) return null;
+    let i = 2, w = 0, h = 0, dc = 0;
+    while(i + 3 < n){
+      if(bin.charCodeAt(i) !== 0xFF) return null;
+      const m = bin.charCodeAt(i + 1);
+      if(m === 0xFF){ i++; continue; }                             // relleno entre marcadores
+      if(m === 0x01 || (m >= 0xD0 && m <= 0xD8)){ i += 2; continue; } // marcadores sin longitud
+      const len = (bin.charCodeAt(i + 2) << 8) | bin.charCodeAt(i + 3);
+      if(len < 2) return null;
+      if(m === 0xDB){                                              // DQT: una o varias tablas
+        let p = i + 4; const end = Math.min(n, i + 2 + len);
+        while(p < end){
+          const pq = bin.charCodeAt(p) >> 4, tq = bin.charCodeAt(p) & 15; p++;
+          if(tq === 0 && !dc && p + (pq ? 1 : 0) < n) dc = pq ? ((bin.charCodeAt(p) << 8) | bin.charCodeAt(p + 1)) : bin.charCodeAt(p);
+          p += pq ? 128 : 64;
+        }
+      } else if(m === 0xC0 || m === 0xC1 || m === 0xC2){          // SOF0/1/2: precisión(1) alto(2) ancho(2)
+        h = (bin.charCodeAt(i + 5) << 8) | bin.charCodeAt(i + 6);
+        w = (bin.charCodeAt(i + 7) << 8) | bin.charCodeAt(i + 8);
+      } else if(m === 0xDA) break;                                 // SOS: empiezan los datos de imagen
+      i += 2 + len;
+    }
+    return (w > 0 && h > 0 && dc > 0) ? { w: w, h: h, dc: dc } : null;
+  }catch(e){ return null; }
+}
+// Valor DC de la tabla de luminancia que produce libjpeg para una calidad 0..1 (escala IJG estándar:
+// q<50 → 5000/q, si no 200−2q; entrada base de DC = 16; división entera con redondeo; mín. 1).
+function _edJpegDcForQuality(quality){
+  const q = Math.max(1, Math.min(100, Math.round(quality * 100)));
+  const s = q < 50 ? Math.floor(5000 / q) : 200 - 2 * q;
+  return Math.max(1, Math.min(255, Math.floor((16 * s + 50) / 100)));
+}
+// true si el JPEG ya está a la calidad pedida (o más comprimido) y dentro del tamaño máximo.
+function _edJpegAlreadyCompressed(src, maxPx, quality){
+  const info = _edJpegHeaderInfo(src);
+  return !!(info && Math.max(info.w, info.h) <= maxPx && info.dc >= _edJpegDcForQuality(quality));
+}
 function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   // Redimensiona y comprime una imagen a JPEG para ahorrar espacio en localStorage
   _edCmpFinal = false;
@@ -30934,6 +31059,9 @@ function _edCompressImageSrc(src, maxPx=1080, quality=0.82){
   const isWebp = src.startsWith('data:image/webp');
   const isGif  = src.startsWith('data:image/gif');
   if(!isPng && !isWebp && !isGif && src.startsWith('data:image/jpeg') && src.length < 200000) return src; // ya pequeña JPEG
+  // v41.77: JPEG ya comprimido a la calidad/tamaño objetivo → se devuelve tal cual (resultado definitivo,
+  // memorizable). No se decodifica ni se recodifica: cero pérdida de generación y cero trabajo.
+  if(!isPng && !isWebp && !isGif && _edJpegAlreadyCompressed(src, maxPx, quality)){ _edCmpFinal = true; return src; }
   try {
     const img = new Image();
     img.src = src;
@@ -30984,6 +31112,7 @@ function _edCompressLoadedImage(img, src, maxPx=1080, quality=0.82){
   const isWebp = src.startsWith('data:image/webp');
   const isGif  = src.startsWith('data:image/gif');
   if(!isPng && !isWebp && !isGif && src.startsWith('data:image/jpeg') && src.length < 200000) return src;
+  if(!isPng && !isWebp && !isGif && _edJpegAlreadyCompressed(src, maxPx, quality)) return src; // v41.77: ver _edJpegHeaderInfo
   try {
     if(!img || !img.complete || img.naturalWidth === 0) return src; // no cargada — no forzar nada
     const ratio = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
@@ -33237,6 +33366,7 @@ async function edLoadProject(id){
   // nunca se deja sin resolver (evitaría un bloqueo permanente del contador).
   let _edResolveFullyLoaded;
   window._edFullyLoadedPromise = new Promise(res => { _edResolveFullyLoaded = res; });
+  window._edFullyLoadedPromise.then(() => { try { _edQualityCapture('obra cargada'); } catch(_) {} }); // v41.77: foto compacta para el 🩺 «Calidad de dibujos»
   // v41.69: cada etapa de la carga que termina (lectura de la obra, biblioteca, autoguardado, capas pesadas…) anota
   // «progreso real» al contador bloqueante: su red de seguridad (_cxLoadOverlayArmSafety) solo da la carga por colgada
   // tras 25 s SIN ningún progreso — antes se agotaba durante cargas lentas pero sanas (móvil con obra pesada).
@@ -36533,6 +36663,7 @@ function EditorView_init(){
     _edDrawInitHistory();
     _edDrawLockUI();
     edRenderOptionsPanel('draw');edCloseMenus();
+    _edQualityCapture('al entrar en dibujo'); // v41.77: foto compacta para el 🩺 «Calidad de dibujos»
     // Primero se abre el panel; medio segundo después, la ayuda (si no se ha
     // desactivado antes para este usuario).
     setTimeout(() => edHelpShow('draw-tools'), 500);
@@ -49182,6 +49313,285 @@ function _edRepairDuplicateIds(dryRun) {
   return report;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// v41.77 — DIAGNÓSTICO «CALIDAD DE DIBUJOS» (🩺)
+//
+// Alberto: los trazos a mano guardados en la nube vuelven «grises y difusos» al reeditar la obra,
+// mientras que los trazos nuevos salen bien. Los datos (PNG sin pérdida) y el render salen idénticos en
+// todas las pruebas automáticas, así que esto mide EN SU DISPOSITIVO, sobre la obra real, todo lo que
+// puede degradar un trazo, para que un solo pegado del 🩺 baste para localizar la causa:
+//   1) los PÍXELES guardados de cada capa de dibujo (¿núcleo sólido y negro, o ya blando/gris?);
+//   2) su COLOCACIÓN (posición/escala fraccionaria → remuestreo bilineal → borroso; tamaño del lienzo
+//      distinto del esperado → el bitmap se estira);
+//   3) si el render los ATENÚA (50 %, ver _isDimmed) y por qué (foto del último render completo);
+//   4) lo que REALMENTE se ve en pantalla encima de cada trazo (luminancia mínima);
+//   5) imágenes de hoja completa (una miniatura JPEG usada como capa) y lo que devolvió la última
+//      descarga de la nube (filas leídas / descartadas / miniatura de reserva);
+//   6) capturas automáticas (al terminar de cargar la obra, al entrar en dibujo y tras cada OK), para ver CUÁNDO
+//      cambia algo sin que haya que pulsar el botón en el momento justo.
+// Solo lee: no modifica capas, ni historial, ni estado de dibujo.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// Estadística de píxeles de un canvas pequeño: cuántos son sólidos (α≥250), semitransparentes (11..249) o
+// casi invisibles (1..10), α máxima y el color más oscuro entre los (casi) opacos. Una tinta negra al
+// 100 % intacta tiene α máx 255 y «más oscuro» #000000; un trazo ya degradado (remuestreado/atenuado) no.
+function _edQualityPixelStats(c){
+  const W = c.width, H = c.height;
+  const d = c.getContext('2d').getImageData(0, 0, W, H).data;
+  let nz = 0, solid = 0, semi = 0, faint = 0, maxA = 0, minLum = 1e9, dr = 0, dg = 0, db = 0;
+  for(let i = 0; i < d.length; i += 4){
+    const a = d[i + 3]; if(!a) continue;
+    nz++;
+    if(a > maxA) maxA = a;
+    if(a >= 250) solid++; else if(a > 10) semi++; else faint++;
+    if(a >= 200){
+      const lum = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+      if(lum < minLum){ minLum = lum; dr = d[i]; dg = d[i + 1]; db = d[i + 2]; }
+    }
+  }
+  const vis = solid + semi;
+  return { nz: nz, solid: solid, semi: semi, faint: faint, maxA: maxA,
+           darkest: minLum < 1e9 ? [dr, dg, db] : null, softPct: vis ? Math.round(100 * semi / vis) : 0 };
+}
+// Lo que hay PINTADO ahora mismo en la pantalla del editor (edCanvas) sobre un rectángulo del mundo
+// {x0,y0,x1,y1} (px de lienzo de trabajo): luminancia mínima y recuento de píxeles oscuros/medios. Es lo que
+// ve el usuario (incluye capas superiores, atenuado, selección…). El lienzo del editor tiene 1 px por px CSS.
+function _edQualityScreenSample(box){
+  const z = edCamera.z;
+  let sx0 = Math.floor(edCamera.x + z * box.x0), sy0 = Math.floor(edCamera.y + z * box.y0);
+  let sx1 = Math.ceil(edCamera.x + z * box.x1),  sy1 = Math.ceil(edCamera.y + z * box.y1);
+  sx0 = Math.max(0, sx0); sy0 = Math.max(0, sy0); sx1 = Math.min(edCanvas.width, sx1); sy1 = Math.min(edCanvas.height, sy1);
+  const w = sx1 - sx0, h = sy1 - sy0;
+  if(w < 1 || h < 1) return { off: true };
+  if(w * h > 1.5e6) return { big: true };
+  const d = edCtx.getImageData(sx0, sy0, w, h).data;
+  let min = 255, dark = 0, mid = 0;
+  for(let i = 0; i < d.length; i += 4){
+    const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
+    if(lum < min) min = lum;
+    if(lum < 60) dark++; else if(lum < 200) mid++;
+  }
+  return { minLum: Math.round(min), dark: dark, mid: mid, n: w * h };
+}
+// Ficha de una imagen (capa 'image'): tipo, peso, tamaño real y, si es JPEG, su calidad (valor DC de la tabla).
+function _edQualityImageInfo(l, i){
+  const src = l.src || (l.img && l.img.src) || '';
+  const m = /^data:([^;,]+)/.exec(src);
+  const o = { i: i, mime: m ? m[1] : (src ? 'url' : '—'), kb: Math.round(src.length * 0.75 / 1024),
+              w: l.width, h: l.height, keepSize: !!l._keepSize, gcp: !!l._isGcpImage,
+              anim: !!(l.animKey || l._pngFramesKey || l._apngIdbKey),
+              nat: (l.img && l.img.naturalWidth) ? (l.img.naturalWidth + 'x' + l.img.naturalHeight) : null };
+  o.full = l.width >= 0.97 && l.height >= 0.97;
+  if(o.mime === 'image/jpeg'){ const ji = _edJpegHeaderInfo(src); if(ji) o.jpg = { w: ji.w, h: ji.h, dc: ji.dc }; }
+  return o;
+}
+// INFORME ESTRUCTURADO de la hoja actual (lo usan el texto del 🩺 y las pruebas automáticas).
+// opts: { screen:false (sin muestreo de pantalla), budgetPx (presupuesto de píxeles a leer), maxLayerPx }
+function _edDrawingQualityReport(opts){
+  opts = opts || {};
+  const maxLayerPx = opts.maxLayerPx || 1.5e6;
+  let budget = opts.budgetPx || 12e6;
+  const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+  const R = window._edLastRender || null;
+  const page = edPages[edCurrentPage];
+  const panel = $('edOptionsPanel');
+  const vv = window.visualViewport;
+  const rep = { pw: pw, ph: ph, pageIdx: edCurrentPage, nPages: edPages.length, layers: [], images: [], pages: [],
+                skipped: 0, flags: {} };
+  rep.orient = (typeof _edCurrentOrientation === 'function') ? _edCurrentOrientation() : '?';
+  rep.env = {
+    dpr: window.devicePixelRatio || 1, mem: navigator.deviceMemory || null, cores: navigator.hardwareConcurrency || null,
+    win: window.innerWidth + 'x' + window.innerHeight, screen: (window.screen ? window.screen.width + 'x' + window.screen.height : '?'),
+    vvScale: vv ? +vv.scale.toFixed(3) : null,
+    canvasPx: edCanvas.width + 'x' + edCanvas.height, canvasCss: edCanvas.clientWidth + 'x' + edCanvas.clientHeight,
+    z: +edCamera.z.toFixed(4), cx: +edCamera.x.toFixed(2), cy: +edCamera.y.toFixed(2),
+    smooth: edCtx.imageSmoothingEnabled + '/' + (edCtx.imageSmoothingQuality || '?'),
+    device: (typeof edGetDeviceClass === 'function') ? edGetDeviceClass() : '?',
+    ua: ((navigator.userAgent.match(/(Android [\d.]+|Windows NT [\d.]+|Mac OS X [\d_.]+|iPhone OS [\d_]+|Linux)/) || [''])[0] + ' ' +
+         (navigator.userAgent.match(/(?:Chrome|Firefox|Version)\/[\d.]+/) || [''])[0]).trim(),
+    bgBudgetMpx: Math.round(_edBgBudget() / 1e6), hydrating: _edCurrentPageHydrating()
+  };
+  rep.state = {
+    tool: edActiveTool, panelOpen: !!(panel && panel.classList.contains('open')), panelMode: (panel && panel.dataset.mode) || '',
+    panelCollapsed: !!(panel && panel.classList.contains('panel-collapsed')),
+    drawBar: !!($('edDrawBar') && $('edDrawBar').classList.contains('visible')),
+    shapeBar: !!($('edShapeBar') && $('edShapeBar').classList.contains('visible')),
+    sel: edSelectedIdx, selType: (edLayers[edSelectedIdx] && edLayers[edSelectedIdx].type) || null,
+    drag: [edIsDragging, edIsResizing, edIsRotating, edIsTailDragging].map(v => v ? 1 : 0).join(''),
+    onion: !!(page && page._onionSkinEnabled), onionAlpha: +(+_edOnionAlpha).toFixed(2), eyedrop: !!window._edEyedropActive
+  };
+  if(R){
+    rep.render = { ageMs: Math.round(performance.now() - R.t), anyEditing: !!R.anyEditing, editingDraw: !!R.editingDraw,
+                   editingShape: !!R.editingShape, editingProps: !!R.editingProps, manipulating: !!R.manipulating,
+                   eyedrop: !!R.eyedrop, panelOpen: !!R.panelOpen, panelMode: R.panelMode || '', page: R.page,
+                   sameLayers: R.layers === edLayers };
+  }
+  // Recuento por hoja (barato): tipos de capa y marca de «imagen de hoja completa» (miniatura usada como capa).
+  edPages.forEach((p, pi) => {
+    const t = {}; let fullImg = 0;
+    (p.layers || []).forEach(l => {
+      if(!l) return; t[l.type] = (t[l.type] || 0) + 1;
+      if(l.type === 'image' && l.width >= 0.97 && l.height >= 0.97 && l._keepSize) fullImg++;
+    });
+    rep.pages.push({ i: pi, n: (p.layers || []).length, types: t, fullImg: fullImg, orient: p.orientation || null });
+  });
+  let nScr = 0;
+  const dimmedOf = (l, i) => { try { return R && typeof R.isDimmed === 'function' ? !!R.isDimmed(l, i) : null; } catch(_) { return null; } };
+  edLayers.forEach((l, i) => {
+    if(!l) return;
+    if(l.type === 'image'){ rep.images.push(_edQualityImageInfo(l, i)); return; }
+    if(!(l.type === 'stroke' || l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor')) return;
+    const c = l._canvas;
+    const o = { i: i, type: l.type, name: l.name || '', uid: String(l._uid || l._drawLayerId || '').slice(-8),
+                hidden: !!l.hidden, op: l.opacity == null ? 1 : l.opacity, rot: l.rotation || 0,
+                x: l.x, y: l.y, w: l.width, h: l.height,
+                unloaded: !!l._canvasUnloaded, ws: !!l._isWorkspaceCanvas };
+    o.cw = c ? c.width : 0; o.ch = c ? c.height : 0;
+    o.ew = Math.max(1, Math.round(l.width * pw)); o.eh = Math.max(1, Math.round(l.height * ph));
+    o.sizeOk = !!c && c.width === o.ew && c.height === o.eh;
+    o.wpx = l.width * pw; o.hpx = l.height * ph;
+    o.sx = c && c.width ? o.wpx / c.width : null; o.sy = c && c.height ? o.hpx / c.height : null;
+    // Trazo redimensionado: desde la v41.77 conserva su bitmap ORIGINAL y se escala solo al pintar (no es una anomalía).
+    o.scaled = l.type === 'stroke' && o.sx != null && (Math.abs(o.sx - 1) > 0.002 || Math.abs(o.sy - 1) > 0.002);
+    o.left = mx + l.x * pw - o.wpx / 2; o.top = my + l.y * ph - o.hpx / 2;
+    o.fracL = o.left - Math.round(o.left); o.fracT = o.top - Math.round(o.top);
+    o.legacyFull = !o.ws && Math.abs(l.width - 1) < 0.01 && Math.abs(l.height - 1) < 0.01;
+    o.rotated = (((o.rot % 360) + 360) % 360) !== 0;
+    o.aligned = !o.ws && !o.rotated && Math.abs(o.fracL) < 0.02 && Math.abs(o.fracT) < 0.02 &&
+                o.sx != null && Math.abs(o.sx - 1) < 0.002 && Math.abs(o.sy - 1) < 0.002;
+    o.dimmed = dimmedOf(l, i);
+    o.lifted = !!(R && R.lift && R.lift.has && R.lift.has(l));
+    if(!o.unloaded && !o.ws && c && c.width && c.height){
+      const px = c.width * c.height;
+      if(px <= maxLayerPx && px <= budget){
+        try { o.px = _edQualityPixelStats(c); budget -= px; } catch(e) { o.pxErr = String(e && e.message || e).slice(0, 60); }
+      } else rep.skipped++;
+    }
+    if(l.type === 'stroke' && opts.screen !== false && !o.hidden && (opts.maxScreen == null || nScr < opts.maxScreen)){
+      nScr++;
+      try {
+        const cx = mx + l.x * pw, cy = my + l.y * ph, a = o.rot * Math.PI / 180, ca = Math.abs(Math.cos(a)), sa = Math.abs(Math.sin(a));
+        const ex = (o.wpx / 2) * ca + (o.hpx / 2) * sa + 1, ey = (o.wpx / 2) * sa + (o.hpx / 2) * ca + 1;
+        o.scr = _edQualityScreenSample({ x0: cx - ex, y0: cy - ey, x1: cx + ex, y1: cy + ey });
+      } catch(e) { o.scr = { err: String(e && e.message || e).slice(0, 60) }; }
+    }
+    rep.layers.push(o);
+  });
+  // ── Lectura automática: lo anómalo, ya clasificado ──
+  const F = rep.flags;
+  F.dimmed = rep.layers.filter(o => o.dimmed && !o.hidden).map(o => o.i);
+  F.scaled = rep.layers.filter(o => !o.ws && !o.unloaded && o.scaled).map(o => o.i);
+  F.misaligned = rep.layers.filter(o => !o.ws && !o.unloaded && !o.aligned && !o.scaled).map(o => o.i);
+  F.sizeMismatch = rep.layers.filter(o => !o.ws && !o.unloaded && !o.sizeOk && o.type !== 'stroke').map(o => o.i);
+  F.noSolid = rep.layers.filter(o => o.type === 'stroke' && o.px && o.px.nz > 0 && o.px.maxA < 250).map(o => o.i);
+  F.notBlack = rep.layers.filter(o => o.type === 'stroke' && o.px && o.px.darkest && o.px.maxA >= 250 &&
+                (o.px.darkest[0] * 0.299 + o.px.darkest[1] * 0.587 + o.px.darkest[2] * 0.114) > 40).map(o => o.i);
+  F.screenGray = rep.layers.filter(o => o.scr && o.scr.minLum != null && o.scr.minLum > 100 && o.px && o.px.maxA >= 250 && !o.hidden && !o.dimmed).map(o => o.i);
+  F.fullImages = rep.images.filter(o => o.full).map(o => o.i);
+  F.unloaded = rep.layers.filter(o => o.unloaded).map(o => o.i);
+  const st = rep.state, rr = rep.render;
+  F.stuckDim = !!(rr && rr.anyEditing && !st.panelOpen && !st.drawBar && !st.shapeBar && st.tool === 'select' && st.drag === '0000');
+  return rep;
+}
+// Texto del informe (una línea por entrada de `lines`). L = función que añade una línea.
+function _edDrawingQualityLines(rep, L){
+  const f2 = n => (Math.round(n * 100) / 100).toFixed(2), f3 = n => (Math.round(n * 1000) / 1000).toFixed(3);
+  const hex = rgb => rgb ? '#' + rgb.map(v => ('0' + v.toString(16)).slice(-2)).join('') : '—';
+  const pct = (n, tot) => tot ? Math.round(100 * n / tot) + '%' : '0%';
+  const e = rep.env, s = rep.state, r = rep.render;
+  L('Hoja ' + (rep.pageIdx + 1) + '/' + rep.nPages + ' · ' + rep.pw + 'x' + rep.ph + ' px de página · ' + rep.orient);
+  L('Entorno: DPR ' + e.dpr + ' · ' + e.ua + ' · RAM ' + (e.mem || '?') + ' GB · núcleos ' + (e.cores || '?') + ' · clase ' + e.device +
+    ' · ventana ' + e.win + ' · pantalla ' + e.screen + (e.vvScale != null ? ' · zoom de página (visualViewport) ' + e.vvScale : ''));
+  L('Lienzo del editor: ' + e.canvasPx + ' px (CSS ' + e.canvasCss + ') · cámara z=' + e.z + ' x=' + e.cx + ' y=' + e.cy +
+    ' · suavizado ' + e.smooth + ' · presupuesto carga en 2.º plano ' + e.bgBudgetMpx + ' Mpx · reconstruyendo hoja: ' + (e.hydrating ? 'SÍ' : 'no'));
+  L('Estado: herramienta=' + s.tool + ' · panel=' + (s.panelOpen ? s.panelMode + (s.panelCollapsed ? ' (colapsado)' : '') : 'cerrado') +
+    ' · barra dibujo=' + (s.drawBar ? 'sí' : 'no') + ' · barra vectorial=' + (s.shapeBar ? 'sí' : 'no') +
+    ' · seleccionado=' + (s.sel >= 0 ? '#' + s.sel + ' ' + s.selType : 'nada') +
+    ' · arrastre/redim/giro/cola=' + s.drag + ' · cuentagotas=' + (s.eyedrop ? 'sí' : 'no') +
+    ' · transparencia de hojas contiguas=' + (s.onion ? 'SÍ (' + Math.round(s.onionAlpha * 100) + '%)' : 'no'));
+  if(r){
+    L('Último render completo (hace ' + (r.ageMs / 1000).toFixed(1) + ' s' + (r.sameLayers ? '' : ' — de OTRAS capas/hoja') + '): atenuado activo=' + (r.anyEditing ? 'SÍ' : 'no') +
+      ' (dibujo=' + (r.editingDraw ? 1 : 0) + ' forma=' + (r.editingShape ? 1 : 0) + ' propiedades=' + (r.editingProps ? 1 : 0) +
+      ' manipulando=' + (r.manipulating ? 1 : 0) + ' · cuentagotas=' + (r.eyedrop ? 1 : 0) + ') · panel en ese render=' + (r.panelOpen ? r.panelMode : 'cerrado'));
+  } else L('Último render completo: (todavía no registrado)');
+  const nPix = rep.layers.length;
+  L('Capas de dibujo a mano en esta hoja: ' + nPix + (rep.skipped ? ' · ' + rep.skipped + ' sin leer píxeles (lienzo grande o presupuesto agotado)' : ''));
+  rep.layers.forEach(o => {
+    const px = o.px, sc = o.scr;
+    L('  #' + o.i + ' ' + o.type + (o.name ? ' "' + o.name + '"' : '') + ' ·' + o.uid + (o.hidden ? ' · OCULTA' : '') +
+      ' · lienzo ' + o.cw + 'x' + o.ch + (o.unloaded ? ' (SIN CARGAR aún)' : (o.ws ? ' (espacio de trabajo)' : (o.sizeOk ? ' ✔' : (o.type === 'stroke' ? ' (bitmap original)' : ' ✖ esperado ' + o.ew + 'x' + o.eh)))) +
+      ' · caja ' + f2(o.wpx) + 'x' + f2(o.hpx) + ' px' + (o.sx != null ? ' (escala ' + f3(o.sx) + '×' + f3(o.sy) + ')' : '') +
+      ' · izq ' + f2(o.left) + ' sup ' + f2(o.top) + ' (fracción ' + f2(o.fracL) + '/' + f2(o.fracT) + ')' +
+      (o.rotated ? ' · GIRADA ' + f2(o.rot) + '°' : '') + ' · opacidad ' + o.op + (o.legacyFull ? ' · caja = hoja entera (formato antiguo)' : ''));
+    L('      ' + (o.ws ? 'espacio de trabajo' : (o.aligned ? 'alineación ✔ píxel entero, escala 1:1'
+        : (o.scaled ? 'redimensionado: se pinta a ×' + f3(o.sx) + (Math.abs(o.sx - o.sy) > 0.002 ? '/×' + f3(o.sy) : '') + ' desde su bitmap original, sin tocarlo'
+                    : 'alineación ⚠ NO entera (el render remuestrea → borroso)'))) +
+      ' · render: ' + (o.dimmed == null ? '?' : (o.dimmed ? 'ATENUADA al 50 %' : '100 %')) + (o.lifted ? ' (elevada)' : '') +
+      (px ? ' · píxeles: ' + px.nz + ' no vacíos · sólidos ' + pct(px.solid, px.solid + px.semi) + ' semitransp. ' + pct(px.semi, px.solid + px.semi) +
+            ' · α máx ' + px.maxA + ' · más oscuro ' + hex(px.darkest) : (o.pxErr ? ' · píxeles: error ' + o.pxErr : '')) +
+      (sc ? (sc.minLum != null ? ' · EN PANTALLA: lum mín ' + sc.minLum + ' · oscuros ' + sc.dark + ' · medios ' + sc.mid + ' de ' + sc.n
+                                : ' · pantalla: ' + (sc.off ? 'fuera de vista' : (sc.big ? 'zona grande, no muestreada' : 'error ' + sc.err))) : ''));
+  });
+  if(rep.images.length){
+    L('Imágenes en esta hoja: ' + rep.images.length);
+    rep.images.forEach(o => {
+      L('  #' + o.i + ' ' + o.mime + ' ' + o.kb + ' KB' + (o.nat ? ' · ' + o.nat + ' px' : '') + ' · caja ' + f2(o.w) + 'x' + f2(o.h) + ' de la hoja' +
+        (o.full ? ' · HOJA COMPLETA' : '') + (o.keepSize ? ' · _keepSize' : '') + (o.gcp ? ' · de animación' : '') + (o.anim ? ' · animada' : '') +
+        (o.jpg ? ' · JPEG ' + o.jpg.w + 'x' + o.jpg.h + ' tabla DC=' + o.jpg.dc + ' (≈ q' + Math.round((200 - o.jpg.dc * 100 / 16) / 2) + ')' : ''));
+    });
+  }
+  L('Hojas de la obra (tipos de capa)' + (rep.pages.length > 40 ? ' — primeras 40 de ' + rep.pages.length : '') + ':');
+  rep.pages.slice(0, 40).forEach(p => {
+    L('  hoja ' + (p.i + 1) + ': ' + p.n + ' capas — ' + Object.keys(p.types).map(k => k + ' ' + p.types[k]).join(' · ') +
+      (p.fullImg ? ' · ⚠ ' + p.fullImg + ' imagen(es) de HOJA COMPLETA _keepSize (firma de la miniatura de reserva)' : ''));
+  });
+  const dl = window._sbLastDownloadTrace;
+  if(dl){
+    L('Última descarga de la nube (' + dl.at + '):');
+    dl.pages.forEach(p => {
+      L('  hoja ' + p.order + ': filas ' + p.rows + ' · legibles ' + p.parsed + ' · descartadas ' + p.dropped +
+        ' · miniatura de reserva ' + (p.thumbFallback ? '⚠ SÍ (' + (p.rows > 0 ? 'había filas pero ninguna legible' : 'sin filas de capas') + ')' : 'no') +
+        ' · ' + Object.keys(p.types).map(k => k + ' ' + p.types[k]).join(' ') + (p.maxKb ? ' · fila mayor ' + p.maxKb + ' KB' : ''));
+    });
+  } else L('Última descarga de la nube: (en esta sesión la obra no se ha descargado de la nube)');
+  // ── Lectura ──
+  const F = rep.flags, list = a => a.map(i => '#' + i).join(' ');
+  L('LECTURA:');
+  let any = false;
+  const note = t => { any = true; L('  • ' + t); };
+  if(F.stuckDim) note('ATENUADO ATASCADO: el último render pintó las demás capas al 50 % sin que haya panel, barra ni arrastre a la vista (estado de edición que no se limpió). Capas atenuadas: ' + (list(F.dimmed) || '—') + '.');
+  else if(F.dimmed.length) note('Capas de dibujo atenuadas al 50 % en el último render: ' + list(F.dimmed) + ' — normal SOLO mientras hay un panel/herramienta abierto (' + (rep.render && rep.render.panelOpen ? rep.render.panelMode : 'sin panel') + ').');
+  if(F.scaled.length) note('Trazos REDIMENSIONADOS: ' + list(F.scaled) + ' — se pintan escalados desde su bitmap original (que no se toca, ni al guardar ni al reabrir); al ver a poco zoom una reducción es inevitablemente más suave.');
+  if(F.misaligned.length) note('Posición o escala NO entera (remuestreo bilineal al pintar → bordes difusos/grises): ' + list(F.misaligned) + '.');
+  if(F.sizeMismatch.length) note('Relleno/lápiz/acuarela de tamaño distinto del que dicta su caja (el bitmap se estira al pintar): ' + list(F.sizeMismatch) + '.');
+  if(F.noSolid.length) note('Trazos SIN núcleo sólido (α máx < 250): ' + list(F.noSolid) + ' — los píxeles guardados ya son semitransparentes.');
+  if(F.notBlack.length) note('Trazos cuyo color más oscuro no es casi negro: ' + list(F.notBlack) + ' (puede ser el color elegido; si era tinta negra, los píxeles ya están degradados).');
+  if(F.screenGray.length) note('En PANTALLA, trazos con píxeles opacos pero sin ningún píxel oscuro (lum mín > 100, zoom z=' + rep.env.z + '): ' + list(F.screenGray) + ' — algo los aclara al pintarlos (atenuado, capa encima, o reducción de zoom de líneas muy finas).');
+  if(F.fullImages.length) note('Hay imagen(es) de hoja completa: ' + list(F.fullImages) + ' (un dibujo convertido en imagen se guarda como JPEG y pierde nitidez en cada ciclo).');
+  if(F.unloaded.length) note('Capas aún sin cargar (hoja reconstruyéndose): ' + list(F.unloaded) + '.');
+  if(dl && dl.pages.some(p => p.thumbFallback)) note('La última descarga usó la MINIATURA de alguna hoja en lugar de sus capas (ver «Última descarga de la nube»).');
+  if(!any) note('Nada anómalo en las capas de dibujo de esta hoja en este momento (píxeles, colocación, atenuado y pantalla coherentes).');
+}
+// Captura automática (carga de la obra, entrada en dibujo y OK): guarda un resumen COMPACTO del informe para que el 🩺
+// muestre cómo estaban los trazos en esos momentos aunque se pulse el botón más tarde. Diferida y acotada
+// (≤ 3 Mpx leídos y ≤ 12 muestreos de pantalla) para no notarse; nunca lanza.
+function _edQualityCapture(tag){
+  setTimeout(() => {
+    try {
+      const rep = _edDrawingQualityReport({ budgetPx: 3e6, maxScreen: 12 });
+      const log = window._edQualityLog || (window._edQualityLog = []);
+      const rows = rep.layers.map(o => {
+        const px = o.px;
+        return '#' + o.i + ' ' + o.type + (o.hidden ? ' (oculta)' : '') + ' ' + o.cw + 'x' + o.ch + (o.sizeOk || o.ws || o.unloaded || o.type === 'stroke' ? '' : '≠' + o.ew + 'x' + o.eh) +
+          (o.aligned ? ' al✔' : (o.ws || o.unloaded ? '' : (o.scaled ? ' esc×' + (Math.round(o.sx * 100) / 100) : ' al✖' + (Math.round(o.fracL * 100) / 100) + '/' + (Math.round(o.fracT * 100) / 100)))) +
+          (px ? ' sól' + (px.solid + px.semi ? Math.round(100 * px.solid / (px.solid + px.semi)) : 0) + '% αmáx' + px.maxA + ' osc' + (px.darkest ? px.darkest.join(',') : '—') : '') +
+          (o.scr && o.scr.minLum != null ? ' pant' + o.scr.minLum : '') + (o.dimmed ? ' ATENUADA' : '');
+      });
+      log.push({ tag: tag, at: new Date().toLocaleTimeString(), page: rep.pageIdx + 1, z: rep.env.z, n: rep.layers.length, rows: rows.slice(0, 14), more: Math.max(0, rows.length - 14) });
+      if(log.length > 8) log.shift();
+    } catch(_) {}
+  }, 450);
+}
+
 async function _edRunDiag() {
   const lines = [];
   const L = s => lines.push(s);
@@ -49201,6 +49611,20 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── v41.77 — CALIDAD DE DIBUJOS: píxeles, colocación, atenuado y pantalla de cada trazo (ver _edDrawingQualityReport) ──
+  L('');
+  L('── CALIDAD DE DIBUJOS (trazos a mano: píxeles guardados, colocación, atenuado y lo que se ve) ──');
+  try {
+    _edDrawingQualityLines(_edDrawingQualityReport(), L);
+    const _qlog = window._edQualityLog || [];
+    L('Capturas automáticas (' + _qlog.length + '): al terminar de cargar la obra, al entrar en dibujo y tras cada OK');
+    _qlog.forEach(q => {
+      L('  [' + q.at + '] ' + q.tag + ' · hoja ' + q.page + ' · z=' + q.z + ' · ' + q.n + ' capas');
+      q.rows.forEach(t => L('      ' + t));
+      if (q.more) L('      … +' + q.more + ' más');
+    });
+  } catch (_qe) { L('  (error al generar el informe de calidad: ' + (_qe && _qe.message || _qe) + ')'); }
 
   // ── BIBLIOTECA: tamaño real de cada objeto al subir a la nube (petición
   // explícita de Alberto: "no sube la biblioteca... dice que puede haber un
