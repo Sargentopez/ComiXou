@@ -6700,6 +6700,38 @@ function _edDrawCanvasBorder(ctx) {
   ctx.restore();
 }
 
+// v41.73 — CUADRÍCULA: UNA sola definición para los dos editores (como el rectángulo de arriba), y SIEMPRE la última
+// capa que se pinta antes de ese rectángulo: por encima de los objetos, de su selección (marco y tiradores) y de las
+// guías. Alberto: «que la cuadrícula quede siempre en la capa superior, como el rectángulo que marca los límites del
+// lienzo». Antes el editor de animaciones la pintaba justo encima de los objetos pero DEBAJO de guías y selección, y
+// con «Visualizar contenido del Editor» la del editor general (que se ve a través del lienzo transparente) quedaba
+// tapada por cualquier objeto de la animación. Mismo trazo de siempre: 1 px físico, mismo azul que el marco al 40 %,
+// celdas de 30 px de espacio de trabajo, sobre todo el espacio de trabajo y con el mismo origen que el lienzo.
+// REQUISITO: ctx ya tiene aplicada la transformación de la cámara (setTransform(z,0,0,z,x,y)).
+function _edDrawGrid(ctx) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(26,140,255,0.4)';
+  ctx.lineWidth = 1 / edCamera.z;   // 1px físico independiente del zoom
+  const _gCell = 30;                // 30px workspace
+  const _gMx = edMarginX(), _gMy = edMarginY();
+  const _gW = ED_CANVAS_W, _gH = ED_CANVAS_H;
+  ctx.beginPath();
+  for (let gx = _gMx; gx >= 0; gx -= _gCell) {
+    ctx.moveTo(gx, 0); ctx.lineTo(gx, _gH);
+  }
+  for (let gx = _gMx + _gCell; gx <= _gW; gx += _gCell) {
+    ctx.moveTo(gx, 0); ctx.lineTo(gx, _gH);
+  }
+  for (let gy = _gMy; gy >= 0; gy -= _gCell) {
+    ctx.moveTo(0, gy); ctx.lineTo(_gW, gy);
+  }
+  for (let gy = _gMy + _gCell; gy <= _gH; gy += _gCell) {
+    ctx.moveTo(0, gy); ctx.lineTo(_gW, gy);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Overlays baratos que siempre se dibujan sobre edCtx:
 // selección, cuadrícula, reglas, borde del lienzo, crop, motion path, scrollbars.
 function _edRenderOverlays() {
@@ -6733,32 +6765,13 @@ function _edRenderOverlays() {
     }
     if(edActiveTool==='select' && edRubberBand) edDrawRubberBand();
   }
-  // ── Cuadrícula: encima de todas las capas, mismo azul que el marco del lienzo ──
-  if (edGridVisible) {
-    edCtx.save();
-    edCtx.strokeStyle = 'rgba(26,140,255,0.4)';
-    edCtx.lineWidth = 1 / edCamera.z;   // 1px físico independiente del zoom
-    const _gCell = 30; // 30px workspace: mitad del tamaño anterior
-    const _gMx = edMarginX(), _gMy = edMarginY();
-    const _gW = ED_CANVAS_W, _gH = ED_CANVAS_H;
-    edCtx.beginPath();
-    for (let gx = _gMx; gx >= 0; gx -= _gCell) {
-      edCtx.moveTo(gx, 0); edCtx.lineTo(gx, _gH);
-    }
-    for (let gx = _gMx + _gCell; gx <= _gW; gx += _gCell) {
-      edCtx.moveTo(gx, 0); edCtx.lineTo(gx, _gH);
-    }
-    for (let gy = _gMy; gy >= 0; gy -= _gCell) {
-      edCtx.moveTo(0, gy); edCtx.lineTo(_gW, gy);
-    }
-    for (let gy = _gMy + _gCell; gy <= _gH; gy += _gCell) {
-      edCtx.moveTo(0, gy); edCtx.lineTo(_gW, gy);
-    }
-    edCtx.stroke();
-    edCtx.restore();
-  }
   // ── Reglas (T29): solo visibles en el editor, encima de todo ──
   _edRulesDraw(edCtx);
+  // ── Cuadrícula: la ÚLTIMA capa antes del borde del lienzo (v41.73) — encima de los objetos, de la selección y
+  //    de las guías, igual que el borde (antes iba debajo de las guías). Ver _edDrawGrid.
+  //    Con el editor de animaciones abierto que la repinta él mismo encima de sus objetos (ver _gcpGridOnTop), este
+  //    lienzo —que se ve por debajo, al 50 %— no la pinta: se duplicaría con más intensidad en las zonas vacías.
+  if (edGridVisible && !(window._gcpActive && _gcpGridOnTop())) _edDrawGrid(edCtx);
   // ── Borde azul del lienzo: siempre encima, 1px en coords workspace ──
   // (v41.67: misma función que usa el editor de animaciones — ver _edDrawCanvasBorder)
   _edDrawCanvasBorder(edCtx);
@@ -13254,7 +13267,7 @@ function _edCopyMotionPathPts(pts) {
 
 // v41.56 — Traspasa la trayectoria (todos sus campos persistentes) de una capa a otra.
 // Cualquier flujo de edición que SUSTITUYA una capa por un objeto nuevo —congelar un dibujo
-// reeditado, pasar una forma a recta, «Editar relleno» de una forma/recta, simetría de grupo,
+// reeditado, pasar una forma a recta, «Rasterizar» (antes «Editar relleno») una forma/recta, simetría de grupo,
 // reedición de una animación GIF— debe llamarla con la capa vieja y la nueva; si no, el objeto
 // «pierde» su trayectoria y hay que volver a crearla (bug reportado por Alberto: «hay que
 // volver a crearla cada vez que se le hace un cambio al objeto»). Es el espejo de lo que ya
@@ -14250,9 +14263,18 @@ function edOnStart(e){
     if (e.target && e.target.closest('#edMotionBar')) return;
     if (document.getElementById('edMpBehaviourModal')?.classList.contains('open')) return;
 
+    // v41.73 — un toque sobre el TIRADOR de una guía BLOQUEADA (extremo libre o nodo compartido bloqueado) tiene
+    // prioridad sobre todos los controles del objeto de la trayectoria (rotar, redimensionar, botón central de inicio
+    // de trazado y arrastrar el objeto): se deja caer directamente al bloque de guías de más abajo, que gestiona su
+    // doble toque (panel con el candado). Alberto: «las guías bloqueadas [deben] detectar los toques también por
+    // encima de todos, de otro modo no se puede desbloquear una guía con sus extremos sobre otro objeto». Las guías
+    // SIN bloquear siguen cediendo ante los controles del objeto (para poder iniciar el trazado desde el centro).
+    const _mpGuideFirst = !_edGuidesPassThroughActive() && (edRules.length > 0 || edRuleNodes.length > 0) &&
+      (() => { const _gc = edCoords(e); return _edLockedGuideHandleAt(_gc.px, _gc.py, e.pointerType === 'touch'); })();
+
     // Handle de rotación del objeto: orientar el objeto en su punto de partida,
     // con independencia de hacia dónde vaya el trazado.
-    if (_edMpRotateHitTest(e)) {
+    if (!_mpGuideFirst && _edMpRotateHitTest(e)) {
       if (_edMotionPathPlaying || _edMpPreviewActive) _edMpPreviewStop();
       if (e.pointerType === 'touch') {
         if (!window._edActivePointers) window._edActivePointers = new Map();
@@ -14294,7 +14316,7 @@ function edOnStart(e){
     // ya se podía rotar.
     {
       const _laRz = edLayers[_edMotionPathTarget];
-      if (_laRz && _laRz.type !== 'bubble' && !_laRz.locked && !_laRz.groupId) {
+      if (!_mpGuideFirst && _laRz && _laRz.type !== 'bubble' && !_laRz.locked && !_laRz.groupId) {
         const _isTRz = e.pointerType === 'touch';
         const _pwRz = edPageW(), _phRz = edPageH(), _zRz = edCamera.z;
         const _objMinHalfScreenRz = Math.min(_laRz.width * _pwRz, _laRz.height * _phRz) * _zRz / 2;
@@ -14348,7 +14370,7 @@ function edOnStart(e){
     // (petición de Alberto, para no chocar con los handlers de arrastrar/
     // redimensionar de más abajo). Mismo tap: activa el dibujo Y coloca el
     // primer punto del trazado, sin paso intermedio.
-    if (_edMpCenterHitTest(e)) {
+    if (!_mpGuideFirst && _edMpCenterHitTest(e)) {
       // En táctil: esperar 120ms por si llega segundo dedo (pinch/zoom/mover cámara).
       // En ratón/lápiz: iniciar inmediatamente.
       if (e.pointerType === 'touch') {
@@ -14402,7 +14424,7 @@ function edOnStart(e){
     // ── Arrastrar (mover) el objeto ────────────────────────────────────────
     {
       const _laMv = edLayers[_edMotionPathTarget];
-      if (_laMv && !_laMv.locked && _laMv.contains(c.nx, c.ny)) {
+      if (!_mpGuideFirst && _laMv && !_laMv.locked && _laMv.contains(c.nx, c.ny)) {
         edDragOffX = c.nx - _laMv.x;
         edDragOffY = c.ny - _laMv.y;
         edIsDragging = true;
@@ -22938,6 +22960,117 @@ function _edTextToDrawing(idx) {
   edRedraw();
 }
 
+// v41.74 — «Rasterizar» (antes «Editar relleno»): convierte una forma/recta VECTORIAL en un dibujo a mano ya
+// terminado —mapa de bits—, SIN abrir el editor de dibujo. Reutiliza el horneado que hacía «Editar relleno»
+// (contorno → tinta del dibujo, relleno → capa de relleno) y ensambla el mismo grupo de 4 capas que deja el
+// editor al congelar un dibujo y que ya usa _edTextToDrawing con un texto: relleno → acuarela → lápiz → trazo
+// (con las 4, «Editar dibujo» no tiene que rellenar huecos del grupo ni deja incidentes en el diagnóstico 🩺).
+//   · Sin pasar por _edFreezeDrawLayer a propósito: aquí no hay sesión de dibujo (_edTmp, DrawLayer de 25 MB,
+//     historial local…). Todo se construye aparte y la página solo se toca al final, en UN splice → si algo falla
+//     el vector queda exactamente como estaba; y es UN solo paso de historial (deshacer devuelve el vector).
+//   · La opacidad NO se hornea: pasa a la opacidad de las capas (deslizador del panel = lo que se ve; ver
+//     $('pp-opacity'), que la sincroniza con relleno/lápiz/acuarela). El giro sí queda horneado (rotation = 0).
+//   · Conserva grupo, bloqueo, oculto, nombre, botón-acción y trayectoria de animación.
+//   · Devuelve true si convirtió; false —sin tocar nada y avisando— si no había nada visible o falló.
+function _edVectorToDrawing(idx) {
+  const page = edPages[edCurrentPage]; if (!page) return false;
+  const la = page.layers[idx];
+  if (!la || (la.type !== 'shape' && la.type !== 'line')) return false;
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+  const _ws = () => { const c = document.createElement('canvas'); c.width = ED_CANVAS_W; c.height = ED_CANVAS_H; return c; };
+  let penWs = null, fillWs = null, built = null;
+  try {
+    // ── 1. Hornear en dos canvas workspace (copias sueltas del objeto: la capa original no se toca) ──────
+    // draw() solo lee la capa; la copia conserva el prototipo (ShapeLayer/LineLayer) y se le cambia el estilo.
+    const _copy = (o) => Object.assign(Object.create(Object.getPrototypeOf(o)), o);
+    // «Objeto unido» (⊕ Unir): cada contorno puede traer su propio relleno/grosor (groupedStyles) y pisa al global
+    const _gs = Array.isArray(la.groupedStyles) ? la.groupedStyles : null;
+    const _hasFill = !!((la.fillColor && la.fillColor !== 'none') ||
+                        (_gs && _gs.some(s => s && s.fillColor && s.fillColor !== 'none')));
+    penWs = _ws();                                   // contorno (sin relleno) → tinta
+    const _ink = _copy(la); _ink.opacity = 1; _ink.fillColor = 'none';
+    if (_gs) _ink.groupedStyles = _gs.map(s => Object.assign({}, s, { fillColor: 'none' }));
+    _ink.draw(penWs.getContext('2d'));
+    fillWs = _ws();                                  // relleno (sin contorno) → capa de relleno
+    if (_hasFill) {
+      const _fil = _copy(la); _fil.opacity = 1; _fil.lineWidth = 0;
+      if (_gs) _fil.groupedStyles = _gs.map(s => Object.assign({}, s, { lineWidth: 0 }));
+      _fil.draw(fillWs.getContext('2d'));
+    }
+    // ── 2. Caja del contenido visible (unión tinta + relleno, mismo criterio que al congelar: alfa > 10) ──
+    const bbPen  = StrokeLayer._boundingBox(penWs);
+    const bbFill = _hasFill ? StrokeLayer._boundingBox(fillWs) : null;
+    if (!bbPen && !bbFill) { edToast(I18n.t('ed_rasterizeNothing')); return false; }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const b of [bbPen, bbFill]) {
+      if (!b) continue;
+      x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+      x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
+    }
+    const uW = Math.max(1, x1 - x0), uH = Math.max(1, y1 - y0);
+    const uCx = (x0 + uW / 2 - mx) / pw, uCy = (y0 + uH / 2 - my) / ph;
+    const uFw = uW / pw, uFh = uH / ph;
+    const _crop = (src) => {
+      const c = document.createElement('canvas'); c.width = uW; c.height = uH;
+      if (src) c.getContext('2d').drawImage(src, x0, y0, uW, uH, 0, 0, uW, uH);
+      return c;
+    };
+    // ── 3. Grupo de 4 capas recortadas a la caja común (todas con la misma posición y tamaño) ──────────
+    const uid = la._uid || ('dl_' + Date.now().toString(36));
+    const op  = la.opacity ?? 1;
+    const _sub = (Cls, prefix, cv) => {
+      const l = new Cls();
+      l._drawLayerId = uid; l._uid = prefix + uid;
+      l._canvas = cv; l._ctx = cv.getContext('2d');
+      l._isWorkspaceCanvas = false;
+      l._bboxOriginX = x0; l._bboxOriginY = y0;
+      l.x = uCx; l.y = uCy; l.width = uFw; l.height = uFh; l.rotation = 0;
+      l.opacity = op;
+      if (la.hidden) l.hidden = true;
+      if (la.locked) l.locked = true;   // mismo criterio que $('pp-lock'): el bloqueo del trazo baja a sus capas
+      return l;
+    };
+    const fl = _sub(FillLayer,       'fl_',     _crop(fillWs));
+    const wl = _sub(WatercolorLayer, 'wc_',     _crop(null));
+    const pl = _sub(PencilLayer,     'pencil_', _crop(null));
+    const penCrop = _crop(penWs);
+    const sl = new StrokeLayer(penCrop);   // el constructor mide y recorta a SU caja; abajo se fija la del conjunto
+    sl._canvas = penCrop;
+    sl._uid = uid; sl._fillLayerId = uid; sl._pencilLayerId = uid; sl._watercolorLayerId = uid;
+    sl.x = uCx; sl.y = uCy; sl.width = uFw; sl.height = uFh; sl.rotation = 0;
+    sl._bboxOriginX = x0; sl._bboxOriginY = y0;
+    sl.opacity = op;
+    if (la.groupId) sl.groupId = la.groupId;
+    if (la.locked)  sl.locked  = true;
+    if (la.hidden)  sl.hidden  = true;
+    if (la.name)    sl.name    = la.name;
+    if (la._buttonAction) sl._buttonAction = Object.assign({}, la._buttonAction);
+    _edCarryMotionPath(la, sl);   // v41.56: sustituir una capa por otra no borra la trayectoria
+    built = { fl, wl, pl, sl };
+  } catch (e) {
+    console.warn('[rasterizar] falló el horneado:', e);
+    edToast(I18n.t('ed_rasterizeFailed'));
+    return false;
+  } finally {
+    // soltar ya los dos bitmaps del tamaño del workspace (≈25 MB cada uno): en Android no se espera al GC
+    for (const c of [penWs, fillWs]) { if (c) { c.width = 0; c.height = 0; } }
+  }
+  if (!built) return false;
+  // ── 4. Sustituir el vector por el grupo, en un solo paso, y registrarlo como UN paso de historial ─────
+  const { fl, wl, pl, sl } = built;
+  edPushHistory();   // estado «antes» (no duplica si ya estaba)
+  page.layers.splice(idx, 1, fl, wl, pl, sl);
+  edLayers = page.layers;
+  edSelectedIdx = page.layers.indexOf(sl);
+  if (edMultiSel && edMultiSel.length) {   // índices de selección múltiple: el vector (1 capa) pasa a ser 4
+    edMultiSel = edMultiSel.map(i => i === idx ? edSelectedIdx : (i > idx ? i + 3 : i));
+  }
+  edPushHistory();
+  edRedraw();
+  return true;
+}
+
 function _edFreezeAllDrawLayers(){
   const page = edPages[edCurrentPage]; if(!page) return;
   // Iterar hasta que no quede ningún DrawLayer en la página
@@ -25350,7 +25483,7 @@ function edRenderOptionsPanel(mode){
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
         <button id="pp-edit-shape" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_vectorEditBtn')}</button>
-        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editFillBtn')}</button>
+        <button id="pp-edit-fill" title="${I18n.t('op_rasterizeBtnTitle')}" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_rasterizeBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     } else if(la.type==='line'){
@@ -25358,7 +25491,7 @@ function edRenderOptionsPanel(mode){
       ${_edRotOpacityRowHtml(la)}
       <div class="op-prop-row">
         <button id="pp-edit-line" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_vectorEditBtn')}</button>
-        <button id="pp-edit-fill" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_editFillBtn')}</button>
+        <button id="pp-edit-fill" title="${I18n.t('op_rasterizeBtnTitle')}" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_rasterizeBtn')}</button>
       </div>
       ${_edPathRowHtml(la, true)}`;
     }
@@ -25676,126 +25809,46 @@ function edRenderOptionsPanel(mode){
       edRenderOptionsPanel('draw');
       edRedraw();
     });
-    // ── Editar relleno: convierte el objeto en DrawLayer (pen=trazo, bucket=relleno) ──
+    // ── Rasterizar (v41.74; antes «Editar relleno»): forma/recta vectorial → dibujo a mano (mapa de bits) ──
+    // Antes este botón convertía el objeto en dibujo Y abría el editor de dibujo (bote de pintura). Ahora solo
+    // convierte (ver _edVectorToDrawing): el objeto queda seleccionado como un dibujo a mano más, editable luego
+    // con «Editar dibujo», y deshacer devuelve el vector. Se mantiene el aviso previo: la información vectorial
+    // se pierde, así que se ofrece guardar antes el objeto en la biblioteca.
     $('pp-edit-fill')?.addEventListener('click', () => {
       const page = edPages[edCurrentPage]; if (!page) return;
-      const la = edLayers[edSelectedIdx]; if (!la) return;
-
-      // Para objetos vectoriales (shape/line) mostrar diálogo antes de
-      // rasterizar: la información vectorial se perderá al editar el relleno.
-      if (la.type === 'shape' || la.type === 'line') {
-        const _overlay    = $('edConfirmModal');
-        const _msgEl      = $('edConfirmMsg');
-        const _okBtn      = $('edConfirmOk');
-        const _cancelBtn  = $('edConfirmCancel');
-        // Texto del diálogo
-        if (_msgEl)     _msgEl.textContent  = I18n.t('ed_editFillLoseVectorMsg');
-        if (_okBtn)     _okBtn.textContent   = I18n.t('ed_yesSaveBtn');
-        if (_cancelBtn) _cancelBtn.textContent = I18n.t('ed_noBtn');
-        // Función que realmente inicia la edición (llamada en ambas opciones)
-        const _startFillEdit = () => {
-          edPushHistory();
-          const _la2 = edLayers[edSelectedIdx]; if (!_la2) return;
-          const _page2 = edPages[edCurrentPage]; if (!_page2) return;
-          const _bakeCanvas = document.createElement('canvas');
-          _bakeCanvas.width = ED_CANVAS_W; _bakeCanvas.height = ED_CANVAS_H;
-          const _bakeCtx = _bakeCanvas.getContext('2d');
-          const _laNoFill = Object.assign(Object.create(Object.getPrototypeOf(_la2)), _la2);
-          _laNoFill.fillColor = 'none';
-          _laNoFill.draw(_bakeCtx);
-          const _dl = new DrawLayer();
-          _dl._ctx.drawImage(_bakeCanvas, 0, 0);
-          _dl._uid = _la2._uid || ('dl_' + Date.now().toString(36));
-          _dl._fillLayerId = _dl._uid;
-          _dl._fromStroke = true;
-          _edCarryMotionPath(_la2, _dl); // v41.56: «Editar relleno» de una forma/recta no borra su trayectoria
-          const _fillCanvas = document.createElement('canvas');
-          _fillCanvas.width = ED_CANVAS_W; _fillCanvas.height = ED_CANVAS_H;
-          const _fillCtx = _fillCanvas.getContext('2d');
-          if (_la2.fillColor && _la2.fillColor !== 'none') {
-            const _laFillOnly = Object.assign(Object.create(Object.getPrototypeOf(_la2)), _la2);
-            _laFillOnly.lineWidth = 0;
-            _laFillOnly.draw(_fillCtx);
-          }
-          const _flNew = new FillLayer();
-          _flNew._drawLayerId = _dl._uid;
-          _flNew._uid = 'fl_' + _dl._uid;
-          _flNew._canvas = _fillCanvas; _flNew._ctx = _fillCanvas.getContext('2d');
-          _flNew._isWorkspaceCanvas = true;
-          _flNew.x = 0.5; _flNew.y = 0.5; _flNew.width = 1; _flNew.height = 1; _flNew.rotation = 0;
-          _page2.layers.splice(edSelectedIdx, 0, _flNew);
-          _page2.layers.splice(edSelectedIdx + 1, 1, _dl);
-          edLayers = _page2.layers;
-          edSelectedIdx = -1;
-          edActiveTool = 'fill';
-          edCanvas.className = 'tool-fill';
-          const _cur = $('edBrushCursor'); if (_cur) _cur.style.display = 'block';
-          _edDrawInitHistory();
-          _edDrawLockUI();
-          _edTmp.active = 'bucket';
-          edFillBrushType = 'bucket';
-          edDrawOpacity = 100;
-          _edSyncFillCursor();
-          edRenderOptionsPanel('fill');
-          edRedraw();
-        };
-        if (!_overlay) {
-          // Fallback nativo
-          if (window.confirm(I18n.t('ed_editFillLoseVectorMsg'))) edBibGuardar();
-          _startFillEdit();
-          return;
-        }
-        _overlay.classList.add('open');
-        const _stopEv = e => e.stopPropagation();
-        _overlay.addEventListener('pointerdown', _stopEv, { capture: true });
-        const _close = () => {
-          _overlay.classList.remove('open');
-          _overlay.removeEventListener('pointerdown', _stopEv, { capture: true });
-          if (_okBtn)     { _okBtn.removeEventListener('click', _onYes); _okBtn.textContent = I18n.t('delete'); }
-          if (_cancelBtn) { _cancelBtn.removeEventListener('click', _onNo); _cancelBtn.textContent = I18n.t('cancel'); }
-        };
-        const _onYes = () => { _close(); edBibGuardar(); _startFillEdit(); };
-        const _onNo  = () => { _close(); _startFillEdit(); };
-        _okBtn?.addEventListener('click', _onYes);
-        _cancelBtn?.addEventListener('click', _onNo);
-        return; // no continuar — la edición se inicia desde los callbacks
+      const la = edLayers[edSelectedIdx];
+      if (!la || (la.type !== 'shape' && la.type !== 'line')) return;
+      const _overlay    = $('edConfirmModal');
+      const _msgEl      = $('edConfirmMsg');
+      const _okBtn      = $('edConfirmOk');
+      const _cancelBtn  = $('edConfirmCancel');
+      // Texto del diálogo
+      if (_msgEl)     _msgEl.textContent  = I18n.t('ed_rasterizeVectorMsg');
+      if (_okBtn)     _okBtn.textContent   = I18n.t('ed_yesSaveBtn');
+      if (_cancelBtn) _cancelBtn.textContent = I18n.t('ed_noBtn');
+      // Convierte (se llama en ambas opciones del diálogo). Si convirtió, el panel pasa a ser el del dibujo.
+      const _rasterize = () => {
+        if (_edVectorToDrawing(edSelectedIdx)) edRenderOptionsPanel('props');
+      };
+      if (!_overlay) {
+        // Fallback nativo
+        if (window.confirm(I18n.t('ed_rasterizeVectorMsg'))) edBibGuardar();
+        _rasterize();
+        return;
       }
-
-      edPushHistory();
-
-      let dl = null;
-
-      if (la.type === 'stroke') {
-        dl = la.toDrawLayer();
-        if (la._uid)               dl._uid               = la._uid;
-        if (la._fillLayerId)       dl._fillLayerId       = la._fillLayerId;
-        if (la._pencilLayerId)     dl._pencilLayerId     = la._pencilLayerId;
-        if (la._watercolorLayerId) dl._watercolorLayerId = la._watercolorLayerId;
-        // Expandir TODAS las capas del grupo al canvas workspace
-        const _laUid = la._uid || la._fillLayerId;
-        if (_laUid) {
-          _edExpandGroupLayerToWs(page.layers.find(f=>f.type==='fill'       && f._drawLayerId===_laUid), dl);
-          _edExpandGroupLayerToWs(page.layers.find(f=>f.type==='pencil'     && f._drawLayerId===_laUid), dl);
-          _edExpandGroupLayerToWs(page.layers.find(f=>f.type==='watercolor' && f._drawLayerId===_laUid), dl);
-        }
-        page.layers.splice(edSelectedIdx, 1, dl);
-
-      } else { return; }
-
-      edLayers = page.layers;
-      edSelectedIdx = -1;
-      edActiveTool = 'fill';
-      edCanvas.className = 'tool-fill';
-      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
-      _edDrawInitHistory();
-      _edDrawLockUI();
-      // Activar capa bote para que el foco esté en el relleno
-      _edTmp.active = 'bucket';
-      edFillBrushType = 'bucket';
-      edDrawOpacity = 100;
-      _edSyncFillCursor();
-      edRenderOptionsPanel('fill');
-      edRedraw();
+      _overlay.classList.add('open');
+      const _stopEv = e => e.stopPropagation();
+      _overlay.addEventListener('pointerdown', _stopEv, { capture: true });
+      const _close = () => {
+        _overlay.classList.remove('open');
+        _overlay.removeEventListener('pointerdown', _stopEv, { capture: true });
+        if (_okBtn)     { _okBtn.removeEventListener('click', _onYes); _okBtn.textContent = I18n.t('delete'); }
+        if (_cancelBtn) { _cancelBtn.removeEventListener('click', _onNo); _cancelBtn.textContent = I18n.t('cancel'); }
+      };
+      const _onYes = () => { _close(); edBibGuardar(); _rasterize(); };
+      const _onNo  = () => { _close(); _rasterize(); };
+      _okBtn?.addEventListener('click', _onYes);
+      _cancelBtn?.addEventListener('click', _onNo);
     });
 
     // Shape props — editar objeto abre submenú Objeto o Rectas (según _fusionId)
@@ -26506,6 +26559,28 @@ function _edRulesHit(wx, wy, isTouch) {
     }
   }
   return null;
+}
+
+// v41.73 — ¿el punto (coords de espacio de trabajo) cae sobre el tirador de una guía BLOQUEADA — un extremo libre o un
+// nodo compartido bloqueado? Misma geometría y radios que _edRulesHit. Las líneas de las guías bloqueadas no cuentan
+// (no se detectan, ver T21 parte 1). Alberto: «las guías bloqueadas [deben] detectar los toques también por encima de
+// todos, de otro modo no se puede desbloquear una guía con sus extremos sobre otro objeto». En el editor general el
+// bloque de guías de edOnStart ya va antes que cualquier objeto; el único sitio donde los controles del objeto le
+// ganaban eran los del MODO TRAYECTORIA (rotar, redimensionar, botón central, arrastrar) — ver edOnStart.
+function _edLockedGuideHandleAt(wx, wy, isTouch) {
+  if (edRulesHidden) return false;
+  const z = edCamera.z;
+  const rPx = (isTouch ? 22 : _ED_RULE_R) / z;
+  const nPx = (_ED_RULE_R * 1.5) / z;
+  for (const n of edRuleNodes) {
+    if (n.locked && Math.hypot(wx - n.x, wy - n.y) <= nPx) return true;
+  }
+  for (const r of edRules) {
+    if (r.hidden || !r.locked) continue;
+    if (!r.nodeA && Math.hypot(wx - r.x1, wy - r.y1) <= rPx) return true;
+    if (!r.nodeB && Math.hypot(wx - r.x2, wy - r.y2) <= rPx) return true;
+  }
+  return false;
 }
 
 // Actualiza el texto del botón toggle según el estado actual de visibilidad de guías.
@@ -41104,15 +41179,27 @@ function _gcpHandleDown(e) {
       if (_tx >= rect2.left && _tx <= rect2.right && _ty >= rect2.top && _ty <= rect2.bottom) {
         // Calcular qué objeto se tocó
         const _c0 = edCoords(e);
+        // v41.73 — LAS GUÍAS VAN ANTES QUE CUALQUIER OBJETO (Alberto: «las guías bloqueadas [deben] detectar los
+        // toques también por encima de todos, de otro modo no se puede desbloquear una guía con sus extremos sobre
+        // otro objeto»). Esta detección de doble toque iba ANTES del bloque de guías de más abajo (que ya declara
+        // «prioridad antes que handles de capas»): el segundo toque sobre el extremo de una guía que estaba sobre
+        // un objeto abría el panel del OBJETO y nunca llegaba a la guía, así que su panel (con el candado) era
+        // inalcanzable. Si el toque cae sobre una guía (extremo, nodo compartido o línea; las ocultas y las líneas
+        // bloqueadas no cuentan, igual que en _gcpRulesHit) no es un toque sobre un objeto: se trata como «vacío»
+        // aquí y lo resuelve el bloque de guías, con su propio doble toque.
+        const _gHit0 = (_gcpRules.length || _gcpRuleNodes.length)
+          ? _gcpRulesHit(_c0.px, _c0.py, e.pointerType === 'touch') : null;
         let _hit0 = -1;
-        for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
-          if (window._gcpLayers[_i]?._gcpVisible === false) continue;
-          if (window._gcpLayers[_i]?.contains?.(_c0.nx, _c0.ny)) { _hit0 = _i; break; }
-        }
-        // También comprobar si el objeto ya seleccionado cubre el punto (por su bbox)
-        if (_hit0 < 0 && window._gcpSelIdx >= 0) {
-          const _sel = window._gcpLayers[window._gcpSelIdx];
-          if (_sel?._gcpVisible !== false && _sel?.contains?.(_c0.nx, _c0.ny)) _hit0 = window._gcpSelIdx;
+        if (!_gHit0) {
+          for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
+            if (window._gcpLayers[_i]?._gcpVisible === false) continue;
+            if (window._gcpLayers[_i]?.contains?.(_c0.nx, _c0.ny)) { _hit0 = _i; break; }
+          }
+          // También comprobar si el objeto ya seleccionado cubre el punto (por su bbox)
+          if (_hit0 < 0 && window._gcpSelIdx >= 0) {
+            const _sel = window._gcpLayers[window._gcpSelIdx];
+            if (_sel?._gcpVisible !== false && _sel?.contains?.(_c0.nx, _c0.ny)) _hit0 = window._gcpSelIdx;
+          }
         }
         if (_hit0 >= 0) {
           const _now0 = Date.now();
@@ -45702,23 +45789,6 @@ function _gcpRedraw() {
     _gcpDrawLayerAt(gcpCtx, l, 1);
   });
 
-  // ── Cuadrícula GCP: encima de capas, mismo azul que el marco ──
-  if (gcpGridVisible) {
-    gcpCtx.save();
-    gcpCtx.strokeStyle = 'rgba(26,140,255,0.4)';
-    gcpCtx.lineWidth = 1 / edCamera.z;
-    const _gcCell = 30;
-    const _gcMx = edMarginX(), _gcMy = edMarginY();
-    const _gcW = ED_CANVAS_W, _gcH = ED_CANVAS_H;
-    gcpCtx.beginPath();
-    for (let gx = _gcMx; gx >= 0; gx -= _gcCell) { gcpCtx.moveTo(gx, 0); gcpCtx.lineTo(gx, _gcH); }
-    for (let gx = _gcMx + _gcCell; gx <= _gcW; gx += _gcCell) { gcpCtx.moveTo(gx, 0); gcpCtx.lineTo(gx, _gcH); }
-    for (let gy = _gcMy; gy >= 0; gy -= _gcCell) { gcpCtx.moveTo(0, gy); gcpCtx.lineTo(_gcW, gy); }
-    for (let gy = _gcMy + _gcCell; gy <= _gcH; gy += _gcCell) { gcpCtx.moveTo(0, gy); gcpCtx.lineTo(_gcW, gy); }
-    gcpCtx.stroke();
-    gcpCtx.restore();
-  }
-
   // Dibujar guías GCP (encima de capas, debajo del handle de selección)
   if (_gcpRules.length || _gcpRuleNodes.length) {
     _gcpRulesDraw(gcpCtx);
@@ -45726,6 +45796,9 @@ function _gcpRedraw() {
 
   // Dibujar handles de selección — copia de edDrawSel usando gcpCtx y _gcpLayers
   _gcpDrawSel();
+  // v41.73 — cuadrícula: la ÚLTIMA capa antes del rectángulo del lienzo, igual que él (antes iba justo encima de los
+  // objetos pero DEBAJO de guías y selección). Misma función que el editor general — ver _edDrawGrid/_gcpGridOnTop.
+  if (_gcpGridOnTop()) _edDrawGrid(gcpCtx);
   // v41.67 — rectángulo de referencia del lienzo (borde azul de la hoja), siempre encima como en el editor
   // general y con LA MISMA función (_edDrawCanvasBorder): mismo origen, tamaño, cámara y trazo, de modo que
   // con "Visualizar contenido del Editor" coincide al píxel con el lienzo de debajo. Solo se pinta en el
@@ -45734,6 +45807,18 @@ function _gcpRedraw() {
   gcpCtx.setTransform(1, 0, 0, 1, 0, 0);
   // Mantener scrollbars sincronizadas con la cámara
   if (typeof _edScrollbarsUpdate === 'function') _edScrollbarsUpdate();
+}
+
+// v41.73 — ¿hay que pintar la cuadrícula ENCIMA de los objetos del editor de animaciones?
+//  · su propia cuadrícula (menú Cuadrícula del editor de animaciones), o
+//  · la del editor general cuando «Visualizar contenido del Editor» deja ver el lienzo del editor general a través de
+//    este (#gcpCanvas transparente sobre #editorCanvas al 50 %). La cuadrícula del editor general vive en OTRO lienzo,
+//    por debajo, así que cualquier objeto de la animación la tapaba (el rectángulo sí quedaba encima porque este
+//    lienzo también lo pinta): se repinta aquí, en el mismo sitio y con el mismo trazo, para que quede arriba del todo.
+//    Sin «Visualizar contenido del Editor» el fondo es blanco opaco y el editor general no se ve: solo cuenta la propia.
+function _gcpGridOnTop() {
+  if (gcpGridVisible) return true;
+  return !!edGridVisible && !!gcpCanvas && !gcpCanvas.classList.contains('gcp-canvas-opaque');
 }
 
 // Copia de edDrawSel adaptada al canvas GIF
@@ -48326,6 +48411,9 @@ function _gcpInitRules() {
     _gcpGridChk.addEventListener('change', () => {
       gcpGridVisible = _gcpGridChk.checked;
       _gcpCloseAllDropdowns();
+      // v41.73 — con la cuadrícula del editor general también activa, quién la pinta (este lienzo encima de los objetos o
+      // el de debajo) depende de esta casilla — ver _gcpGridOnTop y _edRenderOverlays: se repintan los dos.
+      if (edGridVisible) edRedraw();
       _gcpRedraw();
     });
   }
@@ -48347,6 +48435,9 @@ function _gcpInitViewEditorToggle() {
   _canvas.classList.add('gcp-canvas-opaque');
   _chk.addEventListener('change', () => {
     _canvas.classList.toggle('gcp-canvas-opaque', !_chk.checked);
+    // v41.73 — con el contenido del editor visible, la cuadrícula del editor general también se repinta encima de los
+    // objetos de la animación (ver _gcpGridOnTop): hay que redibujar al activar/desactivar la casilla.
+    if (window._gcpActive) { edRedraw(); if (typeof _gcpRedraw === 'function') _gcpRedraw(); }
   });
 }
 
