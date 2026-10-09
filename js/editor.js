@@ -1195,8 +1195,9 @@ let edSelectedIdx = -1;
 let _edInlineTextEditFor = null;
 let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRotating = false;
 // Umbral de movimiento (px de pantalla) para distinguir clic de arrastre con
-// pointerType==='pen' (tableta gráfica en PC). window._edPenDragPending guarda
-// el candidato a drag hasta que se supera este umbral (ver edOnStart/edOnMove).
+// RATÓN y LÁPIZ (pointerType 'mouse' | 'pen'; hasta v41.75 solo el lápiz de
+// tableta lo tenía — ver _edNeedsDragSlop más abajo). window._edPenDragPending
+// guarda el candidato a drag hasta que se supera este umbral (ver edOnStart/edOnMove).
 // Ventana de doble tap/doble clic (táctil y objetos en general). Antes 350ms,
 // reducida a 200ms a petición del usuario (350 se sentía demasiado lento).
 // Vuelto a subir a 300ms (bug reportado por Alberto: con 200ms el doble tap
@@ -1210,6 +1211,31 @@ let edIsDragging = false, edIsResizing = false, edIsTailDragging = false, edIsRo
 // la plataforma principal de la app.
 const _edDoubleTapMs = 300;
 const _edPenDragThreshold = 6;
+// v41.76 — TOLERANCIA DE CLIC PARA EL RATÓN (Alberto: «al hacer doble clic para abrir el panel de
+// propiedades es fácil hacer un pequeño movimiento de ratón entre el primer y el segundo clic,
+// provocando el movimiento involuntario del objeto. Creo que ya se arregló para táctil, debe
+// arreglarse para ratón o lápiz óptico»). Causa: el ratón arrancaba el arrastre en el MISMO
+// pointerdown, con tolerancia cero — el pulso de la mano que desplaza el puntero 1-3 px entre
+// pulsar y soltar el primer clic movía el objeto (y dejaba un paso de deshacer) antes de que el
+// segundo clic abriese el panel. El dedo queda como estaba (selección diferida 120 ms y doble
+// toque resuelto en el propio pointerdown; Alberto: en táctil ya funcionaba). Solución estándar (SM_CXDRAG de Windows,
+// touch-slop de Android, Photoshop/Krita/Figma): el arrastre queda «pendiente» y solo se activa
+// cuando el puntero se aleja _edPenDragThreshold px del punto de pulsación; entonces el objeto
+// alcanza al puntero (el desfase edDragOffX/Y se fijó al pulsar, así que no se pierde posición).
+// Sin ventanas de tiempo (v38.18 retiró _edDblTapGuard por absorber empujones deliberados).
+function _edNeedsDragSlop(e){ return !!e && e.pointerType !== 'touch'; }
+// Arma el arrastre del objeto idx (ya seleccionado y con edDragOffX/Y calculados): ratón y lápiz →
+// pendiente hasta superar el umbral (promoción en edOnMove); dedo → inmediato (protegido aparte).
+function _edArmObjDrag(e, idx){
+  if(_edNeedsDragSlop(e)){
+    edIsDragging = false;
+    window._edPenDragPending = { found: idx, startX: e.clientX, startY: e.clientY };
+  } else {
+    edIsDragging = true;
+    window._edPenDragPending = null;
+  }
+  window._edMoved = false;
+}
 // v38.18 — Guard anti-arrastre tras doble tap ELIMINADO (Alberto: redundante,
 // el bloqueo de arrastre mientras el panel de propiedades está abierto —ver
 // edOnMove— ya cubre el temblor sin los falsos positivos de una ventana fija
@@ -15070,9 +15096,11 @@ function edOnStart(e){
           // Mismo fix que en objetos sueltos: capturar el puntero para que Android
           // no deje de entregar pointermove a mitad de gesto.
           if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-          if(e.pointerType === 'pen' && window._edGroupSilentTool !== undefined){
-            // Solo para el pseudo-grupo (objeto agrupado tratado como unidad).
-            // La multiselección real (rubber-band/shift-clic) no se toca.
+          if(_edNeedsDragSlop(e) && window._edGroupSilentTool !== undefined){
+            // Solo para el pseudo-grupo (objeto agrupado tratado como unidad): su
+            // doble clic abre el panel, así que el temblor del primer clic no debe
+            // moverlo (ratón y lápiz, v41.76). La multiselección real
+            // (rubber-band/shift-clic) no se toca: no tiene doble clic.
             edMultiDragging=false;
             window._edPenGroupDragPending = { startX: e.clientX, startY: e.clientY };
           } else {
@@ -15144,7 +15172,7 @@ function edOnStart(e){
           if(!_glFl?.locked){
             edDragOffX = c.nx - edLayers[_gsHit].x;
             edDragOffY = c.ny - edLayers[_gsHit].y;
-            edIsDragging = true; window._edMoved = false;
+            _edArmObjDrag(e, _gsHit); // v41.76: ratón/lápiz → pendiente hasta superar el umbral (el doble clic siguiente abre el panel)
             if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           }
         } else if(!window._gcpActive){
@@ -15216,7 +15244,7 @@ function edOnStart(e){
           if(!_hFl?.locked){
             edDragOffX = c.nx - edLayers[_hit].x;
             edDragOffY = c.ny - edLayers[_hit].y;
-            edIsDragging = true; window._edMoved = false;
+            _edArmObjDrag(e, _hit); // v41.76: ratón/lápiz → pendiente hasta superar el umbral (el doble clic siguiente abre el panel)
             if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
           }
         } else {
@@ -16247,9 +16275,9 @@ function edOnStart(e){
         // Mismo fix que en objetos sueltos: capturar el puntero para que Android
         // no deje de entregar pointermove a mitad de gesto.
         if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-        if(e.pointerType === 'pen'){
-          // Mismo umbral que en objetos individuales: el lápiz no arrastra el
-          // grupo hasta superar _edPenDragThreshold px (ver promoción en edOnMove).
+        if(_edNeedsDragSlop(e)){
+          // Mismo umbral que en objetos individuales: ratón y lápiz no arrastran
+          // el grupo hasta superar _edPenDragThreshold px (ver promoción en edOnMove).
           edMultiDragging = false;
           window._edPenGroupDragPending = { startX: e.clientX, startY: e.clientY };
         } else {
@@ -16365,13 +16393,15 @@ function edOnStart(e){
     // mitad de gesto — el objeto no sigue al dedo hasta soltar. Mismo patrón
     // que ya usan ~20 sitios más de este archivo (resize, rotate, tail-drag).
     if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-    if(e.pointerType === 'pen'){
-      // Lápiz de tableta gráfica: NO arrastrar al instante. El temblor natural
-      // de la punta al posarla generaría un pointermove mínimo que activaría
-      // el drag aunque el usuario solo quisiera seleccionar o abrir propiedades.
-      // Umbral de movimiento estándar (mismo patrón que Photoshop/Krita/Figma
-      // para distinguir clic de arrastre): el drag real solo se activa si el
-      // puntero supera _edPenDragThreshold px de pantalla (ver promoción en edOnMove).
+    if(_edNeedsDragSlop(e)){
+      // Ratón y lápiz de tableta gráfica: NO arrastrar al instante. El temblor
+      // natural de la mano/punta al pulsar generaría un pointermove mínimo que
+      // activaría el drag aunque el usuario solo quisiera seleccionar o abrir
+      // propiedades con doble clic (v41.76: antes solo el lápiz; el ratón
+      // arrastraba con tolerancia cero). Umbral de movimiento estándar (mismo
+      // patrón que Photoshop/Krita/Figma para distinguir clic de arrastre): el
+      // drag real solo se activa si el puntero supera _edPenDragThreshold px de
+      // pantalla (ver promoción en edOnMove).
       edIsDragging = false;
       window._edPenDragPending = { found, startX: e.clientX, startY: e.clientY };
     } else {
@@ -17391,14 +17421,18 @@ function edOnMove(e){
     // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
     return;
   }
-  // Lápiz de tableta gráfica: promover de "pendiente" a arrastre real solo si el
-  // puntero supera el umbral de movimiento (ver activación en edOnStart).
+  // Ratón y lápiz de tableta gráfica: promover de "pendiente" a arrastre real solo
+  // si el puntero supera el umbral de movimiento (ver activación en edOnStart).
   if(window._edPenDragPending && edSelectedIdx === window._edPenDragPending.found){
     const _pdx = e.clientX - window._edPenDragPending.startX;
     const _pdy = e.clientY - window._edPenDragPending.startY;
     if(Math.hypot(_pdx, _pdy) >= _edPenDragThreshold){
       edIsDragging = true;
       window._edPenDragPending = null;
+      // El arrastre empieza DE VERDAD ahora: marca de inicio de gesto para el
+      // diagnóstico de rendimiento (en el arranque inmediato se hacía al pulsar).
+      window._edDragPerfLast = performance.now();
+      window._edDragPerfGestureId = (window._edDragPerfGestureId || 0) + 1;
     }
   }
   if(!edIsDragging||edSelectedIdx<0)return;
@@ -26268,6 +26302,9 @@ function edInitFloatDrag(){
 const _ED_RULE_R = 10;        // radio arrastrador en coords workspace
 const _ED_RULE_LINE_HIT = 6;  // tolerancia línea en PC (px workspace)
 const _ED_RULE_LINE_HIT_TOUCH = 22; // tolerancia línea en táctil (px workspace)
+// v41.75: alcance del DEDO sobre un punto de fuga (nodo compartido; se dibuja con radio 15 px). Antes valía 15 tanto con ratón como con el
+// dedo — MENOS que un extremo libre (22 px con el dedo, dibujado con 10): el punto de fuga era el tirador más difícil de acertar en el móvil.
+const _ED_RULE_NODE_HIT_TOUCH = 26;
 
 function _edRuleAdd() {
   // Centrada con la CÁMARA (zona visible actual), no con el lienzo entero —
@@ -26530,12 +26567,76 @@ function _edRulesDraw(ctx) {
   ctx.restore();
 }
 
+// v41.75 — ¿este extremo de la guía está cubierto por un nodo VIVO (que existe y que además lista a la guía)? Si no, es un extremo LIBRE
+// aunque r.nodeA/nodeB conserve un id: así un dato incoherente jamás puede dejar un extremo dibujado pero intocable (es lo mismo que
+// decide _edRulesDraw para dibujar o no el punto del extremo — dibujo y hit-test coinciden siempre).
+function _edEndInNode(r, part) {
+  const nid = part === 'a' ? r.nodeA : r.nodeB;
+  if(!nid) return false;
+  for(const n of edRuleNodes) if(n.id === nid && n.ruleIds && n.ruleIds.includes(r.id)) return true;
+  return false;
+}
+
+// v41.75 — INTEGRIDAD DE GUÍAS Y PUNTOS DE FUGA (causa raíz de «todos los clics van al objeto en vez de al extremo de la guía, sigo sin poder
+// desbloquearla»). Cada guía lleva nodeA/nodeB (id del punto de fuga donde confluye ese extremo) y edRuleNodes guarda los puntos de fuga
+// ({id,x,y,ruleIds,locked}). La NUBE (works.rules) sólo almacena las guías: al abrir una obra descargada de la nube (otro dispositivo, o
+// nube más nueva que lo local) las guías conservaban nodeA/nodeB pero edRuleNodes llegaba vacío → el extremo se dibujaba (punto naranja)
+// pero _edRulesHit lo saltaba por «ya pertenece a un nodo» y el clic caía al objeto de debajo. Esta función deja coherentes los dos lados:
+//   · un id de nodo referenciado por ≥2 guías distintas → el punto de fuga EXISTE; si falta se reconstruye (posición = la de sus extremos,
+//     ruleIds, y bloqueado si todas sus guías lo están — así también se recuperan las obras ya subidas, sin tocar la nube);
+//   · referencia suelta (un id con una sola guía) o nodo con <2 guías vivas → se descarta y los extremos vuelven a ser LIBRES (nodeX = null);
+//   · la lista ruleIds de cada nodo se rehace a partir de las guías que de verdad apuntan a él.
+// Idempotente: sobre datos sanos no cambia nada. Devuelve el nº de arreglos hechos (0 = todo estaba bien).
+function _edRulesNormalize() {
+  if(!Array.isArray(edRules)) edRules = [];
+  if(!Array.isArray(edRuleNodes)) edRuleNodes = [];
+  let fixes = 0;
+  const KEYS = [['nodeA','x1','y1'], ['nodeB','x2','y2']];
+  // 1) qué extremos de qué guías apuntan a cada id de nodo
+  const refs = new Map();
+  for(const r of edRules) {
+    for(const [k, xk, yk] of KEYS) {
+      if(!r[k]) continue;
+      if(!refs.has(r[k])) refs.set(r[k], []);
+      refs.get(r[k]).push({ r, k, xk, yk });
+    }
+  }
+  const ruleIdsOf = list => [...new Set(list.map(e => e.r.id))];
+  // 2) nodos existentes: se conservan si ≥2 guías distintas apuntan a ellos; su ruleIds se rehace
+  const keep = [], seen = new Set();
+  for(const n of edRuleNodes) {
+    const list = refs.get(n.id) || [];
+    const ids = ruleIdsOf(list);
+    if(seen.has(n.id) || ids.length < 2) { fixes++; continue; } // duplicado, o sin guías suficientes (los extremos sueltos se liberan en el paso 3)
+    seen.add(n.id);
+    if(!Array.isArray(n.ruleIds) || n.ruleIds.length !== ids.length || ids.some(id => !n.ruleIds.includes(id))) { n.ruleIds = ids; fixes++; }
+    if(!isFinite(n.x) || !isFinite(n.y)) { n.x = list[0].r[list[0].xk]; n.y = list[0].r[list[0].yk]; fixes++; }
+    keep.push(n);
+  }
+  // 3) ids referenciados que no tienen nodo: ≥2 guías → se reconstruye el punto de fuga; si no, el extremo vuelve a ser libre
+  for(const [id, list] of refs) {
+    if(seen.has(id)) continue;
+    const ids = ruleIdsOf(list);
+    if(ids.length >= 2) {
+      const f = list[0], x = f.r[f.xk], y = f.r[f.yk];
+      for(const e of list) { e.r[e.xk] = x; e.r[e.yk] = y; } // el punto de fuga es el lugar común de sus extremos
+      keep.push({ id, x, y, ruleIds: ids, locked: list.every(e => !!e.r.locked) });
+      seen.add(id);
+    } else {
+      for(const e of list) e.r[e.k] = null;
+    }
+    fixes++;
+  }
+  if(fixes) { edRuleNodes.length = 0; keep.forEach(n => edRuleNodes.push(n)); }
+  return fixes;
+}
+
 function _edRulesHit(wx, wy, isTouch) {
   if(edRulesHidden) return null; // guías ocultas: no seleccionables
   const z = edCamera.z;
   const rPx  = (isTouch ? 22 : _ED_RULE_R) / z;
   const lPx  = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT) / z;
-  const nPx  = (_ED_RULE_R * 1.5) / z;
+  const nPx  = (isTouch ? _ED_RULE_NODE_HIT_TOUCH : _ED_RULE_R * 1.5) / z;
   // Primero: nodos compartidos (prioridad máxima)
   for(let i = edRuleNodes.length-1; i >= 0; i--) {
     const n = edRuleNodes[i];
@@ -26545,10 +26646,10 @@ function _edRulesHit(wx, wy, isTouch) {
   for(let i = edRules.length-1; i >= 0; i--) {
     const r = edRules[i];
     if(r.hidden) continue; // guía individualmente oculta: no seleccionable
-    // Extremo A — solo si no pertenece a un nodo compartido
-    if(!r.nodeA && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
+    // Extremo A — solo si no pertenece a un nodo compartido VIVO (v41.75: antes bastaba con que r.nodeA tuviera un id → extremo intocable si faltaba el nodo)
+    if(!_edEndInNode(r,'a') && Math.hypot(wx-r.x1, wy-r.y1) <= rPx) return { ruleId: r.id, part: 'a' };
     // Extremo B
-    if(!r.nodeB && Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
+    if(!_edEndInNode(r,'b') && Math.hypot(wx-r.x2, wy-r.y2) <= rPx) return { ruleId: r.id, part: 'b' };
     // Línea — solo si la regla NO está bloqueada (T21 parte 1)
     if(!r.locked) {
       const dx = r.x2-r.x1, dy = r.y2-r.y1, len2 = dx*dx+dy*dy;
@@ -26571,14 +26672,14 @@ function _edLockedGuideHandleAt(wx, wy, isTouch) {
   if (edRulesHidden) return false;
   const z = edCamera.z;
   const rPx = (isTouch ? 22 : _ED_RULE_R) / z;
-  const nPx = (_ED_RULE_R * 1.5) / z;
+  const nPx = (isTouch ? _ED_RULE_NODE_HIT_TOUCH : _ED_RULE_R * 1.5) / z; // v41.75: mismo alcance que _edRulesHit
   for (const n of edRuleNodes) {
     if (n.locked && Math.hypot(wx - n.x, wy - n.y) <= nPx) return true;
   }
   for (const r of edRules) {
     if (r.hidden || !r.locked) continue;
-    if (!r.nodeA && Math.hypot(wx - r.x1, wy - r.y1) <= rPx) return true;
-    if (!r.nodeB && Math.hypot(wx - r.x2, wy - r.y2) <= rPx) return true;
+    if (!_edEndInNode(r,'a') && Math.hypot(wx - r.x1, wy - r.y1) <= rPx) return true;
+    if (!_edEndInNode(r,'b') && Math.hypot(wx - r.x2, wy - r.y2) <= rPx) return true;
   }
   return false;
 }
@@ -33317,8 +33418,11 @@ async function edLoadProject(id){
     edOrientation=comic.editorData.orientation||'vertical';
     edRules = comic.editorData._rules || [];
     edRuleNodes = comic.editorData._ruleNodes || [];
+    // v41.75: la nube sólo guarda las guías (works.rules), no los puntos de fuga: una obra descargada de la nube llega SIN _ruleNodes y sus
+    // guías siguen apuntando a nodos que ya no existen (extremos dibujados pero intocables). Se reconstruyen aquí (ver _edRulesNormalize).
+    try { window._edRulesNormalizeFixes = _edRulesNormalize(); } catch(_e) { window._edRulesNormalizeFixes = -1; }
     edColorPalette = _edPaletteNormalize(comic.editorData._palette); // v40.45: muestras de color de la obra (sin _palette → por defecto)
-    _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,n.id),0);
+    _edRuleNodeId = edRuleNodes.reduce((m,n)=>Math.max(m,Number(n.id)||0),0);
     _edRuleId     = edRules.reduce((m,r)=>Math.max(m,r.id||0),0); // evitar colisión de IDs
     edPages=(comic.editorData.pages||[]).map((pd, _pi2)=>{
       const orient = pd.orientation||comic.editorData.orientation||'vertical';
@@ -41391,7 +41495,16 @@ function _gcpHandleDown(e) {
       const lyD = (ddxPx*sg2 + ddyPx*cg2)/ph;
       if (Math.abs(lxD) <= bb.w/2 && Math.abs(lyD) <= bb.h/2) {
         _gcpWithEditorContext(() => {
-          edMultiDragging = true;
+          // v41.76: ratón/lápiz → arrastre de la selección PENDIENTE hasta superar el umbral de clic (el
+          // doble clic sobre un miembro abre su panel —doble toque «sistema 1» de más arriba— y el temblor
+          // del primer clic no debe mover la selección); el dedo, como antes. Se promueve en edOnMove.
+          if (_edNeedsDragSlop(e)) {
+            edMultiDragging = false;
+            window._edPenGroupDragPending = { startX: e.clientX, startY: e.clientY };
+          } else {
+            edMultiDragging = true;
+            window._edPenGroupDragPending = null;
+          }
           edMultiDragOffs = edMultiSel.map(i => {
             const la=edLayers[i]; return la ? {dx:c.nx-la.x, dy:c.ny-la.y} : {dx:0,dy:0};
           });
@@ -41508,10 +41621,9 @@ function _gcpDoSelectDrag(e, c) {
     const _ly = _dx*Math.sin(-_rot)*_pw + _dy*Math.cos(-_rot)*_ph;
     if (Math.abs(_lx) <= _la.width/2*_pw + 10/_z && Math.abs(_ly) <= _la.height/2*_ph + 10/_z) {
       if (!_la.locked) {
-        edIsDragging = true;
         edDragOffX = c.nx - _la.x;
         edDragOffY = c.ny - _la.y;
-        window._edMoved = false;
+        _edArmObjDrag(e, window._gcpSelIdx); // v41.76: ratón/lápiz → pendiente hasta superar el umbral (se promueve en edOnMove)
         if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       }
       _gcpRedraw(); return;
@@ -41573,10 +41685,9 @@ function _gcpDoSelectDrag(e, c) {
     }
     _gcpLastTapTime2 = _nowH; _gcpLastTapIdx2 = hit;
     if (_hitLa && !_hitLa.locked) {
-      edIsDragging = true;
       edDragOffX = c.nx - _hitLa.x;
       edDragOffY = c.ny - _hitLa.y;
-      window._edMoved = false;
+      _edArmObjDrag(e, hit); // v41.76: ratón/lápiz → pendiente hasta superar el umbral (se promueve en edOnMove)
       if(e.pointerId!==undefined && gcpCanvas){ try{ gcpCanvas.setPointerCapture(e.pointerId); }catch(_){} }
     }
   } else {
@@ -42174,6 +42285,10 @@ function _gcpHandleMove(e) {
 }
 
 function _gcpHandleUp(e) {
+  // v41.76: un arrastre de ratón/lápiz que no superó la tolerancia de clic queda como clic limpio
+  // (en el editor general lo limpia edOnEnd; GCP no lo llama).
+  window._edPenDragPending = null;
+  window._edPenGroupDragPending = null;
   // Limpiar mapa propio de pinch
   _gcpPtrMap.delete(e.pointerId);
   if (_gcpPtrMap.size < 2) { _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1; }
@@ -48225,7 +48340,7 @@ function _gcpRulesHit(wx, wy, isTouch) {
   const z = edCamera.z;
   const rPx = (isTouch ? 22 : _ED_RULE_R)/z;
   const lPx = (isTouch ? _ED_RULE_LINE_HIT_TOUCH : _ED_RULE_LINE_HIT)/z;
-  const nPx = (_ED_RULE_R*1.5)/z;
+  const nPx = (isTouch ? _ED_RULE_NODE_HIT_TOUCH : _ED_RULE_R*1.5)/z; // v41.75: mismo alcance del dedo que el editor general
   for (let i = _gcpRuleNodes.length-1; i >= 0; i--) {
     const n = _gcpRuleNodes[i];
     if (Math.hypot(wx-n.x, wy-n.y) <= nPx) return { nodeId: n.id };
