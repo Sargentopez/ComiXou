@@ -805,6 +805,221 @@ window.ApngDecoder = (function(){
 })();
 /* ── fin ApngDecoder reader ── */
 
+/* ── AnimNative (v41.78) — APNG con el decodificador NATIVO del navegador (WebCodecs ImageDecoder) ───────
+   Alberto: «sigue siendo extremadamente lento con obras con animaciones en cada hoja». ApngDecoder.decode (UPNG.decode +
+   toRGBA8 + un ImageData y un putImageData/getImageData por fotograma) se ejecuta ENTERO en el hilo principal: una animación de
+   40 fotogramas de 360×780 lo bloqueaba ≈1 s (≈4 s en un móvil lento, medido con la CPU limitada ×4) y dejaba ≈45 MB de píxeles
+   en RAM; con dos animaciones por hoja, cada hoja nueva congelaba la pantalla y la siguiente casi nunca estaba lista a tiempo.
+   ImageDecoder decodifica FUERA del hilo principal (≈4,6× más rápido, medido) y entrega cada fotograma como ImageBitmap, que
+   se pinta con drawImage (≈50–85× más barato que putImageData). Los píxeles son idénticos a los de UPNG (comparado). Es la
+   solución estándar para esto (Chrome/Edge/Android; Safari y Firefox según versión): donde no exista, o si algo falla, el
+   lector sigue con UPNG exactamente como antes (ver _plApngLoad).
+   NO se decodifican todos los fotogramas de golpe: se abre el decodificador, se obtiene el 0 (para poder dibujar la hoja YA) y
+   los demás se van decodificando por delante de la reproducción (hasta AHEAD por delante; si TODA la animación cabe en ALL_MAX
+   se conserva entera mientras suena). Una hoja «lista» que no se está viendo solo guarda el fotograma 0, así que la actual, la
+   anterior y la siguiente pueden estar en memoria a la vez sin que cada una pese decenas de MB; si una animación deja de pintar
+   (hoja que se abandona, parada al final…) se sueltan sus fotogramas decodificados a los IDLE_MS y queda el 0.
+   Cada fotograma tiene la misma forma que los de AnimProc —{delay, paint(ctx)}—, así que _animTickOne, _resetPanelAnims y la
+   sincronización con trayectorias funcionan sin tocar nada. Si el fotograma pedido aún no ha llegado, el lienzo conserva el
+   anterior y se repinta solo al llegar (onLate). */
+window.AnimNative = (function(){
+  'use strict';
+  var ALL_MAX = 24 * 1048576;   // si todos los fotogramas decodificados caben aquí, se conservan mientras la animación suena
+  var AHEAD   = 8;              // fotogramas decodificados por delante del que se está pintando (si no caben todos)
+  var BEHIND  = 1;              // …y por detrás
+  var IDLE_MS = 1500;           // sin pintar nada durante este tiempo ⇒ se sueltan los fotogramas (queda el 0)
+  var live = [], sweeper = null, lateFn = null;
+
+  function supported(){
+    try { return typeof ImageDecoder === 'function' && typeof ImageDecoder.isTypeSupported === 'function' && typeof createImageBitmap === 'function'; }
+    catch (e) { return false; }
+  }
+  function setLate(fn){ lateFn = fn; }
+
+  function b64Bytes(b64){
+    var bin = atob(b64), u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  // Bytes de un data URL. fetch() de un data: lo decodifica el propio navegador (sin bucle de JS sobre MB de texto).
+  function toBytes(dataUrl){
+    if (typeof dataUrl !== 'string' || dataUrl.slice(0, 5) !== 'data:' || dataUrl.indexOf(',') < 0) return Promise.reject(new Error('AnimNative: no es un data URL'));
+    var viaAtob = function(){ return b64Bytes(dataUrl.slice(dataUrl.indexOf(',') + 1)); };
+    if (typeof fetch !== 'function') return Promise.resolve().then(viaAtob);
+    return fetch(dataUrl).then(function(r){ return r.arrayBuffer(); }).then(function(b){ return new Uint8Array(b); }).catch(viaAtob);
+  }
+  function withTimeout(p, ms, what){
+    return new Promise(function(res, rej){
+      var t = setTimeout(function(){ rej(new Error('AnimNative: tiempo agotado (' + what + ')')); }, ms);
+      p.then(function(v){ clearTimeout(t); res(v); }, function(e){ clearTimeout(t); rej(e); });
+    });
+  }
+
+  // Lectura de los trozos del PNG: ¿animado?, retardo de cada fotograma (fcTL) en ms y tamaño. Misma regla que UPNG.decode
+  // (retardo = num/den, con den 0 ⇒ 100) para que los tiempos sean EXACTAMENTE los de antes.
+  function pngInfo(u8){
+    if (u8.length < 33 || u8[0] !== 0x89 || u8[1] !== 0x50 || u8[2] !== 0x4E || u8[3] !== 0x47) return null;
+    var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), p = 8, delays = [], animated = false, w = 0, h = 0;
+    while (p + 12 <= u8.length) {
+      var len = dv.getUint32(p), t = String.fromCharCode(u8[p + 4], u8[p + 5], u8[p + 6], u8[p + 7]);
+      if (t === 'IHDR') { w = dv.getUint32(p + 8); h = dv.getUint32(p + 12); }
+      else if (t === 'acTL') animated = true;
+      else if (t === 'fcTL') {
+        var num = dv.getUint16(p + 8 + 20), den = dv.getUint16(p + 8 + 22);
+        delays.push(Math.round(1000 * num / (den === 0 ? 100 : den)));
+      }
+      else if (t === 'IEND') break;
+      p += 12 + len;
+    }
+    return { animated: animated, delays: delays, w: w, h: h };
+  }
+
+  // ── Secuencia de fotogramas de UNA animación ──
+  function Seq(dec, n, w, h, bm0){
+    this.dec = dec; this.n = n; this.w = w; this.h = h;
+    this.bm = new Array(n); this.bm[0] = bm0;       // ImageBitmap por fotograma; el 0 se conserva siempre
+    this.all = n * w * h * 4 <= ALL_MAX;
+    this.head = 0;        // último fotograma pedido (la posición de reproducción)
+    this.active = false;  // ¿suena? solo entonces se decodifica por delante
+    this.last = 0;        // última vez que se pidió un fotograma (para soltarlos si deja de sonar)
+    this.dead = false; this.running = false; this.err = null;
+    this.ctx = null; this.stall = -1;
+    live.push(this);
+  }
+  Seq.prototype.arm = function(){ if (!sweeper) sweeper = setInterval(sweep, 700); };
+  // La animación va a sonar (llegada a su hoja): empezar a decodificar por delante.
+  Seq.prototype.activate = function(){
+    if (this.dead) return;
+    this.active = true; this.last = performance.now(); this.arm(); this.pump();
+  };
+  Seq.prototype.get = function(i, ctx){
+    if (this.dead) return null;
+    this.head = i; if (ctx) this.ctx = ctx;
+    if (i !== 0 && !this.active) { this.active = true; this.arm(); }   // pedir un fotograma distinto del 0 ES reproducir
+    if (this.active) { this.last = performance.now(); this.pump(); }
+    return this.bm[i] || null;
+  };
+  Seq.prototype.nextWanted = function(){
+    if (!this.active || this.dead || this.err) return -1;
+    var span = this.all ? this.n : Math.min(this.n, AHEAD + 1);
+    for (var k = 0; k < span; k++) { var j = (this.head + k) % this.n; if (!this.bm[j]) return j; }
+    return -1;
+  };
+  Seq.prototype.pump = function(){ if (!this.running && this.nextWanted() >= 0) this.run(); };
+  Seq.prototype.run = async function(){
+    this.running = true;
+    try {
+      for (;;) {
+        var i = this.nextWanted();
+        if (i < 0) break;
+        var r = await this.dec.decode({ frameIndex: i }), bmp = null;
+        try { bmp = await createImageBitmap(r.image); } finally { try { r.image.close(); } catch (e) {} }
+        if (this.dead || !this.active) { bmp.close(); break; }
+        if (this.bm[i]) bmp.close(); else this.bm[i] = bmp;
+        if (!this.all) this.trim();
+        if (this.stall === i && i === this.head && this.ctx && this.bm[i]) {   // se esperaba justo este: pintarlo ya
+          this.stall = -1;
+          paintBitmap(this.ctx, this, this.bm[i]);
+          if (lateFn) { try { lateFn(); } catch (e) {} }
+        }
+      }
+    } catch (e) {
+      if (!this.dead) { this.err = e; try { console.warn('AnimNative:', e); } catch (_) {} }
+    } finally { this.running = false; }
+  };
+  // Suelta los decodificados que quedan fuera de [head-BEHIND, head+AHEAD] (el 0 nunca).
+  Seq.prototype.trim = function(){
+    var n = this.n, h = this.head;
+    for (var j = 1; j < n; j++) {
+      var b = this.bm[j]; if (!b) continue;
+      var fwd = (j - h + n) % n;
+      if (fwd > AHEAD && fwd < n - BEHIND) { try { b.close(); } catch (e) {} this.bm[j] = undefined; }
+    }
+  };
+  // Deja de sonar: solo queda el fotograma 0.
+  Seq.prototype.release = function(){
+    this.active = false; this.head = 0; this.stall = -1;
+    for (var j = 1; j < this.n; j++) { var b = this.bm[j]; if (b) { try { b.close(); } catch (e) {} this.bm[j] = undefined; } }
+  };
+  Seq.prototype.dispose = function(){
+    if (this.dead) return;
+    this.dead = true;
+    for (var j = 0; j < this.bm.length; j++) { var b = this.bm[j]; if (b) { try { b.close(); } catch (e) {} } }
+    this.bm = []; this.ctx = null;
+    try { this.dec.close(); } catch (e) {}
+    var k = live.indexOf(this); if (k >= 0) live.splice(k, 1);
+  };
+  // Cuántos fotogramas decodificados conserva ahora (diagnóstico y pruebas).
+  Seq.prototype.held = function(){ var c = 0; for (var j = 0; j < this.bm.length; j++) if (this.bm[j]) c++; return c; };
+
+  function sweep(){
+    var now = performance.now(), any = false;
+    for (var k = 0; k < live.length; k++) {
+      var s = live[k];
+      if (s.active && now - s.last > IDLE_MS) s.release();
+      if (s.active) any = true;
+    }
+    if (!any && sweeper) { clearInterval(sweeper); sweeper = null; }
+  }
+
+  function paintBitmap(ctx, q, b){
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.clearRect(0, 0, q.w, q.h);
+    ctx.drawImage(b, 0, 0);
+  }
+
+  // Fotograma: misma forma que los de AnimProc (delay + paint). «imageData» solo existe por compatibilidad.
+  function NFrame(q, i, delay){ this._q = q; this.i = i; this.delay = delay; }
+  NFrame.prototype.paint = function(ctx){
+    var q = this._q, b = q.get(this.i, ctx);
+    if (b) { q.stall = -1; paintBitmap(ctx, q, b); }
+    else q.stall = this.i;   // aún no ha llegado: el lienzo conserva el anterior y Seq.run lo pinta al llegar
+  };
+  Object.defineProperty(NFrame.prototype, 'width',  { get: function(){ return this._q.w; } });
+  Object.defineProperty(NFrame.prototype, 'height', { get: function(){ return this._q.h; } });
+  // Lo que pesa de forma permanente (solo el 0: el resto es transitorio) — ver _plWeigh.
+  Object.defineProperty(NFrame.prototype, 'bytes',  { get: function(){ return this.i === 0 ? this._q.w * this._q.h * 4 : 0; } });
+  Object.defineProperty(NFrame.prototype, 'imageData', { get: function(){
+    var q = this._q, c = document.createElement('canvas'); c.width = q.w; c.height = q.h;
+    var x = c.getContext('2d', { willReadFrequently: true }), b = q.bm[this.i] || q.bm[0];
+    if (b) x.drawImage(b, 0, 0);
+    return x.getImageData(0, 0, q.w, q.h);
+  } });
+
+  // Abre un APNG (data URL). Devuelve la misma forma que ApngDecoder.decode —{frames, width, height}— más «seq».
+  // Rechaza (y el lector recurre a UPNG) si no es un APNG animado, si el navegador no lo admite o si algo falla.
+  async function open(dataUrl, delay){
+    var u8 = await toBytes(dataUrl);
+    var info = pngInfo(u8);
+    if (!info || !info.animated || info.delays.length < 2) throw new Error('AnimNative: no es un APNG animado');
+    if (!(await ImageDecoder.isTypeSupported('image/png'))) throw new Error('AnimNative: image/png no admitido');
+    var dec = new ImageDecoder({ data: u8, type: 'image/png' });
+    try {
+      var n = info.delays.length;
+      await withTimeout(dec.tracks.ready, 8000, 'pistas');
+      var tr = dec.tracks.selectedTrack;
+      if (!tr || tr.frameCount !== n) {
+        await withTimeout(dec.completed, 8000, 'completo');
+        tr = dec.tracks.selectedTrack;
+        if (!tr || tr.frameCount !== n) throw new Error('AnimNative: fotogramas ' + (tr && tr.frameCount) + ' ≠ ' + n);
+      }
+      var r0 = await withTimeout(dec.decode({ frameIndex: 0 }), 8000, 'fotograma 0'), bm0 = null;
+      try { bm0 = await createImageBitmap(r0.image); } finally { try { r0.image.close(); } catch (e) {} }
+      var q = new Seq(dec, n, bm0.width, bm0.height, bm0), frames = [];
+      for (var i = 0; i < n; i++) frames.push(new NFrame(q, i, Math.round(info.delays[i] || delay || 100)));
+      return { frames: frames, width: q.w, height: q.h, seq: q };
+    } catch (e) {
+      try { dec.close(); } catch (_) {}
+      throw e;
+    }
+  }
+
+  return { supported: supported, open: open, setLate: setLate, pngInfo: pngInfo, stats: function(){ return { live: live.length }; } };
+})();
+/* ── fin AnimNative ── */
+
 /* ── AnimProc — animaciones «por instrucciones» (v41.64) ──────────────────────────────────────────────
    Una animación del editor de animaciones es: N objetos (cada uno un bitmap, UNA sola vez) y, por objeto y
    fotograma, una transformación {x, y, width, height, rotation, opacity, _interp?, _blur?} (o null = ese objeto
@@ -1661,14 +1876,29 @@ async function _startFromOfflineSnapshot(snapshot, opts) {
 const _CZ_PFX = 'gz:';
 
 // Descarga frames PNG desde bucket 'anims'
-async function _animDownload(animUrl) {
+async function _animDownload(animUrl, onProg) {
   if (!animUrl) return null;
   // cache:'no-store' — el lector se comparte por enlace y lo puede abrir
   // cualquiera; si el navegador sirviera una copia cacheada de una
   // animación ya editada, quien lea la obra vería la versión antigua.
   const r = await fetch(animUrl, { cache: 'no-store' });
   if (!r.ok) return null;
-  const blob = await r.blob();
+  // v41.78 — con onProg(recibidos, total) se lee el cuerpo por trozos para alimentar la barra de carga (total 0 = desconocido).
+  let blob;
+  if (onProg && r.body && typeof r.body.getReader === 'function') {
+    const total = parseInt(r.headers.get('content-length'), 10) || 0;
+    const rd = r.body.getReader(), parts = []; let got = 0;
+    try { onProg(0, total); } catch (_) {}
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+      try { onProg(got, total); } catch (_) {}
+    }
+    blob = new Blob(parts, { type: r.headers.get('content-type') || '' });
+  } else {
+    blob = await r.blob();
+  }
   return new Promise(res => {
     const fr = new FileReader();
     fr.onload  = e => res(e.target.result);
@@ -1781,7 +2011,8 @@ const _PL = {
   allWaiters: [],
   keep: null,         // v41.68 — índices de hoja que pueden estar en memoria (ventana, ver _plKeepSet); null = sin límite
   scanBusy: false,    // v41.68 — escaneo de botones «ir a hoja» de una hoja fuera de la ventana en curso (ver _plStartScan)
-  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, paused: {} },
+  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, native: 0, nativeFail: 0, gated: 0, paused: {} },
+  nativeErr:  '',     // v41.78 — último motivo por el que AnimNative recurrió a UPNG (diagnóstico)
 };
 // Interruptores de la ventana de memoria (v41.68), solo para pruebas y diagnóstico:
 //   ?rdwin=all → sin ventana (el comportamiento de antes de v41.68: todas las hojas acaban en memoria)
@@ -1789,6 +2020,34 @@ const _PL = {
 const _PL_QS = (function () { try { return new URLSearchParams(location.search); } catch (_) { return new URLSearchParams(''); } })();
 // Descarga ya hecha (data URL) del GIF de una capa — se baja en el carril de RED y se decodifica en el de CPU.
 const _plGifDl = new WeakMap();
+
+// APNG de una capa o de una línea de flujo de texto (v41.78): decodificador NATIVO del navegador (AnimNative: fuera del hilo
+// principal, fotogramas por delante de la reproducción) y, si el navegador no lo tiene o algo falla, ApngDecoder (UPNG) como siempre.
+// ?rdnative=0 lo desactiva (pruebas / diagnóstico).
+function _plApngLoad(src, delay) {
+  const nat = window.AnimNative;
+  if (nat && nat.supported() && _PL_QS.get('rdnative') !== '0') {
+    return nat.open(src, delay).then(r => { _PL.stats.native++; return r; },
+      e => { _PL.stats.nativeFail++; _PL.nativeErr = String((e && e.message) || e).slice(0, 120); return window.ApngDecoder.decode(src, delay); });
+  }
+  return window.ApngDecoder.decode(src, delay);
+}
+// Suelta los decodificadores/fotogramas nativos de las capas (y animaciones de flujo de texto) de una hoja.
+function _plDisposeSeqs(panel) {
+  for (const l of (panel.layers || [])) {
+    if (!l) continue;
+    if (l._animSeq) { try { l._animSeq.dispose(); } catch (_) {} l._animSeq = null; }
+    if (Array.isArray(l.richLines)) for (const rl of l.richLines) if (rl && rl._animSeq) { try { rl._animSeq.dispose(); } catch (_) {} rl._animSeq = null; }
+  }
+}
+// Las animaciones nativas de la hoja empiezan a sonar (llegada a ella): decodificar por delante de la reproducción.
+function _plActivateSeqs(panel) {
+  for (const l of (panel.layers || [])) {
+    if (!l) continue;
+    if (l._animSeq) l._animSeq.activate();
+    if (Array.isArray(l.richLines)) for (const rl of l.richLines) if (rl && rl._animSeq) rl._animSeq.activate();
+  }
+}
 
 function _plSleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Cede hasta que el navegador esté libre (requestIdleCallback; sin él, un respiro corto) — mismo patrón que _edBgIdle (editor).
@@ -1865,6 +2124,7 @@ async function _plPreloadBrand() {
 // ── Carril de RED: capas y textos de UNA hoja (+ sus APNG/GIF) ───────────────
 async function _plFetchRaw(panel) {
   const f = RS._sbFetch;
+  _plProg(panel, 0.02);
   const [rows, texts] = await Promise.all([
     f('panel_layers?panel_id=eq.' + panel.id + '&order=layer_order.asc&select=*'),
     f('panel_texts?panel_id=eq.'  + panel.id + '&order=text_order.asc'),
@@ -1872,12 +2132,24 @@ async function _plFetchRaw(panel) {
   const layerRows = (rows || []).slice().sort((a, b) => a.layer_order - b.layer_order);
   // Animaciones: se bajan aquí (red), en paralelo, para que el carril de CPU no se quede esperando.
   // cache:'no-store' (ver _animDownload). Un fallo aislado deja esa capa sin animación, como siempre.
+  // v41.78: la barra de carga cuenta los bytes recibidos de las animaciones (0,12 → 0,55 del progreso de la hoja; sin
+  // animaciones, el progreso de «datos» llega a 0,35 de golpe).
   const dl = [];
+  const nDl = layerRows.filter(r => r.anim_url || r.gif_url).length;
+  const P0 = nDl ? 0.12 : 0.35, P1 = nDl ? 0.55 : 0.35;
+  panel._pgF = P1;
+  _plProg(panel, P0);
+  const pr = { got: 0, tot: 0 };
+  const mkProg = () => {
+    let g0 = 0, t0 = 0;
+    return (g, t) => { pr.got += g - g0; g0 = g; if (t !== t0) { pr.tot += t - t0; t0 = t; } _plProg(panel, P0 + (P1 - P0) * (pr.tot ? Math.min(0.97, pr.got / pr.tot) : 0)); };
+  };
   for (const r of layerRows) {
-    if (r.anim_url) dl.push(_animDownload(r.anim_url).then(d => { if (d) r._apngDl = d; }, () => {}));
-    if (r.gif_url)  dl.push(_animDownload(r.gif_url).then(d => { if (d) r._gifDl = d; }, () => {}));
+    if (r.anim_url) dl.push(_animDownload(r.anim_url, mkProg()).then(d => { if (d) r._apngDl = d; }, () => {}));
+    if (r.gif_url)  dl.push(_animDownload(r.gif_url,  mkProg()).then(d => { if (d) r._gifDl = d; }, () => {}));
   }
   if (dl.length) await Promise.all(dl);
+  _plProg(panel, P1);
   // Hoja sin capas: se dibuja su miniatura (data_url), como siempre — única razón de pedirla.
   if (!layerRows.length && panel._row.data_url === undefined) {
     const d = await f('panels?id=eq.' + panel.id + '&select=data_url');
@@ -1934,9 +2206,15 @@ async function _plWaitQuiet(stillWanted) {
 // respiro corto (la pantalla de carga y los gestos siguen vivos); las de segundo plano trabajan en
 // trozos de ≈8 ms y, entre trozos, esperan a que no haya interacción y a un hueco del navegador.
 let _plSliceT0 = 0;
+// v41.78 — hojas de la ventana fija (la actual y sus contiguas): el lector no puede pasar a ellas hasta que estén listas, así que
+// no esperan a que haya calma —trabajan en trozos de ≈12 ms cediendo el hilo entre trozo y trozo— igual que la hoja actual.
+function _plIsPinned(panel) {
+  const i = RS.panels.indexOf(panel);
+  return i >= 0 && Math.abs(i - (RS.idx || 0)) <= 1;
+}
 async function _plStep(panel) {
   const t = performance.now();
-  if (_plIsCurrent(panel) || panel._turbo) {   // _turbo: hoja «de usar y tirar» de la descarga offline (_plCollectOne), sin esperas
+  if (_plIsCurrent(panel) || panel._turbo || _plIsPinned(panel)) {   // _turbo: hoja «de usar y tirar» de la descarga offline (_plCollectOne), sin esperas
     if (t - _plSliceT0 > 12) { await _plSleep(0); _plSliceT0 = performance.now(); }
     return;
   }
@@ -1951,6 +2229,8 @@ async function _plStep(panel) {
 async function _plParse(panel, pi) {
   const raw = panel._raw;
   const layers = [];
+  const F = panel._pgF || 0.35, nRows = raw.layerRows.length || 1;
+  let kRow = 0;
   for (const r of raw.layerRows) {
     try {
       const l = JSON.parse(await _czDecompress(r.layer_data));
@@ -1960,6 +2240,7 @@ async function _plParse(panel, pi) {
         layers.push(l);
       }
     } catch (e) { /* capa ilegible: se omite, como siempre */ }
+    _plProg(panel, F + 0.15 * (++kRow / nRows));
     await _plStep(panel);
   }
   // Textos para la lógica sequential
@@ -1981,7 +2262,7 @@ async function _plParse(panel, pi) {
 // Decodifica las imágenes/GIF/APNG de la hoja (RS.panels[i].layerImgs[j] = Image | canvas | null) —
 // el cuerpo por hoja de lo que antes hacía preloadImages() para todas a la vez (hasta v41.51).
 async function _plDecode(panel) {
-  panel.layerImgs = await Promise.all((panel.layers || []).map(layer => {
+  const _decodeOne = layer => {
     // GIF: descargar de Storage y decodificar frames (antes de comprobar src)
     if (layer.type === 'gif') {
       if (!layer._gifUrl) return Promise.resolve(null);
@@ -2045,18 +2326,19 @@ async function _plDecode(panel) {
           }) : null;
         });
     }
-    // APNG: decodificar con ApngDecoder
+    // APNG: decodificador nativo del navegador (AnimNative, v41.78) o, si no hay / falla, ApngDecoder (UPNG) como siempre
     if (layer._apngSrc && window.ApngDecoder) {
-      return window.ApngDecoder.decode(layer._apngSrc, layer._gcpFrameDelay || 100)
+      return _plApngLoad(layer._apngSrc, layer._gcpFrameDelay || 100)
         .then(function(result) {
           layer._animFrames    = result.frames;
+          layer._animSeq       = result.seq || null;
           layer._animIdx       = 0;
           layer._animLastTick  = 0;
           layer._animPlayCount = 0;
           layer._animOc        = document.createElement('canvas');
           layer._animOc.width  = result.width;
           layer._animOc.height = result.height;
-          layer._animOc.getContext('2d').putImageData(result.frames[0].imageData, 0, 0);
+          AnimProc.blit(result.frames[0], layer._animOc);   // putImageData (UPNG) o drawImage (nativo): mismo píxel
           layer._animReady     = true;
           return layer._animOc;
         }).catch(function() { return null; });
@@ -2072,11 +2354,18 @@ async function _plDecode(panel) {
     if (!needsImg) return Promise.resolve(null);
     return new Promise(resolve => {
       const img = new Image();
-      img.onload  = () => resolve(img);
+      // v41.78: la hoja pasa a «lista» con sus imágenes YA decodificadas (img.decode(), fuera del hilo principal), no a medias: antes
+      // el primer dibujado de cada hoja las decodificaba de forma síncrona en pleno gesto (dos fotogramas de 5 MB por foto).
+      img.onload  = () => { if (typeof img.decode === 'function') img.decode().then(() => resolve(img), () => resolve(img)); else resolve(img); };
       img.onerror = () => resolve(null);
       img.src = src;
     });
-  }));
+  };
+  const _nDec = (panel.layers || []).length || 1, _pF = panel._pgF || 0.35; let _kDec = 0;
+  panel.layerImgs = await Promise.all((panel.layers || []).map(layer => Promise.resolve(_decodeOne(layer)).then(v => {
+    _plProg(panel, _pF + 0.15 + (0.95 - _pF - 0.15) * (++_kDec / _nDec));   // barra de carga (v41.78)
+    return v;
+  })));
   // (renderDataUrl de bubbles se carga via panel.layers en el paso anterior)
 
   // Cachear referencia de imagen en capas botón para alpha hit testing en trayectorias
@@ -2164,13 +2453,14 @@ async function _plDecode(panel) {
         fr.onload = e => res(e.target.result);
         fr.readAsDataURL(blob);
       }))
-      .then(dataUrl => window.ApngDecoder.decode(dataUrl, line._gcpFrameDelay || 100))
+      .then(dataUrl => _plApngLoad(dataUrl, line._gcpFrameDelay || 100))
       .then(decoded => {
         if (!decoded || !decoded.frames.length) return;
         const oc = document.createElement('canvas');
         oc.width = decoded.width; oc.height = decoded.height;
-        oc.getContext('2d').putImageData(decoded.frames[0].imageData, 0, 0);
+        AnimProc.blit(decoded.frames[0], oc);
         line._animFrames   = decoded.frames;
+        line._animSeq      = decoded.seq || null;
         line._animIdx      = 0;
         line._animOc       = oc;
         line._animReady    = true;
@@ -2196,6 +2486,7 @@ async function _plDecode(panel) {
 // Parte de CPU de la preparación de una hoja descargada: parsear → decodificar.
 async function _plPrepareData(panel) {
   const pi = RS.panels.indexOf(panel);
+  _plDisposeSeqs(panel); // v41.78: un intento anterior fallido a medias no deja decodificadores nativos huérfanos
   if (panel._raw) await _plParse(panel, pi);
   panel._nav = _plNavOf(panel.layers); // v41.68: se conserva aunque la hoja se suelte de memoria
   await _plDecode(panel);
@@ -2234,7 +2525,8 @@ async function _plLoadNow(panel, onStage) {
 // ── Planificador ──────────────────────────────────────────────────────────────
 function _plCursor() { return Math.max(0, Math.min(RS.panels.length - 1, RS.idx || 0)); }
 // Prioridad de la hoja i (menor = antes): las de delante primero; las de detrás cuestan algo más.
-function _plKey(i) { const d = i - _plCursor(); return d >= 0 ? d : (-d) * 1.6 + 0.5; }
+// v41.78: la anterior (d = -1) va justo detrás de la siguiente y por delante de las extra de delante (antes iba después de la d+2).
+function _plKey(i) { const d = i - _plCursor(); return d >= 0 ? d : (d === -1 ? 1.5 : (-d) * 1.6 + 0.5); }
 function _plBest(state) {
   let best = null, bk = Infinity;
   const now = Date.now();
@@ -2279,7 +2571,8 @@ function _plLimits() {
   let behind = q('rdbehind'); if (behind == null) behind = (dm && dm <= 2) ? 1 : 2;
   let mb     = q('rdmem');    if (mb     == null) mb     = dm ? Math.max(48, Math.min(256, dm * 40)) : 120;
   // Con la pestaña oculta (otra app delante) se queda lo mínimo: un proceso ligero tiene menos posibilidades de que Android lo mate.
-  if (document.hidden) { ahead = Math.min(ahead, 1); behind = 0; }
+  // v41.78: lo mínimo es la ventana fija —la actual, la anterior y la siguiente—, que no se suelta nunca (ver _plPinned).
+  if (document.hidden) { ahead = Math.min(ahead, 1); behind = Math.min(behind, 1); }
   return { ahead, behind, bytes: mb * 1048576 };
 }
 
@@ -2295,7 +2588,18 @@ function _plWeigh(panel) {
     if (pr !== Object.prototype && pr !== null) return; // ImageData, <img>, canvas, arrays tipados…: se cuentan aparte
     for (const k in v) walk(v[k], d + 1);
   };
-  const frameBytes = fr => { let b = 0; if (Array.isArray(fr)) for (const f of fr) b += (f && f.imageData && f.imageData.data) ? f.imageData.data.length : 0; return b; };
+  // v41.78: los fotogramas «perezosos» (por instrucciones —AnimProc— o nativos —AnimNative—) se pintan al pedirlos: preguntarles
+  // por «imageData» los pintaba TODOS solo para pesarlos. Los nativos pesan lo que guardan de forma permanente (el fotograma 0);
+  // los de instrucciones no guardan píxeles.
+  const frameBytes = fr => {
+    let b = 0;
+    if (Array.isArray(fr)) for (const f of fr) {
+      if (!f) continue;
+      if (typeof f.paint === 'function') b += (typeof f.bytes === 'number') ? f.bytes : 0;
+      else if (f.imageData && f.imageData.data) b += f.imageData.data.length;
+    }
+    return b;
+  };
   for (const l of (panel.layers || [])) {
     if (!l) continue;
     walk(l, 0);
@@ -2309,13 +2613,30 @@ function _plWeigh(panel) {
   return str * 2 + px;
 }
 
-// Hojas que pueden estar en memoria ahora: por orden de prioridad (_plKey) mientras quepan en la ventana y en el tope de
-// bytes. Siempre la actual y, aunque pesen mucho, la siguiente y la anterior.
+// VENTANA FIJA (v41.78) — Alberto: «La hoja vigente, su hoja anterior y la posterior siempre deben estar listas y no borrarse de la
+// memoria cuando se acceda a una hoja». Hasta v41.77 la anterior y la siguiente solo se conservaban "si cabían" en el tope de bytes
+// (y el recorrido por candidatos se cortaba en la primera que no cabía, así que con hojas pesadas la ANTERIOR se soltaba aunque
+// fuera la siguiente a la que se podía volver: al retroceder había que cargarla otra vez). Ahora estas tres se fijan SIEMPRE,
+// pesen lo que pesen (y el tope de bytes solo limita lo que se guarda además de ellas). Las contiguas «listas» son baratas aunque
+// lleven animaciones: solo guardan el fotograma 0 de cada una (ver AnimNative) y NO se reproducen mientras no se ven.
+// ?rdahead=0 / ?rdbehind=0 (pruebas) siguen pudiendo quitar la contigua de ese lado.
+function _plPinned() {
+  const cur = _plCursor(), L = _plLimits(), s = new Set();
+  const add = i => { const p = RS.panels[i]; if (p && !p.isCredits) s.add(i); };
+  add(cur);
+  if (L.ahead >= 1) add(cur + 1);
+  if (L.behind >= 1) add(cur - 1);
+  return s;
+}
+
+// Hojas que pueden estar en memoria ahora: la ventana fija (_plPinned) y, además, por orden de prioridad (_plKey), las que
+// quepan en la ventana y en el tope de bytes.
 function _plKeepSet() {
-  const cur = _plCursor(), L = _plLimits(), keep = new Set([cur]);
+  const cur = _plCursor(), L = _plLimits(), keep = _plPinned();
+  keep.add(cur);
   const cand = [];
   for (let i = 0; i < RS.panels.length; i++) {
-    if (RS.panels[i].isCredits || i === cur) continue;
+    if (RS.panels[i].isCredits || keep.has(i)) continue;
     const d = i - cur;
     if (d > L.ahead || -d > L.behind) continue;
     cand.push(i);
@@ -2326,14 +2647,113 @@ function _plKeepSet() {
   for (const p of RS.panels) { if (!p.isCredits && p._st === 'ready' && p._w) { sum += p._w; nW++; } }
   const avg = nW ? sum / nW : 0;
   const wOf = i => { const p = RS.panels[i]; return (p._st === 'ready' && p._w) ? p._w : avg; };
-  let bytes = (RS.panels[cur] && !RS.panels[cur].isCredits) ? wOf(cur) : 0;
+  let bytes = 0;
+  keep.forEach(i => { if (RS.panels[i] && !RS.panels[i].isCredits) bytes += wOf(i); });
   for (const i of cand) {
-    const must = (i === cur + 1 && L.ahead >= 1) || (i === cur - 1 && L.behind >= 1);
     const w = wOf(i);
-    if (!must && bytes + w > L.bytes) break;
+    if (bytes + w > L.bytes) break;   // las extra se cortan en la primera que no cabe (así no quedan huecos en medio de la ventana)
     keep.add(i); bytes += w;
   }
   return keep;
+}
+
+// ── Bloqueo de paso (v41.78) ───────────────────────────────────────────────────
+// Alberto: «no permitirse pasar a la siguiente hoja hasta que esté cargada». Al lector no se le deja pasar a la hoja contigua
+// mientras esa hoja se está cargando (se le enseña la barra de carga superpuesta, ver _plBar*); nunca llega a una hoja a medias.
+// Si la hoja ha FALLADO (reintentando) o lleva demasiado, se deja pasar —se verá su aviso de error— para que una hoja rota o un
+// servidor que no contesta no dejen al lector atrapado. Los SALTOS deliberados (barra de hojas, botones del autor, «Volver a
+// leer») no pasan por aquí: llegan a la hoja destino como siempre, con su marcador y la barra mientras carga.
+// ?rdgate=0 desactiva el bloqueo y la barra (pruebas / diagnóstico).
+const _PL_GATE_MAX_MS = 60000;
+function _plGateOn() { return _PL_QS.get('rdgate') !== '0'; }
+function _plGateClosed(i) {
+  if (!_plGateOn()) return false;
+  const p = RS.panels[i];
+  if (!p || p.isCredits || p._st === 'ready' || p._st === 'error' || p._tries > 0) return false;
+  // Sin ventana fija en ese lado (?rdahead=0 / ?rdbehind=0, solo diagnóstico) nadie carga esa hoja por adelantado: no se espera a que llegue.
+  const L = _plLimits();
+  if (i > RS.idx ? L.ahead < 1 : L.behind < 1) return false;
+  if (p._ltAt && performance.now() - p._ltAt > _PL_GATE_MAX_MS) return false;   // seguro: no atrapar al lector
+  return true;
+}
+// El lector ha intentado pasar y no se le deja: la barra se enseña ya (y «late» un momento para que se vea por qué).
+function _plGateNotify() {
+  _PL.stats.gated++;
+  _LB.force = true;
+  _plBarUpdate();
+  const el = _plBarEl();
+  if (el) { el.classList.remove('rd-lb-pulse'); void el.offsetWidth; el.classList.add('rd-lb-pulse'); }
+}
+
+// ── Barra de carga superpuesta (v41.78) ───────────────────────────────────────
+// Alberto: «Cuando se acceda a la primera, debe aparecer superpuesta una barra de carga y no permitirse pasar a la siguiente hoja
+// hasta que esté cargada». Es una píldora inferior (pointer-events:none: nunca estorba a un gesto) con el progreso REAL de las hojas
+// de la ventana fija que aún se están cargando (bytes de las animaciones, capas, imágenes…; ver _plProg). Aparece al abrir la obra y
+// en cuanto una contigua de la hoja actual no está lista (con una espera corta para no parpadear en cargas casi instantáneas,
+// salvo que el lector intente pasar o que sea la propia hoja actual la que falta), y se va cuando todas están listas. El texto
+// reutiliza «Cargando hoja N…» / «No se pudo cargar la hoja N. Reintentando…» (los mismos del marcador de hoja).
+const _LB = { el: null, fill: null, label: null, shown: false, since: 0, force: false, raf: 0, sess: null, sig: '', pct: 0, lastTxt: null, lastPct: -1, timer: 0 };
+const _LB_GRACE_MS = 350;
+function _plBarEl() {
+  if (_LB.el && _LB.el.isConnected) return _LB.el;
+  const el = document.getElementById('readerLoadBar');
+  if (!el) return null;
+  _LB.el = el; _LB.fill = document.getElementById('readerLoadFill'); _LB.label = document.getElementById('readerLoadLabel');
+  return el;
+}
+// Hojas que el lector está esperando ahora: la actual y sus contiguas que aún no están listas.
+function _plBarTargets() {
+  const out = [], c = RS.idx || 0, L = _plLimits();
+  for (const d of [0, 1, -1]) {
+    if (d > 0 && L.ahead < 1) continue;    // sin ventana fija en ese lado (diagnóstico: ?rdahead=0 / ?rdbehind=0) no se espera esa hoja
+    if (d < 0 && L.behind < 1) continue;
+    const p = RS.panels[c + d];
+    if (p && !p.isCredits && p._st !== 'ready') out.push(p);
+  }
+  return out;
+}
+function _plProg(panel, v) { // progreso (0..1) de la hoja mientras se carga; solo sube
+  if (!(v > (panel._pg || 0))) return;
+  panel._pg = v > 1 ? 1 : v;
+  _plBarUpdate();
+}
+function _plBarUpdate() { // idempotente y barato: el DOM se toca como mucho una vez por fotograma
+  if (_LB.raf || !_plGateOn()) return;
+  _LB.raf = requestAnimationFrame(_plBarPaint);
+}
+function _plBarPaint() {
+  _LB.raf = 0;
+  const el = _plBarEl(); if (!el) return;
+  const tg = _plGateOn() ? _plBarTargets() : [];
+  if (!tg.length) {
+    if (_LB.shown) { el.classList.remove('rd-lb-on'); el.setAttribute('aria-hidden', 'true'); _LB.shown = false; }
+    _LB.sess = null; _LB.since = 0; _LB.force = false; _LB.sig = ''; _LB.pct = 0; _LB.lastTxt = null; _LB.lastPct = -1;
+    clearTimeout(_LB.timer); _LB.timer = 0;
+    return;
+  }
+  const now = performance.now(), cur = RS.idx || 0;
+  if (!_LB.sess) { _LB.sess = new Set(); _LB.since = now; }
+  _LB.sess.forEach(p => { if (Math.abs(RS.panels.indexOf(p) - cur) > 1) _LB.sess.delete(p); }); // ya no es una de las que se esperan
+  tg.forEach(p => _LB.sess.add(p));
+  const failed = tg.find(p => p._tries > 0 || p._st === 'error');
+  const waited = now - _LB.since;
+  if (!(_LB.force || failed || tg.indexOf(RS.panels[cur]) >= 0 || waited >= _LB_GRACE_MS)) {
+    if (!_LB.timer) _LB.timer = setTimeout(() => { _LB.timer = 0; _plBarUpdate(); }, Math.max(20, _LB_GRACE_MS - waited + 20));
+    return;
+  }
+  // progreso del conjunto: las ya listas cuentan 1; solo sube mientras el conjunto de hojas esperadas no cambie
+  let sum = 0, ids = [];
+  _LB.sess.forEach(p => { sum += (p._st === 'ready') ? 1 : Math.min(0.99, p._pg || 0); ids.push(p.id); });
+  let pct = Math.round(100 * sum / Math.max(1, _LB.sess.size));
+  const sig = ids.join(',');
+  if (sig === _LB.sig) pct = Math.max(pct, _LB.pct); else _LB.sig = sig;
+  _LB.pct = pct;
+  const sh = failed || tg[0];
+  const txt = I18n.t(failed ? 'reader_sheetLoadError' : 'reader_sheetLoading', { n: RS.panels.indexOf(sh) + 1 });
+  if (!_LB.shown) { el.classList.add('rd-lb-on'); el.removeAttribute('aria-hidden'); _LB.shown = true; }
+  el.classList.toggle('rd-lb-fail', !!failed);
+  if (_LB.lastTxt !== txt && _LB.label) { _LB.label.textContent = txt; _LB.lastTxt = txt; }
+  if (_LB.lastPct !== pct && _LB.fill) { _LB.fill.style.width = pct + '%'; el.setAttribute('aria-valuenow', String(pct)); _LB.lastPct = pct; }
 }
 
 // Fija la ventana vigente (_PL.keep) y suelta las hojas que han quedado fuera de ella. Barato: se llama desde el
@@ -2401,6 +2821,7 @@ function _plRichSrcs(panel) {
 // el planificador la trae otra vez.
 function _plEvict(panel, pi) {
   const mine = _plRichSrcs(panel);
+  _plDisposeSeqs(panel); // v41.78: decodificadores y fotogramas nativos de sus animaciones
   for (const im of (panel.layerImgs || [])) {
     if (!im) continue;
     if (im.tagName === 'IMG') { im.onload = im.onerror = null; try { im.removeAttribute('src'); } catch (_) {} }
@@ -2426,7 +2847,7 @@ function _plEvict(panel, pi) {
     delete panel.data_url;
     panel._st = 'idle';
   }
-  panel._tries = 0; panel._retryAt = 0; panel._w = 0;
+  panel._tries = 0; panel._retryAt = 0; panel._w = 0; panel._pg = 0; panel._ltAt = 0;
   RS._allLoadedAt = 0;
   _PL.stats.evicted++;
   if (mine.length) {
@@ -2454,6 +2875,18 @@ function _plPump() {
     if (wait > 0) _plArmSettle(wait);
     else if (cur._st === 'idle') _plStartFetch(cur);
     else if (cur._st === 'fetched') _plStartPrepare(cur);
+  }
+  // 1b) v41.78 — VENTANA FIJA: con la hoja actual lista, la siguiente y la anterior se piden y se preparan YA, sin esperar al
+  // segundo plano ni a que el usuario esté quieto (ver _plStep): hasta que estén listas no se puede pasar a ellas (_plGateClosed).
+  if (!curPending && _PL.on) {
+    const pin = _plPinned();
+    for (const i of [RS.idx + 1, RS.idx - 1]) {
+      if (!pin.has(i)) continue;
+      const p = RS.panels[i];
+      if (!p || p.isCredits || p._retryAt > now) continue;
+      if (p._st === 'idle') _plStartFetch(p);
+      else if (p._st === 'fetched') _plStartPrepare(p);
+    }
   }
   // 2) Segundo plano — solo cuando la hoja actual ya está lista (o en la descarga offline, que lo pide todo)
   if (_PL.bg && (!curPending || _PL.forceAll)) {
@@ -2519,6 +2952,8 @@ function _plArmRetry() {
 
 async function _plStartFetch(panel) {
   panel._st = 'fetching'; _PL.netActive++;
+  if (!panel._ltAt) panel._ltAt = performance.now();
+  _plBarUpdate();
   try {
     await _plFetchRaw(panel);
     panel._st = 'fetched'; panel._tries = 0; _PL.stats.fetched++;
@@ -2528,6 +2963,7 @@ async function _plStartFetch(panel) {
 
 async function _plStartPrepare(panel) {
   panel._st = 'preparing'; _PL.cpuActive++;
+  if (!panel._ltAt) panel._ltAt = performance.now();
   let ok = false;
   try { await _plPrepareData(panel); ok = true; }
   catch (e) { _plFail(panel, panel._raw ? 'fetched' : 'idle', e); }
@@ -2535,6 +2971,7 @@ async function _plStartPrepare(panel) {
   if (!ok) return;
   await _plFonts(panel);
   panel._st = 'ready'; panel._tries = 0; _PL.stats.prepared++;
+  panel._pg = 1; panel._ltAt = 0;
   try { _plOnReady(panel); } catch (e) { console.error('[reader] hoja lista:', e); }
   _plSchedule(); // si era la hoja actual, el segundo plano estaba en pausa mientras se cargaba: que siga
 }
@@ -2543,12 +2980,13 @@ function _plFail(panel, backTo, e) {
   panel._tries = (panel._tries || 0) + 1;
   _PL.stats.errors++;
   panel._err = String((e && e.message) || e).slice(0, 160);
-  if (panel._tries >= _PL.maxTries && !_plIsCurrent(panel)) { panel._st = 'error'; return; }
+  if (panel._tries >= _PL.maxTries && !_plIsCurrent(panel)) { panel._st = 'error'; _plGateChanged(); return; }
   _PL.stats.retries++;
   panel._st = backTo;
   panel._retryAt = Date.now() + Math.min(15000, 800 * Math.pow(2, panel._tries - 1)); // 0,8 · 1,6 · 3,2 · 6,4 · 12,8 · 15 s
   // La hoja que se está viendo cambia su aviso a «No se pudo cargar…» mientras reintenta.
   if (_plIsCurrent(panel) && RS.ctx) _render();
+  _plGateChanged(); // v41.78: una hoja contigua que falla deja de bloquear el paso (se verá su aviso) y la barra cambia a «No se pudo cargar…»
 }
 
 // ── Escaneo de navegación (v41.68) ────────────────────────────────────────────
@@ -2611,10 +3049,18 @@ function _plOnArrive(idx, dir) {
   RS._arrDir = dir || 'fwd';
   if (_PL.arrIdx !== idx) { _PL.arrIdx = idx; _PL.arrivedAt = performance.now(); }
   const p = RS.panels[idx];
+  _plGateChanged(); // v41.78: las contiguas de la nueva hoja actual pueden no estar listas (gestos y barra de carga)
   if (!p || p.isCredits || p._st === 'ready') { _plSchedule(); return; } // la ventana de memoria se desplaza con la hoja actual
   if (p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
   p._retryAt = 0;
   _plSchedule();
+}
+
+// El estado de «puedo pasar a la contigua» ha podido cambiar (llegada, hoja lista, hoja que falla): gestos del contenedor de scroll
+// (touch-action) y barra de carga.
+function _plGateChanged() {
+  try { if (RS._scroll) _updateContainerTouchAction(); } catch (_) {}
+  _plBarUpdate();
 }
 
 // ¿Está la hoja ACTUAL aún cargándose sin haber fallado? (avanzar queda en espera; si ya ha fallado, se deja pasar)
@@ -2730,6 +3176,7 @@ function _plOnReady(panel) {
   } else if (scroll) {
     _plPreRender(pi).catch(() => {}); // su canvas ya queda pintado cuando se llegue a ella
   }
+  _plGateChanged(); // v41.78: una contigua que acaba de quedar lista deja de bloquear el paso; la barra de carga se actualiza
   _pageNavUpdate();
   _plCheckAllLoaded();
 }
@@ -2739,7 +3186,7 @@ function _plRefreshSnapStops() {
   if (!container) return;
   Array.from(container.children).forEach((slide, pi) => {
     const p = RS.panels[pi]; if (!p) return;
-    slide.style.scrollSnapStop = (_panelHasNavButton(p) || _panelIsJumpTarget(pi)) ? 'always' : '';
+    slide.style.scrollSnapStop = (_plGateOn() || _panelHasNavButton(p) || _panelIsJumpTarget(pi)) ? 'always' : '';
   });
 }
 
@@ -2853,6 +3300,8 @@ function _plStartBackground() {
   _PL.on = true;
   _plWatchInput();
   _plCheckAllLoaded(); // obra de una sola hoja
+  _plSchedule();       // v41.78: la hoja contigua a la 1 (ventana fija) se pide YA, no tras el calentamiento
+  _plBarUpdate();
   // Breve calentamiento: que el primer dibujado y los gestos iniciales no compitan con las primeras respuestas.
   setTimeout(() => { _PL.bg = true; _plSchedule(); }, 250);
   try { _frStart(); } catch (e) { console.warn('[reader] registro de vuelo:', e); }
@@ -2872,6 +3321,21 @@ function _plStartBackground() {
 const _FR_KEY = 'cx_rd_flight', _FR_MAX = 36, _FR_EVERY = 5000;
 const _FR = { rec: null, prev: null, timer: null, on: false, box: null, boxTimer: null };
 
+// v41.78: fotogramas nativos decodificados que retienen ahora las hojas en memoria (la actual suena y guarda varios; el resto, uno por animación).
+function _frHeld() {
+  let n = 0;
+  try {
+    for (const p of RS.panels) {
+      if (p.isCredits || p._st !== 'ready') continue;
+      for (const l of (p.layers || [])) {
+        if (!l) continue;
+        if (l._animSeq) n += l._animSeq.held();
+        if (Array.isArray(l.richLines)) for (const r of l.richLines) if (r && r._animSeq) n += r._animSeq.held();
+      }
+    }
+  } catch (_) {}
+  return n;
+}
 function _frSample(tag) {
   const m = performance.memory; // solo Chrome/Android
   let w = 0; const res = [];
@@ -2881,6 +3345,7 @@ function _frSample(tag) {
     heap: m ? Math.round(m.usedJSHeapSize / 1048576) : null, tot: m ? Math.round(m.totalJSHeapSize / 1048576) : null,
     idx: (RS.idx || 0) + 1, n: RS.panels.filter(p => !p.isCredits).length,
     res: res.join(','), w: Math.round(w / 1048576), ev: _PL.stats.evicted, sc: _PL.stats.scanned, vis: document.hidden ? 'h' : 'v',
+    nat: _PL.stats.native || 0, nf: _PL.stats.nativeFail || 0, gt: _PL.stats.gated || 0, hd: _frHeld(),
   };
 }
 function _frPush(tag) {
@@ -2913,7 +3378,8 @@ function _frDiagWanted() {
 }
 function _frFmt(s) {
   return s.t + 's ' + s.vis + ' hoja ' + s.idx + '/' + s.n + ' en memoria [' + s.res + '] ≈' + s.w + 'MB · JS ' +
-    (s.heap == null ? '-' : s.heap + '/' + s.tot + 'MB') + ' · soltadas ' + s.ev + ' · escaneadas ' + s.sc + (s.tag ? ' (' + s.tag + ')' : '');
+    (s.heap == null ? '-' : s.heap + '/' + s.tot + 'MB') + ' · soltadas ' + s.ev + ' · escaneadas ' + s.sc +
+    ' · anim. nativas ' + (s.nat || 0) + '/' + (s.nf || 0) + 'fallos · pasos bloqueados ' + (s.gt || 0) + ' · fotogramas retenidos ' + (s.hd || 0) + (s.tag ? ' (' + s.tag + ')' : '');
 }
 function _frReport() {
   const out = [];
@@ -2921,6 +3387,7 @@ function _frReport() {
     ' · ventana (delante/detrás/MB) ' + (r.lim || []).join('/');
   out.push('— ' + I18n.t('reader_diagNow') + ' — ' + head(_FR.rec));
   _FR.rec.samples.slice(-8).forEach(s => out.push(_frFmt(s)));
+  if (_PL.nativeErr) out.push('anim. nativas: último motivo de respaldo (UPNG) → ' + _PL.nativeErr);
   const p = _FR.prev;
   if (p && p.samples) {
     const age = Math.round((_FR.rec.start - p.last) / 1000);
@@ -3266,9 +3733,15 @@ function _readerGifTick() {
   let _tLive = false;
   for (let k = _tLo; k <= _tHi; k++) { if (_plHasAnimated(RS.panels[k])) { _tLive = true; break; } }
   if (!_tLive) { RS._gifLoopOn = false; return; }
+  // v41.78: un fotograma nativo que llegó tarde (AnimNative.onLate) se acaba de pintar en su lienzo: redibujar lo visible.
+  const _lateDirty = !!RS._animDirty; RS._animDirty = false;
   RS.panels.forEach((panel, pi) => {
     if (pi < _tLo || pi > _tHi) return;
-    let panelChanged = false;
+    // v41.78: una hoja que aún se está cargando (sus capas ya están parseadas pero no decodificadas) NO se anima: su temporizador de
+    // trayectorias y sus fotogramas se arman al quedar lista (_plOnReady → _resetPanelAnims). Antes el hilo bloqueado por la
+    // decodificación síncrona lo ocultaba; con decodificación fuera del hilo principal el reloj corre mientras carga y adelantaba la trayectoria.
+    if (panel._st && panel._st !== 'ready') return;
+    let panelChanged = _lateDirty;
     (panel.layers || []).forEach(layer => {
       // GIF importado (el ticker se suspende si el motion path con ciclos controla el frame)
       if (layer._gifReady && layer._gifFrames && layer._gifOc) {
@@ -3617,6 +4090,10 @@ function startReader() {
 
   _setupPageNavBar();
   _setupOfflineBtn();
+  // v41.78 — Alberto: «Cuando se acceda a la primera, debe aparecer superpuesta una barra de carga y no permitirse pasar a la
+  // siguiente hoja hasta que esté cargada»: al abrir, la barra se ve en cuanto la contigua no está lista (sin espera de cortesía).
+  _LB.force = true;
+  try { if (window.AnimNative) AnimNative.setLate(() => { RS._animDirty = true; _ensureGifLoop(); }); } catch (_) {}
 
   // Arrancar loop de animación GIF si hay alguno en las hojas ya cargadas — con la carga progresiva
   // (v41.52) en este punto solo está lista la hoja 1; las hojas que se cargan después arrancan el
@@ -3629,6 +4106,7 @@ function startReader() {
 
   if (RS.navMode === 'horizontal' || RS.navMode === 'vertical') {
     _startScrollReader();
+    _plBarUpdate();
     return;
   }
 
@@ -3654,6 +4132,7 @@ function startReader() {
     ? I18n.t('reader_navTouchFixed')
     : I18n.t('reader_navKeyboardFixed');
   _readerToast(msg, 4000);
+  _plBarUpdate();
 }
 
 // ── MODO SCROLL (horizontal / vertical) ──────────────────────
@@ -3710,7 +4189,9 @@ function _startScrollReader() {
     // top: destino})`, usados por el slider de hojas y por los botones de
     // autor vía _rGoToPanel) — ver MDN/spec: scroll-snap-stop solo entra en
     // juego en desplazamientos por inercia ("fling"), no en saltos directos.
-    if (_panelHasNavButton(panel) || _panelIsJumpTarget(pi)) slide.style.scrollSnapStop = 'always';
+    // v41.78: con el bloqueo de paso, TODAS las hojas paran el fling (una hoja por gesto): un gesto enérgico no puede saltarse la
+    // siguiente —que quizá aún se está cargando— y caer en otra más lejana (ver _plGateClosed).
+    if (_plGateOn() || _panelHasNavButton(panel) || _panelIsJumpTarget(pi)) slide.style.scrollSnapStop = 'always';
 
     const canvas = document.createElement('canvas');
     canvas.width  = _full0(pi) ? pw : 1;
@@ -3903,6 +4384,7 @@ function _startScrollReader() {
       _render();
       _updateOverlay();
     } else if (RS.idx < RS.panels.length - 1) {
+      if (_plGateClosed(RS.idx + 1)) { _plGateNotify(); return; } // v41.78: la siguiente aún se está cargando
       _snapTo(RS.idx + 1);
     }
   }
@@ -3924,13 +4406,29 @@ function _startScrollReader() {
       // cambio de hoja.
       return;
     } else if (RS.idx > 0) {
+      if (_plGateClosed(RS.idx - 1)) { _plGateNotify(); return; } // v41.78: la anterior aún se está cargando
       _snapTo(RS.idx - 1);
     }
   }
 
   // ── Scroll nativo: detectar llegada a nuevo panel ──
-  let _prevSI = 0, _scrollRaf = null;
+  let _prevSI = 0, _scrollRaf = null, _gateSettleT = 0;
+  // v41.78 — red de seguridad del bloqueo de paso: si un gesto que el bloqueo no ve venir (barra de desplazamiento, PgDn nativo…) deja la
+  // vista a medio camino hacia una hoja que se está cargando, 350 ms después de que pare el scroll se devuelve a la hoja actual.
+  function _gateSettle() {
+    _gateSettleT = 0;
+    if (!_plGateOn() || _navLocked || _PL.ptrDown > 0) return;
+    // Un salto deliberado (_rGoToPanel) acaba de mover el scroll y su llegada aún no se ha procesado (el evento de scroll llega en el
+    // fotograma siguiente): no deshacerlo. Sin esto, un salto pedido justo cuando vence el temporizador se anulaba solo.
+    if (RS._arrFresh && (performance.now() - RS._arrFresh.t) < _FRESH_ARRIVAL_MS) return;
+    const size = isH ? container.clientWidth : container.clientHeight;
+    if (!size) return;
+    if (!(_plGateClosed(RS.idx + 1) || _plGateClosed(RS.idx - 1))) return;
+    const pos = isH ? container.scrollLeft : container.scrollTop, want = RS.idx * size;
+    if (Math.abs(pos - want) > 2) container.scrollTo({ left: isH ? want : 0, top: isH ? 0 : want, behavior: 'instant' });
+  }
   container.addEventListener('scroll', () => {
+    if (_plGateOn()) { clearTimeout(_gateSettleT); _gateSettleT = setTimeout(_gateSettle, 350); }
     if (_scrollRaf) cancelAnimationFrame(_scrollRaf);
     _scrollRaf = requestAnimationFrame(() => {
       const pos  = isH ? container.scrollLeft : container.scrollTop;
@@ -3958,6 +4456,21 @@ function _startScrollReader() {
         if (_goingFwdNow && _panelHasNavButton(RS.panels[_prevSI])) {
           container.scrollTo({ left: isH ? _prevSI * size : 0, top: isH ? 0 : _prevSI * size, behavior: 'instant' });
           return;
+        }
+        // v41.78 — bloqueo de paso: no se llega a una hoja que aún se está cargando (rueda, teclado de desplazamiento, barra de
+        // scroll o un fling que se salte hojas; el arrastre táctil ya lo impide touch-action, ver _updateContainerTouchAction).
+        // El aterrizaje se recorta en la última hoja alcanzable. Un SALTO deliberado (barra de hojas, botón «ir a hoja», «Volver a leer»;
+        // _rGoToPanel lo marca con _markFreshArrival) no se recorta: llega a su destino como siempre, con su marcador y la barra de carga.
+        const _deliberate = !!(RS._arrFresh && RS._arrFresh.idx === si && (performance.now() - RS._arrFresh.t) < _FRESH_ARRIVAL_MS);
+        if (_plGateOn() && !_deliberate) {
+          let _stopAt = null;
+          if (_goingFwdNow) { for (let i = _prevSI + 1; i <= si; i++) { if (_plGateClosed(i)) { _stopAt = i - 1; break; } } }
+          else if (_goingBackNow) { for (let i = _prevSI - 1; i >= si; i--) { if (_plGateClosed(i)) { _stopAt = i + 1; break; } } }
+          if (_stopAt !== null) {
+            container.scrollTo({ left: isH ? _stopAt * size : 0, top: isH ? 0 : _stopAt * size, behavior: 'instant' });
+            _plGateNotify();
+            return;
+          }
         }
         // Hoja destino de un salto (prohibido RETROCEDER desde ella —
         // avanzar SÍ está permitido): recorre desde la posición actual
@@ -4073,6 +4586,12 @@ function _startScrollReader() {
       const goingBack = isH ? _cdx > 0 : _cdy > 0;
       if (goingBack) e.preventDefault();
     }
+    // v41.78: tampoco se arrastra hacia una hoja contigua que aún se está cargando (touch-action ya lo impide al empezar el gesto;
+    // esto cubre el caso de que la hoja pasara a «cargándose» con el dedo ya apoyado) y se avisa con la barra.
+    if (_plGateOn() && (Math.abs(isH ? _cdx : _cdy) > 12)) {
+      const gFwd = isH ? _cdx < 0 : _cdy < 0;
+      if (_plGateClosed(RS.idx + (gFwd ? 1 : -1))) { e.preventDefault(); _plGateNotify(); }
+    }
   }, { passive: false });
 
   container.addEventListener('touchend', e => {
@@ -4108,7 +4627,14 @@ function _startScrollReader() {
   // PC: Ctrl+rueda para zoom hacia el cursor (llega aquí cuando el overlay
   // está inactivo — sin textos pendientes; ver también el listener gemelo
   // en overlay, para cuando sí hay textos pendientes)
-  container.addEventListener('wheel', e => { _rzWheelZoom(e, RS.canvas); }, { passive: false });
+  container.addEventListener('wheel', e => {
+    _rzWheelZoom(e, RS.canvas);
+    // v41.78 — la rueda hacia una hoja contigua que aún se está cargando se cancela ANTES de que el navegador empiece a desplazar
+    // (corregir el scroll después peleaba con la animación de la rueda y el ajuste a las hojas: la vista se quedaba a medio camino).
+    if (e.ctrlKey || e.defaultPrevented || !_plGateOn()) return;
+    const d = isH ? (e.deltaX || (e.shiftKey ? e.deltaY : 0)) : e.deltaY;
+    if (d && _plGateClosed(RS.idx + (d > 0 ? 1 : -1))) { e.preventDefault(); _plGateNotify(); }
+  }, { passive: false });
 
   // ── Botones de capa — ratón / PC (container) + arrastre para panear con zoom ──
   let _smpdX = null, _smpdY = null, _smpPanning = false, _smpPanTx0 = 0, _smpPanTy0 = 0, _smpPanOrig = null;
@@ -4570,6 +5096,10 @@ async function _buildStandaloneBundle() {
     <input type="range" id="pageNavSlider" class="page-nav-slider" min="1" max="1" value="1" step="1" data-i18n-aria="reader_selectPageLabel" aria-label="${I18n.t('reader_selectPageLabel')}">
   </div>
   <div id="readerToast" class="reader-toast"></div>
+  <div id="readerLoadBar" class="rd-loadbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
+    <div class="rd-loadbar-label" id="readerLoadLabel"></div>
+    <div class="rd-loadbar-track"><div class="rd-loadbar-fill" id="readerLoadFill"></div></div>
+  </div>
 </div>
 
 <script>window.__EMBEDDED_WORK__ = ${snapshotJson};</script>
@@ -5460,6 +5990,7 @@ function _resetPanelAnims(idx) {
   // v41.68: el reloj se detiene si lo visible no anima nada — aquí se reanuda (si la hoja a la que se llega o, en modo scroll,
   // alguna de sus contiguas, que asoman al deslizar, tiene animaciones).
   if (_plVisibleAnimated(idx)) _ensureGifLoop();
+  _plActivateSeqs(panel); // v41.78: las animaciones nativas de la hoja a la que se llega empiezan a decodificar por delante de la reproducción
   (panel.layers || []).forEach(layer => {
     if (layer._gifReady) {
       layer._gifIdx      = 0;
@@ -5746,8 +6277,9 @@ function _updateContainerTouchAction() {
   const container = document.getElementById('scrollReader');
   if (!container) return;
   const isH = RS.navMode === 'horizontal';
-  const blockFwd  = _panelHasNavButton(RS.panels[RS.idx]);
-  const blockBack = _panelIsJumpTarget(RS.idx);
+  // v41.78: además, no se puede arrastrar hacia una hoja contigua que aún se está cargando (ver _plGateClosed).
+  const blockFwd  = _panelHasNavButton(RS.panels[RS.idx]) || _plGateClosed(RS.idx + 1);
+  const blockBack = _panelIsJumpTarget(RS.idx) || _plGateClosed(RS.idx - 1);
   if (blockFwd && blockBack) {
     container.style.touchAction = 'none';
   } else if (blockFwd) {
@@ -5854,6 +6386,7 @@ function advance() {
     _startFade(); RS.textStep++; _render(); return;
   }
   if (RS.idx < RS.panels.length - 1) {
+    if (_plGateClosed(RS.idx + 1)) { _plGateNotify(); return; } // v41.78: la siguiente aún se está cargando: no se pasa a ella
     RS.idx++; RS.textStep = _initTextStep(RS.idx); RS.fadeAlpha = 0;
     _resetPanelAnims(RS.idx); // reiniciar animaciones desde frame 0
     _resizeCanvas(); _render();
@@ -5873,6 +6406,7 @@ function goBack() {
   // sigue funcionando con normalidad.
   if (_panelIsJumpTarget(RS.idx)) return;
   if (RS.idx > 0) {
+    if (_plGateClosed(RS.idx - 1)) { _plGateNotify(); return; } // v41.78: la anterior aún se está cargando: no se pasa a ella
     RS.idx--;
     const pp = RS.panels[RS.idx];
     RS.textStep  = (pp?.text_mode || 'sequential') === 'sequential' ? (pp?.texts || []).length : 0;

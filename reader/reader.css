@@ -299,3 +299,60 @@ body.embed-mode #readerCanvas { border-radius: 4px; }
   transform-origin: 0 0;
   will-change: transform;
 }
+
+/* ── Barra de carga superpuesta (v41.78) ──
+   Progreso de las hojas contiguas que aún se cargan (no se puede pasar a ellas hasta que estén listas). Píldora inferior centrada,
+   por debajo de la barra de hojas (z 150) y del toast; pointer-events:none para no estorbar nunca a un gesto. */
+.rd-loadbar {
+  position: fixed;
+  left: 50%; bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  width: min(260px, 70vw);
+  transform: translateX(-50%) translateY(6px);
+  background: rgba(0,0,0,.74);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 14px;
+  padding: 8px 14px 10px;
+  z-index: 130;
+  pointer-events: none;
+  opacity: 0; visibility: hidden;
+  transition: opacity .2s ease, transform .2s ease, visibility 0s linear .2s;
+}
+.rd-loadbar.rd-lb-on {
+  opacity: 1; visibility: visible;
+  transform: translateX(-50%);
+  transition: opacity .2s ease, transform .2s ease, visibility 0s;
+}
+.rd-loadbar-label {
+  color: #fff;
+  font-size: .78rem; font-weight: 600;
+  text-align: center;
+  margin-bottom: 6px;
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rd-loadbar-track {
+  height: 5px;
+  background: rgba(255,255,255,.25);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.rd-loadbar-fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, #f5c400, #f59000);
+  border-radius: 99px;
+  transition: width .25s ease-out;
+}
+.rd-loadbar.rd-lb-fail .rd-loadbar-fill { background: linear-gradient(90deg, #e57373, #b3261e); }
+/* Latido breve cuando el lector intenta pasar y no se le deja: se ve por qué */
+.rd-loadbar.rd-lb-pulse { animation: rd-lb-pulse .5s ease; }
+@keyframes rd-lb-pulse {
+  0%   { transform: translateX(-50%) scale(1); }
+  35%  { transform: translateX(-50%) scale(1.06); }
+  100% { transform: translateX(-50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rd-loadbar, .rd-loadbar-fill { transition: none; }
+  .rd-loadbar.rd-lb-pulse { animation: none; }
+}
