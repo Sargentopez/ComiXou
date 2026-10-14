@@ -1546,6 +1546,11 @@ _edSnapLayerFragment = function(l) {
   if (r && l && l.name && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
     r.name = l.name;
   }
+  // v41.80 — lo mismo con el botón-acción (_buttonAction): sin esto, CUALQUIER deshacer/rehacer global
+  // reconstruía toda la hoja sin el botón-acción de sus objetos (se perdía el enlace/salto de página).
+  if (r && l && l._buttonAction && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor') {
+    r._buttonAction = Object.assign({}, l._buttonAction);
+  }
   return r;
 };
 const _edNameApplyHistoryOrig = edApplyHistory;
@@ -1557,6 +1562,9 @@ edApplyHistory = function(snapshot) {
     _raw.forEach((o, i) => {
       if (o && o.name && edLayers[i] && o.type !== 'fill' && o.type !== 'pencil' && o.type !== 'watercolor') {
         edLayers[i].name = o.name;
+      }
+      if (o && o._buttonAction && edLayers[i] && o.type !== 'fill' && o.type !== 'pencil' && o.type !== 'watercolor') {
+        edLayers[i]._buttonAction = Object.assign({}, o._buttonAction); // v41.80
       }
     });
   } catch(_e) {}
@@ -2565,7 +2573,34 @@ class GifLayer extends BaseLayer {
     ctx.drawImage((_gAcs && _gAcs.oc) || this._oc, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  contains(px, py) { return super.contains(px, py); }
+  contains(px, py) {
+    // 1. Caja primero (rápido)
+    if (!super.contains(px, py)) return false;
+    // 2. v41.79 — hit por alpha del fotograma actual, igual que ImageLayer: las zonas transparentes del GIF no cuentan
+    //    (antes bastaba con la caja → un GIF con fondo transparente se llevaba el clic sobre píxeles pintados de capas inferiores).
+    //    Sin fotograma listo, o si el navegador no deja leer el píxel, se vuelve a la caja.
+    const oc = this._oc;
+    if (!this._ready || !oc || !oc.width || !oc.height) return true;
+    try {
+      const pw = edPageW(), ph = edPageH();
+      const rot = (this.rotation || 0) * Math.PI / 180;
+      const dx = (px - this.x) * pw, dy = (py - this.y) * ph;
+      const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
+      const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
+      const gw = this.width * pw, gh = this.height * ph;
+      const fx = (lx / gw + 0.5) * oc.width;
+      const fy = (ly / gh + 0.5) * oc.height;
+      if (fx < 0 || fy < 0 || fx >= oc.width || fy >= oc.height) return false;
+      const _ac = ImageLayer._alphaCanvas || (ImageLayer._alphaCanvas = document.createElement('canvas'));
+      _ac.width = 1; _ac.height = 1;
+      const _actx = _ac.getContext('2d');
+      _actx.clearRect(0, 0, 1, 1);
+      _actx.drawImage(oc, -Math.floor(fx), -Math.floor(fy));
+      return _actx.getImageData(0, 0, 1, 1).data[3] > 10;
+    } catch(e) {
+      return true; // fallback: caja
+    }
+  }
 }
 
 // Contexto 2D reutilizable solo para ctx.measureText() — no necesita tamaño
@@ -3971,7 +4006,13 @@ class StrokeLayer extends BaseLayer {
     ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  contains(px, py){
+  // v41.79 — dos radios, igual que DrawLayer.contains(px,py,exactMode):
+  //   exactMode=true  → hay tinta a ≤1 px de página del punto (el «píxel pintado bajo el puntero»). Es lo que usa la 1.ª pasada de la
+  //                     selección (_edPickAt): si una capa inferior tiene un píxel pintado justo ahí, gana a la tinta lejana de un trazo superior.
+  //   por defecto     → 10 px de ayuda (comportamiento de siempre), solo para la 2.ª pasada: cuando NO hay ningún píxel pintado bajo el punto.
+  // Antes el trazo a mano aplicaba siempre los 10 px, también en la pasada «exacta»: un dibujo superior sin relleno (un contorno, un rayado)
+  // se llevaba el clic aunque se tocara una zona vacía suya sobre los píxeles pintados de otra capa inferior (Alberto, v41.79).
+  contains(px, py, exactMode){
     // 1. Bbox rápido primero
     if(!super.contains(px, py)) return false;
     // 2. Pixel-hit real sobre el bitmap recortado
@@ -3984,16 +4025,27 @@ class StrokeLayer extends BaseLayer {
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
       const w = this.width * pw, h = this.height * ph;
-      // Convertir a coordenadas de píxel en el canvas recortado
-      const bx = Math.round((lx / w + 0.5) * this._canvas.width);
-      const by = Math.round((ly / h + 0.5) * this._canvas.height);
-      // Radio de expansión: 10px en coords de workspace, escalado al canvas recortado
-      const scaleX = this._canvas.width / w;
-      const scaleY = this._canvas.height / h;
-      const Rx = Math.ceil(10 * scaleX), Ry = Math.ceil(10 * scaleY);
-      const x0=Math.max(0,bx-Rx), y0=Math.max(0,by-Ry);
-      const x1=Math.min(this._canvas.width-1,bx+Rx);
-      const y1=Math.min(this._canvas.height-1,by+Ry);
+      const cw = this._canvas.width, ch = this._canvas.height;
+      // Escala bitmap/pantalla: 1 px de página = scaleX px de bitmap
+      const scaleX = cw / w;
+      const scaleY = ch / h;
+      let x0, y0, x1, y1;
+      if(exactMode){
+        // Píxeles del bitmap que solapan el cuadrado de ±1 px de página alrededor del punto
+        const ux = (lx / w + 0.5) * cw, uy = (ly / h + 0.5) * ch;
+        const rx = scaleX, ry = scaleY;
+        x0 = Math.max(0, Math.floor(ux - rx)); x1 = Math.min(cw - 1, Math.floor(ux + rx));
+        y0 = Math.max(0, Math.floor(uy - ry)); y1 = Math.min(ch - 1, Math.floor(uy + ry));
+      } else {
+        // Convertir a coordenadas de píxel en el canvas recortado
+        const bx = Math.round((lx / w + 0.5) * cw);
+        const by = Math.round((ly / h + 0.5) * ch);
+        // Radio de expansión: 10px en coords de workspace, escalado al canvas recortado
+        const Rx = Math.ceil(10 * scaleX), Ry = Math.ceil(10 * scaleY);
+        x0 = Math.max(0, bx - Rx); y0 = Math.max(0, by - Ry);
+        x1 = Math.min(cw - 1, bx + Rx);
+        y1 = Math.min(ch - 1, by + Ry);
+      }
       if(x1<x0||y1<y0) return false;
       const _sctx=this._canvas.getContext('2d');
       const data=_sctx.getImageData(x0,y0,x1-x0+1,y1-y0+1).data;
@@ -11615,12 +11667,11 @@ function _edCtxLayerHit(l, nx, ny, preciso){
 // mismo recorrido en orden z inverso (de arriba hacia abajo) que ya usa la
 // selección normal de un clic (ver edOnStart, rama "PC: clic normal").
 function _edCtxHitTest(nx, ny){
-  return edLayers.map((_,i)=>i).reverse().find(i => {
-    const l = edLayers[i];
-    return l && !l.hidden && !l.locked &&
-      l.type!=='fill' && l.type!=='pencil' && l.type!=='watercolor' &&
-      _edCtxLayerHit(l, nx, ny, true);
-  });
+  // v41.79: mismo criterio que el clic normal (_edPickAt: píxel pintado bajo el puntero, de arriba abajo; los píxeles de relleno / lápiz /
+  // acuarela vinculados redirigen a su dibujo, así que ya no hace falta la caja de las sub-capas de _edCtxLayerHit para acertar en el
+  // relleno — y un dibujo superior con relleno vinculado deja de llevarse el clic derecho en cualquier punto de su caja). Los bloqueados no cuentan.
+  const i = _edPickAt(nx, ny, { skipLocked: true });
+  return i >= 0 ? i : undefined;
 }
 
 function _edPositionContextMenu(menu, cx, cy){
@@ -14257,6 +14308,70 @@ function _edCurrentPageHydrating() {
   return false;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// v41.79 — SELECCIÓN POR PÍXEL: UNA SOLA FUENTE DE VERDAD para «¿qué objeto hay bajo este punto?»
+// (clic / toque, clic derecho, Mayús+clic, clic fuera de una multiselección, grupo silencioso y editor de animaciones).
+// Criterio (Alberto): se selecciona el objeto que tiene píxeles PINTADOS en el punto del toque o clic, empezando por la capa
+// superior y bajando, respetando los márgenes de detección que necesitan los vectoriales sin relleno y las guías.
+//   0. Textos y bocadillos primero (siempre se pintan encima).
+//   1. Pasada EXACTA, de arriba abajo: gana la primera capa con un píxel pintado bajo el punto.
+//        · dibujo a mano (stroke / draw): tinta a ≤1 px de página (contains(...,true)). SIN los 10 px de ayuda: con ellos un dibujo
+//          superior sin relleno (un contorno, un rayado) se llevaba el clic aunque se tocara una zona vacía suya sobre los píxeles
+//          pintados de otra capa inferior;
+//        · relleno / lápiz / acuarela vinculados: píxel exacto → se redirige al dibujo dueño;
+//        · imagen / GIF: alpha del píxel; vectoriales: su contains() YA lleva el margen (sin relleno: contorno ensanchado).
+//   2. Pasada de AYUDA, solo si ninguna capa tiene píxeles ahí: dibujos a mano con 10 px de margen (como siempre).
+// (La antigua 3.ª pasada «relleno → dibujo» quedó subsumida por la 1.ª.) Las guías y la caja ampliada táctil (28 px) de los vectoriales
+// sin relleno NO pasan por aquí: se resuelven antes / después en edOnStart.
+// Opciones: layers (def. edLayers) · visible(l) → visibilidad propia (def.: !l.hidden; el editor de animaciones usa _gcpVisible) ·
+//           skipLocked (saltar los bloqueados) · only (índices permitidos).
+// Devuelve el índice de la capa (el del dibujo dueño si el píxel es de un relleno/lápiz/acuarela vinculado) o -1.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+function _edPickAt(nx, ny, o){
+  o = o || {};
+  const L = o.layers || edLayers;
+  const only = o.only ? new Set(o.only) : null;
+  const allowed = i => !only || only.has(i);
+  const vis = o.visible || (l => !l.hidden);
+  const usable = l => !!l && vis(l) && typeof l.contains === 'function'
+    && !(typeof l.type === 'string' && l.type.charAt(0) === '_')
+    && !(o.skipLocked && l.locked);
+  const ownerOf = sl => {
+    if(sl._drawLayerId == null) return -1;
+    const oi = L.findIndex(dl => dl._drawLayerId === undefined && dl._uid === sl._drawLayerId);
+    return oi >= 0 ? oi : L.findIndex(dl => dl._fillLayerId === sl._drawLayerId);
+  };
+  // 0. Textos y bocadillos (siempre encima)
+  for(let i = L.length - 1; i >= 0; i--){
+    const l = L[i];
+    if((l && (l.type === 'text' || l.type === 'bubble')) && usable(l) && allowed(i) && l.contains(nx, ny)) return i;
+  }
+  // 1. Pasada exacta
+  for(let i = L.length - 1; i >= 0; i--){
+    const l = L[i];
+    if(!usable(l) || l.type === 'text' || l.type === 'bubble') continue;
+    if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
+      if(!l.contains(nx, ny)) continue;
+      const oi = ownerOf(l);
+      if(oi >= 0 && allowed(oi) && usable(L[oi])) return oi;
+      continue;
+    }
+    if(!allowed(i)) continue;
+    if((l.type === 'draw' || l.type === 'stroke') ? l.contains(nx, ny, true) : l.contains(nx, ny)) return i;
+  }
+  // 2. Ayuda: solo dibujos a mano, solo si nada tiene píxeles bajo el punto
+  for(let i = L.length - 1; i >= 0; i--){
+    const l = L[i];
+    if(!usable(l) || !allowed(i)) continue;
+    if(l.type !== 'draw' && l.type !== 'stroke') continue;
+    if(l.contains(nx, ny, false)) return i;
+  }
+  return -1;
+}
+
+// Visibilidad para _edPickAt en el editor de animaciones: un frame no visible (_gcpVisible === false) no es seleccionable.
+function _gcpPickVisible(l){ return l._gcpVisible !== false; }
+
 function edOnStart(e){
   // Cuentagotas activo (💧): el toque sobre el lienzo solo muestrea el color
   // (lo gestiona _edStartEyedrop en pointerup); no debe crear/seleccionar objetos.
@@ -15131,7 +15246,8 @@ function edOnStart(e){
             _edLastTapTime = _now2; _edLastTapIdx = -999; // centinela grupo
             if(_isDbl){
               // Encontrar el miembro más cercano al toque
-              const _hit = edMultiSel.find(i => edLayers[i]?.type!=='fill' && edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
+              const _hitM = _edPickAt(c.nx, c.ny, { only: edMultiSel }); // v41.79: píxel pintado bajo el toque, de arriba abajo
+              const _hit = _hitM >= 0 ? _hitM : edMultiSel[0];
               edSelectedIdx = _hit ?? -1;
               edMultiSel = []; edMultiBbox = null;
               edActiveTool = window._edGroupSilentTool;
@@ -15150,8 +15266,8 @@ function edOnStart(e){
             // OJO: _isTouch (const) aún no está declarada en este punto de
             // la función — usar e.pointerType directamente aquí.
             if(e.pointerType === 'touch'){
-              window._edCtxMenuTapCandidate =
-                edMultiSel.find(i => edLayers[i]?.type!=='fill' && edLayers[i]?.contains(c.nx, c.ny)) ?? edMultiSel[0];
+              const _hitM2 = _edPickAt(c.nx, c.ny, { only: edMultiSel }); // v41.79: píxel pintado bajo el toque, de arriba abajo
+              window._edCtxMenuTapCandidate = _hitM2 >= 0 ? _hitM2 : edMultiSel[0];
             }
           }
           // LOCK: solo iniciar si hay miembros desbloqueados
@@ -15188,8 +15304,9 @@ function edOnStart(e){
       edMultiSel=[]; edMultiBbox=null; edMultiGroupRot=0;
       edSelectedIdx = -1;
       edCanvas.className = '';
-      const _gsHit = edLayers.map((_,i)=>i).reverse().find(i =>
-        edLayers[i]?.contains && !edLayers[i].hidden && !edLayers[i].locked && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
+      // v41.79: mismo criterio que el clic normal (píxel pintado bajo el toque, de arriba abajo); los bloqueados se saltan
+      const _gsHitI = _edPickAt(c.nx, c.ny, { skipLocked: true });
+      const _gsHit = _gsHitI >= 0 ? _gsHitI : undefined;
       if(e.pointerType === 'touch'){
         if(_gsHit !== undefined){
           clearTimeout(window._edSelTouchTimer);
@@ -15247,9 +15364,9 @@ function edOnStart(e){
       edRedraw();
     } else if(e.shiftKey && e.pointerType !== 'touch'){
       // Shift+clic fuera del bbox en multiselect: buscar objeto y hacer toggle
-      const _sfound = edLayers.map((_,i)=>i).reverse().find(i=>{
-        const _la=edLayers[i]; return _la && !_la.hidden && _la.type!=='fill' && !_la.type?.startsWith('_') && _la.contains && _la.contains(c.nx,c.ny);
-      });
+      // v41.79: mismo criterio que el clic normal (píxel pintado bajo el toque, de arriba abajo)
+      const _sfoundI = _edPickAt(c.nx, c.ny);
+      const _sfound = _sfoundI >= 0 ? _sfoundI : undefined;
       if(_sfound !== undefined){
         const _si = edMultiSel.indexOf(_sfound);
         if(_si >= 0) edMultiSel.splice(_si, 1);
@@ -15295,7 +15412,9 @@ function edOnStart(e){
         // Si hay un objeto bajo el clic, seleccionarlo inmediatamente (sin
         // abrir el panel — igual que un clic normal; el doble clic/long-press
         // lo abre en el siguiente evento, ya con edActiveTool='select').
-        const _hit = edLayers.map((_,i)=>i).reverse().find(i => edLayers[i]?.contains && !edLayers[i].hidden && !edLayers[i].locked && edLayers[i].type!=='fill' && edLayers[i].contains(c.nx,c.ny));
+        // v41.79: mismo criterio que el clic normal (píxel pintado bajo el toque, de arriba abajo); los bloqueados se saltan
+        const _hitI = _edPickAt(c.nx, c.ny, { skipLocked: true });
+        const _hit = _hitI >= 0 ? _hitI : undefined;
         if(_hit !== undefined){
           edSelectedIdx = _hit;
           edMultiSelAnchor = _hit;
@@ -16148,57 +16267,10 @@ function edOnStart(e){
   // Textos/bocadillos se evalúan primero (siempre encima visualmente).
   const _isTouch = e.pointerType === 'touch';
 
-  let found = -1;
-  // Primero textos/bocadillos (siempre encima)
-  for(let i = edLayers.length - 1; i >= 0; i--){
-    const l = edLayers[i];
-    if((l.type==='text'||l.type==='bubble') && !l.hidden && l.type!=='fill' && l.contains(c.nx,c.ny)){
-      found = i; break;
-    }
-  }
-  // Pasada 1 (exacta): resto de layers de mayor a menor índice.
-  // El FillLayer se incluye: si hay píxeles bajo el cursor, redirige a su capa vinculada.
-  // Esto garantiza que el fill tiene la misma prioridad que el stroke que lo contiene.
-  if(found < 0){
-    for(let i = edLayers.length - 1; i >= 0; i--){
-      const l = edLayers[i];
-      if(l.type==='text'||l.type==='bubble') continue;
-      if(l.hidden) continue;
-      if(l.type==='fill' || l.type==='pencil' || l.type==='watercolor'){
-        // Hit en capa vinculada: verificar píxeles y redirigir a la capa de dibujo principal
-        if(!l.contains(c.nx,c.ny)) continue;
-        // Buscar el DrawLayer/StrokeLayer que tiene este _uid como su id de grupo
-        const _dlIdx=edLayers.findIndex(dl=>dl._drawLayerId===undefined && dl._uid===l._drawLayerId);
-        const _dlIdx2=_dlIdx>=0 ? _dlIdx : edLayers.findIndex(dl=>dl._fillLayerId===l._drawLayerId);
-        if(_dlIdx2>=0){found=_dlIdx2;break;}
-        continue;
-      }
-      const _hit = l.type==='draw' ? l.contains(c.nx,c.ny,true) : l.contains(c.nx,c.ny);
-      if(_hit){found=i;break;}
-    }
-  }
-  // Pasada 2 (expandida): solo si pasada 1 no encontró nada.
-  // DrawLayer usa radio=10px para facilitar selección de trazos finos.
-  if(found < 0){
-    for(let i = edLayers.length - 1; i >= 0; i--){
-      const l = edLayers[i];
-      if(l.type==='text'||l.type==='bubble') continue;
-      if(l.type!=='draw') continue; // solo DrawLayer tiene radio expandido; el resto ya se probó
-      if(!l.hidden && l.type!=='fill' && l.contains(c.nx,c.ny,false)){ found = i; break; }
-    }
-  }
-  // Pasada 3: si nada encontrado, buscar en FillLayers y redirigir a su capa de dibujo
-  if(found < 0){
-    for(let i = edLayers.length - 1; i >= 0; i--){
-      const l = edLayers[i];
-      if(l.type !== 'fill' || l.hidden) continue;
-      if(l.contains(c.nx, c.ny)){
-        // Redirigir al StrokeLayer/DrawLayer vinculado
-        const _dlIdx = edLayers.findIndex(dl => dl._fillLayerId === l._drawLayerId);
-        if(_dlIdx >= 0){ found = _dlIdx; break; }
-      }
-    }
-  }
+  // v41.79 — la decisión de «qué objeto hay bajo el punto» vive en _edPickAt (textos primero; pasada exacta de arriba abajo con
+  // redirección de relleno/lápiz/acuarela a su dibujo; pasada de ayuda de 10 px solo para dibujos a mano y solo si nada tiene
+  // píxeles ahí). Ver el comentario de cabecera de esa función.
+  let found = _edPickAt(c.nx, c.ny);
   // Pasada 4 (solo táctil): bbox expandido para line/shape sin relleno.
   // Los trazos vectoriales sin fill solo tienen hit en el contorno (línea fina),
   // lo que en táctil exige precisión milimétrica. Ampliamos 28px de pantalla.
@@ -18291,6 +18363,10 @@ let _vsHistIdx  = -1;  // índice actual
 // ── Historial vectorial por snapshots ────────────────────────────────────
 function _vsSerLayer(l) {
   // Serialización ligera para historial local (sin bitmaps)
+  // v41.80 — SIN PÉRDIDAS. Antes faltaban hidden / name / _buttonAction / grouped / groupedStyles y los
+  // sub-caminos (huecos) perdían curvas y radios de esquina: al deshacer, el objeto editado volvía sin su
+  // nombre, sin su botón-acción, sin su unión ⊕ o con los huecos rectos. Ahora guarda lo mismo que edSerLayer
+  // (menos los bitmaps de reserva, que aquí no hacen falta).
   if (l.type === 'line') {
     const cr = l.cornerRadii || {};
     const _s = {
@@ -18301,12 +18377,17 @@ function _vsSerLayer(l) {
       lineWidth: l.lineWidth, opacity: l.opacity ?? 1,
       closed: l.closed || false,
       _fromEllipse: l._fromEllipse || false,
-      points: l.points ? l.points.map(p => p ? { x: p.x, y: p.y, cp1: p.cp1 ? { ...p.cp1 } : undefined, cp2: p.cp2 ? { ...p.cp2 } : undefined, curve: p.curve } : null) : [],
+      points: l.points ? l.points.map(_edCloneLinePoint) : [],
       cornerRadii: Object.keys(cr).length ? { ...cr } : undefined,
-      subPaths: l.subPaths && l.subPaths.length ? l.subPaths.map(sp => sp.map(p => p ? { x: p.x, y: p.y } : null)) : undefined,
+      subPaths: l.subPaths && l.subPaths.length ? l.subPaths.map(sp => { const _sp = sp.map(_edCloneLinePoint); if (sp.cornerRadii) _sp.cornerRadii = { ...sp.cornerRadii }; return _sp; }) : undefined,
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
+    if (l.hidden) _s.hidden = true;
+    if (l.name) _s.name = l.name;
+    if (l._buttonAction) _s._buttonAction = Object.assign({}, l._buttonAction);
+    if (l.grouped) _s.grouped = true;
+    if (l.groupedStyles) _s.groupedStyles = l.groupedStyles.map(s => ({ ...s }));
     if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
@@ -18330,6 +18411,9 @@ function _vsSerLayer(l) {
       _fusionId: l._fusionId,
       groupId: l.groupId, locked: l.locked,
     };
+    if (l.hidden) _s.hidden = true;
+    if (l.name) _s.name = l.name;
+    if (l._buttonAction) _s._buttonAction = Object.assign({}, l._buttonAction);
     if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
@@ -18344,32 +18428,34 @@ function _vsSerLayer(l) {
   return null;
 }
 
+// ¿Es un vectorial (recta/polígono o forma)?
+function _vsIsVec(l) { return !!l && (l.type === 'line' || l.type === 'shape'); }
+// ¿Es un vectorial DE LA SESIÓN? = el que se está editando, los creados durante la sesión y el que está en
+// construcción. Todo vectorial que ya existía al abrir la sesión (_vsPreSessionLayers) es AJENO a ella.
+function _vsIsSession(l) { return _vsIsVec(l) && !_vsPreSessionLayers.has(l); }
+
 function _vsSnapshot() {
   const page = edPages[edCurrentPage];
   if (!page) return null;
-  // Excluir _edLineLayer de vecLayers — se guarda por separado
-  // Añadir flag _isPreSession para que _vsApply pueda actualizar _vsPreSessionLayers
-  // con las nuevas instancias y evitar que objetos pre-sesión se vuelvan seleccionables tras undo/redo.
-  const _allVec = page.layers.filter(l => (l.type === 'line' || l.type === 'shape') && l !== _edLineLayer);
-  const vecLayers = _allVec.map(l => {
-    const s = _vsSerLayer(l);
-    if (s) s._isPreSession = _vsPreSessionLayers.has(l);
-    return s;
+  // v41.80 — la instantánea contiene SOLO los vectoriales de la SESIÓN (el que se edita y los que se crean
+  // durante ella). Antes guardaba y, al deshacer/rehacer/cancelar, RECONSTRUÍA todos los vectoriales de la hoja
+  // desde una copia incompleta (sin «oculto», sin nombre, sin botón-acción, sin la unión ⊕…): un vectorial AJENO
+  // a la edición y oculto volvía a verse tras un deshacer (bug de Alberto), y todos cambiaban de instancia.
+  // Ahora los ajenos no se serializan ni se tocan: en el orden de pila solo se anota detrás de qué capa ajena
+  // (referencia viva) iba cada objeto de la sesión, para devolverlo a su profundidad.
+  //   order[i] = { vec: k }   → objeto de la sesión (k = índice dentro de vecLayers)
+  //            = { line: true } → el trazo en construcción (_edLineLayer; se guarda aparte en lineLayer)
+  //            = { keep: capa } → capa AJENA (no vectorial o vectorial previo a la sesión): solo es punto de anclaje
+  const vecLayers = [];
+  const order = page.layers.map(l => {
+    if (l === _edLineLayer) return { line: true };
+    if (_vsIsSession(l)) {
+      const s = _vsSerLayer(l);
+      if (s) { vecLayers.push(s); return { vec: vecLayers.length - 1 }; }
+    }
+    return { keep: l };
   });
   const lineLayer = _edLineLayer ? _vsSerLayer(_edLineLayer) : null;
-  // Registrar el ORDEN completo de la página (BUGFIX reordenado de capas): para
-  // cada posición se anota si es un vectorial (con su índice dentro de vecLayers)
-  // o una capa no vectorial — así _vsApply puede devolver cada objeto exactamente
-  // a su profundidad de pila original, en vez de agrupar todos los vectoriales
-  // en un único bloque (lo que destruía el orden si estaban intercalados con
-  // imágenes/dibujos/texto, típico de un grupo mixto ya desagrupado).
-  let _vsVecCounter = 0;
-  const order = page.layers.map(l => {
-    if (l !== _edLineLayer && (l.type === 'line' || l.type === 'shape')) {
-      return { vec: _vsVecCounter++ };
-    }
-    return { nonVec: true };
-  });
   return { vecLayers, lineLayer, order };
 }
 
@@ -18383,63 +18469,57 @@ function _vsPush() {
   _edShapeUpdateUndoRedoBtns();
 }
 
+// edDeserLayer comparte por referencia la trayectoria (_motionPath) del dato que recibe: se le da una copia propia
+// para que editar después la capa restaurada no altere la instantánea (que puede volver a aplicarse al rehacer).
+function _vsDetach(d) {
+  const c = { ...d };
+  if (d._motionPath) c._motionPath = _edCopyMotionPathPts(d._motionPath);
+  return c;
+}
+
 function _vsApply(snap) {
   if (!snap) return;
   const page = edPages[edCurrentPage];
   if (!page) return;
 
-  // Restaurar layers vectoriales (excluye _edLineLayer)
-  // Mantener array sin filter para poder correlacionar con snap.vecLayers[i]._isPreSession
-  const vecRestoredRaw = snap.vecLayers.map(d => d ? edDeserLayer(d) : null);
-  const vecRestored = vecRestoredRaw.filter(Boolean);
+  // v41.80 — restaura SOLO los vectoriales de la sesión. Todas las demás capas de la hoja (imágenes, textos,
+  // dibujos y, sobre todo, los OTROS vectoriales: ocultos, bloqueados, unidos ⊕, de un grupo…) se quedan tal cual
+  // están: la misma instancia, con su estado actual y en su posición actual.
+  const restored = (snap.vecLayers || []).map(d => {
+    if (!d) return null;
+    const l = edDeserLayer(_vsDetach(d));
+    if (l && d._fusionId) l._fusionId = d._fusionId; // edDeserLayer no lo restaura: pertenencia a la fusión en curso
+    return l;
+  });
+  _edLineLayer = snap.lineLayer ? edDeserLayer(_vsDetach(snap.lineLayer)) : null;
+  if (_edLineLayer && snap.lineLayer._fusionId) _edLineLayer._fusionId = snap.lineLayer._fusionId;
 
-  // Restaurar _edLineLayer si estaba en construcción
-  if (snap.lineLayer) {
-    _edLineLayer = edDeserLayer(snap.lineLayer);
-  } else {
-    _edLineLayer = null;
-  }
-
-  const nonVec = page.layers.filter(l => l.type !== 'line' && l.type !== 'shape');
-
-  let _newLayers;
-  if (snap.order && snap.order.length) {
-    // Reconstrucción fiel: cada objeto vuelve exactamente a su profundidad de
-    // pila original, intercalado con las capas no vectoriales tal como estaba.
-    let _nvI = 0;
-    _newLayers = snap.order.map(m => {
-      if (m.nonVec) return nonVec[_nvI++] || null;
-      return vecRestoredRaw[m.vec] || null;
-    }).filter(Boolean);
-    if (_edLineLayer) _newLayers.push(_edLineLayer);
-  } else {
-    // Fallback para snapshots antiguos sin 'order' (sesión ya en curso antes
-    // de esta corrección): agrupa los vectoriales antes del draw/text, como antes.
-    const drawIdx = nonVec.findIndex(l => l.type === 'draw');
-    const textIdx = nonVec.findIndex(l => l.type === 'text' || l.type === 'bubble');
-    let insertAt = drawIdx >= 0 ? drawIdx : (textIdx >= 0 ? textIdx : nonVec.length);
-    const before = nonVec.slice(0, insertAt);
-    const after  = nonVec.slice(insertAt);
-    const allVec = _edLineLayer ? [...vecRestored, _edLineLayer] : vecRestored;
-    _newLayers = [...before, ...allVec, ...after];
-  }
-  page.layers = _newLayers;
+  // Capas actuales sin los objetos de la sesión (se van a sustituir por los de la instantánea)
+  const out = page.layers.filter(l => !_vsIsSession(l));
+  const present = new Set(out);
+  // Cada objeto restaurado se inserta detrás de la última capa ajena que lo precedía en la instantánea
+  // (si esa capa ya no existe, detrás de la anterior que sí exista); varios seguidos conservan su orden.
+  const lastAfter = new Map();
+  let anchor = null;
+  (snap.order || []).forEach(m => {
+    if (m.keep) { if (present.has(m.keep)) anchor = m.keep; return; }
+    if (m.vec === undefined) return;
+    const l = restored[m.vec];
+    if (!l) return;
+    const after = lastAfter.get(anchor) || anchor;
+    out.splice(after ? out.indexOf(after) + 1 : 0, 0, l);
+    lastAfter.set(anchor, l);
+  });
+  if (_edLineLayer) out.push(_edLineLayer);
+  page.layers = out;
   edLayers = page.layers;
 
-  // Actualizar _vsPreSessionLayers con las nuevas instancias restauradas.
-  // Los objetos pre-sesión se identifican por el flag _isPreSession guardado en el snapshot.
-  // Sin esto, _vsPreSessionLayers quedaría apuntando a las instancias antiguas (GC'd),
-  // haciendo que los objetos pre-sesión restaurados sean seleccionables (bug de selección/relleno).
-  const _newPreSession = new Set();
-  vecRestoredRaw.forEach((l, i) => {
-    if (l && snap.vecLayers[i]?._isPreSession) _newPreSession.add(l);
-  });
-  _vsPreSessionLayers = _newPreSession;
+  // _vsPreSessionLayers sigue siendo válido tal cual: los vectoriales previos a la sesión conservan su instancia
+  // (ya no se recrean), así que siguen sin ser seleccionables ni fusionables.
 
-  // Seleccionar el último layer de SESIÓN (no pre-sesión) restaurado — nunca seleccionar uno ajeno
-  const _lastSessionVec = [...vecRestored].reverse().find(l => !_newPreSession.has(l))
-    || vecRestored[vecRestored.length - 1];
-  edSelectedIdx = _lastSessionVec ? page.layers.indexOf(_lastSessionVec) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
+  // Seleccionar el último objeto de la SESIÓN restaurado (o el trazo en construcción); nunca uno ajeno.
+  const _lastSes = [...restored].reverse().find(Boolean) || null;
+  edSelectedIdx = _lastSes ? page.layers.indexOf(_lastSes) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
 }
 
 function _vsUndo() {
@@ -18681,6 +18761,15 @@ function _edShapeApplyHistory(snapshot){
 // isNew=false: solo activo si hay cambios reales más allá del snapshot inicial.
 function _vsCanUndo(){
   return _vsIsNew ? _vsHistory.length > 1 : _vsHistIdx > 0;
+}
+
+// v41.80 — ¿hay una sesión de edición vectorial abierta (panel de recta/forma o barra flotante)? Mientras la haya,
+// deshacer/rehacer (teclado y botones) actúan SIEMPRE sobre el historial PROPIO de la sesión. Antes, si la sesión
+// aún no tenía cambios (Ctrl+Z) o siempre (Ctrl+Y: _edShapeHistIdx nunca retrocede), caían al deshacer/rehacer
+// GLOBAL de la hoja, que reconstruye toda la hoja por detrás de la sesión abierta (un vectorial oculto volvía a verse).
+function _edVecSessionOpen(){
+  const _m = $('edOptionsPanel')?.dataset.mode;
+  return _m==='shape' || _m==='line' || !!$('edShapeBar')?.classList.contains('visible');
 }
 
 function edShapeUndo(){
@@ -37269,12 +37358,12 @@ function EditorView_init(){
   // ── MINIMIZAR ──
   $('edUndoBtn')?.addEventListener('click', () => {
     if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
-    else if(($('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) && _edShapeHistIdx > _edShapeHistIdxBase) edShapeUndo();
+    else if(_edVecSessionOpen()) edShapeUndo(); // v41.80: sesión vectorial abierta → su historial propio, nunca el global
     else edUndo();
   });
   $('edRedoBtn')?.addEventListener('click', () => {
     if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
-    else if(($('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible')) && _edShapeHistIdx < _edShapeHistory.length - 1) edShapeRedo();
+    else if(_edVecSessionOpen()) edShapeRedo();
     else edRedo();
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
@@ -38009,17 +38098,18 @@ function EditorView_init(){
       if(!e.shiftKey && e.key.toLowerCase() === 'z'){ e.preventDefault(); _gcpUndo(); return; }
       if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){ e.preventDefault(); _gcpRedo(); return; }
     }
-    const _vecActive = $('edOptionsPanel')?.dataset.mode==='shape' || $('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible');
+    // v41.80: con una sesión vectorial abierta, Ctrl+Z / Ctrl+Y van SIEMPRE a su historial propio (ver _edVecSessionOpen)
+    const _vecActive = _edVecSessionOpen();
     if(!e.shiftKey && e.key.toLowerCase() === 'z'){
       e.preventDefault();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDrawUndo();
-      else if(_vecActive && _edShapeHistIdx > _edShapeHistIdxBase) edShapeUndo();
+      else if(_vecActive) edShapeUndo();
       else edUndo();
     }
     else if(e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z')){
       e.preventDefault();
       if(['draw','eraser','fill'].includes(edActiveTool)) edDrawRedo();
-      else if(_vecActive && _edShapeHistIdx < _edShapeHistory.length - 1) edShapeRedo();
+      else if(_vecActive) edShapeRedo();
       else edRedo();
     }
   };
@@ -41426,10 +41516,8 @@ function _gcpHandleDown(e) {
           ? _gcpRulesHit(_c0.px, _c0.py, e.pointerType === 'touch') : null;
         let _hit0 = -1;
         if (!_gHit0) {
-          for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
-            if (window._gcpLayers[_i]?._gcpVisible === false) continue;
-            if (window._gcpLayers[_i]?.contains?.(_c0.nx, _c0.ny)) { _hit0 = _i; break; }
-          }
+          // v41.79: mismo criterio de píxel pintado que el editor general (_edPickAt), con la visibilidad propia de GCP
+          _hit0 = _edPickAt(_c0.nx, _c0.ny, { layers: window._gcpLayers, visible: _gcpPickVisible });
           // También comprobar si el objeto ya seleccionado cubre el punto (por su bbox)
           if (_hit0 < 0 && window._gcpSelIdx >= 0) {
             const _sel = window._gcpLayers[window._gcpSelIdx];
@@ -41658,11 +41746,8 @@ function _gcpHandleDown(e) {
     const _prevMultiSel = window._gcpMultiSel.slice();
     window._gcpMultiSel = []; window._gcpMultiBbox = null;
     if (e.shiftKey && e.pointerType !== 'touch') {
-      let _sfound = -1;
-      for (let _i = window._gcpLayers.length - 1; _i >= 0; _i--) {
-        const _l = window._gcpLayers[_i];
-        if (_l && _l._gcpVisible !== false && !_l.locked && _l.contains?.(c.nx, c.ny)) { _sfound = _i; break; }
-      }
+      // v41.79: mismo criterio de píxel pintado que el editor general (_edPickAt); los bloqueados se saltan
+      const _sfound = _edPickAt(c.nx, c.ny, { layers: window._gcpLayers, visible: _gcpPickVisible, skipLocked: true });
       if (_sfound >= 0) {
         const _prev = _prevMultiSel.slice();
         const _si = _prev.indexOf(_sfound);
@@ -41761,23 +41846,10 @@ function _gcpDoSelectDrag(e, c) {
     }
   }
 
-  // ── Buscar cualquier objeto bajo el toque (3 pasadas, igual que editor general) ──
-  let hit = -1;
-  // Pasada 1: textos y bocadillos primero (siempre encima visualmente)
-  for (let i = window._gcpLayers.length-1; i >= 0; i--) {
-    const _l = window._gcpLayers[i];
-    if (_l._gcpVisible === false) continue; // frame no visible → no seleccionable
-    if ((_l.type==='text'||_l.type==='bubble') && _l.contains?.(c.nx, c.ny)) { hit = i; break; }
-  }
-  // Pasada 2: resto de capas (hit exacto)
-  if (hit < 0) {
-    for (let i = window._gcpLayers.length-1; i >= 0; i--) {
-      const _l = window._gcpLayers[i];
-      if (_l._gcpVisible === false) continue; // frame no visible → no seleccionable
-      if (_l.type==='text'||_l.type==='bubble') continue;
-      if (_l.contains?.(c.nx, c.ny)) { hit = i; break; }
-    }
-  }
+  // ── Buscar cualquier objeto bajo el toque ──
+  // v41.79: mismo criterio de píxel pintado que el editor general (_edPickAt: textos primero; pasada exacta de arriba abajo;
+  // ayuda de 10 px solo para dibujos a mano y solo si nada tiene píxeles ahí). Un frame no visible no es seleccionable.
+  const hit = _edPickAt(c.nx, c.ny, { layers: window._gcpLayers, visible: _gcpPickVisible });
   if (hit >= 0) {
     // ── Shift+clic (solo PC): combinar selección previa + nueva en
     // multiselección — mismo comportamiento que edOnStart en el editor
