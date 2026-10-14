@@ -8855,14 +8855,65 @@ function _edCropHandleCanvasEnd() {
   return false;
 }
 
+// v41.81 — Capas de dibujo a mano (relleno / acuarela / lápiz) de un trazo según lo que HAY en la hoja: vinculadas por
+// _drawLayerId a cualquiera de los ids que el trazo conoce (_uid o las marcas *LayerId; en un dibujo bien formado son
+// el mismo valor, pero uno antiguo o retocado puede conservar solo alguno).
+function _edCropGroupInfo(la, layers) {
+  const ids = [la._uid, la._fillLayerId, la._pencilLayerId, la._watercolorLayerId]
+    .filter((v, i, a) => v && a.indexOf(v) === i);
+  const find = t => {
+    for (const id of ids) { const c = layers.find(l => l.type === t && l._drawLayerId === id); if (c) return c; }
+    return null;
+  };
+  const fill = find('fill'), watercolor = find('watercolor'), pencil = find('pencil');
+  return { uid: ids[0] || null, fill, watercolor, pencil, any: !!(fill || watercolor || pencil) };
+}
+
+// v41.81 — Red de seguridad al acabar un recorte: cada pieza (la de dentro y la de fuera) queda como un dibujo a mano
+// COMPLETO E INDEPENDIENTE — su _uid, marcas de relleno / acuarela / lápiz SOLO de las capas que existen (nada de
+// marcas colgantes) y esas capas pegadas justo debajo de su tinta, en el orden relleno → acuarela → lápiz → tinta
+// (invariante del proyecto), de modo que nada —un vectorial de debajo, otro dibujo— pueda quedar entre ellas.
+// Es idempotente: el congelado ya las deja así; esto lo garantiza aunque algún paso previo lo altere.
+// _edCropPieceUids lo rellena _edApplyCropDraw con los ids de las piezas que acaba de crear.
+let _edCropPieceUids = [];
+function _edNormalizeCropPieces(page) {
+  const uids = _edCropPieceUids; _edCropPieceUids = [];
+  if (!page || !uids.length) return;
+  const L = page.layers;
+  for (const uid of uids) {
+    const sl = L.find(l => l.type === 'stroke' && l._uid === uid);
+    if (!sl) continue;
+    const sub = {};
+    for (const [flag, t] of [['_fillLayerId', 'fill'], ['_watercolorLayerId', 'watercolor'], ['_pencilLayerId', 'pencil']]) {
+      const c = L.find(l => l.type === t && l._drawLayerId === uid) || null;
+      sub[t] = c;
+      if (c) sl[flag] = uid; else delete sl[flag];
+    }
+    const subs = [sub.fill, sub.watercolor, sub.pencil].filter(Boolean);
+    if (!subs.length) continue;
+    const i = L.indexOf(sl);
+    let ordered = i >= subs.length;
+    if (ordered) for (let k = 0; k < subs.length; k++) { if (L[i - subs.length + k] !== subs[k]) { ordered = false; break; } }
+    if (ordered) continue;
+    for (const c of subs) L.splice(L.indexOf(c), 1);
+    L.splice(L.indexOf(sl), 0, ...subs);
+  }
+}
+
 function _edApplyCrop() {
   const la  = _edCropLayer;
   const pw  = edPageW(), ph = edPageH();
   const pts = _edCropPts;
   if (!la || pts.length < 3) return;
 
+  // v41.81 — ¿tiene el trazo un GRUPO de dibujo a mano? Se mira lo que HAY en la hoja (capas de relleno / acuarela /
+  // lápiz vinculadas por _drawLayerId), no solo las marcas *LayerId del trazo: un trazo que perdió la marca de relleno
+  // (dibujo antiguo, relleno borrado desde el panel de capas…) conserva sus capas, y el recorte tiene que llevarlas
+  // con él. Antes la ruta de «trazo sin relleno marcado» recortaba las capas suponiendo el mismo tamaño de lienzo que
+  // la tinta y no recolocaba nada: el relleno de cada pieza quedaba desalineado o por debajo del vectorial.
+  const _gi0 = (la && la.type === 'stroke') ? _edCropGroupInfo(la, edLayers) : null;
   // Función de finalización — se llama cuando todas las imágenes han cargado
-  const _wasDrawLayer = la && (la.type === 'draw' || (la.type === 'stroke' && la._fillLayerId));
+  const _wasDrawLayer = la && (la.type === 'draw' || (la.type === 'stroke' && _gi0.any));
   const _finish = (newLayer) => {
     if (newLayer) {
       // Para DrawLayer: _edApplyCropDraw ya sustituyó el original por dlOutside,
@@ -8928,21 +8979,35 @@ function _edApplyCrop() {
   if (la.type === 'image') {
     _edApplyCropImage(la, pts, pw, ph, _finish);
   } else if (la.type === 'stroke') {
-    if (la._fillLayerId) {
-      // Stroke con fill: convertir a DrawLayer, recortar como Draw, luego freeze
+    if (_gi0.any) {
+      // Stroke con grupo (relleno / acuarela / lápiz): convertir a DrawLayer, recortar como Draw, luego freeze
       // Reutiliza exactamente el mismo flujo que la edición de dibujos
-      const _dlTmp = la.toDrawLayer();
-      if(la._uid)               _dlTmp._uid               = la._uid;
-      if(la._fillLayerId)       _dlTmp._fillLayerId       = la._fillLayerId;
-      if(la._pencilLayerId)     _dlTmp._pencilLayerId     = la._pencilLayerId;
-      if(la._watercolorLayerId) _dlTmp._watercolorLayerId = la._watercolorLayerId;
-      // Expandir TODAS las capas del grupo al canvas workspace
-      const _cropUid = la._uid || la._fillLayerId;
-      if (_cropUid) {
-        _edExpandGroupLayerToWs(edLayers.find(f=>f.type==='fill'       && f._drawLayerId===_cropUid), _dlTmp);
-        _edExpandGroupLayerToWs(edLayers.find(f=>f.type==='pencil'     && f._drawLayerId===_cropUid), _dlTmp);
-        _edExpandGroupLayerToWs(edLayers.find(f=>f.type==='watercolor' && f._drawLayerId===_cropUid), _dlTmp);
+      // v41.81 — la OPACIDAD no se hornea en la tinta: es la de las capas (el deslizador del panel la reparte igual a
+      // tinta, relleno, acuarela y lápiz) y cada pieza la conserva tal cual en sus cuatro capas. Antes la tinta la
+      // horneaba y las capas vinculadas de las dos piezas volvían a 100 %.
+      const _opSave = la.opacity;
+      la.opacity = 1;
+      let _dlTmp;
+      try { _dlTmp = la.toDrawLayer(); } finally { la.opacity = _opSave; }
+      // Identidad del grupo: el id del trazo (o, si lo perdió, el de sus capas) y marcas SOLO de las capas que existen.
+      const _gU = _gi0.uid || ('dl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+      _dlTmp._uid = _gU;
+      for (const [_k, _t] of [['_fillLayerId', 'fill'], ['_pencilLayerId', 'pencil'], ['_watercolorLayerId', 'watercolor']]) {
+        if (_gi0[_t]) _dlTmp[_k] = _gU; else delete _dlTmp[_k];
       }
+      // Lo que cada pieza conserva del dibujo original (ver _edApplyCropDraw / _edFreezeDrawLayer/_carryAttrs):
+      // las dos, opacidad y «oculto»; solo el resto del original (la pieza de fuera), nombre, botón-acción y bloqueo.
+      const _both = {}, _out = {};
+      if (_opSave !== undefined && _opSave !== 1) _both.opacity = _opSave;
+      if (la.hidden)        _both.hidden = true;
+      if (la.name)          _out.name = la.name;
+      if (la._buttonAction) _out._buttonAction = Object.assign({}, la._buttonAction);
+      _dlTmp._cropAttrs = { both: _both, out: _out };
+      if (la.locked) _dlTmp.locked = true;
+      // Expandir TODAS las capas del grupo al canvas workspace (las relinka a _dlTmp._uid)
+      _edExpandGroupLayerToWs(_gi0.fill,       _dlTmp);
+      _edExpandGroupLayerToWs(_gi0.pencil,     _dlTmp);
+      _edExpandGroupLayerToWs(_gi0.watercolor, _dlTmp);
       // Sustituir stroke por DrawLayer en edLayers
       const _stIdx = edLayers.indexOf(la);
       if (_stIdx >= 0) edLayers.splice(_stIdx, 1, _dlTmp);
@@ -9139,8 +9204,8 @@ function _edApplyCropStroke(la, pts, pw, ph) {
   // Aplicamos el mismo clip y la recortamos para el lado dentro; destination-out para el lado fuera.
   const _cropUidS = la._uid || la._fillLayerId;
   const _newUid = Date.now().toString(36) + '_nf_' + Math.random().toString(36).slice(2,5);
-  newLayer._uid         = _newUid;
-  newLayer._fillLayerId = _newUid;
+  // v41.81 — la pieza NO recibe _uid ni _fillLayerId de entrada: solo si de verdad lleva capas vinculadas (abajo).
+  // Antes se marcaba SIEMPRE con un relleno que podía no existir (marca colgante).
   // Usar mismos handlers que la original — canvas sw×sh completo con clip aplicado
   newLayer.x = la.x; newLayer.y = la.y;
   newLayer.width = la.width; newLayer.height = la.height;
@@ -9177,6 +9242,7 @@ function _edApplyCropStroke(la, pts, pw, ph) {
   _cropGroupLayerS('pencil',     PencilLayer,     'pencil_',  '_newPencil');
   _cropGroupLayerS('watercolor', WatercolorLayer, 'wc_',      '_newWatercolor');
 
+  if (newLayer._newFill || newLayer._newPencil || newLayer._newWatercolor) newLayer._uid = _newUid;
   if (newLayer._newFill)       newLayer._fillLayerId       = _newUid;
   if (newLayer._newPencil)     newLayer._pencilLayerId     = _newUid;
   if (newLayer._newWatercolor) newLayer._watercolorLayerId = _newUid;
@@ -9243,7 +9309,13 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
       if (hasContent) break;
     }
   }
-  if (!hasContent) { if (_onDone) _onDone(null); return; }
+  if (!hasContent) {
+    // El polígono no toca nada: la original se vuelve a congelar tal cual (con lo que tenía: opacidad, nombre…)
+    if (dl._cropAttrs) dl._carryAttrs = Object.assign({}, dl._cropAttrs.both, dl._cropAttrs.out);
+    _edCropPieceUids = _dlUid ? [_dlUid] : [];
+    if (_onDone) _onDone(null);
+    return;
+  }
 
   // ── 3. Recortar capas vinculadas (fill, pencil, watercolor) si existen ──
   // Cada sub-capa tiene canvas local (recortado al bbox). Renderizarla a workspace antes de _splitCanvas.
@@ -9266,13 +9338,22 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   dlInside._ctx.drawImage(drawInside, 0, 0);
   dlInside.opacity = dl.opacity ?? 1;
   dlInside.locked  = false;
+  // v41.81 — cada pieza hereda de las capas del original su opacidad y su «oculto» (relleno oculto con el 👁 del panel
+  // de capas, opacidad repartida por el deslizador): antes las capas nuevas salían siempre al 100 % y visibles.
+  const _carryLayerAttrs = (nl, src) => {
+    if (src && src.opacity !== undefined) nl.opacity = src.opacity;
+    if (src && src.hidden) nl.hidden = true;
+  };
+  let _uidInV = null, _uidOutV = null;
   if (fillInside || pencilInside || wcInside) {
     const uidIn = Date.now().toString(36) + '_ci_' + Math.random().toString(36).slice(2,5);
+    _uidInV = uidIn;
     dlInside._uid               = uidIn;
-    dlInside._fillLayerId       = uidIn;
+    // v41.81 — marca SOLO de las capas que existen (antes _fillLayerId iba siempre, aunque no hubiera relleno)
+    dlInside._fillLayerId       = fillInside   ? uidIn : null;
     dlInside._pencilLayerId     = pencilInside ? uidIn : null;
     dlInside._watercolorLayerId = wcInside     ? uidIn : null;
-    const _makeGroupIn = (inside, LayerClass, prefix) => {
+    const _makeGroupIn = (inside, LayerClass, prefix, src) => {
       if (!inside) return null;
       const la = new LayerClass();
       la._drawLayerId = uidIn;
@@ -9280,11 +9361,12 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
       la._canvas = inside; la._ctx = inside.getContext('2d');
       la._isWorkspaceCanvas = true;
       la.x = 0.5; la.y = 0.5; la.width = 1; la.height = 1; la.rotation = 0;
+      _carryLayerAttrs(la, src);
       return la;
     };
-    dlInside._flInside     = _makeGroupIn(fillInside,   FillLayer,       'fl_');
-    dlInside._pencilInside = _makeGroupIn(pencilInside, PencilLayer,     'pencil_');
-    dlInside._wcInside     = _makeGroupIn(wcInside,     WatercolorLayer, 'wc_');
+    dlInside._flInside     = _makeGroupIn(fillInside,   FillLayer,       'fl_',     fl);
+    dlInside._pencilInside = _makeGroupIn(pencilInside, PencilLayer,     'pencil_', pencilL);
+    dlInside._wcInside     = _makeGroupIn(wcInside,     WatercolorLayer, 'wc_',     wcL);
   }
 
   // ── 5. Crear DrawLayer FUERA con sus capas vinculadas ──
@@ -9295,11 +9377,12 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   _edCarryMotionPath(dl, dlOutside); // v41.56: el resto del dibujo recortado (el original) conserva su trayectoria
   if (fillOutside || pencilOutside || wcOutside) {
     const uidOut = (Date.now()+1).toString(36) + '_co_' + Math.random().toString(36).slice(2,5);
+    _uidOutV = uidOut;
     dlOutside._uid               = uidOut;
-    dlOutside._fillLayerId       = uidOut;
+    dlOutside._fillLayerId       = fillOutside   ? uidOut : null;
     dlOutside._pencilLayerId     = pencilOutside ? uidOut : null;
     dlOutside._watercolorLayerId = wcOutside     ? uidOut : null;
-    const _makeGroupOut = (outside, LayerClass, prefix) => {
+    const _makeGroupOut = (outside, LayerClass, prefix, src) => {
       if (!outside) return null;
       const la = new LayerClass();
       la._drawLayerId = uidOut;
@@ -9307,12 +9390,19 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
       la._canvas = outside; la._ctx = outside.getContext('2d');
       la._isWorkspaceCanvas = true;
       la.x = 0.5; la.y = 0.5; la.width = 1; la.height = 1; la.rotation = 0;
+      _carryLayerAttrs(la, src);
       return la;
     };
-    dlOutside._flOutside     = _makeGroupOut(fillOutside,   FillLayer,       'fl_');
-    dlOutside._pencilOutside = _makeGroupOut(pencilOutside, PencilLayer,     'pencil_');
-    dlOutside._wcOutside     = _makeGroupOut(wcOutside,     WatercolorLayer, 'wc_');
+    dlOutside._flOutside     = _makeGroupOut(fillOutside,   FillLayer,       'fl_',     fl);
+    dlOutside._pencilOutside = _makeGroupOut(pencilOutside, PencilLayer,     'pencil_', pencilL);
+    dlOutside._wcOutside     = _makeGroupOut(wcOutside,     WatercolorLayer, 'wc_',     wcL);
   }
+  // v41.81 — atributos del dibujo original que viajan a cada pieza al congelarla (ver _edFreezeDrawLayer/_carryAttrs).
+  if (dl._cropAttrs) {
+    dlInside._carryAttrs  = Object.assign({}, dl._cropAttrs.both);
+    dlOutside._carryAttrs = Object.assign({}, dl._cropAttrs.both, dl._cropAttrs.out);
+  }
+  _edCropPieceUids = [_uidOutV, _uidInV].filter(Boolean);
 
   // ── 6. Sustituir el DrawLayer original (y todas sus capas) en edLayers ──
   const page = edPages[edCurrentPage];
@@ -23258,8 +23348,25 @@ function _edVectorToDrawing(idx) {
   return true;
 }
 
+// v41.81 — mientras se congela el resultado de un RECORTE (dos DrawLayer seguidos: la pieza de fuera y la de dentro),
+// _edFreezeDrawLayer NO apunta cada congelado en el historial: el estado intermedio (la 1.ª pieza ya congelada y la 2.ª
+// todavía como DrawLayer con sus capas provisionales al final de la hoja) no es un dibujo bien formado, y aun así
+// quedaba como pasos de deshacer: un Ctrl+Z llevaba a ese estado a medias. Ahora el recorte deja UN solo paso (el
+// final), y deshacer vuelve directamente a «antes de recortar».
+let _edFreezeBatch = false;
 function _edFreezeAllDrawLayers(){
   const page = edPages[edCurrentPage]; if(!page) return;
+  _edFreezeBatch = true;
+  try { _edFreezeAllDrawLayersInner(page); } finally { _edFreezeBatch = false; }
+  // Cada pieza del recorte, como dibujo a mano completo, con sus capas pegadas y en orden (ver _edNormalizeCropPieces)
+  try { _edNormalizeCropPieces(page); } catch(e) { _edCropPieceUids = []; }
+  edLayers = page.layers;
+  _edDrawClearHistory();
+  edSelectedIdx = -1;
+  window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
+  edPushHistory(true); // force: resultado del recorte siempre se guarda
+}
+function _edFreezeAllDrawLayersInner(page){
   // Iterar hasta que no quede ningún DrawLayer en la página
   let safety = 20; // máximo 20 iteraciones para evitar bucle infinito
   while(safety-- > 0){
@@ -23295,10 +23402,6 @@ function _edFreezeAllDrawLayers(){
     // _edFreezeDrawLayer ya sustituyó el DrawLayer por StrokeLayer en page.layers
     edLayers = page.layers;
   }
-  _edDrawClearHistory();
-  edSelectedIdx = -1;
-  window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
-  edPushHistory(true); // force: resultado del recorte siempre se guarda
 }
 
 function _edFreezeDrawLayer(){
@@ -23397,7 +23500,7 @@ function _edFreezeDrawLayer(){
       }
       page.layers.splice(page.layers.indexOf(dl), 1);
       edLayers = page.layers;
-      edPushHistory();
+      if (!_edFreezeBatch) edPushHistory();
       return;
     }
     // Al menos una sub-capa tiene contenido: calcular union bbox de todas
@@ -23423,6 +23526,7 @@ function _edFreezeDrawLayer(){
     if(dl._pencilLayerId)     _slE._pencilLayerId     = dl._pencilLayerId;
     if(dl._watercolorLayerId) _slE._watercolorLayerId = dl._watercolorLayerId;
     _edCarryMotionPath(dl, _slE); // v41.56: la reedición no borra la trayectoria del dibujo
+    if (dl._carryAttrs) Object.assign(_slE, dl._carryAttrs); // v41.81: lo que el recorte conserva de cada pieza (opacidad, nombre…)
     // Recortar cada sub-capa al union bbox (si existe)
     const _cropSubE = (la, refId) => {
       if (!la) return;
@@ -23452,7 +23556,7 @@ function _edFreezeDrawLayer(){
     }
     edLayers = page.layers;
     _edDrawClearHistory();
-    edPushHistory(true);
+    if (!_edFreezeBatch) edPushHistory(true);
     edRedraw();
     _edFCL('=== RAMA TINTA VACÍA: FIN — stroke creado con ink transparente, fill final: ' +
       _edFCCanvasInfo(_flEm?._canvas, _flEm?._ctx) + ' ===');
@@ -23533,6 +23637,7 @@ function _edFreezeDrawLayer(){
   if(dl._pencilLayerId)     sl._pencilLayerId     = dl._pencilLayerId;
   if(dl._watercolorLayerId) sl._watercolorLayerId = dl._watercolorLayerId;
   _edCarryMotionPath(dl, sl); // v41.56: la reedición no borra la trayectoria del dibujo
+  if (dl._carryAttrs) Object.assign(sl, dl._carryAttrs); // v41.81: lo que el recorte conserva de cada pieza (opacidad, nombre…)
 
   // ── Helper: recortar una capa del grupo al bbox union ─────────────────────
   // DIAGNÓSTICO v40.90: el registro (_edFCL) estaba condicionado a _isFillLa,
@@ -23617,7 +23722,7 @@ function _edFreezeDrawLayer(){
     ' | fill final: ' + _edFCCanvasInfo(_flFreeze?._canvas, _flFreeze?._ctx) + ' ===');
   // Registrar el resultado final (StrokeLayer) en el historial global.
   window._edDrawSessionActive = false; // permitir edPushHistory de nuevo
-  edPushHistory(true); // force: el resultado del dibujo siempre se guarda
+  if (!_edFreezeBatch) edPushHistory(true); // force: el resultado del dibujo siempre se guarda
   edRedraw();
   _edQualityCapture('tras OK del dibujo'); // v41.77: foto compacta para el 🩺 «Calidad de dibujos»
 }

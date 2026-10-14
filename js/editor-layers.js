@@ -241,12 +241,26 @@ function _lyRender() {
   if (_lrPage?.layers) {
     _lrPage.layers.filter(l=>l.type==='draw'||l.type==='stroke').forEach(dl => {
       if (dl._fillLayerId) return; // ya vinculado
+      // v41.81 — si su relleno YA está en la hoja (vinculado por _drawLayerId al _uid del trazo, pero el trazo perdió la
+      // marca _fillLayerId), solo se restituye la marca. Antes se creaba otro relleno vacío con el mismo vínculo: dos
+      // rellenos para un mismo dibujo, y las funciones que buscan «el» relleno (recorte, edición…) podían coger el vacío.
+      if (dl._uid) {
+        const _own = _lrPage.layers.find(l => l.type==='fill' && l._drawLayerId === dl._uid);
+        if (_own) { dl._fillLayerId = dl._uid; return; }
+      }
       // Buscar FillLayer huérfano o crear uno nuevo
       let fl = _lrPage.layers.find(l => l.type==='fill' && !l._drawLayerId);
       if (!fl) {
         fl = new FillLayer();
         const dlIdx = _lrPage.layers.indexOf(dl);
-        _lrPage.layers.splice(dlIdx, 0, fl);
+        // v41.81 — el relleno nuevo va DEBAJO de acuarela y lápiz del dibujo (relleno → acuarela → lápiz → tinta),
+        // no pegado a la tinta por encima de ellos.
+        let _insIdx = dlIdx;
+        const _bfUid = dl._uid || dl._pencilLayerId || dl._watercolorLayerId;
+        if (_bfUid) _lrPage.layers.forEach((l, k) => {
+          if ((l.type==='watercolor' || l.type==='pencil') && l._drawLayerId === _bfUid && k < _insIdx) _insIdx = k;
+        });
+        _lrPage.layers.splice(_insIdx, 0, fl);
         if (typeof edLayers !== 'undefined') edLayers = _lrPage.layers;
       }
       const uid = 'dl_' + Date.now().toString(36) + Math.random().toString(36).slice(2,5);
