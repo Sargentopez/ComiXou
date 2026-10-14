@@ -1418,6 +1418,26 @@ let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen'
 // herramienta guarda el suyo. Se vacía al empezar una edición (EditorView_init).
 const ED_TOOL_COLOR_DEFAULTS = { pen: '#000000', pencil: '#7A2E20' };
 let _edToolColor = {}; // color recordado por herramienta (clave = _edTmp.active)
+// ── Grosor y opacidad de cada herramienta de dibujo a mano (v41.82) ──────
+// Petición de Alberto: los defaults de cada herramienta (grosor, opacidad, color)
+// se aplican al EMPEZAR la creación o edición de un dibujo a mano, pero una vez
+// que el usuario los rectifica NO deben volver a imponerse al cambiar de
+// herramienta y regresar: cada herramienta conserva lo suyo hasta que se hace OK
+// y el objeto queda insertado en el lienzo (la sesión siguiente vuelve a empezar
+// con los defaults). Mismo patrón que _edToolColor: los globales edDrawSize /
+// edEraserSize / edDrawOpacity siguen siendo la copia VIVA de la herramienta
+// activa (todo el pintado los lee tal cual) y este almacén guarda la de cada
+// una — ver _edToolKey / _edToolParamSet / _edSyncToolParams.
+//   size:null = herramienta sin grosor (bote).  dodge = iluminar/oscurecer.
+const ED_TOOL_PARAM_DEFAULTS = {
+  pen:        { size: 2,    opacity: 100 },
+  pencil:     { size: 2,    opacity: 100 },
+  watercolor: { size: 20,   opacity: 7   },
+  bucket:     { size: null, opacity: 100 },
+  dodge:      { size: 20,   opacity: 7   }, // sobre bote: 100 % (ver _edToolParamDefault)
+  eraser:     { size: 20,   opacity: 100 }
+};
+let _edToolParams = {}; // {clave de herramienta: {size, opacity}} — se vacía al empezar una sesión de dibujo
 // Instantánea del canal alfa de la tinta al ENTRAR a una sesión de dibujo —
 // ver _edDrawInitHistory/_edFreezeDrawLayer/_edAutoSmoothExposedFillEdges.
 // {alpha:Uint8Array, w, h} | null.
@@ -23860,6 +23880,50 @@ function _edSyncToolColor(){
   const i = edColorPalette.indexOf(edDrawColor);
   if (i >= 0) edSelectedPaletteIdx = i;
 }
+// ── Grosor/opacidad por herramienta (v41.82) — ver ED_TOOL_PARAM_DEFAULTS ──
+// Qué "herramienta" es la activa a efectos de grosor/opacidad: la goma (sea cual
+// sea la capa que borra — _edTmp.active solo dice cuál), iluminar/oscurecer
+// (sobre acuarela o bote), o la capa de dibujo activa (tinta, lápiz, acuarela,
+// bote).
+function _edToolKey(){
+  if (edActiveTool === 'eraser') return 'eraser';
+  if (_edDodgeBurnActive) return 'dodge';
+  return _edTmp.active;
+}
+// Valores por defecto de una herramienta la primera vez que se usa en la sesión.
+// Iluminar/oscurecer sobre el bote arranca al 100 % (sobre acuarela, al 7 %),
+// como siempre — pero solo la primera vez: después manda lo que fije el usuario.
+function _edToolParamDefault(k){
+  const d = ED_TOOL_PARAM_DEFAULTS[k] || ED_TOOL_PARAM_DEFAULTS.pen;
+  const r = { size: d.size, opacity: d.opacity };
+  if (k === 'dodge' && _edTmp.active === 'bucket') r.opacity = 100;
+  return r;
+}
+// Elección de grosor u opacidad del USUARIO en modo dibujo (deslizadores y casillas
+// del panel o de la barra flotante): además de fijar el global vivo (que ya hace
+// cada manejador), la guarda en la ficha de la herramienta activa. field = 'size'
+// | 'opacity'. Los reinicios internos (cambio de herramienta, nueva sesión…) NO
+// pasan por aquí — así lo que el usuario fijó nunca lo pisa un default.
+function _edToolParamSet(field, v){
+  if (!_edDrawModeActive()) return;
+  const k = _edToolKey();
+  const e = _edToolParams[k] || (_edToolParams[k] = _edToolParamDefault(k));
+  e[field] = v;
+}
+// Carga en los globales vivos el grosor y la opacidad de la herramienta activa.
+// Cuelga de los dos puntos por los que pasa TODO cambio de herramienta o de capa
+// —el repintado del panel (edRenderOptionsPanel) y _edbSyncTool (barra flotante)—,
+// DESPUÉS de los reinicios explícitos que aún hay en cada botón (edDrawOpacity = 100,
+// edDrawSize = 20…): esos valores ya no sobreviven, manda la ficha. Es idempotente.
+// La goma carga su grosor en edEraserSize (su propio global); el bote no tiene grosor.
+function _edSyncToolParams(){
+  const k = _edToolKey();
+  const e = _edToolParams[k] || (_edToolParams[k] = _edToolParamDefault(k));
+  if (e.size !== null && e.size !== undefined) {
+    if (k === 'eraser') edEraserSize = e.size; else edDrawSize = e.size;
+  }
+  edDrawOpacity = e.opacity;
+}
 function _edUpdatePaletteDots(){
   // v41.05 — BUGFIX Alberto: "en la muestra se veía el color negro, pero al
   // aplicar el bote de pintura ha pintado naranja". El aro de "seleccionado"
@@ -24520,6 +24584,7 @@ function edRenderOptionsPanel(mode){
       // flotante (popup de pinceles) pasan por aquí: sin esto la herramienta nueva
       // dibujaba con el color de la anterior hasta restaurar el panel.
       _edSyncToolColor();
+      _edSyncToolParams(); // v41.82: grosor/opacidad de la herramienta activa (cambio de herramienta desde la barra)
       edDrawBarShow();
       _edbSyncColor(); // el muestrario de la barra debe enseñar el color de la herramienta activa
       return;
@@ -24550,6 +24615,12 @@ function edRenderOptionsPanel(mode){
         // mano — petición de Alberto: se puede cambiar durante la sesión,
         // pero no debe recordarse de una sesión a la siguiente.
         edDrawSize = 2;
+        // v41.82: igual para el grosor y la opacidad de TODAS las herramientas
+        // (tinta, lápiz, acuarela, bote, iluminar/oscurecer y goma): cada una
+        // vuelve a sus defaults al empezar la creación/edición de un dibujo
+        // — _edSyncToolParams (más abajo) los carga al ir usando cada herramienta.
+        _edToolParams = {};
+        edEraserSize = ED_TOOL_PARAM_DEFAULTS.eraser.size;
       }
     }
     const _actIsWc     = _edTmp.active === 'watercolor';
@@ -24559,17 +24630,22 @@ function edRenderOptionsPanel(mode){
     const isEr   = edActiveTool === 'eraser';
     const isPen  = !isFill && !isEr;
     // ── Defaults por herramienta ─────────────────────────────────────
-    // Grosor: se aplica en cada render del panel (cubre selección directa Y
-    // cualquier cambio de capa mientras la herramienta está activa).
-    if (_actIsWc || _edDodgeBurnActive) edDrawSize = 20;
+    // Grosor y opacidad (v41.82): NO se imponen en cada render del panel. Antes
+    // esto forzaba edDrawSize = 20 con acuarela o iluminar/oscurecer en CADA
+    // repintado —y los botones de herramienta reponían edDrawOpacity = 100 / 7—,
+    // así que al volver a una herramienta se perdía lo que el usuario había
+    // fijado. Ahora se carga la ficha de la herramienta activa (ver
+    // _edSyncToolParams): el default entra solo la primera vez que se usa en la
+    // sesión, y desde entonces manda lo que elija el usuario.
     // Color (v40.44): NO se repone el default en cada render — se carga el
     // color de la herramienta activa (ver _edSyncToolColor). Antes esto forzaba
     // negro/sanguina aquí y el color elegido se perdía al cambiar de herramienta,
     // usar la goma o restaurar el panel de la barra flotante.
     _edSyncToolColor();
+    _edSyncToolParams();
     // ────────────────────────────────────────────────────────────────
     const curSize = isEr ? edEraserSize : edDrawSize;
-    const curOpacity = 100; // future: per-tool opacity
+    const curOpacity = 100; // sin uso: la opacidad de cada herramienta vive en _edToolParams (v41.82)
     // Función helper para generar info de estado
     const _infoText = () => {
       if(isFill) return `Color ${edDrawColor}`;
@@ -25025,6 +25101,7 @@ function edRenderOptionsPanel(mode){
     $('op-dsize')?.addEventListener('input',e=>{
       const v=+e.target.value;
       if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
+      _edToolParamSet('size', v); // v41.82: la herramienta activa recuerda su grosor
       const num=$('op-dsize-num'); if(num) num.value=v;
       _edbSyncSize(); _edUpdateDrawInfo();
     });
@@ -25033,6 +25110,7 @@ function edRenderOptionsPanel(mode){
       const v=Math.max(1,Math.min(max,parseInt(e.target.value)||1));
       e.target.value=v;
       if(edActiveTool==='eraser') edEraserSize=v; else edDrawSize=v;
+      _edToolParamSet('size', v);
       const sl=$('op-dsize'); if(sl){ sl.value=v; _edUpdateBubble(sl,'px'); }
       _edbSyncSize(); _edUpdateDrawInfo();
     });
@@ -25062,12 +25140,13 @@ function edRenderOptionsPanel(mode){
     });
     $('op-dopacity')?.addEventListener('input',e=>{
       edDrawOpacity=+e.target.value;
-
+      _edToolParamSet('opacity', edDrawOpacity); // v41.82: la herramienta activa recuerda su opacidad
       _edUpdateDrawInfo();
     });
     $('op-draw-opacity-num')?.addEventListener('change',e=>{
       const v=Math.max(1,Math.min(100,parseInt(e.target.value)||1));
       e.target.value=v; edDrawOpacity=v;
+      _edToolParamSet('opacity', v);
       const sl=$('op-dopacity'); if(sl) sl.value=v;
       _edUpdateDrawInfo();
     });
@@ -28001,6 +28080,7 @@ function edInitDrawBar() {
     window._esbShowSlider?.('drawOpacity', 1, 100, edDrawOpacity,
       v => {
         edDrawOpacity = v;
+        _edToolParamSet('opacity', v); // v41.82: la herramienta activa recuerda su opacidad
         // Sincronizar los controles equivalentes del panel completo si están abiertos
         const _osl = $('op-dopacity'); if (_osl) _osl.value = v;
         const _onum = $('op-draw-opacity-num'); if (_onum) _onum.value = v;
@@ -28044,6 +28124,7 @@ function edInitDrawBar() {
     const v = Math.max(0, Math.min(max, parseInt(e.target.value) || 0));
     e.target.value = v;
     if (isEr) edEraserSize = v; else edDrawSize = v;
+    _edToolParamSet('size', v); // v41.82: la herramienta activa recuerda su grosor
     _edbSyncSize();
     const sl = $('op-dsize'); if (sl) { sl.value = v; _edUpdateBubble(sl,'px'); }
   });
@@ -28066,6 +28147,7 @@ function edInitDrawBar() {
     }
     const isEr = edActiveTool === 'eraser';
     if (isEr) edEraserSize = v; else edDrawSize = v;
+    _edToolParamSet('size', v); // v41.82: la herramienta activa recuerda su grosor
     // Actualizar número y preview inmediatamente
     const num = $('edb-size-num'); if(num) num.value = v;
     const prev = $('edb-size-preview');
@@ -28447,6 +28529,10 @@ function _edbPositionPalette() {
 
 function _edbSyncTool() {
   const bar = $('edDrawBar'); if (!bar) return;
+  // v41.82: grosor/opacidad de la herramienta activa ANTES de pintar la barra (los
+  // botones de herramienta de la barra aún reponen opacidad = 100, grosor = 20…
+  // antes de llamar aquí; manda la ficha de la herramienta — ver _edSyncToolParams).
+  if (_edDrawModeActive()) _edSyncToolParams();
   const t = edActiveTool;
   // Icono dinámico según sub-herramienta activa
   // edb-pen muestra el icono de la herramienta activa actual
@@ -28561,22 +28647,26 @@ function _edDodgeBurnActivate(sign){
   const type = _edDodgeBurnTargetType();
   _edDodgeBurnActive = true; edDodgeBurnSign = sign;
   _edTmp.active = type; edFillBrushType = type;
-  edDrawOpacity = (type === 'bucket') ? 100 : 7;
-  edDrawSize = 20;
   edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
+  // v41.82: grosor/opacidad de iluminar/oscurecer. Antes se imponían aquí (20 px;
+  // 100 % sobre bote, 7 % sobre acuarela) CADA vez que se activaba; ahora esos
+  // son solo los defaults de la primera vez (ver _edToolParamDefault) y después
+  // manda lo que haya fijado el usuario.
+  if (_edDrawModeActive()) _edSyncToolParams();
   // v41.70: con el cursor desplazado activo, mostrarlo ya (también sobre el bote)
   _edRefreshOffsetCursor(); _edbSyncOffsetBtn();
 }
 window._edDodgeBurnActivate = _edDodgeBurnActivate;
 // Desactiva iluminar/oscurecer manteniendo el tipo de relleno actual
-// (acuarela o bote) — solo restaura la opacidad "normal" de ese tipo, en
+// (acuarela o bote) — vuelve a él con el grosor/opacidad que el usuario tenga
+// fijados en ese tipo (v41.82; antes solo restauraba su opacidad "normal"), en
 // vez de forzar siempre la vuelta a acuarela.
 function _edDodgeBurnDeactivate(){
-  const wasBucket = edFillBrushType === 'bucket';
   _edDodgeBurnActive = false;
-  edDrawOpacity = wasBucket ? 100 : 7;
-  if(!wasBucket) edDrawSize = 20;
   edActiveTool = 'fill'; edCanvas.className = 'tool-fill'; _edSyncFillCursor();
+  // v41.82: vuelve a la acuarela/bote CON lo que el usuario fijó en él (antes se
+  // imponían opacidad 100/7 y grosor 20 aquí).
+  if (_edDrawModeActive()) _edSyncToolParams();
   // v41.70: sobre el bote el cursor desplazado deja de aplicar (se oculta); sobre acuarela se repinta sin el estilo de D/B
   _edRefreshOffsetCursor(); _edbSyncOffsetBtn();
 }
