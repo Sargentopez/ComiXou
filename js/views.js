@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.82</footer>
+    <footer class="app-version">v41.83</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -344,10 +344,11 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — VISIBLE de nuevo en v41.77 para la investigación «los trazos a mano guardados en
+        <!-- Botón de diagnóstico — OCULTO de nuevo en v41.83 (petición de Alberto), tras revisar un diagnóstico
+             sin anomalías. Había estado VISIBLE desde v41.77 para la investigación «los trazos a mano guardados en
              la nube vuelven grises y difusos al reeditar» (sección «CALIDAD DE DIBUJOS» del informe: píxeles,
-             colocación, atenuado y pantalla de cada trazo + última descarga de la nube). Al cerrarla, volver a
-             meter el <button> de la línea siguiente entre marcadores de comentario; el <button> NO se borra.
+             colocación, atenuado y pantalla de cada trazo + última descarga de la nube). Para volver a mostrarlo,
+             descomentar la línea siguiente (está entre marcadores de comentario); el <button> NO se borra.
              Antes: OCULTO en v41.69 (petición de Alberto), cerradas las investigaciones
              para las que se reactivó en v41.47: tiempos del guardado en la nube (sección «Último guardado en la
              nube» del informe, v41.46), papel cebolla y nodos.
@@ -371,7 +372,7 @@ Router.register('editor', {
              encontrar la causa raíz de la investigación v40.80→v40.83.
              El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
              nada ni da error mientras esté oculto. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
