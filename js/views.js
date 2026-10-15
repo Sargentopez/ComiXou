@@ -55,7 +55,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.85</footer>
+    <footer class="app-version">v41.86</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -998,6 +998,7 @@ Router.register('editor', {
           <h3 class="ed-modal-title" data-i18n="ed_projectDataTitle">Datos del proyecto</h3>
         </div>
         <div class="ed-modal-body">
+        <p id="edMFirstHint" style="display:none;font-size:.78rem;color:var(--gray-500);margin:0 0 12px;line-height:1.4" data-i18n="ed_firstSaveHint">Antes de guardar, puedes cambiar estos datos o dejarlos así. Podrás editarlos cuando quieras desde «Editar datos de la obra».</p>
         <div class="ed-modal-field"><label data-i18n="comicTitle">Título</label><input type="text" id="edMTitle" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
         <div class="ed-modal-field"><label data-i18n="ed_authorLabel">Autor</label><input type="text" id="edMAuthor" inputmode="text" enterkeyhint="next" autocomplete="off"></div>
         <div class="ed-modal-field"><label data-i18n="comicGenre">Género</label><input type="text" id="edMGenre" inputmode="text" enterkeyhint="done" autocomplete="off"></div>

@@ -333,7 +333,7 @@ const Auth = (() => {
   // el usuario está como invitado... la obra no debe perderse, una vez
   // iniciada sesión la obra iniciada como invitado debe aparecer entre las
   // obras del autor en my-works, guardada localmente"). Las obras creadas
-  // sin sesión llevan userId:'_anon_' y anonymous:true (ver _mcCreateProject
+  // sin sesión llevan userId:'_anon_' y anonymous:true (ver _mcCreateBlankWork
   // en my-works.js) — "Mis obras" filtra estrictamente por
   // userId===user.id (ver my-works.js, varios sitios), así que sin esto se
   // quedaban huérfanas e invisibles tras iniciar sesión, aunque sus datos

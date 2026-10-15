@@ -1323,6 +1323,13 @@ const SupabaseClient = (() => {
     await _patch('works', `id=eq.${sid}`, { published: true, pending_review: false });
   }
 
+  // v41.86 — cambia SOLO el título de una obra en la nube (renombrado automático de un «Sin título» repetido,
+  // ver my-works.js _mcResolveUntitledConflicts). No toca ninguna otra columna ni sube contenido.
+  async function renameWork(supabaseId, title) {
+    if (!supabaseId) return;
+    await _patch('works', `id=eq.${supabaseId}`, { title: title || '' });
+  }
+
   async function unpublishWork(workId, supabaseId) {
     const sid = supabaseId || workId;
     await _patch('works', `id=eq.${sid}`, { published: false, pending_review: false });
@@ -2522,5 +2529,5 @@ continue;
     return r.json();
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
 })();

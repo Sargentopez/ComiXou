@@ -306,6 +306,8 @@ const TRANSLATIONS = {
     mc_cloudUpdatedOne:  "☁️ {n} obra actualizada desde la nube",
     mc_cloudUpdatedMany: "☁️ {n} obras actualizadas desde la nube",
     mc_allUpToDate:      "✓ Todo al día — no hay versiones más recientes en la nube",
+    mc_autoRenamedOne:   "Había dos obras llamadas «{from}»: una se ha renombrado a «{to}».",
+    mc_autoRenamedMany:  "{n} obras compartían nombre con otra y se han renombrado automáticamente.",
     mc_errCloudConnect:  "⚠️ Error al conectar con la nube",
     mc_closeAria:        "Cerrar",
     mc_savingAlt:        "Guardando",
@@ -620,6 +622,7 @@ const TRANSLATIONS = {
 
     // Editor general — modales proyecto/guardado/atajos/ayuda/camara (Trozo D)
     ed_projectDataTitle:    "Datos del proyecto",
+    ed_firstSaveHint:       "Antes de guardar, puedes cambiar estos datos o dejarlos así. Podrás editarlos cuando quieras desde «Editar datos de la obra».",
     ed_authorLabel:         "Autor",
     ed_navModeFixedSheet:   "Hoja fija (botones)",
     ed_finalSheetHint:      "(hoja final)",
@@ -1463,6 +1466,8 @@ const TRANSLATIONS = {
     mc_cloudUpdatedOne:  "☁️ {n} work updated from the cloud",
     mc_cloudUpdatedMany: "☁️ {n} works updated from the cloud",
     mc_allUpToDate:      "✓ All up to date — no newer versions in the cloud",
+    mc_autoRenamedOne:   "Two works were called “{from}”: one is now “{to}”.",
+    mc_autoRenamedMany:  "{n} works shared a name with another one and were renamed automatically.",
     mc_errCloudConnect:  "⚠️ Failed to connect to the cloud",
     mc_closeAria:        "Close",
     mc_savingAlt:        "Saving",
@@ -1773,6 +1778,7 @@ const TRANSLATIONS = {
 
     // General editor — project/save/shortcuts/help/camera modals (Chunk D)
     ed_projectDataTitle:    "Work details",
+    ed_firstSaveHint:       "Before saving, you can change these details or leave them as they are. You can edit them any time from “Edit work details”.",
     ed_authorLabel:         "Author",
     ed_navModeFixedSheet:   "Fixed page (buttons)",
     ed_finalSheetHint:      "(final page)",

@@ -171,55 +171,16 @@ function _mcInitTitlePillObserver(){
     window._mcTitlePillRaf = requestAnimationFrame(_mcFitAllTitlePills);
   };
   const _obs = new MutationObserver(_cb);
-  // mcNewModal es fijo (se inyecta una vez y alterna la clase "open");
-  // mcDupModal se crea/destruye cada vez — subtree cubre ambos casos.
+  // Los modales de Mis obras se crean/destruyen según se necesitan — subtree los cubre todos.
   _obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   window.addEventListener('resize', _cb);
   window._mcTitleObs = _obs;
 }
 
-function _mcInjectModal() {
-  // Inyectar el modal directamente en body (fuera de appView)
-  // para que position:fixed funcione sin restricciones
-  if (document.getElementById('mcNewModal')) return; // ya existe
-  const modal = document.createElement('div');
-  modal.className = 'mc-modal-overlay';
-  modal.id = 'mcNewModal';
-  modal.innerHTML = `
-    <div class="mc-modal-box">
-      <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('newProject')}</span></h3>
-      <div class="mc-field">
-        <label>${I18n.t('comicTitle')}</label>
-        <input type="text" id="mcTitle" placeholder="${I18n.t('mc_titlePlaceholder')}" autocomplete="off" inputmode="text" enterkeyhint="next">
-      </div>
-      <div class="mc-field">
-        <label>${I18n.t('comicGenre')}</label>
-        <input type="text" id="mcGenre" placeholder="${I18n.t('mc_genrePlaceholder')}" autocomplete="off" inputmode="text" enterkeyhint="next">
-      </div>
-      <div class="mc-field">
-        <label>${I18n.t('mc_navModeLabel')}</label>
-        <select id="mcNavMode">
-          <option value="fixed">${I18n.t('mc_navModeFixed')}</option>
-          <option value="horizontal">${I18n.t('mc_navModeHorizontal')}</option>
-          <option value="vertical">${I18n.t('mc_navModeVertical')}</option>
-        </select>
-      </div>
-      <div class="mc-field">
-        <label>${I18n.t('mc_socialLabel')} <span style="font-weight:400;color:var(--gray-400);font-size:.78rem">${I18n.t('mc_socialHint')}</span></label>
-        <textarea id="mcSocial" placeholder="${I18n.t('mc_socialPlaceholder')}" maxlength="300" rows="3" style="resize:none;overflow-y:auto;font-family:var(--font-body);font-size:.88rem;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:8px;width:100%;box-sizing:border-box;line-height:1.5"></textarea>
-      </div>
-      <div class="mc-modal-actions">
-        <button class="btn" id="mcNewCancel" style="flex:1">${I18n.t('cancel')}</button>
-        <button class="btn btn-primary" id="mcNewCreate" style="flex:1">${I18n.t('mc_createBtn')}</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-}
-
-function _mcRemoveModal() {
-  const m = document.getElementById('mcNewModal');
-  if (m) m.remove();
-}
+/* v41.86 — «Nueva obra» ya NO abre un modal de datos (título, género, modo de lectura, hoja final): entra directo
+   al editor (ver _mcCreateBlankWork). Esos datos se piden al GUARDAR, con el modal «Datos del proyecto» del editor
+   (editor.js, _edEnsureProjectData). El antiguo modal #mcNewModal y sus funciones (_mcInjectModal, _mcOpenModal,
+   _mcCreateProject, _mcConfirmDuplicate…) se han retirado porque ya nada los llamaba. */
 
 
 /* ── ACCESO A cxAutosave DESDE LA LIMPIEZA DE HUÉRFANOS (v40.55) ─────────
@@ -640,7 +601,6 @@ function MyWorksView_init() {
     } catch(_) { window._mcIdbAvail = false; }
   })();
   _mcCheckStorage(); // aviso modal si el almacenamiento supera el 85%
-  _mcInjectModal();
   _mcRenderList();
   _mcBindNav();
   // Sincronizar fechas con Supabase en segundo plano (incluye descarga de biblioteca)
@@ -678,6 +638,9 @@ async function _mcSyncCloudDates() {
             WorkStore.save(_wClean);
           }
         }
+        // v41.86: «Sin título» repetido entre las obras de la nube recién llegadas y las locales de este dispositivo
+        const _cd1 = {}; cloudWorks.forEach(w => { if (w && w.id) _cd1[w.id] = w.updatedAt; });
+        _mcAfterCloudMerge(_mcUser, _cd1);
         _mcRenderList();
       }
     } catch(_) {}
@@ -729,6 +692,9 @@ async function _mcSyncCloudDates() {
       if (dirty) { WorkStore.save(local); changed = true; }
     }
 
+    // v41.86: «Sin título» repetido entre obras de la nube y locales (los títulos acaban de sincronizarse)
+    const _cd2 = {}; works.forEach(w => { if (w && w.id) _cd2[w.id] = w.updated_at; });
+    if (_mcAfterCloudMerge(_mcUser, _cd2)) changed = true;
     if (changed) _mcRenderList();
   } catch(e) {
     // Silencioso — si no hay red, se usa la versión local
@@ -1605,121 +1571,162 @@ async function _mcOpenWorkForEdit(id) {
   Router.go('editor');
 }
 
-/* ── NAV Y MODALES ── */
+/* ── NAV Y NUEVA OBRA ── */
 function _mcBindNav() {
   document.getElementById('mcBackBtn')?.addEventListener('click', () => Router.go('home'));
   document.getElementById('mcCloudLoadBtn')?.addEventListener('click', _mcCloudLoad);
-  document.getElementById('mcNewBtn')?.addEventListener('click', _mcOpenModal);
-  document.getElementById('mcNewCancel')?.addEventListener('click', _mcCloseModal);
-  document.getElementById('mcNewCreate')?.addEventListener('click', _mcCreateProject);
+  document.getElementById('mcNewBtn')?.addEventListener('click', _mcCreateBlankWork);
 }
 
-function _mcOpenModal() {
-  const m = document.getElementById('mcNewModal');
-  if (m) m.classList.add('open');
+/* ── NUEVA OBRA DIRECTA AL EDITOR (v41.86) ───────────────────────────────────────────────────────────
+   Antes, «Nueva obra» abría un modal (título, género, modo de lectura, hoja final) que había que rellenar para
+   poder empezar. Ahora entra directo al editor: la obra nace llamada «Sin título» («Untitled» en inglés) —o
+   «Sin título(2)», «Sin título(3)»… si el usuario ya tiene otra con ese nombre— y con lectura por deslizamiento
+   horizontal. Los datos de verdad se piden al GUARDAR, con el modal «Datos del proyecto» del editor
+   (editor.js, _edEnsureProjectData), y solo hasta que el usuario los confirma una vez.
+   `metaPending: true` es esa marca (local: no tiene columna en la nube ni hace falta). Se pone SOLO en las
+   obras nacidas aquí, de modo que las que ya existían o llegan de la nube —que no la llevan— jamás ven el modal.
+   Se borra al confirmar el modal de datos, ya sea desde el guardado o desde «Editar datos de la obra». */
+
+// ¿Es esta obra del usuario actual? (mismo criterio que el aviso de título repetido del editor)
+function _mcSameOwner(c, user) {
+  if (!c) return false;
+  if (user) return c.userId === user.id || c.username === user.username;
+  return c.userId === '_anon_' || c.anonymous === true;
 }
 
-function _mcCloseModal() {
-  document.getElementById('mcNewModal')?.classList.remove('open');
+// Primer título libre de la familia: «Sin título», «Sin título(2)», «Sin título(3)»… (o «Untitled»…) que no use ya
+// otra obra del usuario. skipBase: parte de «base(2)» (renombrado de una repetida). reserved: títulos ya normalizados que
+// se acaban de repartir en esta misma pasada y aún no están en el almacén.
+function _mcNextUntitledTitle(user, base, skipBase, reserved) {
+  base = base || I18n.t('noWork');
+  const norm = s => String(s == null ? '' : s).trim().toLowerCase();
+  const used = new Set(reserved || []);
+  WorkStore.getAll().forEach(c => { if (_mcSameOwner(c, user)) used.add(norm(c.title)); });
+  if (!skipBase && !used.has(norm(base))) return base;
+  for (let n = 2; n < 10000; n++) {
+    const t = base + '(' + n + ')';
+    if (!used.has(norm(t))) return t;
+  }
+  return base + '(' + Date.now() + ')';
 }
 
-function _mcCreateProject() {
-  const title   = document.getElementById('mcTitle')?.value.trim();
-  const genre   = document.getElementById('mcGenre')?.value.trim();
-  const social  = document.getElementById('mcSocial')?.value.trim().slice(0, 300);
-  const navMode = document.getElementById('mcNavMode')?.value || 'horizontal';
-
-  if (!title) { document.getElementById('mcTitle')?.focus(); return; }
+function _mcCreateBlankWork() {
+  // Doble toque: una sola obra (el cambio de vista no es instantáneo del todo).
+  if (window._mcCreatingWork) return;
+  window._mcCreatingWork = true;
+  setTimeout(() => { window._mcCreatingWork = false; }, 1500);
 
   const user = Auth.currentUser?.() || null;
-
-  // ── Comprobar si ya existe una obra con ese título para este usuario ──────
-  const _mcDuplicateWork = WorkStore.getAll().find(c =>
-    c.title === title &&
-    (c.userId === (user?.id) || c.username === (user?.username))
-  );
-
-  if (_mcDuplicateWork) {
-    _mcConfirmDuplicate(title, _mcDuplicateWork, function(overwrite) {
-      if (overwrite) {
-        // Sobrescribir: abrir el editor con la obra existente
-        _mcCloseModal();
-        // v40.49: por el MISMO camino que el botón «Editar» (consulta la nube,
-        // versión temporal…). Antes se abría el editor directamente con la copia
-        // local, sin mirar la nube.
-        _mcOpenWorkForEdit(_mcDuplicateWork.id);
-      }
-      // Si no sobrescribe: el modal de nueva obra sigue abierto para que edite el nombre
-    });
-    return;
-  }
-
-  _mcDoCreateProject(title, genre, social, navMode, user);
-}
-
-function _mcDoCreateProject(title, genre, social, navMode, user) {
+  const now  = new Date().toISOString();
   const comic = {
     id:       'comic_' + Date.now(),
     userId:   user ? user.id : '_anon_',
     username: user ? user.username : I18n.t('mc_anonymous'),
     anonymous: !user,
-    title,
+    title:    _mcNextUntitledTitle(user),
     author:   user ? user.username : I18n.t('mc_anonymous'),
-    genre,
-    social:   social || '',
-    navMode,
+    genre:    '',
+    social:   '',
+    navMode:  'horizontal',   // reproducción por defecto: deslizamiento horizontal
+    metaPending: true,        // los datos de la obra aún no los ha confirmado el usuario (ver arriba)
     pages:    [],
     panels:   [],
     published: false,
     approved:  false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
     // localSavedAt en la creación garantiza que cualquier autosave anterior
     // (de otra obra) no sea más nuevo que esta obra y no aparezca al abrirla.
-    localSavedAt: new Date().toISOString(),
+    localSavedAt: now,
   };
   WorkStore.save(comic);
-
-  _mcCloseModal();
-
-  // Limpiar campos
-  ['mcTitle','mcGenre','mcSocial'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
 
   // Abrir el editor con este proyecto
   sessionStorage.setItem('cx_edit_id', comic.id);
   Router.go('editor');
 }
 
-// Modal de confirmación de título duplicado desde "Nuevo proyecto"
-function _mcConfirmDuplicate(title, existingComic, callback) {
-  // Eliminar modal anterior si existe
-  document.getElementById('mcDupModal')?.remove();
-  const ov = document.createElement('div');
-  ov.className = 'mc-modal-overlay open';
-  ov.id = 'mcDupModal';
-  ov.innerHTML = `
-    <div class="mc-modal-box" style="gap:14px">
-      <h3 class="mc-modal-title" style="font-size:1.05rem"><span class="mc-modal-title-text">${I18n.t('mc_dupTitle')}</span></h3>
-      <p style="margin:0;color:var(--gray-600);font-size:.9rem;line-height:1.5">
-        ${I18n.t('mc_dupMsg', { title: title.replace(/</g,'&lt;') })}
-      </p>
-      <div class="mc-modal-actions" style="flex-direction:column;gap:8px">
-        <button class="btn btn-primary" id="mcDupOverwrite" style="width:100%">${I18n.t('mc_dupOpenExisting')}</button>
-        <button class="btn" id="mcDupBack" style="width:100%">${I18n.t('mc_dupRename')}</button>
-      </div>
-    </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('mcDupOverwrite').addEventListener('click', function() {
-    ov.remove();
-    callback(true);
+/* ── «SIN TÍTULO» REPETIDO ENTRE LA NUBE Y ESTE DISPOSITIVO (v41.86) ─────────────────────────────────────
+   El usuario puede guardar en la nube una obra «Sin título» desde un dispositivo y, en otro donde ya tenía guardada en
+   local otra «Sin título», acabar con DOS obras con el mismo nombre. Cada vez que las obras de la nube se mezclan con
+   las locales (sincronización de Mis obras, «Cargar desde la nube») se buscan los títulos repetidos de la familia
+   «Sin título» / «Sin título(2)»… / «Untitled»… del usuario, y la obra guardada MÁS RECIENTEMENTE pasa a llamarse
+   «Sin título(n)», con n el primer número libre (desde el 2): aquí y, si está en la nube, también allí (solo el título,
+   para que todos los dispositivos vean el mismo nombre; si no hay red, la próxima sincronización lo repite).
+   · Los títulos escritos a mano por el usuario no se tocan: ya tienen su aviso «sobrescribir o cambiar el nombre».
+   · Una obra publicada o en revisión no se renombra sola (se renombra la otra).
+   · «Más reciente» = fecha del último guardado (local o en la nube). Las obras recién llegadas de la nube traen su
+     fecha real en cloudDates {supabaseId: updated_at}: en el almacén local su updatedAt es la de la importación. */
+const _MC_UNTITLED_BASES = ['Sin título', 'Untitled'];
+// Base de la familia «Sin título» a la que pertenece un título («Sin título(3)» → «Sin título»), o null si no es de ella.
+function _mcUntitledBase(title) {
+  const t = String(title == null ? '' : title).trim().replace(/\s*\(\d+\)$/, '').trim().toLowerCase();
+  const bases = _MC_UNTITLED_BASES.concat([I18n.t('noWork')]);
+  for (const b of bases) if (t === String(b).toLowerCase()) return b;
+  return null;
+}
+// Fecha (ms) del último guardado de una obra: el mayor de lo guardado aquí y lo que la nube dice de ella.
+function _mcSavedMs(c, cloudDates) {
+  const t = v => { const n = Date.parse(v || ''); return isNaN(n) ? 0 : n; };
+  let m = Math.max(t(c.localSavedAt), t(c.cloudSavedAt));
+  if (c.supabaseId && cloudDates && cloudDates[c.supabaseId]) m = Math.max(m, t(cloudDates[c.supabaseId]));
+  return m || t(c.updatedAt) || t(c.createdAt);
+}
+// Busca y arregla los «Sin título» repetidos del usuario. Devuelve [{id, from, to}] con lo renombrado.
+function _mcResolveUntitledConflicts(user, cloudDates) {
+  const out = [];
+  if (!user) return out;
+  const norm = s => String(s == null ? '' : s).trim().toLowerCase();
+  const groups = new Map();
+  WorkStore.getAll().forEach(c => {
+    if (!_mcSameOwner(c, user) || !_mcUntitledBase(c.title)) return;
+    const k = norm(c.title);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(c);
   });
-  document.getElementById('mcDupBack').addEventListener('click', function() {
-    ov.remove();
-    callback(false);
+  const reserved = new Set();
+  groups.forEach(list => {
+    // dos registros locales de la MISMA obra de la nube no son un conflicto
+    const seen = new Set();
+    const uniq = list.filter(c => { const key = c.supabaseId || c.id; if (seen.has(key)) return false; seen.add(key); return true; });
+    if (uniq.length < 2) return;
+    const movable = uniq.filter(c => !c.published && !c.pendingReview).sort((a, b) =>
+      (_mcSavedMs(a, cloudDates) - _mcSavedMs(b, cloudDates)) ||
+      String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.id).localeCompare(String(b.id)));
+    // si alguna no se puede renombrar (publicada) conserva el nombre y se renombran todas las demás;
+    // si no, se queda con él la más antigua y se renombran las más recientes (la más antigua, con el número más bajo)
+    const toRename = movable.length < uniq.length ? movable : movable.slice(1);
+    const base = _mcUntitledBase(list[0].title);
+    toRename.forEach(c => {
+      const nt = _mcNextUntitledTitle(user, base, true, reserved);
+      reserved.add(norm(nt));
+      out.push({ id: c.id, supabaseId: c.supabaseId || null, from: c.title, to: nt });
+    });
   });
+  out.forEach(r => {
+    // keepUpdatedAt: renombrar no es editar — no cambia el orden de la lista ni la fecha con que se compara con la nube
+    WorkStore.updateMeta(r.id, { title: r.to }, { keepUpdatedAt: true });
+    if (r.supabaseId && typeof SupabaseClient !== 'undefined' && SupabaseClient.renameWork) {
+      SupabaseClient.renameWork(r.supabaseId, r.to).catch(() => {});
+    }
+  });
+  return out;
+}
+// Tras mezclar obras de la nube: arregla los repetidos y avisa (si Mis obras sigue en pantalla). Devuelve cuántas renombró;
+// quien llama vuelve a pintar la lista.
+function _mcAfterCloudMerge(user, cloudDates, toastDelay) {
+  let renamed = [];
+  try { renamed = _mcResolveUntitledConflicts(user, cloudDates); } catch (e) { console.error('_mcResolveUntitledConflicts:', e); }
+  if (renamed.length) {
+    if (document.getElementById('mcContent')) {
+      const msg = renamed.length === 1
+        ? I18n.t('mc_autoRenamedOne', { from: renamed[0].from, to: renamed[0].to })
+        : I18n.t('mc_autoRenamedMany', { n: renamed.length });
+      if (toastDelay) setTimeout(() => _mcToast(msg), toastDelay); else _mcToast(msg);
+    }
+  }
+  return renamed.length;
 }
 
 /* ── TOAST ── */
@@ -1746,7 +1753,6 @@ function _mcToast(msg) {
 }
 
 function MyWorksView_destroy() {
-  _mcRemoveModal();
   // Cancelar el check de huérfanos si aún no se ha ejecutado
   if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
 }
@@ -1860,6 +1866,9 @@ async function _mcCloudLoad() {
       imported++;
     }
 
+    // v41.86: «Sin título» repetido entre las obras de la nube y las locales de este dispositivo
+    const _cd3 = {}; works.forEach(w => { if (w && w.id) _cd3[w.id] = w.updated_at; });
+    _mcAfterCloudMerge(user, _cd3, (imported > 0 || skipped > 0) ? 2400 : 0);
     _mcRenderList();
     if (imported > 0)      _mcToast(I18n.t(imported > 1 ? 'mc_cloudUpdatedMany' : 'mc_cloudUpdatedOne', { n: imported }));
     else if (skipped > 0)  _mcToast(I18n.t('mc_allUpToDate'));

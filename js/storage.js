@@ -190,11 +190,14 @@ const WorkStore = (() => {
   // antes obligaban a releer y reescribir la obra ENTERA (decenas de MB) solo para
   // cambiar un par de campos: p.ej. tras subir a la nube, anotar supabaseId /
   // cloudSavedAt / cloudSync. `patch` no debe contener editorData/panels/portada.
-  function updateMeta(id, patch) {
+  // v41.86: opts.keepUpdatedAt — no toca updatedAt (para cambios que no son una edición de la obra, como el
+  // renombrado automático de un «Sin título» repetido: no debe reordenar «Mis obras» ni alterar la fecha con la
+  // que se compara con la nube).
+  function updateMeta(id, patch, opts) {
     const list = getAll();
     const idx  = list.findIndex(c => c.id === id);
     if (idx < 0) return false;
-    list[idx] = { ...list[idx], ...patch, updatedAt: new Date().toISOString() };
+    list[idx] = { ...list[idx], ...patch, updatedAt: (opts && opts.keepUpdatedAt) ? list[idx].updatedAt : new Date().toISOString() };
     saveAll(list);
     _emit('save', id);
     return true;

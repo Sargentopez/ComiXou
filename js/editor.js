@@ -1249,7 +1249,10 @@ let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
 let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'' };
+// v41.86 — metaPending: obra recién creada cuyos datos (título, género, modo de lectura, hoja final) el usuario aún no
+// ha confirmado. Nace true en my-works.js (_mcCreateBlankWork); el modal «Datos del proyecto» sale en el primer
+// guardado que pide el usuario y, al confirmarlo (o desde «Editar datos de la obra»), pasa a false para siempre.
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'', metaPending:false };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
 const ED_WORKSPACE_NORMAL  = '#c8d4e8'; // color de siempre de la zona de trabajo
 const ED_WORKSPACE_DRAWING = '#ffffff'; // durante dibujo a mano o vectorial (v40.47)
@@ -5358,6 +5361,29 @@ function _edHasUnsavedLocalChanges() {
   if (window._edPagesStructureDirtyLocal) return true;
   if (window._edProjectMetaDirtyLocal) return true;
   return edPages.some(p => _edPageDirtyLocal(p));
+}
+
+// v41.86 — ¿es esta una obra NUEVA (creada con «Nueva obra», marca metaPending) que nunca se ha guardado con
+// contenido ni subido a la nube? Se mira el registro ligero del almacén: una obra guardada de verdad tiene
+// panels (una imagen por hoja) y las subidas dejan supabaseId/cloudSavedAt.
+function _edIsNeverSavedNewWork() {
+  if (!edProjectId || !edProjectMeta || !edProjectMeta.metaPending) return false;
+  const rec = WorkStore.getById(edProjectId);
+  if (!rec || !rec.metaPending) return false;
+  if (rec.supabaseId || rec.cloudSavedAt || rec.cloudOnly || rec.localEditorData) return false;
+  if (rec.panels && rec.panels.length) return false;
+  return true;
+}
+// …y además sin nada que perder: ni cambios sin guardar ni elementos en su biblioteca (la biblioteca se escribe en
+// el momento, sin guardar la obra, y se borraría con ella). Solo entonces se retira al salir (botón atrás).
+function _edIsUntouchedNewWork() {
+  if (!_edIsNeverSavedNewWork()) return false;
+  if (_edHasUnsavedLocalChanges()) return false;
+  try {
+    const _b = (typeof _bibCache !== 'undefined' && _bibCache) ? _bibCache : null;
+    if (_b && Array.isArray(_b.folders) && _b.folders.some(f => f && f.items && f.items.length)) return false;
+  } catch(_) { return false; }
+  return true;
 }
 
 function edPushHistory(force, movedLayer){
@@ -33894,7 +33920,7 @@ async function edLoadProject(id){
   try { _edBibNoteMirroredSync(id, comic); } catch(_) {}
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||''};
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||'',metaPending:!!comic.metaPending};
 
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
@@ -35453,7 +35479,11 @@ function _edViewerDrawTextsOnCtx(page, ctx, can){
 /* ══════════════════════════════════════════
    MODAL DATOS PROYECTO
    ══════════════════════════════════════════ */
-function edOpenProjectModal(){
+// v41.86 — Contexto del guardado que está esperando estos datos: { onDone(info), onCancel() } (ver
+// _edEnsureProjectData). null = el modal se abrió desde «Editar datos de la obra» (guarda en local, como siempre).
+let _edProjectModalCtx = null;
+function edOpenProjectModal(ctx){
+  _edProjectModalCtx = (ctx && typeof ctx.onDone === 'function') ? ctx : null;
   $('edMTitle').value=edProjectMeta.title;
   $('edMAuthor').value=edProjectMeta.author;
   $('edMGenre').value=edProjectMeta.genre;
@@ -35461,9 +35491,32 @@ function edOpenProjectModal(){
   const edMSocial=$('edMSocial'); if(edMSocial) edMSocial.value=edProjectMeta.social||'';
   const _titleEl = document.querySelector('#edProjectModal .ed-modal-title');
   if(_titleEl) _titleEl.textContent = I18n.t('ed_projectDataTitle');
+  // v41.86: la línea que explica por qué sale ahora solo se ve cuando lo abre un guardado…
+  const _fh = $('edMFirstHint'); if(_fh) _fh.style.display = _edProjectModalCtx ? '' : 'none';
+  // …y en una obra nueva sin datos confirmados, al tocar el título se selecciona entero (escribir sustituye «Sin título»).
+  const _tEl = $('edMTitle'); if(_tEl) _tEl._edSelOnFocus = !!edProjectMeta.metaPending;
   $('edProjectModal')?.classList.add('open');
 }
-function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open');}
+function edCloseProjectModal(){$('edProjectModal')?.classList.remove('open'); _edProjectModalCtx = null;}
+// Cancelar: cierra y, si lo había abierto un guardado, ese guardado se aborta (la marca sigue puesta: el modal
+// volverá a salir en el siguiente).
+function edCancelProjectModal(){
+  const _ctx = _edProjectModalCtx;
+  edCloseProjectModal();
+  if (_ctx && typeof _ctx.onCancel === 'function') { try { _ctx.onCancel(); } catch(_) {} }
+}
+// v41.86 — DATOS DE LA OBRA AL GUARDAR. Las obras nuevas nacen «Sin título», con lectura horizontal y la marca
+// edProjectMeta.metaPending (my-works.js, _mcCreateBlankWork): el usuario entra al editor sin rellenar nada. En el
+// primer guardado que pida (botón Guardar → dispositivo/nube, o «Guardar» al salir) se le enseña el modal de datos
+// para que los cambie o los deje como están; al confirmarlo (aquí, o desde «Editar datos de la obra») la marca se
+// borra y no vuelve a salir. Sin la marca —obras de siempre, de la nube— se llama a onReady al instante.
+// onReady({saved}): saved=true si el propio modal ya ha guardado en local (sobrescribir otra obra, ver
+// edSaveProjectModal); onCancel: el usuario cerró el modal sin confirmar (no se guarda nada).
+// El autoguardado temporal y las exportaciones (PNG…) no son un guardado del usuario: nunca pasan por aquí.
+function _edEnsureProjectData(onReady, onCancel){
+  if (!(edProjectMeta && edProjectMeta.metaPending)) { onReady({ saved: false }); return; }
+  edOpenProjectModal({ onDone: onReady, onCancel: onCancel || null });
+}
 
 function edOpenSaveChoiceModal(){ $('edSaveChoiceModal')?.classList.add('open'); }
 function edCloseSaveChoiceModal(){ $('edSaveChoiceModal')?.classList.remove('open'); }
@@ -36129,6 +36182,8 @@ function EditorView_destroy(){
   _edOnionReleaseAll(); // v41.45: y se sueltan los lienzos del onion skin (2 × ~25 MB), que antes se quedaban retenidos
 }
 async function edSaveProjectModal(){
+  const _ctx     = _edProjectModalCtx;          // v41.86: guardado que espera estos datos (null = abierto desde el menú)
+  const _pending = !!edProjectMeta.metaPending; // v41.86: obra nueva cuyos datos aún no se habían confirmado
   const _newTitle  = $('edMTitle').value.trim() || edProjectMeta.title;
   const _newAuthor = $('edMAuthor').value.trim();
   const _newGenre  = $('edMGenre').value.trim();
@@ -36138,7 +36193,10 @@ async function edSaveProjectModal(){
   const _titleChanged = _newTitle !== edProjectMeta.title;
 
   // ── Comprobar duplicado de título al renombrar ──────────────────────────
-  if (_titleChanged) {
+  // v41.86: una obra nueva sin datos confirmados nunca se ha guardado con ese título, así que se comprueba SIEMPRE,
+  // también si el usuario lo deja como está («Sin título(2)» pudo ocuparse después de crear la obra: otra obra
+  // descargada de la nube, un «Sin título» escrito a mano…).
+  if (_titleChanged || _pending) {
     const _edUser = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
     const _edDup  = (typeof WorkStore !== 'undefined') && WorkStore.getAll().find(c =>
       c.id !== edProjectId &&
@@ -36164,9 +36222,17 @@ async function edSaveProjectModal(){
       // defecto de edConfirm si no se confirma).
       edConfirm(
         I18n.t('ed_dupWorkTitleMsg'),
-        () => {
-          _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
-          _edForkToId(_edDup.id);
+        async () => {
+          try {
+            const _fromId = edProjectId;
+            _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
+            const _snap = await _edForkToId(_edDup.id);
+            // v41.86: el registro «Sin título» de partida (nunca llegó a tener nombre propio) ya no pinta nada una
+            // vez que su contenido ha quedado guardado SOBRE la obra existente: se retira, para no dejar en Mis
+            // obras una obra fantasma. Solo si el guardado se verificó de verdad.
+            if (_pending && _snap && _fromId && _fromId !== _edDup.id) { try { WorkStore.remove(_fromId); } catch(_) {} }
+            if (_ctx && _snap) await _ctx.onDone({ saved: true });
+          } catch(_e) { console.error('edSaveProjectModal (sobrescribir):', _e); }
         },
         I18n.t('ed_overwriteWorkBtn')
       );
@@ -36176,12 +36242,15 @@ async function edSaveProjectModal(){
 
   _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
 
-  if (_titleChanged) {
+  if (_titleChanged && !_pending) {
     // Crear obra nueva independiente con el nuevo nombre (sin duplicado de título)
     await _edForkToId(null);
   } else {
+    // v41.86: en una obra nueva sin datos confirmados el título se cambia EN SU SITIO: es la misma obra, que aún no
+    // tenía nombre propio; bifurcarla (guardar como…) dejaría una «Sin título» vacía de más en Mis obras.
     edCloseProjectModal();
-    await edSaveProject();
+    if (_ctx) await _ctx.onDone({ saved: false }); // el guardado que lo pidió (local, nube, salir) continúa
+    else await edSaveProject();
   }
 }
 
@@ -36194,6 +36263,9 @@ function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _new
   edProjectMeta.genre   = _newGenre;
   edProjectMeta.navMode = _newNavMode;
   edProjectMeta.social  = _newSocial;
+  // v41.86: el usuario ha confirmado los datos de la obra (aunque los haya dejado como estaban) → el modal no vuelve
+  // a salir en los guardados siguientes. Viaja al registro local en el spread «...edProjectMeta» de _edSaveProjectInner.
+  edProjectMeta.metaPending = false;
   // BUG CORREGIDO (reportado por Alberto): _edHasUnsavedLocalChanges() —
   // fuente única del aviso al salir, el autoguardado y el beforeunload —
   // solo miraba páginas (_edPagesStructureDirtyLocal/_edPageDirtyLocal),
@@ -36293,7 +36365,7 @@ async function _edForkToId(_targetId) {
   // respaldo con Auth.currentUser() de _edSaveProjectInner ni siquiera hace
   // falta ahí — solo se usa cuando _targetId es un id nuevo de verdad.
   edCloseProjectModal();
-  await edSaveProject();
+  return await edSaveProject(); // v41.86: se devuelve la instantánea verificada (o null) — ver edSaveProjectModal
 }
 
 /* ══════════════════════════════════════════
@@ -36804,14 +36876,24 @@ function EditorView_init(){
     const hasUnsaved = _edHasUnsavedLocalChanges();
     if (!hasUnsaved) {
       // Esperar a que biblioteca IDB haya completado antes de salir
-      if (typeof _bibFlush === 'function') _bibFlush().then(() => Router.go('my-works'));
-      else Router.go('my-works');
+      // v41.86: «Nueva obra» ya no pide nada antes de entrar, así que entrar y salir sin tocar nada dejaría una
+      // «Sin título» vacía en Mis obras cada vez. Si la obra es nueva, sin datos confirmados, sin ningún guardado
+      // ni subida y sin nada en su biblioteca, se retira (se mira DESPUÉS de volcar la biblioteca).
+      const _leave = () => {
+        if (_edIsUntouchedNewWork()) { try { WorkStore.remove(edProjectId); } catch(_) {} }
+        Router.go('my-works');
+      };
+      if (typeof _bibFlush === 'function') _bibFlush().then(_leave);
+      else _leave();
       return;
     }
 
     // Hay cambios sin guardar — preguntar
+    // v41.86: además de la comparación de fechas (frágil: dependen de dos lecturas del reloj en el mismo milisegundo),
+    // una obra nueva con la marca de datos pendientes y ningún guardado previo también es «nueva».
     const isNew = !WorkStore.getById(edProjectId)?.updatedAt ||
-                  WorkStore.getById(edProjectId)?.updatedAt === WorkStore.getById(edProjectId)?.createdAt;
+                  WorkStore.getById(edProjectId)?.updatedAt === WorkStore.getById(edProjectId)?.createdAt ||
+                  _edIsNeverSavedNewWork();
 
     const dlg = document.createElement('div');
     dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
@@ -36834,21 +36916,25 @@ function EditorView_init(){
     // de salir — ver edStopCanvasLeak.
     edStopCanvasLeak(dlg);
 
-    document.getElementById('_edExitYes').onclick = async () => {
+    document.getElementById('_edExitYes').onclick = () => {
       dlg.remove();
-      _edAutosaveClear(); // salida controlada → borrar autosave
-      await edSaveProject();
-      // Esperar a que biblioteca IDB complete
-      if (typeof _bibFlush === 'function') await _bibFlush();
-      // La versión local es ahora la canónica — limpiar backup de versión de nube
-      if (edProjectId) {
-        const _cSave = WorkStore.getById(edProjectId);
-        if (_cSave && _cSave.localEditorData) {
-          WorkStore.save({ ..._cSave, localEditorData: null });
+      // v41.86: obra nueva sin datos confirmados → antes de guardar sale el modal de datos; si el usuario lo cancela
+      // no se guarda ni se sale (se queda en el editor, con todo como estaba, incluido el autoguardado).
+      _edEnsureProjectData(async (info) => {
+        _edAutosaveClear(); // salida controlada → borrar autosave
+        if (!info.saved) await edSaveProject();
+        // Esperar a que biblioteca IDB complete
+        if (typeof _bibFlush === 'function') await _bibFlush();
+        // La versión local es ahora la canónica — limpiar backup de versión de nube
+        if (edProjectId) {
+          const _cSave = WorkStore.getById(edProjectId);
+          if (_cSave && _cSave.localEditorData) {
+            WorkStore.save({ ..._cSave, localEditorData: null });
+          }
+          try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
         }
-        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-      }
-      Router.go('my-works');
+        Router.go('my-works');
+      });
     };
     document.getElementById('_edExitNo').onclick = async () => {
       dlg.remove();
@@ -36929,8 +37015,9 @@ function EditorView_init(){
     _edScrollbarsUpdate();
   });
   $('edSaveBtn')?.addEventListener('click', edOpenSaveChoiceModal);
-  $('edSaveChoiceLocal')?.addEventListener('click', () => { edCloseSaveChoiceModal(); edSaveProject(); });
-  $('edSaveChoiceCloud')?.addEventListener('click', () => { edCloseSaveChoiceModal(); edCloudSave(); });
+  // v41.86: obra nueva sin datos confirmados → antes de guardar sale el modal de datos (ver _edEnsureProjectData).
+  $('edSaveChoiceLocal')?.addEventListener('click', () => { edCloseSaveChoiceModal(); _edEnsureProjectData(info => { if (!info.saved) edSaveProject(); }); });
+  $('edSaveChoiceCloud')?.addEventListener('click', () => { edCloseSaveChoiceModal(); _edEnsureProjectData(() => edCloudSave()); });
   $('edSaveChoiceCancel')?.addEventListener('click', edCloseSaveChoiceModal);
   document.getElementById('edSaveChoiceModal')?.addEventListener('pointerdown', e => {
     if (e.target === document.getElementById('edSaveChoiceModal')) edCloseSaveChoiceModal();
@@ -37841,8 +37928,17 @@ function EditorView_init(){
   });
 
   // ── MODAL PROYECTO ──
-  $('edMCancel')?.addEventListener('click',edCloseProjectModal);
+  $('edMCancel')?.addEventListener('click',edCancelProjectModal);
   $('edMSave')?.addEventListener('click',edSaveProjectModal);
+  // v41.86: obra nueva sin datos confirmados → al tocar el título se selecciona entero (ver edOpenProjectModal).
+  // (el «mouseup» se cancela una vez: sin eso, en escritorio el soltar el botón del ratón colapsa la selección.)
+  $('edMTitle')?.addEventListener('focus', e => {
+    const _t = e.target;
+    if (!_t._edSelOnFocus) return;
+    _t._edSelOnFocus = false;
+    _t.addEventListener('mouseup', ev => ev.preventDefault(), { once: true });
+    setTimeout(() => { try { _t.select(); } catch(_) {} }, 0);
+  });
 
   // ── Ctrl+Wheel: zoom del canvas ──
   window._edWheelFn = e => {
@@ -38993,8 +39089,8 @@ function _edPromptSaveName(suggestedName) {
   });
 }
 
-// Aviso "ya existe" — mismo patrón visual que _mcConfirmDuplicate (my-works.js,
-// título de obra duplicado): overlay propio apilado sobre el modal de nombre,
+// Aviso "ya existe" — mismo patrón visual que el aviso de título de obra duplicado de
+// Mis obras (mcDupModal, retirado en v41.86): overlay propio apilado sobre el modal de nombre,
 // dos botones apilados.
 function _edShowDupNameModal(fullName, { onChange, onOverwrite }) {
   document.getElementById('edDupNameModal')?.remove();
@@ -50318,7 +50414,7 @@ async function _edRunDiag() {
     L('  Nº de páginas: ' + edPages.length);
     L('  edCurrentPage: ' + edCurrentPage);
     L('  Flags estructurales — local: ' + window._edPagesStructureDirtyLocal + ' | nube: ' + window._edPagesStructureDirtyCloud);
-    L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud);
+    L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud + ' | datos sin confirmar (metaPending): ' + !!(edProjectMeta && edProjectMeta.metaPending));
     // REGISTRO DE CONTEO (v40.82, ver _edInteractionTick): los últimos toques
     // que SÍ incrementaron el contador de interacción — es decir, los que NO
     // coincidieron con ningún selector de _ED_TICK_EXCLUDE_SELECTOR. Si una
