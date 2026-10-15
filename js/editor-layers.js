@@ -1278,12 +1278,18 @@ function _lyBuildVisualItem(la, realIdx, selected) {
           } else {
             // Sin objetos de sesión restantes: cerrar panel y sesión
             const _panel = document.getElementById('edOptionsPanel');
-            if (_panel) { _panel.classList.remove('open'); delete _panel.dataset.mode; }
-            if (typeof edShapeBarHide === 'function') edShapeBarHide();
+            // v41.85: cierre COMPLETO de la sesión vectorial. Antes dejaba el panel marcado «plegado» (y con ello la barra flotante
+            // visible para siempre: edShapeBarHide() no hace nada con el panel plegado), la sesión _vs viva y el polígono a medias,
+            // porque «window._edLineLayer» no existe (_edLineLayer es una variable de editor.js, no una propiedad de window).
+            if (_panel) { _panel.classList.remove('open', 'panel-collapsed'); delete _panel.dataset.mode; }
+            if (typeof _edPanelTabHide === 'function') _edPanelTabHide();
+            if (typeof edShapeBarHide === 'function') edShapeBarHide(true);
+            window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false;
             if (typeof _edDrawUnlockUI === 'function') _edDrawUnlockUI();
             if (typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
-            if (window._edLineLayer) window._edLineLayer = null;
-            if (window._edLineFusionId) window._edLineFusionId = null;
+            if (typeof _vsClear === 'function') _vsClear();
+            if (typeof _edLineLayer !== 'undefined') _edLineLayer = null;
+            if (typeof _edLineFusionId !== 'undefined') _edLineFusionId = null;
             edActiveTool = 'select';
             if (typeof edCanvas !== 'undefined') edCanvas.className = '';
             if (edSelectedIdx === realIdx) edSelectedIdx = -1;

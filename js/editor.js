@@ -4516,7 +4516,8 @@ class LineLayer extends BaseLayer {
     // 1. Bbox rápido primero
     if (!super.contains(px, py)) return false;
     // 2. Pixel-hit real — canvas escalado (máx 256 px) para evitar OOM en Android
-    const _noFillL = !this.fillColor || this.fillColor === 'none';
+    // v41.84: un contorno ABIERTO no pinta relleno aunque guarde color de relleno → se selecciona como «sin relleno»
+    const _noFillL = !_edVecHasPaintedFill(this);
     try {
       const pw = edPageW(), ph = edPageH();
       const w  = this.width  * pw;
@@ -6985,6 +6986,7 @@ function edRedraw(){
   if (_edInlineTextEditFor) _edInlineTextEditReposition(); // v40.14 — barato, no-op si no hay edición activa
   if(window._edRedrawOverride && window._gcpActive){ _gcpRedraw(); return; }
   if(!edCtx || !edCanvas)return;
+  _edVecWatchSel(); // v41.84: muestras de color vectoriales al día cuando cambia el objeto seleccionado
 
   // ── Fast path: canvas estático durante drag de capa cacheable ──────────
   if (_edDragStatic.valid && edIsDragging && edSelectedIdx === _edDragStatic.forIdx &&
@@ -14482,6 +14484,37 @@ function _edPickAt(nx, ny, o){
 // Visibilidad para _edPickAt en el editor de animaciones: un frame no visible (_gcpVisible === false) no es seleccionable.
 function _gcpPickVisible(l){ return l._gcpVisible !== false; }
 
+// v41.85 — ¿hay una edición vectorial legítimamente abierta? Panel de recta/forma (también plegado con ▲: sigue «open») o interfaz
+// oculta con OCULTAR teniendo la herramienta vectorial. Si NO la hay, cualquier resto suyo es huérfano y se limpia aquí.
+// Cada limpieza se anota en window._edVecHealLog (se ve en el 🩺 del editor, sección «EDICIÓN VECTORIAL Y SELECCIÓN»).
+function _edVecHealOrphans() {
+  const _p  = $('edOptionsPanel');
+  const _pm = (_p && _p.classList.contains('open')) ? (_p.dataset.mode || '') : '';
+  if (_pm === 'line' || _pm === 'shape') return false;
+  const _mdm = window._edMinimizedDrawMode || '';
+  if (edMinimized && (edActiveTool === 'line' || edActiveTool === 'shape' || _mdm === 'line' || _mdm === 'shape')) return false;
+  const _what = [];
+  if (_edLineLayer) {
+    const _ix = edLayers.indexOf(_edLineLayer);
+    if (_edLineLayer.points.length < 2 && _ix >= 0) edLayers.splice(_ix, 1);
+    _edLineLayer = null; _what.push('polígono a medias');
+  }
+  const _bar = $('edShapeBar');
+  if (_bar && _bar.classList.contains('visible')) { edShapeBarHide(true); _what.push('barra flotante'); }
+  if (_p && !_p.classList.contains('open')) {
+    if (_p.classList.contains('panel-collapsed')) { _p.classList.remove('panel-collapsed'); _edPanelTabHide(); _what.push('panel plegado'); }
+    // «editando vectorial» (más abajo en edOnStart) lee dataset.mode SIN mirar si el panel está abierto: un modo línea/forma que
+    // sobrevive a un panel ya cerrado lo deja en verdadero para siempre (tercera y última fuente de ese bloqueo, junto a la barra y el polígono)
+    if (_p.dataset.mode === 'line' || _p.dataset.mode === 'shape') { _what.push('modo «' + _p.dataset.mode + '» del panel'); delete _p.dataset.mode; }
+  }
+  if (!edMinimized && (_mdm || window._edMinimizedCollapsed)) { window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false; _what.push('modo minimizado'); }
+  if (!_what.length) return false;
+  // Registro para el 🩺: si algún día vuelve a pasar, se sabe QUÉ resto era y con qué herramienta
+  try { const _lg = window._edVecHealLog || (window._edVecHealLog = []); _lg.push({ at: new Date().toLocaleTimeString(), what: _what.join(' + '), tool: edActiveTool }); if (_lg.length > 12) _lg.shift(); } catch (_) {}
+  try { edRedraw(); } catch (_) {}
+  return true;
+}
+
 function edOnStart(e){
   // Cuentagotas activo (💧): el toque sobre el lienzo solo muestrea el color
   // (lo gestiona _edStartEyedrop en pointerup); no debe crear/seleccionar objetos.
@@ -14572,6 +14605,10 @@ function edOnStart(e){
     _edActiveNonTouchPointerId = e.pointerId;
     _edActiveNonTouchPointerTs = Date.now();
   }
+  // v41.85 — red de seguridad: si NO hay una edición vectorial abierta pero quedó algún resto de ella (polígono a medias, barra
+  // flotante o «modo minimizado» huérfanos), se limpia ANTES de decidir qué se toca con este toque. Un solo resto basta para que
+  // _editingVectorial sea verdad para siempre y no se pueda seleccionar nada (ver más abajo «bloquear selección de otros objetos»).
+  if (e.target === edCanvas) _edVecHealOrphans();
   // ── MODO TRAYECTORIA: inicio de trazo a mano alzada ───────────────────────
   if (_edMotionPathMode) {
     // No iniciar trazo si se está tocando la barra de controles o el modal de comportamiento
@@ -15739,7 +15776,7 @@ function edOnStart(e){
     _edShapeStart = {x:c.nx, y:c.ny};
     _edShapePreview = new ShapeLayer(_edShapeType, c.nx, c.ny, 0.01, 0.01);
     _edShapePreview.color     = edDrawColor || '#000000';
-    _edShapePreview.fillColor = 'none'; // sin relleno durante construcción
+    _edShapePreview.fillColor = _edVecNewStyle.fillColor; // v41.84: 'none' salvo que se haya elegido relleno para los nuevos
     _edShapePreview.lineWidth = edDrawSize || 2;
     _edInsertLayerAbove(_edShapePreview);
     edRedraw();
@@ -16391,7 +16428,7 @@ function edOnStart(e){
       const l = edLayers[i];
       if(l.hidden) continue;
       if(l.type !== 'line' && l.type !== 'shape') continue;
-      const _noFill = !l.fillColor || l.fillColor === 'none';
+      const _noFill = !_edVecHasPaintedFill(l);   // v41.84: contorno abierto con color de relleno = sin relleno
       if(!_noFill) continue; // con relleno ya se detecta bien en pasada 1
       const _p4Rot = (l.rotation || 0) * Math.PI / 180;
       const _p4Dx = (c.nx - l.x) * _p4Pw, _p4Dy = (c.ny - l.y) * _p4Ph;
@@ -18266,7 +18303,7 @@ function edOnEnd(e){
     _edShapePreview.width  = Math.max(_edShapePreview.width,  0.02);
     _edShapePreview.height = Math.max(_edShapePreview.height, 0.02);
     _edShapePreview.color     = edDrawColor || '#000000';
-    _edShapePreview.fillColor = 'none'; // sin relleno durante construcción
+    _edShapePreview.fillColor = _edVecNewStyle.fillColor; // v41.84: 'none' salvo que se haya elegido relleno para los nuevos
     _edShapePreview.lineWidth = edDrawSize  || 3;
     // Convertir siempre a LineLayer (rect=4pts con nodos, ellipse=32pts)
     const _ll = _edShapeToLineLayer(_edShapePreview);
@@ -18632,6 +18669,16 @@ function _vsApply(snap) {
   edSelectedIdx = _lastSes ? page.layers.indexOf(_lastSes) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
 }
 
+// v41.85 — deshacer/rehacer reconstruyen el panel (_edActivateLineTool) y eso reiniciaba NODOS (V⟺C): el objeto seguía seleccionado
+// pero sus nodos desaparecían solos y había que volver a pulsar NODOS. NODOS es un MODO elegido por el usuario: se conserva.
+function _vsRerender() {
+  const _keepNodes = _edCurveModeActive();
+  _edActivateLineTool(false, true);
+  window._edCurveVertIdx = -1; // el vértice «activo» de antes puede haber desaparecido con el deshacer/rehacer
+  const _pl = $('edOptionsPanel');
+  if (_keepNodes && !edMinimized && _pl && _pl.dataset.mode === 'line' && !_pl.classList.contains('panel-collapsed')) _edRestoreCurveModeInPanel('line');
+}
+
 function _vsUndo() {
   if (_vsHistIdx < 0) {
     edToast(I18n.t('ed_nothingToUndo'));
@@ -18643,7 +18690,7 @@ function _vsUndo() {
       // No hay nada más que deshacer — mantener el panel abierto con el objeto restaurado.
       _vsApply(_vsHistory[0]);
       edRedraw();
-      _edActivateLineTool(false, true);
+      _vsRerender();
       _edShapeUpdateUndoRedoBtns();
       return;
     }
@@ -18665,7 +18712,7 @@ function _vsUndo() {
   _vsHistIdx--;
   _vsApply(_vsHistory[_vsHistIdx]);
   edRedraw();
-  _edActivateLineTool(false, true);
+  _vsRerender();
   _edShapeUpdateUndoRedoBtns();
 }
 
@@ -18674,7 +18721,7 @@ function _vsRedo() {
   _vsHistIdx++;
   _vsApply(_vsHistory[_vsHistIdx]);
   edRedraw();
-  _edActivateLineTool(false, true);
+  _vsRerender();
   _edShapeUpdateUndoRedoBtns();
 }
 
@@ -18860,7 +18907,7 @@ function _edShapeApplyHistory(snapshot){
   la.cornerRadii = d.cornerRadii
     ? (Array.isArray(d.cornerRadii) ? [...d.cornerRadii] : {...d.cornerRadii})
     : undefined;
-  _esbSync();
+  _edVecRefreshColorUI('', la);   // v41.84: panel Y barra (antes solo la barra)
   edRedraw();
 }
 
@@ -20661,7 +20708,10 @@ function _edLineAddPoint(nx, ny, isTouch=false){
     // Crear capa con el primer punto como centro
     _edLineLayer = new LineLayer();
     _edLineLayer.color    = edDrawColor || '#000000';
-    _edLineLayer.fillColor = 'none'; // sin relleno durante construcción; se aplica al OK o al fusionar
+    // Sin relleno durante la construcción (un contorno abierto no pinta relleno); el de la fusión se aplica al
+    // fusionar. v41.84: el POLÍGONO nace ya con el relleno elegido para los objetos nuevos (si lo hay) y se verá
+    // al cerrarlo; la recta (segmento) nunca lleva relleno al nacer.
+    _edLineLayer.fillColor = (_edLineType === 'draw') ? _edVecNewStyle.fillColor : 'none';
     _edLineLayer.lineWidth = edDrawSize || 2;
     _edLineLayer.x = nx; _edLineLayer.y = ny;
     _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
@@ -22263,11 +22313,11 @@ function _edActivateShapeTool(isNew, isCreating) {
 
   const _sel = (edSelectedIdx>=0 && edLayers[edSelectedIdx]?.type==='shape') ? edLayers[edSelectedIdx] : null;
   const col     = _sel?.color     || edDrawColor  || '#000000';
-  const fillCol = _sel ? (_sel.fillColor||'#ffffff') : (edDrawFillColor||'#ffffff');
+  // v41.84: sin objeto muestra el estilo del próximo (antes salía «relleno marcado» aunque los nuevos nacen sin relleno)
+  const _fillSrcS = _sel || _edVecNewStyle;
   const lw      = _sel?.lineWidth ?? edDrawSize ?? 2;
   const opacity = _sel ? Math.round((_sel.opacity??1)*100) : 100;
-  const hasFill = fillCol !== 'none';
-  const fillVal = hasFill ? fillCol : '#ffffff';
+  const hasFill = !!(_fillSrcS.fillColor && _fillSrcS.fillColor !== 'none');
 
   panel.innerHTML = `
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
@@ -22309,10 +22359,10 @@ function _edActivateShapeTool(isNew, isCreating) {
     <span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-shape-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_sel&&hasFill&&_edGradValid(_sel.fillGradient)?_edGradCss(_sel.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
+      <button id="op-shape-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_edFillSwatchBg(_fillSrcS)};border:${_edVecColorTarget==='fill'?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('shape')}
-    <button id="op-shape-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
+    <button id="op-shape-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${_sel?1:0.4}" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
   </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
@@ -22454,23 +22504,12 @@ function _edActivateShapeTool(isNew, isCreating) {
   });
 
   // ── Relleno ──
-  $('op-shape-fill-on')?.addEventListener('change',e=>{
-    const on=e.target.checked;
-    const fb=$('op-shape-fill-btn'); if(fb) fb.style.opacity=on?1:0.4;
-    const s=_curShape(); if(!s) return;
-    if(on){
-      const hex=s._lastFillColor||edDrawFillColor||'#ffffff';
-      s.fillColor=hex; edDrawFillColor=hex;
-      if(fb) fb.style.background=_edFillSwatchBg(s);
-    } else {
-      s._lastFillColor=s.fillColor;
-      s.fillColor='none'; edDrawFillColor='none';
-    }
-    edRedraw(); _edShapePushHistory();
-  });
+  // v41.84: con objeto lo rellena / quita el relleno; sin objeto decide si el SIGUIENTE nace con relleno
+  $('op-shape-fill-on')?.addEventListener('change',e=>{ _edVecSetFillOn(e.target.checked, _curShape); });
   // Degradado vectorial (mismo modal que el relleno de mano alzada)
   $('op-shape-grad-btn')?.addEventListener('click', ()=>{
-    const s=_curShape(); if(!s) return;
+    const s=_curShape();
+    if(!s){ edToast(I18n.t('ed_gradNeedsObject')); return; }   // la línea guía se dibuja SOBRE un objeto
     _edOpenVecGradient(s, ()=>{
       const fb=$('op-shape-fill-btn'); if(fb){ fb.style.background=_edFillSwatchBg(s); fb.style.opacity=1; }
       const fo=$('op-shape-fill-on'); if(fo) fo.checked=true;
@@ -22528,6 +22567,7 @@ function _edActivateShapeTool(isNew, isCreating) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al OK
     // Cerrar modo V⟺C si estaba abierto
     const _slVCShape=$('op-shape-curve-slider');
     if(_slVCShape && _slVCShape.style.display==='flex'){
@@ -22618,9 +22658,11 @@ function _edActivateLineTool(isNew, isCreating) {
   const nPoints = _edLineLayer?.points?.length || 0;
   const isClosed = _cur?.closed || false;
   const _showCloseBtn = !isClosed && (_cur?.points?.filter(Boolean).length ?? 0) >= 3;
-  const fillCol = _cur ? (_cur.fillColor||'none') : 'none';
-  const hasFill = fillCol !== 'none' && isClosed;
-  const fillVal = hasFill ? fillCol : '#ffffff';
+  // v41.84: la fila de relleno es SIEMPRE la de edición —también al crear (sin objeto) y con contornos
+  // abiertos—; sin objeto muestra el estilo con el que nacerá el siguiente (_edVecNewStyle).
+  const _fillSrc = _cur || _edVecNewStyle;
+  const fillCol = _fillSrc.fillColor || 'none';
+  const hasFill = fillCol !== 'none';
   // canFuse: ≥2 layers line cerrados de sesión actual, O un layer único grouped=true
   const _canFuseGrouped = _cur && _cur.type==='line' && _cur.grouped && _cur.points && _cur.points.includes(null);
   const canFuse = _canFuseGrouped || edLayers.filter(l => l.type==='line' && l.closed && !_vsPreSessionLayers.has(l)).length >= 2;
@@ -22674,19 +22716,17 @@ function _edActivateLineTool(isNew, isCreating) {
     </div>
     ${!edLastPointerIsTouch ? `<span id="op-line-info" style="flex:1;text-align:right;font-size:.72rem;color:var(--gray-500);padding:0 4px">${nPoints>0?I18n.t('op_vertCount',{n:nPoints}):I18n.t('op_tapToAddVertices')}</span>` : ''}
   </div>
-  ${isClosed?`
+  <!-- FILA RELLENO — v41.84: la misma al crear (sin objeto) que al editar, cerrado o no -->
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">
     <span style="font-size:.72rem;font-weight:700;color:var(--gray-600);flex-shrink:0">${I18n.t('ed_fillTool')}</span>
     <input type="checkbox" id="op-line-fill-on" ${hasFill?'checked':''} style="cursor:pointer;flex-shrink:0">
     <div style="position:relative;display:flex;align-items:center;flex-shrink:0">
-      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_cur&&hasFill&&_edGradValid(_cur.fillGradient)?_edGradCss(_cur.fillGradient):fillVal};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
+      <button id="op-line-fill-btn" style="width:26px;height:26px;border-radius:50%;background:${_edFillSwatchBg(_fillSrc)};border:${_edVecColorTarget==='fill'?'3px solid var(--black)':'2px solid var(--gray-300)'};cursor:pointer;flex-shrink:0;padding:0;opacity:${hasFill?1:0.4}"></button>
     </div>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${_edVecPalHtml('line')}
-    <button id="op-line-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
-  </div>` : `
-  <div style="height:1px;background:var(--gray-300);width:100%"></div>
-  <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none">${_edVecPalHtml('line')}</div>`}
+    <button id="op-line-grad-btn" style="width:26px;height:26px;border-radius:6px;background:linear-gradient(135deg,#fff,#000);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;opacity:${_cur?1:0.4}" title="${I18n.t('ed_gradientTitle')}" aria-label="${I18n.t('ed_gradientTitle')}"></button>
+  </div>
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA ACCIONES -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0 2px 0;min-height:32px;width:100%">
@@ -22765,11 +22805,13 @@ function _edActivateLineTool(isNew, isCreating) {
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-rect-btn')?.addEventListener('click',()=>{
+    if(_edLineLayer) _edFinishLine(); // v41.85: el polígono a medias se confirma (≥2 puntos) o se descarta, como al pasar a selección
     _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-ellipse-btn')?.addEventListener('click',()=>{
+    if(_edLineLayer) _edFinishLine(); // v41.85: ídem
     _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
@@ -22862,23 +22904,12 @@ function _edActivateLineTool(isNew, isCreating) {
   });
 
   // ── Relleno ──
-  $('op-line-fill-on')?.addEventListener('change',e=>{
-    const on=e.target.checked;
-    const fb=$('op-line-fill-btn'); if(fb) fb.style.opacity=on?1:0.4;
-    const l=_curLine(); if(!l) return;
-    if(on){
-      const hex=l._lastFillColor||edDrawFillColor||'#ffffff';
-      l.fillColor=hex; edDrawFillColor=hex;
-      if(fb) fb.style.background=_edFillSwatchBg(l);
-    } else {
-      l._lastFillColor=l.fillColor;
-      l.fillColor='none'; edDrawFillColor='none';
-    }
-    edRedraw(); _edShapePushHistory();
-  });
+  // v41.84: con objeto lo rellena / quita el relleno; sin objeto decide si el SIGUIENTE nace con relleno
+  $('op-line-fill-on')?.addEventListener('change',e=>{ _edVecSetFillOn(e.target.checked, _curLine); });
   // Degradado vectorial (mismo modal que el relleno de mano alzada)
   $('op-line-grad-btn')?.addEventListener('click', ()=>{
-    const l=_curLine(); if(!l) return;
+    const l=_curLine();
+    if(!l){ edToast(I18n.t('ed_gradNeedsObject')); return; }   // la línea guía se dibuja SOBRE un objeto
     _edOpenVecGradient(l, ()=>{
       const fb=$('op-line-fill-btn'); if(fb){ fb.style.background=_edFillSwatchBg(l); fb.style.opacity=1; }
       const fo=$('op-line-fill-on'); if(fo) fo.checked=true;
@@ -23049,6 +23080,7 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── OK ──
   $('op-draw-ok')?.addEventListener('click',()=>{
+    if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al OK
     // Cerrar modo V⟺C si estaba abierto
     const _slVCL=$('op-line-curve-slider');
     if(_slVCL && _slVCL.style.display==='flex'){
@@ -23790,6 +23822,8 @@ function edCloseOptionsPanel(){
     // impidiendo guardar movimientos/resize/rotate de cualquier objeto posterior.
     if(_mode==='line' || _mode==='shape'){
       _edLineFusionId = null;
+      if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al cierre del panel
+      _edVecResetNewStyle();               // v41.84: el estilo del próximo objeto vuelve a su valor de partida
       if(typeof _vcofSetOn === 'function') _vcofSetOn(false);
       // Cerrar sin OK → descartar cambios: restaurar snapshot inicial de la sesión
       if(typeof _vsClear === 'function'){
@@ -23799,6 +23833,17 @@ function edCloseOptionsPanel(){
         }
         _vsClear();
       }
+      // v41.85: cerrar la edición vectorial cierra TAMBIÉN todo lo que cuelga de ella. Antes quedaban vivos la barra flotante
+      // (plegada con ▲ u oculta con OCULTAR), el «modo minimizado» y el polígono a medias: bastaba UNO para que
+      // «editando vectorial» fuese verdad para siempre y no se pudiera seleccionar nada del lienzo (Escape con el panel plegado,
+      // borrar el último objeto desde Capas, cambiar de menú a medio polígono…).
+      if(_edLineLayer){
+        const _ixLL = edLayers.indexOf(_edLineLayer);
+        if(_edLineLayer.points.length < 2 && _ixLL >= 0) edLayers.splice(_ixLL, 1);
+        _edLineLayer = null;
+      }
+      window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false;
+      edShapeBarHide(true);
     }
   }
   _edFocusDone = false;
@@ -24020,22 +24065,82 @@ function _edCheckDoubleTap(el) {
   return isDbl;
 }
 
-// ── Color de objetos vectoriales (paneles forma y línea) ──────────────────
+// ── Color de objetos vectoriales (paneles forma y línea + barra flotante) ──────
 // Mismo método que el panel de dibujo a mano: fila con 🎨 (selector propio en
 // táctil / nativo en PC), 💧 cuentagotas y 2 muestras editables
 // (_edVecPal: 2 muestras editables, propias). El destino lo decide la muestra marcada:
 // 'line' (muestra de línea) o 'fill' (muestra de relleno).
+//
+// v41.84 — el destino marcado es ÚNICO y compartido por el panel y la barra flotante
+// (_edVecColorTarget). Con un objeto vectorial seleccionado, muestras, 🎨, 💧, paleta y casilla de relleno
+// actúan sobre él. SIN objeto seleccionado actúan sobre el estilo con el que nacerá el SIGUIENTE objeto
+// (_edVecNewStyle): línea = edDrawColor (el color vivo de siempre), relleno = _edVecNewFillHex solo si
+// _edVecNewFillOn (por defecto los objetos nuevos siguen naciendo sin relleno). Ese estilo no entra en el
+// historial de deshacer (no es un cambio de ningún objeto).
 let _edVecColorTarget = 'line';
+let _edVecNewFillOn  = false;      // ¿el próximo objeto cerrado nace con relleno?
+let _edVecNewFillHex = '#ffffff';  // color de ese relleno
+// Objeto «virtual» con la misma forma que una capa (color, fillColor, _lastFillColor) para que los ayudantes de
+// abajo funcionen igual con un objeto real que con el estilo del próximo. NO se le define fillGradient a
+// propósito: un degradado necesita el objeto (su línea guía se dibuja sobre él) y `delete la.fillGradient`
+// sobre un accesor lo destruiría.
+const _edVecNewStyle = {
+  isNewStyle: true,
+  get color(){ return edDrawColor || '#000000'; },
+  set color(v){ edDrawColor = v; },
+  get fillColor(){ return _edVecNewFillOn ? _edVecNewFillHex : 'none'; },
+  set fillColor(v){ if(!v || v==='none'){ _edVecNewFillOn = false; } else { _edVecNewFillOn = true; _edVecNewFillHex = v; } },
+  get _lastFillColor(){ return _edVecNewFillHex; },
+  set _lastFillColor(v){ if(v && v!=='none') _edVecNewFillHex = v; }
+};
+// Vuelve el estilo del próximo objeto a su valor de partida (al entrar en dibujo vectorial y al salir de él).
+function _edVecResetNewStyle(){ _edVecNewFillOn = false; _edVecNewFillHex = '#ffffff'; _edVecColorTarget = 'line'; }
+// Objeto vectorial sobre el que actúan las muestras: el que se está construyendo o el seleccionado.
+function _edVecSelObj(){
+  if(_edLineLayer) return _edLineLayer;
+  const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  return (l && (l.type==='line' || l.type==='shape')) ? l : null;
+}
+// ¿Pinta este objeto algún relleno? Un contorno ABIERTO no pinta el suyo (LineLayer.draw solo rellena si
+// `closed`), aunque guarde un color de relleno: a efectos de selección cuenta como «sin relleno».
+function _edVecHasPaintedFill(l){
+  if(!l || !l.fillColor || l.fillColor==='none') return false;
+  if(l.type==='line' && !l.closed && !l.grouped && !(l.points && l.points.includes(null))) return false;
+  return true;
+}
+// Historial: solo los cambios de un objeto REAL (el estilo del próximo objeto no es deshacible).
+function _edVecPush(la){ if(la && !la.isNewStyle) _edShapePushHistory(); }
+// Vigilante de selección (lo llama edRedraw; coste: una comparación). Cuando cambia el objeto vectorial
+// seleccionado —tocar otro, deseleccionar, deshacer/rehacer— y hay panel vectorial o barra flotante visibles,
+// sus muestras de color, la casilla de relleno y el marcador de destino se ponen al día (si no, se quedaban con
+// los colores del objeto anterior). Se difiere un fotograma para no tocar el DOM dentro del repintado.
+var _edVecWatchLayer; // (var: edRedraw puede llegar a ejecutarse antes de que este punto del archivo se evalúe)
+function _edVecWatchSel(){
+  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+  if(la === _edVecWatchLayer) return;
+  _edVecWatchLayer = la;
+  requestAnimationFrame(()=>{
+    const p = $('edOptionsPanel');
+    const open = (p && p.classList.contains('open') && (p.dataset.mode==='line' || p.dataset.mode==='shape'))
+              || !!$('edShapeBar')?.classList.contains('visible');
+    if(open) _edVecRefreshColorUI('', null);
+  });
+}
 // Paleta propia del dibujo vectorial: 2 muestras (negro/blanco) EDITABLES,
 // independientes de la paleta de dibujo a mano (cuyas 2 primeras son fijas).
 let _edVecPal = ['#000000','#ffffff'];
 try{ const _p=JSON.parse(localStorage.getItem('cx_vec_pal')||'null'); if(Array.isArray(_p)&&_p.length===2&&_p.every(x=>/^#[0-9a-f]{6}$/i.test(x))) _edVecPal=_p; }catch(_){}
 function _edVecSavePal(){ try{ localStorage.setItem('cx_vec_pal', JSON.stringify(_edVecPal)); }catch(_){} }
+// (pfx se conserva en las firmas por compatibilidad: desde la v41.84 el panel y la barra comparten destino y la
+// fila de relleno existe siempre, así que ya no depende del panel que esté abierto.)
 function _edVecTarget(pfx){
-  return (_edVecColorTarget==='fill' && $('op-'+pfx+'-fill-btn')) ? 'fill' : 'line';
+  return _edVecColorTarget==='fill' ? 'fill' : 'line';
 }
 function _edVecCurHex(pfx, la){
-  if(_edVecTarget(pfx)==='fill') return (la.fillColor && la.fillColor!=='none') ? la.fillColor : '#ffffff';
+  if(_edVecTarget(pfx)==='fill'){
+    if(la.fillColor && la.fillColor!=='none') return la.fillColor;
+    return (la._lastFillColor && la._lastFillColor!=='none') ? la._lastFillColor : '#ffffff';
+  }
   return la.color || '#000000';
 }
 function _edVecPalHtml(pfx){
@@ -24046,16 +24151,23 @@ function _edVecPalHtml(pfx){
     <button id="op-${pfx}-eyedrop" style="width:26px;height:26px;border-radius:50%;background:var(--gray-100);border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0;font-size:.85rem" title="${I18n.t('ed_eyedropTool')}">💧</button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0;margin:0 2px"></div>${dots}`;
 }
+// Pone al día TODAS las muestras de color vectoriales visibles: las del panel (línea o forma, la que esté abierta)
+// y las de la barra flotante, para el objeto `la` (por defecto el seleccionado o, si no hay, el estilo del próximo).
 function _edVecRefreshColorUI(pfx, la){
+  la = la || _edVecSelObj() || _edVecNewStyle;
   const tgt = _edVecTarget(pfx);
-  const lb=$('op-'+pfx+'-color-btn'), fb=$('op-'+pfx+'-fill-btn');
-  if(lb){ lb.style.background = la.color||'#000000'; lb.style.border = (tgt==='line'?'3px solid var(--black)':'2px solid var(--gray-300)'); }
-  if(fb){
-    const on = la.fillColor && la.fillColor!=='none';
-    fb.style.background = _edFillSwatchBg(la); fb.style.opacity = on?1:0.4;
-    fb.style.border = (tgt==='fill'?'3px solid var(--black)':'2px solid var(--gray-300)');
-  }
-  const cur = (la.fillColor && la.fillColor!=='none' && !_edGradValid(la.fillGradient)) || tgt==='line'
+  const on = !!(la.fillColor && la.fillColor!=='none');
+  ['line','shape'].forEach(p=>{
+    const lb=$('op-'+p+'-color-btn'), fb=$('op-'+p+'-fill-btn'), fo=$('op-'+p+'-fill-on'), gb=$('op-'+p+'-grad-btn');
+    if(lb){ lb.style.background = la.color||'#000000'; lb.style.border = (tgt==='line'?'3px solid var(--black)':'2px solid var(--gray-300)'); }
+    if(fb){
+      fb.style.background = _edFillSwatchBg(la); fb.style.opacity = on?1:0.4;
+      fb.style.border = (tgt==='fill'?'3px solid var(--black)':'2px solid var(--gray-300)');
+    }
+    if(fo) fo.checked = on;
+    if(gb) gb.style.opacity = la.isNewStyle ? 0.4 : 1;   // sin objeto no hay sobre qué dibujar la línea guía del degradado
+  });
+  const cur = ((on && !_edGradValid(la.fillGradient)) || tgt==='line')
     ? _edVecCurHex(pfx, la) : null;
   document.querySelectorAll('.op-vpal-dot').forEach(d=>{
     const c = _edVecPal[parseInt(d.dataset.colidx)];
@@ -24063,56 +24175,94 @@ function _edVecRefreshColorUI(pfx, la){
     const sel = cur && c===cur;
     d.style.border = sel ? '3px solid var(--black)' : '2px solid var(--gray-300)';
   });
+  _esbSync(la);   // barra flotante
 }
 function _edVecApplyColor(pfx, la, hex){
   if(_edVecTarget(pfx)==='fill'){
     la.fillColor=hex; delete la.fillGradient; la._lastFillColor=hex; edDrawFillColor=hex;
-    const fo=$('op-'+pfx+'-fill-on'); if(fo) fo.checked=true;
   } else {
     la.color=hex;
   }
-  _edVecRefreshColorUI(pfx, la);
+  _edVecRefreshColorUI(pfx, la);   // también marca la casilla de relleno
   edRedraw();
 }
+// Casilla / botón «relleno» (panel y barra). Con objeto: lo rellena o lo deja sin relleno (un paso de historial).
+// Sin objeto: decide si el SIGUIENTE nacerá con relleno. Antes, al volver a marcar el relleno podía salir 'none'
+// (edDrawFillColor se deja en 'none' al desmarcarlo): ahora se ignora ese valor.
+function _edVecSetFillOn(on, getLayer){
+  const la = getLayer ? getLayer() : _edVecSelObj();
+  if(!la){ _edVecNewFillOn = !!on; _edVecRefreshColorUI('', _edVecNewStyle); return; }
+  if(on){
+    const lf = la._lastFillColor;
+    const hex = (lf && lf!=='none') ? lf : ((edDrawFillColor && edDrawFillColor!=='none') ? edDrawFillColor : '#ffffff');
+    la.fillColor = hex; edDrawFillColor = hex;
+  } else {
+    if(la.fillColor && la.fillColor!=='none') la._lastFillColor = la.fillColor;
+    la.fillColor = 'none'; edDrawFillColor = 'none';
+  }
+  _edVecRefreshColorUI('', la);
+  edRedraw(); _edShapePushHistory();
+}
+// 💧 del panel y de la barra: toma un color del lienzo y lo aplica al destino MARCADO (línea o relleno) del objeto
+// seleccionado; sin objeto seleccionado, al estilo del próximo objeto. Con el cuentagotas armado, volver a
+// pulsar 💧 lo cancela. El destino se lee al tomar el color (si se cambia de muestra entre medias, manda la última).
+function _edVecEyeUI(on){
+  document.querySelectorAll('#op-line-eyedrop,#op-shape-eyedrop').forEach(b=>{
+    b.style.background  = on ? 'var(--gray-300)' : 'var(--gray-100)';
+    b.style.borderColor = on ? 'var(--black)'    : 'var(--gray-300)';
+  });
+  $('esb-eyedrop')?.classList.toggle('active', !!on);
+}
+function _edVecEyedrop(pfx, getLayer){
+  if(_edEyeCancel){ _edEyeCancel(); return; }
+  const fill = _edVecTarget(pfx)==='fill';
+  _edVecEyeUI(true);
+  _edStartEyedrop(hex=>{
+    const la = (getLayer && getLayer()) || _edVecNewStyle;
+    _edVecApplyColor(pfx, la, hex);
+    _edVecPush(la);
+  }, ()=>{ _edVecEyeUI(false); }, {
+    exclusiveEsc: true,   // Escape cancela SOLO el cuentagotas (no cierra además el panel)
+    toast:   I18n.t(fill ? 'ed_eyedropToFill'   : 'ed_eyedropToLine'),
+    okToast: ()=> I18n.t(_edVecTarget(pfx)==='fill' ? 'ed_eyedropDoneFill' : 'ed_eyedropDoneLine')
+  });
+}
 function _edVecWireColors(pfx, getLayer){
-  const L = ()=>getLayer();
-  const mark = t => { _edVecColorTarget=t; const la=L(); if(la) _edVecRefreshColorUI(pfx, la); };
+  // v41.84: sin objeto (getLayer() = null) todo actúa sobre el estilo del próximo objeto (_edVecNewStyle)
+  const L = ()=> getLayer() || _edVecNewStyle;
+  const mark = t => { _edVecColorTarget=t; _edVecRefreshColorUI(pfx, L()); };
   const openPicker = e => {
-    const la=L(); if(!la) return;
-    _edPickColor(e, _edVecCurHex(pfx, la),
-      hex=>{ const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex); },
-      ()=>{ _edShapePushHistory(); });
+    _edPickColor(e, _edVecCurHex(pfx, L()),
+      hex=>{ _edVecApplyColor(pfx, L(), hex); },
+      ()=>{ _edVecPush(L()); });
   };
   [['line','color'],['fill','fill']].forEach(([t,id])=>{
     const b=$('op-'+pfx+'-'+id+'-btn'); if(!b) return;
     b.addEventListener('click', ()=>mark(t));
     // Doble clic/toque: mismo modal HSL que las muestras de dibujo a mano
     const hslPicker = () => {
-      mark(t); const la=L(); if(!la) return;
+      mark(t);
       _edShowColorPicker((hex, final)=>{
-        const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex);
-        if(final) _edShapePushHistory();
-      }, _edVecCurHex(pfx, la));
+        const l2=L(); _edVecApplyColor(pfx, l2, hex);
+        if(final) _edVecPush(l2);
+      }, _edVecCurHex(pfx, L()));
     };
     b.addEventListener('pointerup', e=>{ if(!_edCheckDoubleTap(b)) return; e.stopPropagation(); hslPicker(); });
     b.addEventListener('dblclick', e=>{ if(document.getElementById('ed-hsl-picker')) return; e.stopPropagation(); hslPicker(); });
   });
   $('op-'+pfx+'-custom')?.addEventListener('click', e=>{ e.stopPropagation(); openPicker(e); });
-  $('op-'+pfx+'-eyedrop')?.addEventListener('click', ()=>{
-    _edStartEyedrop(hex=>{ const la=L(); if(la){ _edVecApplyColor(pfx, la, hex); _edShapePushHistory(); } });
-  });
+  $('op-'+pfx+'-eyedrop')?.addEventListener('click', ()=>{ _edVecEyedrop(pfx, getLayer); });
   const editSlot = idx => {
-    const la=L(); if(!la) return;
     _edShowColorPicker((hex, final)=>{
-      const l2=L(); if(l2) _edVecApplyColor(pfx, l2, hex);
-      if(final){ _edVecPal[idx]=hex; _edVecSavePal(); const l3=L(); if(l3) _edVecRefreshColorUI(pfx, l3); _edShapePushHistory(); }
+      const l2=L(); _edVecApplyColor(pfx, l2, hex);
+      if(final){ _edVecPal[idx]=hex; _edVecSavePal(); _edVecRefreshColorUI(pfx, L()); _edVecPush(l2); }
     }, _edVecPal[idx]);
   };
   document.querySelectorAll('.op-vpal-dot').forEach(dot=>{
     const idx=parseInt(dot.dataset.colidx);
     dot.addEventListener('click', ()=>{
-      const la=L(); if(!la) return;
-      _edVecApplyColor(pfx, la, _edVecPal[idx]); _edShapePushHistory();
+      const la=L();
+      _edVecApplyColor(pfx, la, _edVecPal[idx]); _edVecPush(la);
     });
     dot.addEventListener('pointerup', e=>{
       if(!_edCheckDoubleTap(dot)) return;
@@ -24124,7 +24274,7 @@ function _edVecWireColors(pfx, getLayer){
       e.stopPropagation(); editSlot(idx);
     });
   });
-  const la0=L(); if(la0) _edVecRefreshColorUI(pfx, la0);
+  _edVecRefreshColorUI(pfx, L());
 }
 
 // initialColor: color de partida del picker (por defecto edDrawColor).
@@ -26586,6 +26736,9 @@ function _edRestoreCurveModeInPanel(mode){
     btn.style.color = 'var(--white)';
     btn.style.borderColor = 'var(--black)';
   }
+  // v41.85: igual que el clic manual en NODOS (muestra el cursor desplazado, solo táctil) y repinta los nodos ya
+  if(mode==='line'){ const _vw=$('op-vcof-wrap'); if(_vw) _vw.style.display='flex'; }
+  edRedraw();
 }
 function edInitFloatDrag(){
   const btn=$('edFloatBtn');if(!btn)return;
@@ -28612,8 +28765,9 @@ function _edbSyncColor() {
   const sw = $('edb-color'); if (!sw) return;
   sw.style.background = edDrawColor;
   sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
-  // También actualizar el swatch de la barra de polígonos
-  const sw2 = $('esb-color'); if(sw2) sw2.style.background = edDrawColor;
+  // También actualizar las muestras de la barra de polígonos (v41.84: las decide _esbSync: objeto seleccionado o
+  // estilo del próximo; antes se pintaba aquí la muestra de línea con edDrawColor)
+  if($('esb-color')) _esbSync();
   // Actualizar preview del panel de grosor si está abierto
   _edbSyncSizePreview();
   // Refrescar cursor offset si está visible y hay posición guardada
@@ -28860,9 +29014,17 @@ function _edCurveModeActive(){
   const panelS=$('op-shape-curve-slider');
   const panelL=$('op-line-curve-slider');
   const barBtn=$('esb-curve');
-  return (panelS&&panelS.style.display==='flex')||
+  // v41.85: con la barra flotante VISIBLE (panel plegado ▲ o interfaz oculta) manda SOLO la barra. Antes bastaba con que el
+  // control NODOS del panel —oculto bajo la barra— siguiera marcado: al apagar NODOS en la barra los nodos seguían activos y
+  // pintados, y el botón no podía apagarlos (pulsarlo otra vez los «activaba» de nuevo).
+  if($('edShapeBar')?.classList.contains('visible')){
+    const _pn=$('edOptionsPanel');
+    const _panelManda = !!(_pn && _pn.classList.contains('open') && !_pn.classList.contains('panel-collapsed') && !edMinimized);
+    if(!_panelManda) return !!(barBtn&&barBtn.dataset.curveActive==='1');
+  }
+  return !!((panelS&&panelS.style.display==='flex')||
          (panelL&&panelL.style.display==='flex')||
-         (barBtn&&barBtn.dataset.curveActive==='1');
+         (barBtn&&barBtn.dataset.curveActive==='1'));
 }
 
 function _edBarDefaultPos(barEl) {
@@ -28981,6 +29143,10 @@ function _esbActivateCurveUI(){
     _cb.style.color = '#FFE135';
     _cb.style.outline = '1px solid rgba(255,255,0,.5)';
   }
+  // v41.85: repintar AHORA, con el estado ya puesto (curveActive='1' → _edCurveModeActive() es true). Antes cada llamador hacía
+  // edRedraw() ANTES de llamar aquí —con NODOS aún apagado—, así que los nodos del objeto seleccionado no aparecían hasta el
+  // siguiente redibujo (activar NODOS desde la barra flotante, con el panel plegado o la interfaz oculta).
+  edRedraw();
   if(typeof window._esbShowSlider !== 'function') return;
   // Si el control ya está abierto en modo 'curve', no volver a llamarlo:
   // _esbShowSlider alterna (abre/cierra) el mismo modo, así que llamarlo de
@@ -29006,6 +29172,8 @@ function _esbActivateCurveUI(){
 
 function edShapeBarShow(snapToCanvas) {
   const bar = $('edShapeBar'); if(!bar) return;
+  // v41.85: estado de NODOS ANTES de mostrar la barra (hasta ahora manda el panel; en cuanto la barra es visible manda ella)
+  const _carryCurve = _edCurveModeActive();
   bar.classList.add('visible');
   _edShapeInitHistory();
   if(_vsHistory.length === 0) _vsInit(false);
@@ -29032,12 +29200,14 @@ function edShapeBarShow(snapToCanvas) {
   // su control de curvatura — no basta con iluminar el botón, hace falta
   // abrir el popup del slider o el usuario tenía que desactivar/reactivar a
   // mano para verlo (bug reportado por Alberto).
-  if(_edCurveModeActive()) _esbActivateCurveUI();
+  if(_carryCurve) _esbActivateCurveUI();
   // Actualizar visibilidad del botón ⊕ Fusionar
   if(typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
 }
-function edShapeBarHide() {
-  if (_edPanelIsCollapsed()) return;
+function edShapeBarHide(force) {
+  // force (v41.85): las SALIDAS de la edición vectorial (OK, Escape, cerrar el panel, borrar el último objeto) ocultan la barra
+  // aunque el panel siguiera marcado como plegado; sin force, con el panel plegado la barra es la interfaz y no se oculta.
+  if (!force && _edPanelIsCollapsed()) return;
   // Ocultar slider directamente por DOM (no depender del closure de edInitShapeBar)
   const _sp=$('esb-slider-panel');
   if(_sp){ _sp.style.display='none'; _sp._mode=null; }
@@ -29051,12 +29221,18 @@ function edShapeBarHide() {
   $('edShapeBar')?.classList.remove('visible');
 }
 
-function _esbSync() {
-  const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-  if(!la || (la.type !== 'shape' && la.type !== 'line')) return;
+// v41.84: la barra refleja SIEMPRE el objeto vectorial seleccionado o, si no hay ninguno, el estilo con el que
+// nacerá el siguiente (_edVecNewStyle) — antes, sin objeto, se quedaba con las muestras del anterior — y marca
+// con un anillo blanco la muestra que es destino del cuentagotas (línea o relleno, el mismo destino del panel).
+function _esbSync(la) {
+  la = la || _edVecSelObj() || _edVecNewStyle;
+  const tgt = _edVecTarget();
   // Swatch color borde
   const colorBtn = $('esb-color');
-  if(colorBtn) colorBtn.style.background = la.color || '#000000';
+  if(colorBtn){
+    colorBtn.style.background = la.color || '#000000';
+    colorBtn.classList.toggle('edb-target', tgt === 'line');
+  }
   // Estado relleno
   const hasFill = la.fillColor && la.fillColor !== 'none';
   // Botón toggle relleno: activo (iluminado) si tiene relleno
@@ -29067,6 +29243,7 @@ function _esbSync() {
   if(fillBtn){
     fillBtn.style.background = _edFillSwatchBg(la);
     fillBtn.style.opacity = hasFill ? '1' : '0.4';
+    fillBtn.classList.toggle('edb-target', tgt === 'fill');
   }
   // Grosor: si el panel emergente compartido con el lápiz está abierto en modo
   // vectorial, refrescar su preview (mismo criterio que _edSyncSizeDots)
@@ -29250,47 +29427,33 @@ function edInitShapeBar() {
   bar.addEventListener('pointercancel', _endDrag);
 
   // ── Botones ──
-  // Color borde
-  // Color borde: nativo en PC (con cuentagotas), HSL en Android
-  $('esb-color')?.addEventListener('click', e => {
-    if(_locked) return;
-    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
-    _edPickColor(e, la.color||'#000000',
-      hex=>{ la.color=hex; _esbSync(); edRedraw();
-        // Sincronizar botón color del panel si está abierto
-        const _pcb=$('op-line-color-btn'); if(_pcb) _pcb.style.background=hex;
-        const _pcb2=$('op-shape-color-btn'); if(_pcb2) _pcb2.style.background=hex;
-      },
-      ()=>{ _edShapePushHistory(); }
+  // v41.84 — Color borde / color relleno. Igual que en el panel: tocar una muestra la MARCA como destino del
+  // cuentagotas (anillo blanco; destino único compartido con el panel) y volver a tocar la que ya está marcada
+  // abre el selector (nativo en PC, HSL en Android). Con objeto seleccionado actúa sobre él; sin objeto, sobre el
+  // estilo con el que nacerá el siguiente. Un doble toque abre el selector desde cualquier estado.
+  const _esbSwatch = (t, e) => {
+    if(_edVecColorTarget !== t){ _edVecColorTarget = t; _edVecRefreshColorUI('bar', null); return; }
+    const la = _edVecSelObj() || _edVecNewStyle;
+    _edPickColor(e, _edVecCurHex('bar', la),
+      hex=>{ _edVecApplyColor('bar', _edVecSelObj() || _edVecNewStyle, hex); },
+      ()=>{ _edVecPush(_edVecSelObj() || _edVecNewStyle); }
     );
-  });
+  };
+  $('esb-color')?.addEventListener('click', e => { if(_locked) return; _esbSwatch('line', e); });
 
-  // Cuentagotas
-  $('esb-eyedrop')?.addEventListener('click', ()=>{ if(_locked) return; _edStartEyedrop(); });
+  // Cuentagotas: toma un color del lienzo para el destino marcado (línea o relleno)
+  $('esb-eyedrop')?.addEventListener('click', ()=>{ if(_locked) return; _edVecEyedrop('bar', _edVecSelObj); });
 
-  // Toggle relleno
+  // Toggle relleno (sin objeto: el siguiente nacerá con / sin relleno)
   $('esb-fill-on')?.addEventListener('click', () => {
     if(_locked) return;
-    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
-    if(la.fillColor && la.fillColor!=='none'){
-      la._lastFillColor=la.fillColor;
-      la.fillColor='none';
-    } else {
-      la.fillColor=la._lastFillColor||'#ffffff';
-    }
-    _esbSync(); _edShapePushHistory(); edRedraw();
+    const la = _edVecSelObj();
+    const hasFill = la ? !!(la.fillColor && la.fillColor !== 'none') : _edVecNewFillOn;
+    _edVecSetFillOn(!hasFill, _edVecSelObj);
   });
 
-  // Color relleno: nativo en PC, HSL en Android; activa relleno automáticamente
-  $('esb-fill')?.addEventListener('click', e => {
-    if(_locked) return;
-    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la) return;
-    const cur=(la.fillColor&&la.fillColor!=='none')?la.fillColor:'#ffffff';
-    _edPickColor(e, cur,
-      hex=>{ la.fillColor=hex; la._lastFillColor=hex; delete la.fillGradient; _esbSync(); edRedraw(); },
-      ()=>{ _edShapePushHistory(); }
-    );
-  });
+  // Color relleno (activa el relleno automáticamente al elegir color)
+  $('esb-fill')?.addEventListener('click', e => { if(_locked) return; _esbSwatch('fill', e); });
 
 
   // ── Helper: posicionar y mostrar slider adjunto a edShapeBar ──
@@ -29418,7 +29581,7 @@ function edInitShapeBar() {
     // Activar — icono + control de curvatura (función compartida, también
     // usada al restaurar el estado desde el panel al colapsar; ver
     // edShapeBarShow y _esbActivateCurveUI).
-    edRedraw(); // actualizar vértices a verde inmediatamente al activar V⟺C
+    // v41.85: _esbActivateCurveUI() activa el estado Y repinta (antes se repintaba ANTES de activarlo y los nodos no se veían)
     _esbActivateCurveUI();
     // El slider permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
   });
@@ -29512,19 +29675,21 @@ function edInitShapeBar() {
   // OK
   $('esb-ok')?.addEventListener('click', ()=>{
     if(_locked) return;
+    if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al OK
+    _edVecResetNewStyle();               // v41.84: el estilo del próximo objeto vuelve a su valor de partida
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
     // Desactivar V⟺C si estaba activo, y cerrar su slider
     const _curveBtn=$('esb-curve');
     if(_curveBtn){ _curveBtn.dataset.curveActive='0'; _curveBtn.style.background=''; _curveBtn.style.color=''; _curveBtn.style.outline=''; }
     window._edCurveVertIdx=-1;
     _esbHideSlider(); // cerrar slider V/C (y cualquier otro slider activo)
-    edShapeBarHide();
-    window._edMinimizedDrawMode=null;
+    edShapeBarHide(true);                // v41.85: force — con el panel plegado la barra no se ocultaba
+    window._edMinimizedDrawMode=null; window._edMinimizedCollapsed=false;
     // Limpiar estado antes de maximizar
     edSelectedIdx=-1;
     edActiveTool='select'; edCanvas.className='';
     const _panel=$('edOptionsPanel');
-    if(_panel){ _panel.style.visibility=''; _panel.classList.remove('open'); _panel.innerHTML=''; delete _panel.dataset.mode; }
+    if(_panel){ _panel.style.visibility=''; _panel.classList.remove('open','panel-collapsed'); _panel.innerHTML=''; delete _panel.dataset.mode; _edPanelTabHide(); }
     _edDrawUnlockUI();
     edMaximize();
     edRedraw();
@@ -35312,9 +35477,18 @@ function _isBackSide(endX, endY) {
 }
 
 
-function _edStartEyedrop(onPick, onDone) {
+// Cuentagotas (💧): un único muestreo por armado.
+//  · onPick(hex)  — destino del color; si falta, color de dibujo a mano + hueco de paleta seleccionado.
+//  · onDone()     — se llama SIEMPRE al terminar (muestreo, toque sin color, Escape o cancelación).
+//  · opts.toast / opts.okToast — textos propios (el vectorial dice si el color va a la línea o al relleno).
+// v41.84: solo puede haber UN cuentagotas armado a la vez — armar otro (o volver a pulsar 💧) cancela el anterior en
+// vez de apilar escuchas — y se puede cancelar por código con la función que devuelve / con _edEyeCancel()
+// (p.ej. al pulsar OK). La tecla Escape ya no se «gasta» con la primera tecla cualquiera.
+let _edEyeCancel = null;
+function _edStartEyedrop(onPick, onDone, opts) {
   const canvas = edCanvas;
-  if (!canvas) return;
+  if (!canvas) return null;
+  if (_edEyeCancel) _edEyeCancel(true);   // uno solo armado
 
   // Opacidad al 100% mientras el cuentagotas está activo
   window._edEyedropActive = true;
@@ -35322,15 +35496,31 @@ function _edStartEyedrop(onPick, onDone) {
 
   // Indicador visual: cambiar cursor y mostrar toast
   canvas.style.cursor = 'crosshair';
-  edToast(I18n.t('ed_tapColorToCopy'));
+  edToast((opts && opts.toast) || I18n.t('ed_tapColorToCopy'));
 
   // Usar AbortController para limpiar tras el primer sample
   const ac = new AbortController();
   const sig = { signal: ac.signal };
-
-  function sampleAt(clientX, clientY) {
+  let finished = false;
+  // Cierre común: true la primera vez (quien llama sigue), false si ya estaba cerrado
+  const finish = () => {
+    if (finished) return false;
+    finished = true;
     ac.abort(); // un solo disparo
     canvas.style.cursor = '';
+    if (_edEyeCancel === cancel) _edEyeCancel = null;
+    return true;
+  };
+  function cancel(silent) {
+    if (!finish()) return;
+    window._edEyedropActive = false; edRedraw();
+    if (silent !== true) edToast(I18n.t('ed_eyedropCanceled'));
+    if (onDone) onDone();
+  }
+  _edEyeCancel = cancel;
+
+  function sampleAt(clientX, clientY) {
+    if (!finish()) return;
 
     // Leer pixel ANTES de restaurar el dimming — el canvas aún está al 100%
     const rect = canvas.getBoundingClientRect();
@@ -35358,7 +35548,8 @@ function _edStartEyedrop(onPick, onDone) {
       _edUpdatePaletteDots();
       _edbSyncColor();
     }
-    edToast(I18n.t('ed_colorCopied'));
+    const okt = opts && opts.okToast;   // texto, o función que lo calcula tras aplicar el color
+    edToast((typeof okt === 'function' ? okt() : okt) || I18n.t('ed_colorCopied'));
     if (onDone) onDone();
   }
 
@@ -35367,15 +35558,21 @@ function _edStartEyedrop(onPick, onDone) {
     sampleAt(e.clientX, e.clientY);
   }, { ...sig, once: true });
 
-  // Cancelar con Escape o tocando fuera del canvas
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') {
-      ac.abort(); canvas.style.cursor = '';
-      window._edEyedropActive = false; edRedraw();
-      edToast(I18n.t('ed_eyedropCanceled'));
-      if (onDone) onDone();
-    }
-  }, { ...sig, once: true });
+  // Cancelar con Escape (la señal de aborto retira este escucha al terminar)
+  if (opts && opts.exclusiveEsc) {
+    // v41.84 (cuentagotas vectorial): fase de CAPTURA y se corta la propagación → Escape solo cancela el cuentagotas;
+    // el atajo global de Escape (cerrar el panel y deseleccionar el objeto) ya no se ejecuta además.
+    window.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      cancel();
+    }, { capture: true, signal: ac.signal });
+  } else {
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') cancel();
+    }, sig);
+  }
+  return cancel;
 }
 
 /* ── CÁMARA IN-APP (getUserMedia) ── */
@@ -36954,10 +37151,15 @@ function EditorView_init(){
   });
 
   // ── POLÍGONOS (desde menú Insertar) ──
-  function _esbActivate(shapeType, lineType) {
+  function _esbActivate(shapeType, lineType, keepStyle) {
     edCloseMenus();
+    // v41.85: pasar a rectángulo/elipse con un polígono a medias lo confirma (≥2 puntos) o lo descarta (antes quedaba «vivo»)
+    if (shapeType && _edLineLayer) _edFinishLine();
     edSelectedIdx = -1;
     edDrawFillColor = '#ffffff';
+    // v41.84: al ENTRAR en dibujo vectorial los objetos nuevos nacen sin relleno y el destino del cuentagotas es la
+    // línea; si solo se cambia de herramienta dentro de la sesión (popup de la barra) se conserva lo elegido.
+    if (!keepStyle) _edVecResetNewStyle();
     // Si hay sesión vectorial activa (objetos ya creados), preservarla al cambiar de modo
     const _esbContSession = _vsHistory.length > 0;
     // Grosor de línea siempre a 2px al entrar en dibujo vectorial DE NUEVO
@@ -37006,7 +37208,9 @@ function EditorView_init(){
     const shapesBtn = $('esb-shapes');
     if(shapesBtn) shapesBtn.innerHTML = _esbGetActiveIcon();
     $('esb-fill')?.classList.toggle('active', t === 'fill');
-    const sw = $('esb-color'); if(sw) sw.style.background = edDrawColor;
+    // v41.84: antes pintaba aquí la muestra de línea con edDrawColor aunque hubiera un objeto seleccionado con otro
+    // color (y pisaba lo que acababa de poner _esbSync). Ahora una sola función decide las muestras de la barra.
+    _esbSync();
   }
   // Expuesta globalmente: edMinimize necesita re-sincronizar el icono de la
   // barra flotante con la herramienta activa al colapsar el panel.
@@ -37037,26 +37241,27 @@ function EditorView_init(){
   }
 
   // Handlers: usan _esbActivate exactamente igual que los botones del menú Insertar original
+  // (3.er parámetro true: cambio de herramienta DENTRO de la sesión → se conserva el estilo del próximo objeto)
   $('esb-shape-rect')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _esbClosePop();
-    _esbActivate('rect');
+    _esbActivate('rect', undefined, true);
     _esbSyncTool();
   });
   $('esb-shape-ellipse')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _esbClosePop();
-    _esbActivate('ellipse');
+    _esbActivate('ellipse', undefined, true);
     _esbSyncTool();
   });
   $('esb-shape-line')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _esbClosePop();
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
-    _esbActivate(null, 'draw');
+    _esbActivate(null, 'draw', true);
     _esbSyncTool();
   });
   $('esb-shape-segment')?.addEventListener('pointerup', e => {
     e.stopPropagation(); _esbClosePop();
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
-    _esbActivate(null, 'segment');
+    _esbActivate(null, 'segment', true);
     _esbSyncTool();
   });
   $('esb-shape-select')?.addEventListener('pointerup', e => {
@@ -37106,10 +37311,15 @@ function EditorView_init(){
   });
   // ── OK: igual que op-draw-ok pero cierra edShapeBar ──
   $('esb-ok')?.addEventListener('click', () => {
-    if(edActiveTool === 'line' && _edLineLayer) _edFinishLine();
+    if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al OK
+    // v41.85: un polígono a medias se confirma (≥2 puntos) o se descarta SIEMPRE, sea cual sea la herramienta activa. Antes solo con la
+    // herramienta polígono: si se había cambiado a rectángulo/elipse quedaba «vivo» y, ya fuera de la edición, bloqueaba toda selección.
+    if(_edLineLayer) _edFinishLine();
+    _edVecResetNewStyle();               // v41.84: el estilo del próximo objeto vuelve a su valor de partida
     _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
-    edShapeBarHide();
-    edCloseOptionsPanel();
+    edCloseOptionsPanel();               // v41.85: primero el panel (le quita «plegado»)…
+    edShapeBarHide(true);                // …y la barra se oculta SIEMPRE (con el panel plegado, edShapeBarHide() sin force no hacía nada)
+    window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false;
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
     _edDrawUnlockUI();
@@ -37827,7 +38037,11 @@ function EditorView_init(){
           _edDrawUnlockUI();
         }
         edCloseOptionsPanel();
-        edSelectedIdx=-1; edRedraw();
+        edSelectedIdx=-1;
+        // v41.85: salir de la edición vectorial con Escape deja la interfaz como al salir con OK (visible y reencuadrada);
+        // antes, con la interfaz oculta (OCULTAR) o el panel plegado, quedaba la barra flotante «fantasma» en pantalla.
+        if(mode === 'shape' || mode === 'line'){ if(edMinimized) edMaximize(); else edFitCanvas(); }
+        edRedraw();
         return;
       }
     }
@@ -49878,6 +50092,30 @@ async function _edRunDiag() {
     } catch(_) {}
   }
   L('Proyecto: ' + edProjectId + ' | Versión: ' + _edDiagVersion);
+
+  // ── v41.85 — EDICIÓN VECTORIAL Y SELECCIÓN: las tres cosas que, si quedan «vivas», impiden seleccionar nada del lienzo ──
+  L('');
+  L('── EDICIÓN VECTORIAL Y SELECCIÓN (por qué el lienzo podría no dejar seleccionar) ──');
+  try {
+    const _dp = document.getElementById('edOptionsPanel'), _db = document.getElementById('edShapeBar'), _dt = document.getElementById('edPanelTab');
+    const _dMode = _dp ? (_dp.dataset.mode || '—') : '(sin panel)';
+    const _dCls = _dp ? (['open', 'panel-collapsed'].filter(c => _dp.classList.contains(c)).join('+') || 'cerrado') : '—';
+    const _dBar = !!(_db && _db.classList.contains('visible'));
+    const _dVecMode = !!(_dp && (_dp.dataset.mode === 'line' || _dp.dataset.mode === 'shape'));
+    L('  «editando vectorial» (bloquea seleccionar otros objetos) = ' + ((_dVecMode || _dBar || _edLineLayer) ? 'SÍ' : 'no') +
+      '  ← modo línea/forma del panel: ' + (_dVecMode ? 'sí' : 'no') + ' · barra flotante visible: ' + (_dBar ? 'sí' : 'no') +
+      ' · polígono a medias: ' + (_edLineLayer ? 'sí (' + _edLineLayer.points.length + ' pts)' : 'no'));
+    L('  panel: modo=' + _dMode + ' · estado=' + _dCls + ' · pestaña ▼ visible=' + !!(_dt && _dt.classList.contains('visible')) +
+      ' · herramienta=' + edActiveTool + ' · NODOS=' + (_edCurveModeActive() ? 'sí' : 'no'));
+    L('  interfaz minimizada=' + !!edMinimized + ' (modo guardado=' + (window._edMinimizedDrawMode || '—') + ', plegado guardado=' + !!window._edMinimizedCollapsed + ')');
+    L('  sesión vectorial: historial=' + _vsHistory.length + ' · objetos previos bloqueados=' + _vsPreSessionLayers.size + ' · cuentagotas armado=' + (_edEyeCancel ? 'sí' : 'no'));
+    const _dPtr = window._edActivePointers ? [...window._edActivePointers.keys()] : [];
+    L('  dedos registrados (_edActivePointers)=' + _dPtr.length + (_dPtr.length ? ' [' + _dPtr.join(',') + '] ← con la pantalla sin tocar, el siguiente toque contaría como pinch' : '') + ' · pinch en curso=' + !!edPinching);
+    L('  selección: edSelectedIdx=' + edSelectedIdx + ' · multiselección=' + edMultiSel.length + ' · hoja ' + (edCurrentPage + 1) + ' con ' + edLayers.length + ' objetos');
+    const _dHeal = window._edVecHealLog || [];
+    L('  restos de edición vectorial limpiados por la red de seguridad (' + _dHeal.length + '):' + (_dHeal.length ? '' : ' ninguno'));
+    _dHeal.forEach(h => L('    [' + h.at + '] ' + h.what + ' (herramienta=' + h.tool + ')'));
+  } catch (_ve) { L('  (error al leer el estado: ' + (_ve && _ve.message || _ve) + ')'); }
 
   // ── v41.77 — CALIDAD DE DIBUJOS: píxeles, colocación, atenuado y pantalla de cada trazo (ver _edDrawingQualityReport) ──
   L('');

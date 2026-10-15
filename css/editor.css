@@ -681,6 +681,11 @@ body.ed-scale-tablet {
   touch-action: manipulation; /* evita el zoom nativo por doble-tap en el swatch */
 }
 .edb-swatch:active { transform: scale(.88); }
+/* v41.84 — muestra de la barra vectorial marcada como destino del cuentagotas (línea o relleno): anillo blanco */
+.edb-swatch.edb-target {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.8), 0 1px 3px rgba(0,0,0,.3);
+}
 
 /* OK / ocultar barra de dibujo — mismo tamaño que edMinimizeBtn */
 .edb-ok {
