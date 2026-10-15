@@ -1368,6 +1368,30 @@ function _edFastTouchArmStart(){
     _edFastTouchArmed = false; _edFastTouchSnap = null; _edFastTouchTimer = null;
   }, _ED_FAST_TOUCH_MS);
 }
+// ── v41.88 — TRAZOS RÁPIDOS: CURVOS, NO POLIGONALES ───────────────────────────────────────────────
+// Alberto: «cuando se realiza un trazado rápido con las herramientas de dibujo a mano debería ser completamente curvo, sin
+// embargo se crean rectas … con pencil, con el cursor COF o con gestos … en tiempo real … suavizado mínimo».
+// CAUSA: el navegador entrega UN pointermove por frame (≈60 Hz). A mano alzada rápida dos muestras consecutivas quedan a 20-40 px
+//   y DrawLayer.continueStroke las unía con rectas → polígono. Además, fuera del cursor COF se descartaban las muestras
+//   intermedias que el navegador agrupa en el mismo evento (PointerEvent.getCoalescedEvents).
+// SOLUCIÓN — la técnica estándar de la industria, SIN postproceso (lo ya pintado nunca cambia: el trazo en vivo ES el final):
+//   1) usar TODAS las muestras del frame → _edPaintMoveCoalesced (trazo normal) y _cofHandleMove (cursor COF);
+//   2) unir las muestras con curvas Bézier cuadráticas por los PUNTOS MEDIOS (Fabric.js PencilBrush, perfect-freehand, tldraw,
+//      Excalidraw): cada muestra P_i es el punto de control de la curva que va de medio(P_{i-1},P_i) a medio(P_i,P_{i+1}).
+//      Continuidad C1 (sin esquinas), O(1) por muestra, y la deformación es la mínima posible: la curva sólo se separa de la
+//      muestra ≈ ¼ de lo que esa muestra se desvía del punto medio de sus vecinas (con muestras cada pocos px, nada);
+//   3) al soltar se remata el último medio tramo con una recta hasta la última muestra (_edSmFinish → DrawLayer.finishStroke).
+// DrawLayer.beginBatch()/endBatch() agrupan las muestras de un frame en UN solo trazado: con opacidad < 100 % cada trazado suelto
+// solapa sus extremos redondos con el anterior y acumula alfa — un trazado por frame deja el alfa como estaba.
+let _edSmActive = null; // DrawLayer con un trazo en curso (para rematar su último medio tramo al soltar)
+function _edSmFinish(){ // fin normal del trazo
+  const d = _edSmActive; _edSmActive = null;
+  if(d && d.finishStroke && d.finishStroke()){ try{ edRedraw(); }catch(_){} }
+}
+function _edSmDiscard(){ // trazo abortado (un 2.º dedo lo revirtió): olvidar el estado sin pintar nada
+  const d = _edSmActive; _edSmActive = null;
+  if(d && d.discardStroke) d.discardStroke();
+}
 // El trazo terminó con normalidad (mismo dedo levantado, sin gesto): conservarlo.
 function _edFastTouchConfirm(){
   _edFastTouchArmed = false;
@@ -1376,6 +1400,7 @@ function _edFastTouchConfirm(){
 }
 // Llegó un 2º dedo dentro de la ventana: era un gesto — revertir el trazo.
 function _edFastTouchCancel(){
+  _edSmDiscard(); // v41.88: el trazo se revierte → que no quede la punta del suavizado pendiente de rematar
   if(_edFastTouchSnap){
     try { _edFastTouchSnap.ctx.putImageData(_edFastTouchSnap.data, 0, 0); edRedraw(); } catch(_){}
   }
@@ -3376,6 +3401,12 @@ class DrawLayer extends BaseLayer {
     this._gcStartX = undefined; this._gcStartY = undefined;
     this._gcEndX   = undefined; this._gcEndY   = undefined;
     this._gcStrokeSize = 4;
+    // v41.88 — suavizado en tiempo real del trazo (ver el bloque «TRAZOS RÁPIDOS» junto a _edSmActive).
+    // P = última muestra (this._lastX/_lastY) · M = «punta» ya pintada = punto medio del último tramo · _smPX/_smPY = la P con la
+    // que M está sincronizada (si alguien mueve _lastX/_lastY por fuera, se detecta y M se reinicia) · _smSty = estilo del último
+    // tramo (para el remate) · _bt = tramos del lote abierto, aún sin pintar.
+    this._smX = undefined; this._smY = undefined; this._smPX = undefined; this._smPY = undefined;
+    this._smSty = null; this._bt = null; this._btOpen = false;
   }
   static fromDataUrl(dataUrl, pw, ph){
     const dl = new DrawLayer();
@@ -3449,6 +3480,9 @@ class DrawLayer extends BaseLayer {
     this._gcDirty = false;
     this._gcStartX = undefined; this._gcStartY = undefined;
     this._gcEndX   = undefined; this._gcEndY   = undefined;
+    this._smX = undefined; this._smY = undefined; this._smPX = undefined; this._smPY = undefined; // v41.88
+    this._smSty = null; this._bt = null; this._btOpen = false;
+    if(_edSmActive === this) _edSmActive = null;
   }
   // Coordenadas en workspace (px absoluto dentro del canvas de trabajo)
   _wsCoords(nx, ny){
@@ -3496,11 +3530,111 @@ class DrawLayer extends BaseLayer {
     }
     this._ctx.restore(); this._ctx.globalCompositeOperation='source-over';
     this._lastX=x; this._lastY=y;
+    this._smReset(x, y); // v41.88
   }
   // Como beginStroke pero sin dibujar el punto inicial — para cursor offset
   beginStrokeNoDot(nx, ny){
     const {x,y} = this._wsCoords(nx, ny);
     this._lastX=x; this._lastY=y;
+    this._smReset(x, y); // v41.88
+  }
+  // ── v41.88 — suavizado en tiempo real (curvas cuadráticas por puntos medios; ver «TRAZOS RÁPIDOS» junto a _edSmActive) ──
+  _smReset(x, y){
+    if(_edSmActive && _edSmActive !== this) _edSmActive.discardStroke(); // trazo anterior abandonado en OTRA capa: olvidarlo
+    if(_edSmActive === this) _edSmActive = null;
+    this._smX = x; this._smY = y; this._smPX = x; this._smPY = y;
+    this._smSty = null; this._bt = null; this._btOpen = false;
+  }
+  // Agrupa lo que se pinte con continueStroke() hasta endBatch() en UN solo trazado (una vez por frame).
+  beginBatch(){ this._btOpen = true; }
+  endBatch(){ this._btOpen = false; this._btFlush(); }
+  // Añade un tramo (curva A → B con punto de control C) al lote; fuera de un lote se pinta al instante.
+  // Un cambio de color / opacidad / herramienta cierra el lote; un cambio de grosor (presión del lápiz) NO: el lote usa el último grosor.
+  _smAdd(ax, ay, cx, cy, ex, ey, color, size, eraser, alpha, kind){
+    let b = this._bt;
+    if(b && (b.kind !== kind || b.alpha !== alpha || b.eraser !== eraser || b.color !== color)){ this._btFlush(); b = null; }
+    if(!b){
+      b = this._bt = { kind, color, size, alpha, eraser, path: null, pcs: null };
+      if(kind === 'pencil') b.pcs = []; else { b.path = new Path2D(); b.path.moveTo(ax, ay); }
+    }
+    b.size = size;
+    if(kind === 'pencil') b.pcs.push(ax, ay, cx, cy, ex, ey); else b.path.quadraticCurveTo(cx, cy, ex, ey);
+    if(!this._btOpen) this._btFlush();
+  }
+  _btFlush(){
+    const b = this._bt; if(!b) return; this._bt = null;
+    const ctx = this._ctx;
+    ctx.save();
+    if(b.kind === 'pencil'){
+      this._smStamp(b);
+    } else {
+      ctx.globalAlpha = b.alpha;
+      ctx.globalCompositeOperation = b.eraser ? 'destination-out' : 'source-over';
+      ctx.strokeStyle = b.eraser ? 'rgba(0,0,0,1)' : b.color;
+      ctx.lineWidth = b.size; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.stroke(b.path);
+    }
+    ctx.restore(); ctx.globalCompositeOperation = 'source-over';
+  }
+  // Lápiz de grafito: las «fibras» se reparten a lo largo de la CURVA con la misma densidad de siempre
+  // (pasos = longitud / (0.15·grosor), calculada sobre el conjunto del frame, no tramo a tramo: así un frame con varias muestras
+  // no queda más oscuro que antes) y con el mismo ruido aleatorio.
+  _smStamp(b){
+    const ctx = this._ctx, size = b.size, color = b.color, pcs = b.pcs;
+    // 1) aplanar las curvas en una poligonal fina
+    const px = [pcs[0]], py = [pcs[1]];
+    for(let i = 0; i < pcs.length; i += 6){
+      const ax = pcs[i], ay = pcs[i+1], cx = pcs[i+2], cy = pcs[i+3], ex = pcs[i+4], ey = pcs[i+5];
+      const L = (Math.hypot(ex-ax, ey-ay) + Math.hypot(cx-ax, cy-ay) + Math.hypot(ex-cx, ey-cy)) / 2;
+      const n = Math.max(1, Math.min(12, Math.ceil(L / 3)));
+      for(let k = 1; k <= n; k++){
+        const t = k / n, u = 1 - t;
+        px.push(u*u*ax + 2*u*t*cx + t*t*ex); py.push(u*u*ay + 2*u*t*cy + t*t*ey);
+      }
+    }
+    // 2) longitud acumulada
+    const cum = [0];
+    for(let i = 1; i < px.length; i++) cum.push(cum[i-1] + Math.hypot(px[i]-px[i-1], py[i]-py[i-1]));
+    const dist = cum[cum.length-1] || 1;
+    // 3) reparto de las fibras (misma fórmula que el segmento recto de antes)
+    const steps = Math.max(1, Math.round(dist / (size*0.15)));
+    const _cAlpha = b.alpha * 0.18;
+    const fibers = Math.max(2, Math.round(size * 0.7));
+    ctx.globalCompositeOperation = 'source-over';
+    let seg = 1;
+    for(let s = 0; s <= steps; s++){
+      const target = dist * s / steps;
+      while(seg < cum.length - 1 && cum[seg] < target) seg++;
+      const c0 = cum[seg-1], c1 = cum[seg], f = c1 > c0 ? (target - c0) / (c1 - c0) : 0;
+      const bx = px[seg-1] + (px[seg] - px[seg-1]) * f;
+      const by = py[seg-1] + (py[seg] - py[seg-1]) * f;
+      for(let i = 0; i < fibers; i++){
+        const jx = bx + (Math.random()-0.5)*size*0.65;
+        const jy = by + (Math.random()-0.5)*size*0.65;
+        const r  = size * (0.06 + Math.random()*0.16);
+        ctx.globalAlpha = _cAlpha * (0.4 + Math.random()*0.6);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(jx,jy,r,0,Math.PI*2); ctx.fill();
+      }
+    }
+  }
+  // Remata el último medio tramo (de la punta M a la última muestra P) con una recta: el trazo acaba EXACTAMENTE donde acabó el dedo.
+  // Devuelve true si pintó algo.
+  finishStroke(){
+    this._btOpen = false; this._btFlush();
+    const st = this._smSty; this._smSty = null;
+    if(!st || this._smX === undefined) return false;
+    if(this._smPX !== this._lastX || this._smPY !== this._lastY) return false; // alguien movió la última muestra por fuera: nada que rematar
+    const ax = this._smX, ay = this._smY, ex = this._lastX, ey = this._lastY;
+    if(ax === ex && ay === ey) return false;
+    this._smAdd(ax, ay, (ax + ex) / 2, (ay + ey) / 2, ex, ey, st.color, st.size, st.eraser, st.alpha, st.kind); // sin lote abierto → se pinta ya
+    this._smX = ex; this._smY = ey;
+    return true;
+  }
+  // Trazo abortado (revertido): se olvida el estado sin pintar nada.
+  discardStroke(){
+    this._btOpen = false; this._bt = null; this._smSty = null;
+    this._smX = this._lastX; this._smY = this._lastY; this._smPX = this._lastX; this._smPY = this._lastY;
   }
   continueStroke(nx, ny, color, size, isEraser, opacity, clipR){
     const {x,y} = this._wsCoords(nx, ny);
@@ -3517,6 +3651,25 @@ class DrawLayer extends BaseLayer {
       if (size > (this._gcStrokeSize || 0)) this._gcStrokeSize = size;
     }
     const alpha = (opacity ?? 100) / 100;
+    if(!(clipR > 0)){
+      // v41.88 — curva Bézier cuadrática por puntos medios (ver «TRAZOS RÁPIDOS» junto a _edSmActive).
+      if(this._smX === undefined || this._smPX !== this._lastX || this._smPY !== this._lastY){
+        // sin punta sincronizada (trazo sin beginStroke, o _lastX/_lastY movidos por fuera): arrancar la punta en la última muestra
+        this._smX = this._lastX; this._smY = this._lastY;
+      }
+      const px = this._lastX, py = this._lastY;       // P: muestra anterior (punto de control)
+      const mx = (px + x) / 2, my = (py + y) / 2;     // M': punto medio nuevo (fin de este tramo)
+      const eraser = !!isEraser;
+      const kind = eraser ? 'eraser' : ((typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? 'pencil' : 'pen');
+      this._smAdd(this._smX, this._smY, px, py, mx, my, color, size, eraser, alpha, kind);
+      this._smX = mx; this._smY = my;
+      this._lastX = x; this._lastY = y; this._smPX = x; this._smPY = y;
+      this._smSty = { color, size, eraser, alpha, kind };
+      _edSmActive = this;
+      return;
+    }
+    // Ruta antigua (recta con recorte circular): sólo la usaba el cursor desplazado anterior al COF (hoy inalcanzable).
+    this._smSty = null;
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     if(isEraser){
@@ -15273,6 +15426,7 @@ function edOnStart(e){
       // dibujando, era el inicio de un gesto de 2 dedos, no un trazo — revertir
       // los píxeles al estado justo anterior al primer punto.
       if(_edFastTouchArmed) _edFastTouchCancel();
+      _edSmFinish(); // v41.88: si el trazo se conserva (ya consolidado), se remata su punta; si se revirtió, ya no queda nada que rematar
       edPainting = false;
       // Resetear _lastX/_lastY del DrawLayer para que el siguiente trazo
       // arranque limpio (evita el bug del "solo un punto" post-pinch).
@@ -17422,7 +17576,7 @@ function edOnMove(e){
   // Si estamos pintando activamente, el pinch ya terminó — limpiar flag y continuar trazo
   if(_edPinchHappened && edPainting) _edPinchHappened = false;
   if(_edPinchHappened) return; // hubo pinch — ignorar movimiento del dedo que queda
-  if(['draw','eraser'].includes(edActiveTool)&&edPainting){edContinuePaint(e);return;}
+  if(['draw','eraser'].includes(edActiveTool)&&edPainting){_edPaintMoveCoalesced(e);return;}
   if(edActiveTool==='fill'){
     if(edPainting && _edDodgeBurnActive){
       // Dodge/burn: trazo continuo — solo modifica luminosidad, no pinta color
@@ -20919,42 +21073,54 @@ function _cofHandleMove(e) {
     // getCoalescedEvents(): recuperar los puntos intermedios que el browser consolidó.
     // Sin esto, si el hilo JS estuvo ocupado, el browser entrega solo el punto final
     // y continueStroke dibuja una recta desde el último punto hasta ahí.
-    const _ces = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    // v41.88: si el navegador devolviera una lista vacía se usa el propio evento (antes no se pintaba nada).
+    let _ces = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+    if (!_ces || !_ces.length) _ces = [e];
     const _er = edActiveTool === 'eraser';
     const _sz = _er ? edEraserSize : edDrawSize;
     const _radM = _edCursorOffsetAngle * Math.PI / 180;
+    // v41.88: pen/pencil/goma → todas las muestras del frame en UN trazado (ver _edPaintMoveCoalesced); la última no repinta
+    // (se repinta una vez al cerrar el lote). Con la herramienta fill (acuarela / iluminar-oscurecer) todo sigue como antes.
+    const _dlB = (edActiveTool !== 'fill') ? _edTmpProxy() : null;
+    if (_dlB && _dlB.beginBatch) _dlB.beginBatch();
+    let _drewB = false;
+    try {
+      for (let _ci = 0; _ci < _ces.length; _ci++) {
+        const _ce = _ces[_ci];
+        // Calcular delta desde la posición REAL anterior del dedo
+        const _refX = _cof._prevTx ?? _cof.touchX;
+        const _refY = _cof._prevTy ?? _cof.touchY;
+        _cof._prevTx = _ce.clientX; _cof._prevTy = _ce.clientY;
+        _cof.cursorX += _ce.clientX - _refX;
+        _cof.cursorY += _ce.clientY - _refY;
+        _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
+        _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radM);
 
-    for (let _ci = 0; _ci < _ces.length; _ci++) {
-      const _ce = _ces[_ci];
-      // Calcular delta desde la posición REAL anterior del dedo
-      const _refX = _cof._prevTx ?? _cof.touchX;
-      const _refY = _cof._prevTy ?? _cof.touchY;
-      _cof._prevTx = _ce.clientX; _cof._prevTy = _ce.clientY;
-      _cof.cursorX += _ce.clientX - _refX;
-      _cof.cursorY += _ce.clientY - _refY;
-      _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radM);
-      _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radM);
-
-      const _synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
-                       pointerType: 'touch', pointerId: e.pointerId, touches: null };
-      if (_ci < _ces.length - 1) {
-        // Punto intermedio: trazar sin redraw.
-        // Herramienta fill (acuarela / dodge-burn): solo acumular el delta del cursor;
-        // el trazo real se aplica ÚNICAMENTE en el último evento (via edContinuePaint).
-        // Razón: los eventos coalescidos intermedios generan trazados incorrectos para
-        // estas herramientas — se restaura el comportamiento de v31_52.
-        if (edActiveTool === 'fill') continue;
-        // Herramienta normal (pen/pencil/eraser): pintar directamente sin redraw
-        const _dlC = _edTmpProxy();
-        if (_dlC) {
-          const _cC = edCoords(_synth);
-          _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
+        const _synth = { clientX: _cof.cursorX, clientY: _cof.cursorY,
+                         pointerType: 'touch', pointerId: e.pointerId, touches: null };
+        if (_ci < _ces.length - 1) {
+          // Punto intermedio: trazar sin redraw.
+          // Herramienta fill (acuarela / dodge-burn): solo acumular el delta del cursor;
+          // el trazo real se aplica ÚNICAMENTE en el último evento (via edContinuePaint).
+          // Razón: los eventos coalescidos intermedios generan trazados incorrectos para
+          // estas herramientas — se restaura el comportamiento de v31_52.
+          if (edActiveTool === 'fill') continue;
+          // Herramienta normal (pen/pencil/eraser): pintar directamente sin redraw
+          const _dlC = _edTmpProxy();
+          if (_dlC) {
+            const _cC = edCoords(_synth);
+            _dlC.continueStroke(_cC.nx, _cC.ny, edDrawColor, _sz, _er, edDrawOpacity, 0);
+            _drewB = true;
+          }
+        } else {
+          // Último punto: trazo + redraw completo (con lote: el redraw se hace una vez, tras cerrarlo)
+          if (edContinuePaint(_synth, !!_dlB)) _drewB = true;
         }
-      } else {
-        // Último punto: trazo + redraw completo
-        edContinuePaint(_synth);
       }
+    } finally {
+      if (_dlB && _dlB.endBatch) _dlB.endBatch();
     }
+    if (_dlB && _drewB) edRedraw();
     _cofDraw(); // actualizar posición visual del cursor COF una sola vez
   }
 }
@@ -21794,7 +21960,34 @@ function edStartPaint(e){
   }
   if(!e._skipMoveBrush) edMoveBrush(e);
 }
-function edContinuePaint(e){
+// v41.88 — un pointermove con TODAS sus muestras. El navegador entrega un solo evento por frame aunque el dedo/lápiz haya pasado
+// por varios puntos; usar sólo el último convertía un trazo rápido en una poligonal de tramos largos. PointerEvent.getCoalescedEvents()
+// devuelve todas (el último elemento es el propio evento). Se pintan sin repintar la pantalla, agrupadas en UN trazado
+// (beginBatch/endBatch) y se repinta una sola vez al final — mismo coste de pantalla que antes.
+function _edPaintMoveCoalesced(e){
+  let ces = null;
+  try{ ces = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null; }catch(_){ ces = null; }
+  if(!ces || ces.length < 2){ edContinuePaint(e); return; } // 0 ó 1 muestra: el camino de siempre
+  const dl = _edTmpProxy();
+  if(dl && dl.beginBatch) dl.beginBatch();
+  let drew = false;
+  try{
+    for(let i = 0; i < ces.length; i++){
+      if(!edPainting) break; // p. ej. el lápiz levantó (presión baja / sin contacto) a mitad del frame
+      if(edContinuePaint(ces[i], true)) drew = true;
+    }
+    // Por contrato la lista termina en el propio evento; por si algún navegador no lo incluyera, se añade si difiere.
+    const _l = ces[ces.length - 1];
+    if(edPainting && _l && (_l.clientX !== e.clientX || _l.clientY !== e.clientY) && edContinuePaint(e, true)) drew = true;
+  } finally {
+    if(dl && dl.endBatch) dl.endBatch();
+  }
+  if(drew) edRedraw();
+  edMoveBrush(e);
+}
+// _noRender (v41.88): pinta la muestra pero NO repinta la pantalla ni mueve el cursor del pincel — lo hace quien llama, una vez por frame.
+// Devuelve true si pintó un tramo en la capa de dibujo.
+function edContinuePaint(e, _noRender){
   if(!edPainting) return;
   if (edActiveTool === 'color-erase') {
     const _cCE2 = edCoords(e); _edColorErase(_cCE2.nx, _cCE2.ny); edRedraw(); return;
@@ -21837,7 +22030,7 @@ function edContinuePaint(e){
         }, 250);
       }
       // No dibujar en este evento — esperar a que suba la presión o expire el timer
-      edMoveBrush(e);
+      if(!_noRender) edMoveBrush(e);
       return;
     }
   }
@@ -21852,8 +22045,8 @@ function edContinuePaint(e){
   if(_cof.on && isTouch){
     const _sz = er ? edEraserSize : edDrawSize;
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sz, er, edDrawOpacity, 0);
-    edRedraw();
-    return;
+    if(!_noRender) edRedraw();
+    return true;
   }
 
   if(_edOffsetFirstMove){
@@ -21868,8 +22061,8 @@ function edContinuePaint(e){
     const _sizeCS = Math.max(1, Math.round(_baseC * _pres));
     dl.continueStroke(c.nx, c.ny, edDrawColor, _sizeCS, er, edDrawOpacity, _cr4c);
   }
-  edRedraw();
-  edMoveBrush(e);
+  if(!_noRender){ edRedraw(); edMoveBrush(e); }
+  return true;
 }
 // Cierre de huecos para la capa de tinta (pen/estilografo).
 // Escanea SOLO DOS VENTANAS PEQUENAS: una alrededor del inicio del trazo
@@ -21970,6 +22163,7 @@ function _edCloseInkGapsInRegion(dl, x0, y0, x1, y1) {
 }
 
 function edSaveDrawData(){
+  _edSmFinish(); // v41.88: remata el último medio tramo del trazo suavizado ANTES de empujar nada al historial
   _edPenPendingStroke = null;
   _edFastTouchConfirm(); // el trazo terminó con normalidad: no revertir
   if(_edPenLowPressureTimer){ clearTimeout(_edPenLowPressureTimer); _edPenLowPressureTimer = null; }
@@ -24063,20 +24257,14 @@ function _edPickColor(e, initialHex, onInput, onCommit){
       if(commit) onCommit(hex);
     });
   } else {
-    const inp=document.createElement('input');
-    inp.type='color'; inp.value=initialHex;
-    inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
-    document.body.appendChild(inp);
-    // Activar inmediatamente (antes del click) — el focus no siempre se dispara en Chrome
-    window._edEyedropActive = true; edRedraw();
-    inp.addEventListener('input', ev=>onInput(ev.target.value));
-    inp.addEventListener('change', ()=>{
-      window._edEyedropActive = false; edRedraw();
-      onCommit(inp.value); inp.remove();
-    });
-    // Fallback: si se cierra sin cambiar color (Escape), restaurar tras breve espera
-    inp.addEventListener('blur', ()=>{ setTimeout(()=>{ window._edEyedropActive=false; edRedraw(); }, 200); });
-    inp.click();
+    // v41.87 — PC: ventana de color propia y centrada (antes: input type=color oculto cuyo popup nativo salía pegado
+    // a la esquina superior izquierda). Mismo contrato que tenía el popup: onInput en vivo (y al cancelar, con el color
+    // de partida, que lo deja todo como estaba) y onCommit solo si se ACEPTA un color distinto del de partida — así
+    // «Aceptar» sin tocar nada, o cancelar, no añaden pasos al historial.
+    _edShowColorPickerPC((hex, commit, accepted)=>{
+      onInput(hex);
+      if(commit && accepted && String(hex).toLowerCase() !== String(initialHex).toLowerCase()) onCommit(hex);
+    }, initialHex);
   }
 }
 
@@ -24306,6 +24494,9 @@ function _edVecWireColors(pfx, getLayer){
 // initialColor: color de partida del picker (por defecto edDrawColor).
 // El botón Cancelar restaura _startColor, no el edDrawColor modificado en tiempo real.
 function _edShowColorPicker(onColorChange, initialColor){
+  // v41.87 — PC: ventana de color propia y centrada (_edShowColorPickerPC). Táctil: este selector HSL, como siempre.
+  if(!window._edIsTouch) return _edShowColorPickerPC(onColorChange, initialColor);
+  if(typeof _edColorWinClose === 'function') _edColorWinClose(false, true);   // (equipo híbrido que pasa del ratón al dedo)
   document.getElementById('ed-hsl-picker')?.remove();
   const _startColor = initialColor || edDrawColor;
   let [h,s,l] = _hexToHsl(_startColor);
@@ -24369,6 +24560,314 @@ function _edShowColorPicker(onColorChange, initialColor){
   overlay.addEventListener('touchstart',  e=>e.stopPropagation(), {passive:true, capture:true});
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// v41.87 — VENTANA DE COLOR DE PC
+// En PC el selector de color era el popup NATIVO del navegador (input type=color oculto, sin posición): Chrome ancla ese
+// popup al propio input, y un input oculto de 0×0 sin coordenadas está en la esquina superior izquierda — de ahí que
+// saliera pegado a ella. El popup nativo no se puede incrustar ni mover desde la página, así que se sustituye por una
+// ventana de la app (misma cabecera amarilla y borde negro que Capas/Hojas), centrada y arrastrable por la cabecera,
+// con lo mismo que daba el popup: plano saturación/brillo, tono, HEX, RGB y cuentagotas de pantalla (API EyeDropper,
+// solo si el navegador la tiene). Se usa desde TODOS los flujos de «color personalizado» de PC: _edShowColorPicker
+// la elige solo cuando el dispositivo no es táctil. En táctil sigue el selector HSL de siempre.
+//
+// Contrato (el mismo de _edShowColorPicker): onColorChange(hex, final[, aceptado]).
+//   · final=false → cambio en vivo (como mucho una vez por fotograma).
+//   · final=true  → al cerrar: con el color elegido si se acepta (OK / Intro) o con el de partida si se cancela
+//                   (Cancelar / ✕ / Escape / clic fuera). El 3.er argumento (solo esta ventana) dice cuál de los dos
+//                   fue: true = aceptado, false = cancelado; el selector táctil no lo envía (undefined).
+// Mientras está abierta se activa window._edEyedropActive (el lienzo se ve a opacidad plena, como con el cuentagotas)
+// y se restaura el valor anterior al cerrarla.
+// ══════════════════════════════════════════════════════════════════════════
+let _edColorWinClose = null;   // cierra la ventana abierta (si la hay): (aceptar, silencioso)
+
+function _edColorHexNorm(v){   // '#abc' | 'abc' | '#AABBCC' → '#aabbcc' (o null si no es un color hexadecimal)
+  let x = String(v == null ? '' : v).trim().replace(/^#/, '');
+  if(/^[0-9a-f]{3}$/i.test(x)) x = x[0]+x[0]+x[1]+x[1]+x[2]+x[2];
+  return /^[0-9a-f]{6}$/i.test(x) ? '#'+x.toLowerCase() : null;
+}
+function _edHexToRgb(hex){ const n = parseInt(hex.slice(1), 16); return [(n>>16)&255, (n>>8)&255, n&255]; }
+function _edRgbToHex(r, g, b){
+  return '#' + [r, g, b].map(c => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('');
+}
+function _edRgbToHsv(r, g, b){   // → [tono 0–360, saturación 0–1, valor 0–1]
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), d = mx - Math.min(r, g, b);
+  let h = 0;
+  if(d > 0){
+    if(mx === r) h = ((g - b) / d) % 6; else if(mx === g) h = (b - r) / d + 2; else h = (r - g) / d + 4;
+    h *= 60; if(h < 0) h += 360;
+  }
+  return [h, mx === 0 ? 0 : d / mx, mx];
+}
+function _edHsvToRgb(h, s, v){   // tono 0–360, s y v 0–1 → [r, g, b] 0–255
+  const c = v * s, hp = (((h % 360) + 360) % 360) / 60, x = c * (1 - Math.abs(hp % 2 - 1)), m = v - c;
+  let r = 0, g = 0, b = 0;
+  if(hp < 1){ r = c; g = x; } else if(hp < 2){ r = x; g = c; } else if(hp < 3){ g = c; b = x; }
+  else if(hp < 4){ g = x; b = c; } else if(hp < 5){ r = x; b = c; } else { r = c; b = x; }
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+function _edShowColorPickerPC(onColorChange, initialColor){
+  if(typeof _edColorWinClose === 'function') _edColorWinClose(false, true);   // solo una ventana de color a la vez
+  document.getElementById('ed-hsl-picker')?.remove();
+  const T = k => escHtml(I18n.t(k));
+  const start = _edColorHexNorm(initialColor || edDrawColor) || '#000000';
+  let cur = start, done = false, liveRaf = 0, eyeBusy = false, eyeAc = null, tx = 0, ty = 0;
+  let [h, s, v] = _edRgbToHsv(..._edHexToRgb(start));
+  const prevEye = !!window._edEyedropActive;
+  const openedAt = performance.now();
+  const hasEye = typeof window.EyeDropper === 'function';
+
+  const overlay = document.createElement('div');
+  overlay.id = 'ed-hsl-picker';   // mismo id que el selector táctil: varias guardas del editor lo buscan por él
+  overlay.className = 'ed-fulloverlay edc-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', I18n.t('ed_colorPickTitle'));
+  overlay.innerHTML = `
+    <div class="ed-fulloverlay-box edc-box">
+      <div class="ed-fulloverlay-header" id="edc-head">
+        <h2 class="ed-fulloverlay-title">${T('ed_colorPickTitle')}</h2>
+        <button type="button" class="ed-fulloverlay-close" id="edc-x" aria-label="${T('cancel')}">✕</button>
+      </div>
+      <div class="edc-body">
+        <div class="edc-sv" id="edc-sv" tabindex="0" role="application" aria-label="${T('ed_colorPlane')}"><div class="edc-sv-thumb" id="edc-sv-t"></div></div>
+        <div class="edc-hue" id="edc-hue" tabindex="0" role="slider" aria-label="${T('ed_hue')}" aria-valuemin="0" aria-valuemax="360"><div class="edc-hue-thumb" id="edc-hue-t"></div></div>
+        <div class="edc-row">
+          <div class="edc-sw"><button type="button" class="edc-old" id="edc-old" title="${T('ed_colorOldSwatch')}" aria-label="${T('ed_colorOldSwatch')}"></button><div class="edc-new" id="edc-new" title="${T('ed_colorNewSwatch')}"></div></div>
+          <label class="edc-f edc-f-hex"><span>HEX</span><input class="edc-in" id="edc-hex" type="text" maxlength="7" spellcheck="false" autocomplete="off"></label>
+          <button type="button" class="edc-eye" id="edc-eye" title="${T('ed_colorScreenPick')}" aria-label="${T('ed_colorScreenPick')}">💧</button>
+        </div>
+        <div class="edc-rgb">
+          <label class="edc-f"><span>R</span><input class="edc-in" id="edc-r" type="number" min="0" max="255" step="1"></label>
+          <label class="edc-f"><span>G</span><input class="edc-in" id="edc-g" type="number" min="0" max="255" step="1"></label>
+          <label class="edc-f"><span>B</span><input class="edc-in" id="edc-b" type="number" min="0" max="255" step="1"></label>
+        </div>
+      </div>
+      <div class="ed-fulloverlay-actions">
+        <button type="button" class="ed-modal-btn cancel" id="ecp-cancel">${T('cancel')}</button>
+        <button type="button" class="ed-modal-btn ok" id="ecp-ok">${T('accept')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  edStopCanvasLeak(overlay);   // ni un clic, rueda o toque sobre la ventana llega al lienzo de debajo
+
+  const q = id => overlay.querySelector('#' + id);
+  const box = overlay.querySelector('.edc-box'), head = q('edc-head');
+  const svEl = q('edc-sv'), svT = q('edc-sv-t'), hueEl = q('edc-hue'), hueT = q('edc-hue-t');
+  const oldBtn = q('edc-old'), newEl = q('edc-new'), eyeBtn = q('edc-eye');
+  const inHex = q('edc-hex'), inR = q('edc-r'), inG = q('edc-g'), inB = q('edc-b');
+  const rgbEls = [inR, inG, inB];
+  oldBtn.style.background = start;
+
+  // Pinta TODA la ventana desde (h, s, v). `skip` = el campo que el usuario está escribiendo (no se le pisa el texto).
+  function paint(skip){
+    const rgb = _edHsvToRgb(h, s, v);
+    cur = _edRgbToHex(rgb[0], rgb[1], rgb[2]);
+    svEl.style.backgroundColor = _edRgbToHex(..._edHsvToRgb(h, 1, 1));
+    svT.style.left = (s * 100) + '%';
+    svT.style.top  = ((1 - v) * 100) + '%';
+    hueT.style.left = (h / 360 * 100) + '%';
+    hueEl.setAttribute('aria-valuenow', String(Math.round(h)));
+    newEl.style.background = cur;
+    if(skip !== inHex){ inHex.value = cur.toUpperCase(); inHex.classList.remove('bad'); }
+    rgbEls.forEach((el, i) => { if(el !== skip){ el.value = rgb[i]; el.classList.remove('bad'); } });
+  }
+  // Cambio en vivo hacia quien llama: como mucho uno por fotograma (arrastrar el plano genera cientos de eventos)
+  function live(){
+    if(liveRaf || done) return;
+    liveRaf = requestAnimationFrame(() => { liveRaf = 0; if(!done) onColorChange(cur, false); });
+  }
+  function setHsv(nh, ns, nv, skip){ h = nh; s = ns; v = nv; paint(skip); live(); }
+  function setRgb(r, g, b, skip){
+    const n = _edRgbToHsv(r, g, b);
+    let nh = n[0], ns = n[1];
+    if(n[2] === 0){ nh = h; ns = s; }   // negro: tono y saturación no existen → se conservan los de antes
+    else if(ns === 0){ nh = h; }        // gris/blanco: el tono no existe → se conserva
+    setHsv(nh, ns, n[2], skip);
+  }
+  function setHex(hex, skip){
+    const x = _edColorHexNorm(hex); if(!x) return false;
+    const c = _edHexToRgb(x); setRgb(c[0], c[1], c[2], skip); return true;
+  }
+  const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+
+  // ── Plano saturación/brillo y barra de tono: arrastre con el ratón/lápiz (captura de puntero) ──
+  function dragOn(el, move){
+    el.addEventListener('pointerdown', e => {
+      if(e.button !== 0) return;
+      e.preventDefault();                             // sin selección de texto ni arrastre nativo…
+      try{ el.focus({ preventScroll: true }); }catch(_){}   // …pero con foco, para poder usar las flechas
+      try{ el.setPointerCapture(e.pointerId); }catch(_){}
+      move(e);
+    });
+    el.addEventListener('pointermove', e => {
+      let cap = false; try{ cap = el.hasPointerCapture(e.pointerId); }catch(_){}
+      if(cap) move(e);
+    });
+  }
+  dragOn(svEl, e => {
+    const r = svEl.getBoundingClientRect();   // la posición se mide dentro del borde (clientLeft/clientTop)
+    setHsv(h, clamp01((e.clientX - r.left - svEl.clientLeft) / svEl.clientWidth),
+              1 - clamp01((e.clientY - r.top - svEl.clientTop) / svEl.clientHeight));
+  });
+  dragOn(hueEl, e => {
+    const r = hueEl.getBoundingClientRect();
+    setHsv(clamp01((e.clientX - r.left - hueEl.clientLeft) / hueEl.clientWidth) * 360, s, v);
+  });
+
+  // ── HEX: se aplica en vivo al completar 6 dígitos; con 3 (#abc) al salir del campo o con Intro ──
+  function applyHexText(){
+    const x = _edColorHexNorm(inHex.value);
+    if(x && x !== cur) setHex(x); else paint();   // igual al actual, incompleto o inválido: solo se reescribe el campo
+    inHex.classList.remove('bad');
+  }
+  inHex.addEventListener('input', () => {
+    const raw = inHex.value.trim().replace(/^#/, '');
+    if(/^[0-9a-f]{6}$/i.test(raw)){ inHex.classList.remove('bad'); setHex(raw, inHex); }
+    else inHex.classList.toggle('bad', raw.length > 6 || /[^0-9a-f]/i.test(raw));
+  });
+  inHex.addEventListener('blur', applyHexText);
+
+  // ── RGB: se aplica en vivo cuando los tres valores son válidos (0–255) ──
+  rgbEls.forEach(el => {
+    el.addEventListener('input', () => {
+      const c = rgbEls.map(x => /^\d{1,3}$/.test(x.value.trim()) ? +x.value : NaN);
+      rgbEls.forEach((x, i) => x.classList.toggle('bad', x.value.trim() !== '' && !(c[i] >= 0 && c[i] <= 255)));
+      if(c.every(n => n >= 0 && n <= 255)) setRgb(c[0], c[1], c[2], el);
+    });
+    el.addEventListener('blur', () => {
+      // al salir: un valor por encima de 255 se acota a 255; vacío o no numérico vuelve al actual
+      const c = rgbEls.map(x => /^\d{1,3}$/.test(x.value.trim()) ? Math.min(255, +x.value) : NaN);
+      if(c.every(n => n >= 0) && _edRgbToHex(c[0], c[1], c[2]) !== cur) setRgb(c[0], c[1], c[2]); else paint();
+    });
+  });
+  // Al entrar en un campo se selecciona todo su texto (el mouseup que sigue al clic lo deseleccionaría)
+  [inHex, ...rgbEls].forEach(el => el.addEventListener('focus', () => {
+    el.select();
+    el.addEventListener('mouseup', ev => ev.preventDefault(), { once: true });
+  }));
+
+  // ── Color de partida (volver a él) y cuentagotas de pantalla ──
+  oldBtn.addEventListener('click', () => setHex(start));
+  if(hasEye){
+    eyeBtn.addEventListener('click', async () => {
+      if(eyeBusy) return;
+      eyeBusy = true; eyeAc = new AbortController();
+      try{
+        const r = await new window.EyeDropper().open({ signal: eyeAc.signal });
+        if(!done && r && r.sRGBHex) setHex(r.sRGBHex);
+      }catch(_){ /* cancelado con Escape o ventana cerrada */ }
+      eyeBusy = false; eyeAc = null;
+      if(!done){ try{ eyeBtn.focus({ preventScroll: true }); }catch(_){} }
+    });
+  } else eyeBtn.hidden = true;   // Firefox/Safari no tienen la API: sin botón
+
+  // ── Cerrar ──
+  function finish(ok, silent){
+    if(done) return;
+    done = true;
+    cancelAnimationFrame(liveRaf);
+    if(eyeAc){ try{ eyeAc.abort(); }catch(_){} }
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', onResize);
+    if(_edColorWinClose === finish) _edColorWinClose = null;
+    window._edEyedropActive = prevEye;
+    overlay.removeAttribute('id');   // las guardas que miran #ed-hsl-picker ya lo ven cerrado
+    overlay.classList.remove('open');
+    if(silent){ overlay.remove(); return; }   // sustituida por otra ventana o editor cerrado: sin avisar a nadie
+    setTimeout(() => overlay.remove(), 240);
+    try{ edRedraw(); }catch(_){}
+    onColorChange(ok ? cur : start, true, !!ok);
+  }
+  q('edc-x').addEventListener('click', () => finish(false));
+  q('ecp-cancel').addEventListener('click', () => finish(false));
+  q('ecp-ok').addEventListener('click', () => finish(true));
+  // Clic en el fondo = cancelar. Se ignora el primer instante: si quien abre la ventana es el primer clic de un doble
+  // clic, el segundo caería aquí y la cerraría nada más abrirla.
+  overlay.addEventListener('pointerdown', e => {
+    if(e.target === overlay && e.button === 0 && performance.now() - openedAt > 300) finish(false);
+  });
+
+  // ── Teclado: la ventana es modal, así que NINGUNA tecla llega a los atajos del editor (flechas = mover el objeto
+  // seleccionado, Supr = borrarlo, Intro/Escape = cerrar paneles…). Un solo escucha en captura sobre document.
+  function onKey(e){
+    if(!overlay.isConnected){ finish(false, true); return; }   // alguien la quitó del DOM por fuera: se desengancha sola
+    e.stopPropagation();
+    if(e.isComposing) return;
+    const k = e.key, t = e.target;
+    if(k === 'Escape'){ e.preventDefault(); if(!eyeBusy) finish(false); return; }
+    if(k === 'Enter'){
+      if(t && t.tagName === 'BUTTON') return;     // un botón enfocado hace su propia acción
+      e.preventDefault();
+      if(t === inHex) applyHexText();
+      finish(true); return;
+    }
+    if(k === 'Tab'){                              // el foco no sale de la ventana
+      const f = [...box.querySelectorAll('button,input,[tabindex="0"]')].filter(x => !x.hidden && !x.disabled && x.offsetParent !== null);
+      if(!f.length) return;
+      const a = document.activeElement;
+      if(!box.contains(a)){ e.preventDefault(); (e.shiftKey ? f[f.length-1] : f[0]).focus(); }
+      else if(e.shiftKey && a === f[0]){ e.preventDefault(); f[f.length-1].focus(); }
+      else if(!e.shiftKey && a === f[f.length-1]){ e.preventDefault(); f[0].focus(); }
+      return;
+    }
+    if(t === svEl || t === hueEl){                // flechas: 1 paso (Mayús: 10)
+      const st = e.shiftKey ? 10 : 1;
+      let used = true;
+      if(t === svEl){
+        if(k === 'ArrowLeft')       setHsv(h, clamp01(s - st / 100), v);
+        else if(k === 'ArrowRight') setHsv(h, clamp01(s + st / 100), v);
+        else if(k === 'ArrowUp')    setHsv(h, s, clamp01(v + st / 100));
+        else if(k === 'ArrowDown')  setHsv(h, s, clamp01(v - st / 100));
+        else used = false;
+      } else {
+        if(k === 'ArrowLeft' || k === 'ArrowDown')    setHsv(Math.max(0, h - st), s, v);
+        else if(k === 'ArrowRight' || k === 'ArrowUp') setHsv(Math.min(360, h + st), s, v);
+        else used = false;
+      }
+      if(used) e.preventDefault();
+    }
+  }
+  document.addEventListener('keydown', onKey, true);
+
+  // ── Arrastrar la ventana por la cabecera (propiedad CSS `translate`: la animación de apertura usa `transform`) ──
+  const onResize = () => { tx = ty = 0; box.style.translate = ''; };   // al cambiar el tamaño de la ventana se recentra
+  window.addEventListener('resize', onResize);
+  if(window.CSS && CSS.supports && CSS.supports('translate', '1px 1px')){
+    let drag = null;
+    head.addEventListener('pointerdown', e => {
+      if(e.button !== 0 || e.target.closest('button')) return;
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, l: r.left, t: r.top, w: r.width, tx, ty };
+      try{ head.setPointerCapture(e.pointerId); }catch(_){}
+      box.classList.add('dragging');
+    });
+    head.addEventListener('pointermove', e => {
+      if(!drag || e.pointerId !== drag.id) return;
+      // siempre queda a la vista un trozo de la cabecera para poder volver a cogerla
+      const nl = Math.max(-(drag.w - 80), Math.min(window.innerWidth - 80, drag.l + e.clientX - drag.x));
+      const nt = Math.max(0, Math.min(window.innerHeight - 40, drag.t + e.clientY - drag.y));
+      tx = drag.tx + (nl - drag.l); ty = drag.ty + (nt - drag.t);
+      box.style.translate = tx + 'px ' + ty + 'px';
+    });
+    const endDrag = e => { if(drag && e.pointerId === drag.id){ drag = null; box.classList.remove('dragging'); } };
+    head.addEventListener('pointerup', endDrag);
+    head.addEventListener('pointercancel', endDrag);
+  } else head.style.cursor = 'default';
+
+  // ── Apertura ──
+  _edColorWinClose = finish;
+  paint();
+  window._edEyedropActive = true; edRedraw();   // lienzo a opacidad plena mientras se elige (como con el cuentagotas)
+  requestAnimationFrame(() => {
+    if(done) return;
+    overlay.classList.add('open');
+    try{ svEl.focus({ preventScroll: true }); }catch(_){}
+  });
+}
 
 /* T5 — Cerrar teclado virtual Android al pulsar Enter en inputs numéricos */
 // ── Burbuja flotante sobre thumb del slider ──
@@ -25203,18 +25702,13 @@ function edRenderOptionsPanel(mode){
     $('op-custom-color-btn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
       if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); return; }
-      if(window._edIsTouch){
-        _edShowColorPicker((hex, final)=>{
-          _edSetDrawColor(hex);
-          if(final){ _edSetPaletteColor(edSelectedPaletteIdx, hex); }
-          _edUpdatePaletteDots();
-        });
-      } else {
-        window._edEyedropActive = true; edRedraw();
-        const _dc = $('op-dcolor');
-        if(_dc) _dc.value = edDrawColor;
-        _dc?.click();
-      }
+      // v41.87 — táctil: selector HSL propio · PC: ventana de color centrada (antes el input nativo oculto #op-dcolor,
+      // cuyo popup salía en la esquina superior izquierda). En PC, cancelar no toca la muestra (3.er argumento `aceptado`).
+      _edShowColorPicker((hex, final, aceptado)=>{
+        _edSetDrawColor(hex);
+        if(final && aceptado !== false){ _edSetPaletteColor(edSelectedPaletteIdx, hex); }
+        _edUpdatePaletteDots();
+      });
     });
     $('op-dcolor')?.addEventListener('input',e=>{
       if(edSelectedPaletteIdx <= 1) return;
@@ -28586,27 +29080,15 @@ function _edbBuildPalette() {
         // el picker recién creado no puede verse afectado por nada que
         // dispare _edbClosePalette() (y su limpieza del listener de "clic
         // fuera") a mitad de su propia inicialización.
-        if(window._edIsTouch){
-          // Android: picker HSL propio (sin cuentagotas)
-          _edShowColorPicker((hex, commit) => {
-            _edSetDrawColor(hex);
-            if(commit){ _edSetPaletteColor(edSelectedPaletteIdx, hex); _edUpdatePaletteDots(); }
-            _edbSyncColor();
-          });
-          _edbClosePalette();
-        } else {
-          // PC: selector nativo del navegador (con cuentagotas)
-          _edbClosePalette();
-          const _inp=document.createElement('input'); _inp.type='color'; _inp.value=edDrawColor;
-          _inp.style.cssText='position:fixed;opacity:0;width:0;height:0;';
-          document.body.appendChild(_inp);
-          _inp.addEventListener('input', ev=>{ _edSetDrawColor(ev.target.value); _edbSyncColor(); });
-          _inp.addEventListener('change', ()=>{
-            _edSetPaletteColor(edSelectedPaletteIdx, edDrawColor);
-            _edUpdatePaletteDots(); _edbSyncColor(); _inp.remove();
-          });
-          _inp.click();
-        }
+        // v41.87 — _edShowColorPicker elige solo: Android → selector HSL propio; PC → ventana de color centrada (antes
+        // un input type=color oculto con el popup nativo en la esquina superior izquierda). En PC, cancelar no toca la
+        // muestra (el 3.er argumento `aceptado` solo lo envía esa ventana; el selector táctil no, y sigue igual).
+        _edShowColorPicker((hex, commit, aceptado) => {
+          _edSetDrawColor(hex);
+          if(commit && aceptado !== false){ _edSetPaletteColor(edSelectedPaletteIdx, hex); _edUpdatePaletteDots(); }
+          _edbSyncColor();
+        });
+        _edbClosePalette();
         return;
       }
       const idx = +btn.dataset.colidx;
@@ -36138,6 +36620,10 @@ function EditorView_destroy(){
   }
   _edSizeMonitorStop();
   if (typeof EdAnimCtl !== 'undefined') EdAnimCtl.destroy(); // v41.60: «Ver control de animaciones»
+  // v41.87: ventana de color de PC abierta al salir del editor → se cierra sin avisar (suelta su escucha de teclado,
+  // que si no seguiría tragándose las teclas, y devuelve la bandera del cuentagotas a su valor anterior)
+  if (typeof _edColorWinClose === 'function') _edColorWinClose(false, true);
+  document.getElementById('ed-hsl-picker')?.remove();
   if(window._edPointerTypeFn){
     document.removeEventListener('pointerdown', window._edPointerTypeFn, true);
     window._edPointerTypeFn = null;

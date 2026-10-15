@@ -1999,6 +1999,84 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 }
 .ed-btn-sec:hover { border-color: var(--black); }
 
+/* ══════════════════════════════════════════════════════
+   v41.87 — VENTANA DE COLOR DE PC
+   Sustituye al popup nativo del navegador (input type=color), que salía pegado a la esquina superior izquierda: ahora
+   es una ventana de la app, centrada, con el mismo estilo que Capas/Hojas (cabecera amarilla, borde negro). El fondo
+   apenas oscurece y NO desenfoca, para seguir viendo cómo cambia el color en el lienzo; la ventana se arrastra por
+   la cabecera si tapa el objeto. Reutiliza .ed-fulloverlay (ver editor.js, _edShowColorPickerPC).
+   ══════════════════════════════════════════════════════ */
+.edc-overlay {
+  z-index: 10000;                       /* por encima de cualquier otra ventana (p. ej. Degradado, 9999) */
+  background: rgba(0,0,0,.22);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  align-items: center !important;       /* siempre centrada, también en pantallas bajas */
+}
+.edc-box {
+  max-width: 340px;
+  border-bottom: 2.5px solid var(--black) !important;
+  border-radius: 18px !important;
+  max-height: 92vh !important;
+}
+.edc-box .ed-fulloverlay-header { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.edc-box.dragging .ed-fulloverlay-header { cursor: grabbing; }
+.edc-body {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 16px 12px;
+  overflow-y: auto; min-height: 0;
+}
+/* Plano saturación (→) / brillo (↑): el color de base (tono) lo pone JS en background-color */
+.edc-sv {
+  position: relative; flex-shrink: 0;
+  width: 100%; height: clamp(110px, 28vh, 200px);
+  border: 2px solid var(--black); border-radius: 10px;
+  background-image: linear-gradient(to top, #000, rgba(0,0,0,0)), linear-gradient(to right, #fff, rgba(255,255,255,0));
+  cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.edc-hue {
+  position: relative; flex-shrink: 0;
+  height: 16px;
+  border: 2px solid var(--black); border-radius: 10px;
+  background: linear-gradient(to right, #f00 0%, #ff0 16.667%, #0f0 33.333%, #0ff 50%, #00f 66.667%, #f0f 83.333%, #f00 100%);
+  cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.edc-sv:focus-visible, .edc-hue:focus-visible, .edc-eye:focus-visible, .edc-old:focus-visible { outline: 3px solid var(--black); outline-offset: 2px; }
+.edc-sv-thumb, .edc-hue-thumb {
+  position: absolute; box-sizing: border-box; border-radius: 50%;
+  pointer-events: none;
+}
+.edc-sv-thumb  { width: 20px; height: 20px; margin: -10px 0 0 -10px; border: 3px solid #fff; box-shadow: 0 0 0 1.5px #000, 0 1px 5px rgba(0,0,0,.55); }
+.edc-hue-thumb { top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; background: #fff; border: 3px solid var(--black); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.edc-row { display: flex; align-items: flex-end; gap: 10px; }
+.edc-sw {
+  display: flex; flex-shrink: 0;
+  width: 64px; height: 42px;
+  border: 2px solid var(--black); border-radius: 10px; overflow: hidden;
+}
+.edc-old { flex: 1; border: none; padding: 0; margin: 0; cursor: pointer; border-right: 2px solid var(--black); }
+.edc-new { flex: 1; }
+.edc-f { display: block; min-width: 0; }
+.edc-f > span { display: block; font-size: .7rem; font-weight: 900; color: var(--gray-500); text-transform: uppercase; margin-bottom: 3px; text-align: center; }
+.edc-f-hex { flex: 1; }
+.edc-in {
+  width: 100%; box-sizing: border-box;
+  background: var(--gray-100); border: 2px solid var(--gray-300); border-radius: var(--radius-sm);
+  padding: 8px 6px; text-align: center;
+  font-family: var(--font-body); font-size: .9rem; font-weight: 900; color: var(--black);
+  outline: none; -moz-appearance: textfield;
+}
+.edc-in::-webkit-outer-spin-button, .edc-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.edc-in:focus { border-color: var(--black); }
+.edc-in.bad { border-color: #d33; background: #fff1f1; }
+.edc-rgb { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.edc-eye {
+  flex-shrink: 0; width: 42px; height: 42px;
+  border: 2px solid var(--black); border-radius: 10px; background: var(--white);
+  box-shadow: 2px 2px 0 var(--black);
+  font-size: 1.15rem; line-height: 1; cursor: pointer; touch-action: manipulation;
+}
+.edc-eye:active { transform: translate(1px,1px); box-shadow: 1px 1px 0 var(--black); }
+
 /* ── LISTA DE CAPAS ── */
 .ed-layers-list {
   flex: 1;
