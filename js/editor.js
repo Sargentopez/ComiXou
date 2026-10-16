@@ -5673,15 +5673,25 @@ function edPushHistory(force, movedLayer){
   // genuinamente activa (mismo criterio que usa _editingVectorial en edOnStart:
   // edActiveTool==='shape'/'line', objeto en construcción, o barra flotante
   // visible) — nunca el tipo del objeto seleccionado en el editor general.
+  //
+  // v41.90 — HISTORIAL (Alberto: «he movido varios objetos vectoriales, luego he hecho deshacer una sola vez y se han deshecho
+  // todos los cambios de una vez, que incluían varias duplicaciones y arrastres»). Dos fallos de fondo en este bloque:
+  //  1) «Sesión viva» se decidía con un criterio DISTINTO al del botón deshacer (_edVecSessionOpen: panel recta/forma o barra
+  //     flotante). Bastaba un resto —herramienta 'shape'/'line' o _edLineLayer sin panel ni barra— para que TODO push global
+  //     quedase bloqueado en silencio (BLOCKED_VS): mover, duplicar, arrastrar… no se apuntaban en ningún historial y el
+  //     siguiente deshacer saltaba hasta el último apunte real. Ahora hay UN solo criterio (_edVecSessionOpen) para
+  //     decidir dónde se apunta y adónde va el deshacer; lo que quede sin panel ni barra es una sesión huérfana (se limpia).
+  //  2) Con la sesión viva pero la herramienta en «selección» (p. ej. Ctrl+D, capas, orden de apilado dentro del panel) el
+  //     apunte NO se bloqueaba: se tiraba el historial local entero (la sesión perdía todo su deshacer) y se apuntaba un paso
+  //     intermedio en el global. Ahora, con la sesión viva, el cambio se apunta en el historial LOCAL (si ha cambiado algo),
+  //     que es donde el usuario deshace dentro de la sesión; el global sigue recibiendo solo el «antes» y el «después» (OK).
   if(_vsHistory.length > 0){
-    const _vsToolActive = (edActiveTool === 'shape' || edActiveTool === 'line')
-      || !!_edLineLayer
-      || !!document.getElementById('edShapeBar')?.classList.contains('visible');
-    if(!_vsToolActive){
-      _vsHistory=[]; _vsHistIdx=-1; // limpiar sesión vectorial huérfana
-    } else {
-      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('BLOCKED_VS vsLen='+_vsHistory.length); edUpdateUndoRedoBtns(); return;
+    if(_edVecSessionOpen()){
+      const _vsRec = _vsPushIfChanged();
+      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('LOCAL_VS vsLen='+_vsHistory.length+(_vsRec?' (apuntado)':' (sin cambios)'));
+      edUpdateUndoRedoBtns(); return;
     }
+    _vsHistory=[]; _vsHistIdx=-1; // sesión vectorial huérfana (sin panel ni barra): limpiar y dejar pasar el push
   }
   const layersJSON = _edLayersSnapshot(movedLayer);
   // DIAG: registrar cada push
@@ -12423,6 +12433,7 @@ function edMirrorSelected(){
       la.src = mirroredDataUrl;
       // Invertir rotación respecto a eje vertical: rotation → -rotation
       la.rotation = -(la.rotation || 0);
+      edPushHistory(); // v41.90: el estado «después» (arriba solo se apunta el «antes»; reflejar quedaba sin paso propio)
       edRedraw();
     };
     mirroredImg.src = mirroredDataUrl;
@@ -12532,6 +12543,10 @@ function edMirrorSelected(){
     }
   }
 
+  // v41.90 — HISTORIAL: reflejar solo apuntaba el estado «antes» (arriba). El historial guarda el estado DESPUÉS de cada
+  // acción, así que el reflejo no tenía paso propio: se fundía con la acción siguiente (un solo deshacer deshacía las dos)
+  // y rehacer no podía devolverlo. Ahora se apunta también el «después».
+  edPushHistory();
   edRedraw();
   edToast(I18n.t('ed_objectMirrored'));
 }
@@ -12557,7 +12572,9 @@ function edDeleteSelected(){
   // Si era shape/line con barra flotante activa, limpiar y desbloquear
   if(_delType==='shape'||_delType==='line'){
     // ¿Sesión vectorial activa con objetos restantes?
-    const _remSess3 = _vsHistory.length > 0
+    // v41.90: «activa» = con panel o barra abiertos. Con restos de una sesión ya cerrada (_vsHistory sin panel ni barra) esta rama
+    // solo apuntaba en el historial local y salía sin apuntar el borrado en el general: el borrado no tenía paso de deshacer.
+    const _remSess3 = (_vsHistory.length > 0 && _edVecSessionOpen())
       ? edLayers.filter(l=>(l.type==='line'||l.type==='shape')&&!_vsPreSessionLayers.has(l))
       : [];
     if(_remSess3.length > 0){
@@ -18899,6 +18916,28 @@ function _vsPush() {
   _edShapeUpdateUndoRedoBtns();
 }
 
+// v41.90 — clave comparable de una instantánea local: lo serializado de los vectoriales de la sesión + el orden relativo
+// (las referencias vivas a capas ajenas, {keep}, solo cuentan como «hay una capa ajena aquí»).
+function _vsSnapKey(s) {
+  if (!s) return '';
+  return JSON.stringify([s.vecLayers, s.lineLayer, (s.order || []).map(m => m.keep ? 0 : (m.line ? -1 : (m.vec + 1)))]);
+}
+
+// v41.90 — como _vsPush, pero SIN abrir un paso nuevo si el estado de la sesión no ha cambiado respecto al paso actual del
+// historial local. Lo usa edPushHistory() cuando se le llama con la sesión vectorial viva (Ctrl+D, orden de apilado, capas…):
+// antes ese apunte se perdía (o, peor, vaciaba el historial local entero).
+function _vsPushIfChanged() {
+  const snap = _vsSnapshot();
+  if (!snap) return false;
+  const cur = _vsHistory[_vsHistIdx];
+  if (cur && _vsSnapKey(cur) === _vsSnapKey(snap)) return false;
+  _vsHistory = _vsHistory.slice(0, _vsHistIdx + 1);
+  _vsHistory.push(snap);
+  _vsHistIdx = _vsHistory.length - 1;
+  _edShapeUpdateUndoRedoBtns();
+  return true;
+}
+
 // edDeserLayer comparte por referencia la trayectoria (_motionPath) del dato que recibe: se le da una copia propia
 // para que editar después la capa restaurada no altere la instantánea (que puede volver a aplicarse al rehacer).
 function _vsDetach(d) {
@@ -24254,6 +24293,9 @@ function edCloseOptionsPanel(){
           if(typeof _vsApply === 'function') _vsApply(_vsHistory[0]);
         }
         _vsClear();
+        // v41.90: el historial LEGADO de nodos (_edShapeHistory) se quedaba con los pasos de la sesión descartada (y crecía en cada
+        // Escape); el resto de salidas (OK, borrar, deshacer todo) ya lo vaciaban junto con _vsClear().
+        if(typeof _edShapeClearHistory === 'function') _edShapeClearHistory();
       }
       // v41.85: cerrar la edición vectorial cierra TAMBIÉN todo lo que cuelga de ella. Antes quedaban vivos la barra flotante
       // (plegada con ▲ u oculta con OCULTAR), el «modo minimizado» y el polígono a medias: bastaba UNO para que
@@ -26403,6 +26445,11 @@ function edRenderOptionsPanel(mode){
         });
         if(!_mainIdxs.length) return;
         const gcx = _mainIdxs.reduce((s,i)=>s+(edLayers[i].x||0),0) / _mainIdxs.length;
+        // v41.90 — HISTORIAL: las imágenes del grupo se reflejan de forma ASÍNCRONA (mi.onload cambia m.src y m.rotation tras
+        // cargar el bitmap). El «después» se apuntaba ANTES de que terminaran, así que el paso guardado no era el estado final.
+        // Con imágenes, el «después» se apunta cuando la última ha cargado (un solo paso para toda la acción).
+        let _gmPend = 0, _gmQueued = false;
+        const _gmFin = () => { _gmPend--; if(_gmQueued && _gmPend === 0){ edPushHistory(); edRedraw(); } };
 
         // Helper: crear canvas reflejado horizontalmente
         function _mirrorCanvas(src){
@@ -26466,7 +26513,9 @@ function edRenderOptionsPanel(mode){
             // CRÍTICO: actualizar también m.src (no solo m.img) — ver comentario
             // en edMirrorSelected. Si no, el reflejo se pierde al guardar el
             // grupo en la biblioteca y volver a insertarlo.
-            mi.onload=()=>{ m.img=mi; m.src=mirroredDataUrl; m.rotation=-(m.rotation||0); edRedraw(); };
+            _gmPend++;
+            mi.onload=()=>{ m.img=mi; m.src=mirroredDataUrl; m.rotation=-(m.rotation||0); edRedraw(); _gmFin(); };
+            mi.onerror=_gmFin;
             mi.src=mirroredDataUrl;
           } else if(m.type==='gif'){
             // GIF: reflejar solo posición y rotación (frames no se alteran — operación costosa)
@@ -26496,7 +26545,9 @@ function edRenderOptionsPanel(mode){
           }
         });
         edLayers=_pg.layers;
-        edPushHistory(); edRedraw();
+        _gmQueued = true;
+        if(_gmPend === 0) edPushHistory();
+        edRedraw();
       });
       // Desagrupar
       $('pp-grp-ungroup')?.addEventListener('click',()=>{ edCloseOptionsPanel(); edUngroupSelected(); });
@@ -27970,6 +28021,9 @@ function edInitSelectMenu(){
       _msClear();
       edSelectedIdx = -1;
       edActiveTool = 'select'; edCanvas.className = '';
+      // v41.90 — HISTORIAL: solo se apuntaba el estado «antes» de borrar (arriba); el borrado no tenía paso propio y se fundía con
+      // la acción siguiente. Se apunta también el «después», igual que edDeleteSelected y la tecla Supr.
+      edPushHistory();
       edRedraw();
     }, I18n.t('delete'));
   });
@@ -38784,6 +38838,13 @@ function EditorView_init(){
       const panel = $('edOptionsPanel');
       if(panel && panel.classList.contains('open')){
         e.preventDefault();
+        // v41.90 — Intro = OK. En una sesión vectorial (recta/forma) edCloseOptionsPanel() a secas equivale a Escape: DESCARTA
+        // todo lo hecho en la sesión (restaura el estado inicial) sin dejar ningún paso de historial. Intro ha de confirmarla
+        // como el botón ✓ OK (que apunta el «después» en el historial general).
+        if(panel.dataset.mode === 'shape' || panel.dataset.mode === 'line'){
+          const _okVec = $('op-draw-ok');
+          if(_okVec){ _okVec.click(); return; }
+        }
         edCloseOptionsPanel();
         if(['draw','eraser','fill'].includes(edActiveTool)) edDeactivateDrawTool();
         return;
@@ -39097,7 +39158,10 @@ function EditorView_init(){
         edLayers=page.layers;
         _edDeactivateMultiSel();
         edSelectedIdx=-1;
-        _edShapePushHistory(); // igual que edDeleteSelected: push DESPUÉS del borrado
+        // v41.90 — HISTORIAL: aquí se llamaba a _edShapePushHistory() (el historial LOCAL de la sesión vectorial) y, con
+        // edSelectedIdx ya en -1 y sin sesión, no apuntaba NADA: borrar varios objetos con Supr no tenía paso propio
+        // (se fundía con la acción siguiente). El borrado se apunta en el historial general, igual que edDeleteSelected.
+        edPushHistory(); // push DESPUÉS del borrado
         edRedraw();
       } else if(edSelectedIdx >= 0){
         e.preventDefault(); edDeleteSelected();
@@ -51901,7 +51965,9 @@ async function _edRunDiag() {
       + (l.type==='image'?' _playing=' + l._playing:''));
   });
   L('\n── Historial ──');
-  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' | _vsHistory.length=' + _vsHistory.length + ' (>0 = bloquea push global)');
+  // v41.90 — con la sesión vectorial abierta (panel recta/forma o barra flotante) los cambios se apuntan en el historial LOCAL
+  // (_vsHistory); sin sesión, en el global. Un _vsHistory sin panel ni barra es un resto huérfano y se limpia solo.
+  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' (máx ' + ED_MAX_HISTORY + ') | historial vectorial local: ' + _vsHistory.length + ' (índice ' + _vsHistIdx + ') · sesión vectorial abierta=' + (typeof _edVecSessionOpen === 'function' ? _edVecSessionOpen() : '?') + ' · _edShapeHistory=' + (typeof _edShapeHistory !== 'undefined' ? _edShapeHistory.length : '?'));
   L('edIsDragging=' + edIsDragging + ' _edMoved=' + window._edMoved + ' edSelectedIdx=' + edSelectedIdx);
   edHistory.forEach((h, hi) => {
     try {
