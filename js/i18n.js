@@ -25,6 +25,21 @@
  *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
  *     Licencia: MIT
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
+ *
+ * - gifuct-js (decodificador de GIF animados; incluido dentro de editor.js y de reader/reader.js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/gifuct-js
+ *
+ * - js-binary-schema-parser (analizador de esquemas binarios; parte de gifuct-js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/jsBinarySchemaParser
+ *
+ * - jsgif (función de desentrelazado de GIF; parte de gifuct-js)
+ *     Autor: Shachaf Ben-Kiki
+ *     Licencia: MIT
+ *     https://github.com/shachaf/jsgif
  */
 /* ============================================================
    i18n.js — Internacionalización
@@ -347,6 +362,26 @@ const TRANSLATIONS = {
     credits_lzwMeta:        "Licencia: dominio público / uso libre",
     credits_trixDesc:       "editor de texto enriquecido",
     credits_trixMeta:       "Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson · Licencia: MIT",
+    credits_gifuctDesc:     "decodificador de GIF animados (incluido en el editor y en el lector)",
+    credits_gifuctMeta:     "Autor: Matt Way · Licencia: MIT",
+    credits_jbspDesc:       "analizador de esquemas binarios (parte de gifuct-js)",
+    credits_jbspMeta:       "Autor: Matt Way · Licencia: MIT",
+    credits_jsgifDesc:      "desentrelazado de GIF (parte de gifuct-js)",
+    credits_jsgifMeta:      "Autor: Shachaf Ben-Kiki · Licencia: MIT",
+    credits_fontsName:      "Tipografías",
+    credits_fontsDesc:      "Bangers, Bebas Neue, Bungee Outline, Comic Neue, Lora, Nunito, Oswald, Patrick Hand, Permanent Marker y Press Start 2P",
+    credits_fontsMeta:      "Licencia: SIL Open Font License 1.1 (Permanent Marker: Apache 2.0) · el aviso de copyright de cada familia está en fonts/typefaces.css",
+    credits_techTitle:      "Técnicas de referencia (implementación propia)",
+    credits_techNote:       "Técnicas y algoritmos conocidos en los que se inspiran partes del editor. El código es propio: no se ha copiado código de estos proyectos.",
+    credits_techBezierName: "Trazo suavizado por puntos medios",
+    credits_techBezierDesc: "curvas Bézier cuadráticas en el dibujo a mano",
+    credits_techBezierMeta: "Técnica documentada en Fabric.js (PencilBrush) y perfect-freehand (Steve Ruiz; también la usan tldraw y Excalidraw)",
+    credits_techTilesName:  "Historial por baldosas",
+    credits_techTilesDesc:  "deshacer/rehacer del dibujo con baldosas compartidas",
+    credits_techTilesMeta:  "Técnica de los programas de pintura Krita, GIMP y MyPaint",
+    credits_techC2aName:    "Color to Alpha",
+    credits_techC2aDesc:    "«Borrar color» sin dejar contorno",
+    credits_techC2aMeta:    "Algoritmo de GIMP/Krita (Kevin Cozens)",
     credits_license1:       "Copyright © 2026 Alberto Gavina Costero. Todos los derechos reservados.",
     credits_license2:       "Este repositorio contiene el código fuente de Comxow (en adelante, \"la Aplicación\"), incluyendo pero no limitado a sus archivos HTML, CSS, JavaScript, activos gráficos y cualquier otro material contenido en él.",
     credits_license3:       "Salvo por las bibliotecas de terceros listadas arriba, todo el código y los contenidos de este repositorio son propiedad exclusiva de Alberto Gavina Costero.",
@@ -1513,6 +1548,26 @@ const TRANSLATIONS = {
     credits_lzwMeta:        "License: public domain / free use",
     credits_trixDesc:       "rich text editor",
     credits_trixMeta:       "Author: 37signals, LLC (Basecamp) — Javan Makhmali and Sam Stephenson · License: MIT",
+    credits_gifuctDesc:     "animated GIF decoder (included in the editor and the reader)",
+    credits_gifuctMeta:     "Author: Matt Way · License: MIT",
+    credits_jbspDesc:       "binary schema parser (part of gifuct-js)",
+    credits_jbspMeta:       "Author: Matt Way · License: MIT",
+    credits_jsgifDesc:      "GIF deinterlacing (part of gifuct-js)",
+    credits_jsgifMeta:      "Author: Shachaf Ben-Kiki · License: MIT",
+    credits_fontsName:      "Typefaces",
+    credits_fontsDesc:      "Bangers, Bebas Neue, Bungee Outline, Comic Neue, Lora, Nunito, Oswald, Patrick Hand, Permanent Marker and Press Start 2P",
+    credits_fontsMeta:      "License: SIL Open Font License 1.1 (Permanent Marker: Apache 2.0) · each family's copyright notice is in fonts/typefaces.css",
+    credits_techTitle:      "Reference techniques (own implementation)",
+    credits_techNote:       "Well-known techniques and algorithms that inspire parts of the editor. The code is original: no code was copied from these projects.",
+    credits_techBezierName: "Midpoint-smoothed strokes",
+    credits_techBezierDesc: "quadratic Bézier curves in freehand drawing",
+    credits_techBezierMeta: "Technique documented in Fabric.js (PencilBrush) and perfect-freehand (Steve Ruiz; also used by tldraw and Excalidraw)",
+    credits_techTilesName:  "Tile-based history",
+    credits_techTilesDesc:  "drawing undo/redo with shared tiles",
+    credits_techTilesMeta:  "Technique used by the painting programs Krita, GIMP and MyPaint",
+    credits_techC2aName:    "Color to Alpha",
+    credits_techC2aDesc:    "“Erase color” without leaving an outline",
+    credits_techC2aMeta:    "Algorithm from GIMP/Krita (Kevin Cozens)",
     credits_license1:       "Copyright © 2026 Alberto Gavina Costero. All rights reserved.",
     credits_license2:       "This repository contains the source code of Comxow (hereinafter, \"the Application\"), including but not limited to its HTML, CSS, and JavaScript files, graphic assets, and any other material contained within it.",
     credits_license3:       "Except for the third-party libraries listed above, all code and content in this repository are the exclusive property of Alberto Gavina Costero.",

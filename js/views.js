@@ -25,6 +25,21 @@
  *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
  *     Licencia: MIT
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
+ *
+ * - gifuct-js (decodificador de GIF animados; incluido dentro de editor.js y de reader/reader.js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/gifuct-js
+ *
+ * - js-binary-schema-parser (analizador de esquemas binarios; parte de gifuct-js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/jsBinarySchemaParser
+ *
+ * - jsgif (función de desentrelazado de GIF; parte de gifuct-js)
+ *     Autor: Shachaf Ben-Kiki
+ *     Licencia: MIT
+ *     https://github.com/shachaf/jsgif
  */
 /* ============================================================
    views.js — Registro de todas las vistas de la SPA
@@ -55,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v41.88</footer>
+    <footer class="app-version">v41.89</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }

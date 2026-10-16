@@ -25,6 +25,21 @@
  *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
  *     Licencia: MIT
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
+ *
+ * - gifuct-js (decodificador de GIF animados; incluido dentro de editor.js y de reader/reader.js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/gifuct-js
+ *
+ * - js-binary-schema-parser (analizador de esquemas binarios; parte de gifuct-js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/jsBinarySchemaParser
+ *
+ * - jsgif (función de desentrelazado de GIF; parte de gifuct-js)
+ *     Autor: Shachaf Ben-Kiki
+ *     Licencia: MIT
+ *     https://github.com/shachaf/jsgif
  */
 /* ============================================================
    auth-pages.js — Login y Registro (SPA)

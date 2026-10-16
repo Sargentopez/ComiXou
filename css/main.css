@@ -944,7 +944,10 @@ body.editor-page { padding-top: 0; }
   font-size: .78rem;
   color: var(--gray-500);
   margin-top: 2px;
-  word-break: break-all;
+  /* El texto se parte por palabras; solo las URL largas se parten donde haga falta
+     (antes «break-all» cortaba palabras a mitad: «tambié|n», «St|ephenson»). */
+  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 #creditsModal .cr-meta a { color: var(--blue); font-weight: 600; }
 #creditsModal .cr-license {

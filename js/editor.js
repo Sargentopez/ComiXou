@@ -25,6 +25,35 @@
  *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
  *     Licencia: MIT
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
+ *
+ * - gifuct-js (decodificador de GIF animados; incluido dentro de editor.js y de reader/reader.js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/gifuct-js
+ *
+ * - js-binary-schema-parser (analizador de esquemas binarios; parte de gifuct-js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/jsBinarySchemaParser
+ *
+ * - jsgif (función de desentrelazado de GIF; parte de gifuct-js)
+ *     Autor: Shachaf Ben-Kiki
+ *     Licencia: MIT
+ *     https://github.com/shachaf/jsgif
+ *
+ * Técnicas de referencia usadas en este fichero (IMPLEMENTACIÓN PROPIA: no se ha copiado código de estos proyectos):
+ *
+ * - Trazo a mano suavizado con curvas Bézier cuadráticas por puntos medios (v41.88)
+ *     Técnica estándar documentada en Fabric.js (PencilBrush) y en perfect-freehand (Steve Ruiz; también la usan tldraw y Excalidraw).
+ *     https://github.com/steveruizok/perfect-freehand  ·  https://github.com/fabricjs/fabric.js
+ *
+ * - Historial local de dibujo por baldosas (tiles) con estructura compartida (v41.89)
+ *     Técnica estándar de los programas de pintura Krita, GIMP y MyPaint (deshacer por baldosas inmutables compartidas).
+ *     https://krita.org/  ·  https://www.gimp.org/  ·  https://www.mypaint.app/
+ *
+ * - «Borrar color» (Color to Alpha)
+ *     Algoritmo de GIMP/Krita (Kevin Cozens), reescrito aquí.
+ *     https://www.gimp.org/
  */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
@@ -1337,12 +1366,14 @@ let _edPenCanDraw = false;         // true cuando se ha confirmado presión sufi
 const _ED_FAST_TOUCH_MS = 120; // misma ventana que el resto de timers táctiles
 let _edFastTouchArmed = false; // true durante la ventana de gracia de un trazo revertible
 let _edFastTouchTimer  = null; // desarma la ventana al expirar sin 2º dedo
-let _edFastTouchSnap   = null; // {ctx, data} snapshot pre-trazo del canvas temporal activo
+let _edFastTouchDl     = null; // v41.89: DrawLayer con el «volver atrás» armado (antes: copia ENTERA del canvas en cada toque)
 // Resuelve el mismo canvas temporal que va a recibir el próximo beginStroke()
 // (misma lógica de _edTmp.active que usa edStartPaint) para snapshotearlo.
 function _edFastTouchResolveProxy(){
   if(edActiveTool === 'eraser'){
     // conserva la capa activa actual (o _edEraserLayer) — igual que _edTmpProxy()
+  } else if(edActiveTool === 'fill' && !_edDodgeBurnActive && typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'){
+    _edTmp.active = 'watercolor'; // v41.89: acuarela táctil (sin cursor desplazado) también empieza al instante
   } else if(typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil'){
     _edTmp.active = 'pencil';
   } else {
@@ -1350,23 +1381,26 @@ function _edFastTouchResolveProxy(){
   }
   return _edTmpProxy();
 }
-// Arma la ventana de gracia y toma el snapshot ANTES del primer beginStroke().
+// Arma la ventana de gracia ANTES del primer beginStroke().
 // Llamar justo antes de edStartPaint(e) en el toque táctil simple (sin _cof).
+// v41.89 — antes se hacía una copia ENTERA del canvas (getImageData 2700×2340 ≈ 25 MB, ≈20 ms) en CADA toque, y una ráfaga de trazos
+// cortos (sombreado) saturaba el hilo principal. Ahora el DrawLayer guarda, «copy-on-write», sólo las baldosas que el trazo llega a tocar
+// durante la ventana (DrawLayer.rvArm/_rvSave/rvRevert): el coste es proporcional al trazo, no al lienzo, y el resultado es el mismo
+// (los píxeles vuelven al estado justo anterior al primer punto).
 function _edFastTouchArmStart(){
   _edGetOrCreateDrawLayer();
   const dl = _edFastTouchResolveProxy();
-  _edFastTouchSnap = null;
-  if(dl && dl._canvas){
-    try {
-      const c = dl._canvas, ctx = dl._ctx || c.getContext('2d');
-      _edFastTouchSnap = { ctx, data: ctx.getImageData(0, 0, c.width, c.height) };
-    } catch(_){ _edFastTouchSnap = null; }
-  }
+  if(_edFastTouchDl && _edFastTouchDl !== dl && _edFastTouchDl.rvDisarm) _edFastTouchDl.rvDisarm();
+  _edFastTouchDl = null;
+  if(dl && typeof dl.rvArm === 'function'){ dl.rvArm(); _edFastTouchDl = dl; }
   _edFastTouchArmed = true;
   clearTimeout(_edFastTouchTimer);
-  _edFastTouchTimer = setTimeout(() => {
-    _edFastTouchArmed = false; _edFastTouchSnap = null; _edFastTouchTimer = null;
-  }, _ED_FAST_TOUCH_MS);
+  _edFastTouchTimer = setTimeout(() => { _edFastTouchTimer = null; _edFastTouchDisarm(); }, _ED_FAST_TOUCH_MS);
+}
+function _edFastTouchDisarm(){
+  _edFastTouchArmed = false;
+  const d = _edFastTouchDl; _edFastTouchDl = null;
+  if(d && d.rvDisarm) d.rvDisarm();
 }
 // ── v41.88 — TRAZOS RÁPIDOS: CURVOS, NO POLIGONALES ───────────────────────────────────────────────
 // Alberto: «cuando se realiza un trazado rápido con las herramientas de dibujo a mano debería ser completamente curvo, sin
@@ -1378,6 +1412,8 @@ function _edFastTouchArmStart(){
 //   1) usar TODAS las muestras del frame → _edPaintMoveCoalesced (trazo normal) y _cofHandleMove (cursor COF);
 //   2) unir las muestras con curvas Bézier cuadráticas por los PUNTOS MEDIOS (Fabric.js PencilBrush, perfect-freehand, tldraw,
 //      Excalidraw): cada muestra P_i es el punto de control de la curva que va de medio(P_{i-1},P_i) a medio(P_i,P_{i+1}).
+//      CRÉDITOS: es la técnica documentada por esos proyectos; el código de aquí es PROPIO (no se copió nada) — constan en la
+//      cabecera de este fichero y en la ventana «Créditos» de la app.
 //      Continuidad C1 (sin esquinas), O(1) por muestra, y la deformación es la mínima posible: la curva sólo se separa de la
 //      muestra ≈ ¼ de lo que esa muestra se desvía del punto medio de sus vecinas (con muestras cada pocos px, nada);
 //   3) al soltar se remata el último medio tramo con una recta hasta la última muestra (_edSmFinish → DrawLayer.finishStroke).
@@ -1394,20 +1430,25 @@ function _edSmDiscard(){ // trazo abortado (un 2.º dedo lo revirtió): olvidar 
 }
 // El trazo terminó con normalidad (mismo dedo levantado, sin gesto): conservarlo.
 function _edFastTouchConfirm(){
-  _edFastTouchArmed = false;
   if(_edFastTouchTimer){ clearTimeout(_edFastTouchTimer); _edFastTouchTimer = null; }
-  _edFastTouchSnap = null;
+  _edFastTouchDisarm();
 }
 // Llegó un 2º dedo dentro de la ventana: era un gesto — revertir el trazo.
 function _edFastTouchCancel(){
   _edSmDiscard(); // v41.88: el trazo se revierte → que no quede la punta del suavizado pendiente de rematar
-  if(_edFastTouchSnap){
-    try { _edFastTouchSnap.ctx.putImageData(_edFastTouchSnap.data, 0, 0); edRedraw(); } catch(_){}
+  const d = _edFastTouchDl; _edFastTouchDl = null;
+  if(d && d.rvRevert){
+    try { if(d.rvRevert()) edRedraw(); } catch(_){}
   }
+  // v41.89: si era un trazo de ACUARELA, su vista previa acumulada (_wcOffscreen) y su estado de trazo también se descartan
+  if(window._edWcFl){ try { _edWatercolorCommit(window._edWcFl, edDrawSize, edDrawOpacity); } catch(_){} window._edWcFl = null; window._edWcLast = null; }
   _edFastTouchConfirm();
 }
 let edDrawHistory = [], edDrawHistoryIdx = -1;  // historial local de dibujo
 const ED_MAX_DRAW_HISTORY = 20;
+// v41.89 — el historial local guarda BALDOSAS de ED_HT×ED_HT px (ver «HISTORIAL LOCAL DEL DIBUJO POR BALDOSAS» junto a _edDrawPushHistory).
+const ED_HT = 128;
+let _edHtUnknownDirty = false; // algo escribió en un canvas que el historial no conoce → el próximo apunte será completo
 // Icono simetría (T14): triángulo izq (cateto horiz + cateto vertical derecho) | gap | línea discontinua | gap | triángulo der (espejo)
 const _ED_MIRROR_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16" width="20" height="14" style="display:block;pointer-events:none"><polygon points="1,1 9,1 9,15" fill="currentColor"/><line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.5 2"/><polygon points="15,1 23,1 15,15" fill="currentColor"/></svg>`;
 let edDrawColor = '#000000', edDrawSize = 2, edEraserSize = 20, edDrawOpacity = 100;
@@ -3407,6 +3448,10 @@ class DrawLayer extends BaseLayer {
     // tramo (para el remate) · _bt = tramos del lote abierto, aún sin pintar.
     this._smX = undefined; this._smY = undefined; this._smPX = undefined; this._smPY = undefined;
     this._smSty = null; this._bt = null; this._btOpen = false;
+    // v41.89 — rectángulo «sucio» (todo lo pintado desde el último apunte del historial local, ver _edDrawPushHistory) y estado del
+    // «volver atrás» de la ventana del gesto táctil (ver _edFastTouchArmStart). Ambos son proporcionales al trazo, no al lienzo.
+    this._hdX0 = Infinity;  this._hdY0 = Infinity; this._hdX1 = -Infinity; this._hdY1 = -Infinity;
+    this._rv = null;
   }
   static fromDataUrl(dataUrl, pw, ph){
     const dl = new DrawLayer();
@@ -3482,6 +3527,7 @@ class DrawLayer extends BaseLayer {
     this._gcEndX   = undefined; this._gcEndY   = undefined;
     this._smX = undefined; this._smY = undefined; this._smPX = undefined; this._smPY = undefined; // v41.88
     this._smSty = null; this._bt = null; this._btOpen = false;
+    this._hdX0 = Infinity; this._hdY0 = Infinity; this._hdX1 = -Infinity; this._hdY1 = -Infinity; this._rv = null; // v41.89
     if(_edSmActive === this) _edSmActive = null;
   }
   // Coordenadas en workspace (px absoluto dentro del canvas de trabajo)
@@ -3504,6 +3550,10 @@ class DrawLayer extends BaseLayer {
       this._gcStrokeSize = size;
     }
     const alpha = (opacity ?? 100) / 100;
+    { // v41.89: ANTES de pintar — copy-on-write del «volver atrás» táctil + rectángulo sucio del historial local
+      const _pd = (!isEraser && typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? size * 0.7 + 3 : size / 2 + 2;
+      this._markPaint(x - _pd, y - _pd, x + _pd, y + _pd);
+    }
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     if(isEraser){
@@ -3554,16 +3604,61 @@ class DrawLayer extends BaseLayer {
     let b = this._bt;
     if(b && (b.kind !== kind || b.alpha !== alpha || b.eraser !== eraser || b.color !== color)){ this._btFlush(); b = null; }
     if(!b){
-      b = this._bt = { kind, color, size, alpha, eraser, path: null, pcs: null };
+      b = this._bt = { kind, color, size, alpha, eraser, path: null, pcs: null, x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity, pad: 0 };
       if(kind === 'pencil') b.pcs = []; else { b.path = new Path2D(); b.path.moveTo(ax, ay); }
     }
     b.size = size;
+    // v41.89 — área que tocará este lote: una Bézier cuadrática queda siempre dentro del casco convexo de sus 3 puntos; + el radio del pincel
+    // (lápiz de grafito: las fibras se reparten ±0,35·grosor y miden hasta 0,22·grosor → 0,7·grosor + 3)
+    { const _p = kind === 'pencil' ? size * 0.7 + 3 : size / 2 + 2; if(_p > b.pad) b.pad = _p;
+      const _lx = Math.min(ax, cx, ex), _hx = Math.max(ax, cx, ex), _ly = Math.min(ay, cy, ey), _hy = Math.max(ay, cy, ey);
+      if(_lx < b.x0) b.x0 = _lx; if(_hx > b.x1) b.x1 = _hx; if(_ly < b.y0) b.y0 = _ly; if(_hy > b.y1) b.y1 = _hy; }
     if(kind === 'pencil') b.pcs.push(ax, ay, cx, cy, ex, ey); else b.path.quadraticCurveTo(cx, cy, ex, ey);
     if(!this._btOpen) this._btFlush();
+  }
+  // ── v41.89 — rectángulo sucio del historial local + «volver atrás» del gesto táctil (copy-on-write por baldosas) ──
+  // _markPaint se llama SIEMPRE justo ANTES de pintar: guarda los píxeles previos de las baldosas que se van a tocar (sólo si el «volver
+  // atrás» está armado) y amplía el rectángulo sucio que _edDrawPushHistory convertirá en baldosas nuevas del historial.
+  _markPaint(x0, y0, x1, y1){
+    if(this._rv) this._rvSave(x0, y0, x1, y1);
+    if(x0 < this._hdX0) this._hdX0 = x0; if(y0 < this._hdY0) this._hdY0 = y0;
+    if(x1 > this._hdX1) this._hdX1 = x1; if(y1 > this._hdY1) this._hdY1 = y1;
+  }
+  // El escritor NO es DrawLayer.continueStroke (acuarela, iluminar/oscurecer): marca la zona igual que _markPaint. La acuarela la llama ANTES
+  // de pintar (con el «volver atrás» armado guarda sus baldosas: acuarela táctil con arranque inmediato); iluminar/oscurecer la llama
+  // DESPUÉS y nunca arma el «volver atrás», así que sólo amplía el rectángulo sucio.
+  _hdAdd(x0, y0, x1, y1){ this._markPaint(x0, y0, x1, y1); }
+  histTake(){ // devuelve (y vacía) el rectángulo pintado desde el último apunte; null si no hay nada
+    if(!(this._hdX1 >= this._hdX0 && this._hdY1 >= this._hdY0)) return null;
+    const r = { x0: this._hdX0, y0: this._hdY0, x1: this._hdX1, y1: this._hdY1 };
+    this._hdX0 = Infinity; this._hdY0 = Infinity; this._hdX1 = -Infinity; this._hdY1 = -Infinity;
+    return r;
+  }
+  rvArm(){ this._rv = { tiles: new Map(), hd: [this._hdX0, this._hdY0, this._hdX1, this._hdY1] }; }
+  rvDisarm(){ this._rv = null; }
+  _rvSave(x0, y0, x1, y1){
+    const rv = this._rv; if(!rv) return;
+    const W = this._canvas.width, H = this._canvas.height, T = ED_HT, cols = Math.ceil(W / T), rows = Math.ceil(H / T);
+    const tx0 = Math.max(0, Math.floor(x0 / T)), tx1 = Math.min(cols - 1, Math.floor(x1 / T));
+    const ty0 = Math.max(0, Math.floor(y0 / T)), ty1 = Math.min(rows - 1, Math.floor(y1 / T));
+    for(let ty = ty0; ty <= ty1; ty++) for(let tx = tx0; tx <= tx1; tx++){
+      const id = ty * cols + tx; if(rv.tiles.has(id)) continue;
+      const px = tx * T, py = ty * T, w = Math.min(T, W - px), h = Math.min(T, H - py);
+      try { rv.tiles.set(id, { x: px, y: py, d: this._ctx.getImageData(px, py, w, h) }); } catch(_){ rv.tiles.set(id, null); }
+    }
+  }
+  // Devuelve los píxeles al estado previo al primer punto (sólo las baldosas tocadas) y desarma. true si restauró algo.
+  rvRevert(){
+    const rv = this._rv; this._rv = null; if(!rv) return false;
+    let n = 0;
+    rv.tiles.forEach(t => { if(t){ try { this._ctx.putImageData(t.d, t.x, t.y); n++; } catch(_){} } });
+    this._hdX0 = rv.hd[0]; this._hdY0 = rv.hd[1]; this._hdX1 = rv.hd[2]; this._hdY1 = rv.hd[3]; // el trazo revertido no deja zona sucia
+    return n > 0;
   }
   _btFlush(){
     const b = this._bt; if(!b) return; this._bt = null;
     const ctx = this._ctx;
+    this._markPaint(b.x0 - b.pad, b.y0 - b.pad, b.x1 + b.pad, b.y1 + b.pad); // v41.89: ANTES de pintar
     ctx.save();
     if(b.kind === 'pencil'){
       this._smStamp(b);
@@ -3670,6 +3765,10 @@ class DrawLayer extends BaseLayer {
     }
     // Ruta antigua (recta con recorte circular): sólo la usaba el cursor desplazado anterior al COF (hoy inalcanzable).
     this._smSty = null;
+    { // v41.89: ANTES de pintar (ver _markPaint)
+      const _pd = (!isEraser && typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? size * 0.7 + 3 : size / 2 + 2;
+      this._markPaint(Math.min(this._lastX, x) - _pd, Math.min(this._lastY, y) - _pd, Math.max(this._lastX, x) + _pd, Math.max(this._lastY, y) + _pd);
+    }
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
     if(isEraser){
@@ -15825,12 +15924,12 @@ function edOnStart(e){
           }
           return;
         }
-        // Sin cursor offset: iniciar trazo inmediato
-        clearTimeout(window._edDrawTouchTimer);
-        window._edDrawTouchTimer = setTimeout(() => {
-          if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
-          edStartPaint(_eSavedWC);
-        }, 120);
+        // Sin cursor offset: v41.89 — trazo rápido con prioridad, igual que tinta/lápiz/goma: empezar YA y, si llega un 2.º dedo dentro de
+        // _ED_FAST_TOUCH_MS, revertirlo sin rastro (_edFastTouchCancel). Antes: espera fija de 120 ms tras tocar, y un trazo más corto que
+        // eso (sombreado con trazos cortos y rápidos) no llegaba a pintarse nunca.
+        clearTimeout(window._edDrawTouchTimer); window._edDrawTouchTimer = null;
+        _edFastTouchArmStart();
+        edStartPaint(_eSavedWC);
         return;
       }
       // Dodge/burn en touch: actuar directamente (o a través de cursor desplazado)
@@ -16663,6 +16762,10 @@ function edOnStart(e){
         }
       } else if(['draw','eraser'].includes(edActiveTool)){
         // Trazo rápido con prioridad — mismo criterio que al tocar zona vacía
+        _edFastTouchArmStart();
+        edStartPaint(_eSaved2);
+      } else if(edActiveTool==='fill' && !_edDodgeBurnActive && typeof edFillBrushType!=='undefined' && edFillBrushType==='watercolor'){
+        // v41.89: acuarela con prioridad, igual que tinta/lápiz/goma (ver el toque en zona vacía)
         _edFastTouchArmStart();
         edStartPaint(_eSaved2);
       } else {
@@ -19133,59 +19236,154 @@ function _edShapeUpdateUndoRedoBtns(){
   if(br) br.style.opacity = canRedo ? '1' : '0.3';
 }
 
-function _edDrawPushHistory(){
-  const _snapTmp = (dl) => dl?._canvas ? dl._canvas.toDataURL() : null;
-  // Incluir DrawLayer real para restaurar cambios de dodge/burn
+// ── v41.89 — HISTORIAL LOCAL DEL DIBUJO POR BALDOSAS ─────────────────────────────────────────────────────────────────────
+// Alberto: «si dibujas múltiples trazos cortos rápidos (sombreado) no se visualizan completamente hasta que se dejan de hacer, perdiendo
+// la visualización en tiempo real … también ocurre en PC».
+// CAUSA (medida con ráfagas reales de 24 trazos cortos): al SOLTAR cada trazo, este historial codificaba a PNG los 5 canvas de trabajo
+// ENTEROS (4 temporales + la capa real, 2700×2340 px cada uno ≈ 25 MB): ≈190 ms de hilo principal por trazo. Con trazos de ≈50 ms y
+// pausas de ≈35 ms el hilo no daba abasto, los eventos se encolaban (retraso de 2,5 s tras 24 trazos) y lo dibujado sólo aparecía al parar.
+// En táctil se sumaba una copia completa del canvas (getImageData ≈20 ms) al empezar CADA trazo (ventana del gesto de 2 dedos).
+// SOLUCIÓN — la estándar de los programas de pintura (Krita, GIMP, Photoshop, MyPaint): historial por BALDOSAS con estructura compartida.
+//   (CRÉDITOS: técnica de esos programas; implementación PROPIA, sin código copiado — ver la cabecera de este fichero y «Créditos» en la app.)
+//   · Cada apunte es una «rejilla» por canvas de baldosas de ED_HT×ED_HT px. Una baldosa es null (vacía), {u} (de un solo color: un
+//     relleno plano ocupa casi nada) o {u32} (píxeles). Las baldosas son INMUTABLES: dos apuntes seguidos comparten las que no cambian.
+//   · Al soltar un trazo sólo se leen y comparan las baldosas del rectángulo que ese trazo ha pintado (DrawLayer lo va acumulando en
+//     _hdX0..; acuarela e iluminar/oscurecer lo marcan con _edHistMarkCanvas): UNA lectura pequeña por canvas tocado. Coste ∝ trazo.
+//   · Cualquier otra operación (cubo, degradado, vaciar capa, convertir en relleno, borrar color…) sigue pidiendo un apunte COMPLETO
+//     (sin argumentos), igual que antes; también se cae al completo si no hay apunte previo o algo escribió en un canvas desconocido.
+//   · Deshacer/rehacer reescribe las baldosas de forma SÍNCRONA (putImageData) — sin decodificar PNG ni parpadeo.
+//   · Se mantiene la deduplicación: un apunte idéntico al anterior no añade entrada.
+function _edHtGrid(W, H, pg){
+  const cols = Math.ceil(W / ED_HT), rows = Math.ceil(H / ED_HT);
+  const same = !!pg && pg.W === W && pg.H === H;
+  return { W, H, cols, rows, t: same ? pg.t.slice() : new Array(cols * rows).fill(null) };
+}
+// Baldosa de w×h px leída de `src` (Uint32Array con `stride` px por fila) desde (sx,sy). null = vacía; {u} = de un solo valor.
+function _edHtMake(src, stride, sx, sy, w, h){
+  const first = src[sy * stride + sx];
+  let uni = true;
+  for(let y = 0; y < h && uni; y++){
+    const o = (sy + y) * stride + sx;
+    for(let x = 0; x < w; x++){ if(src[o + x] !== first){ uni = false; break; } }
+  }
+  if(uni) return first === 0 ? null : { w, h, u: first };
+  const out = new Uint32Array(w * h);
+  for(let y = 0; y < h; y++){ const o = (sy + y) * stride + sx; out.set(src.subarray(o, o + w), y * w); }
+  return { w, h, u32: out };
+}
+function _edHtSame(a, b){
+  if(a === b) return true;
+  if(!a || !b || a.w !== b.w || a.h !== b.h) return false;
+  if(a.u !== undefined || b.u !== undefined) return a.u === b.u;
+  const x = a.u32, y = b.u32;
+  for(let i = 0; i < x.length; i++) if(x[i] !== y[i]) return false;
+  return true;
+}
+// Lee (UNA llamada a getImageData) las baldosas tx0..tx1 × ty0..ty1 de `canvas` y las vuelca en `grid`, reutilizando las de `pg` que no
+// han cambiado. Devuelve true si alguna baldosa es distinta de la de `pg`.
+function _edHtCaptureRect(canvas, ctx, grid, pg, tx0, ty0, tx1, ty1){
+  const T = ED_HT, W = grid.W, H = grid.H;
+  tx0 = Math.max(0, tx0); ty0 = Math.max(0, ty0); tx1 = Math.min(grid.cols - 1, tx1); ty1 = Math.min(grid.rows - 1, ty1);
+  if(tx1 < tx0 || ty1 < ty0) return false;
+  const px0 = tx0 * T, py0 = ty0 * T, px1 = Math.min(W, (tx1 + 1) * T), py1 = Math.min(H, (ty1 + 1) * T);
+  const rw = px1 - px0, rh = py1 - py0; if(rw <= 0 || rh <= 0) return false;
+  const src = new Uint32Array(ctx.getImageData(px0, py0, rw, rh).data.buffer);
+  const comparable = !!pg && pg.W === W && pg.H === H;
+  let changed = !comparable;
+  for(let ty = ty0; ty <= ty1; ty++) for(let tx = tx0; tx <= tx1; tx++){
+    const x = tx * T, y = ty * T, w = Math.min(T, W - x), h = Math.min(T, H - y); if(w <= 0 || h <= 0) continue;
+    const nt = _edHtMake(src, rw, x - px0, y - py0, w, h), i = ty * grid.cols + tx;
+    if(comparable && _edHtSame(pg.t[i], nt)) grid.t[i] = pg.t[i];
+    else { grid.t[i] = nt; changed = true; }
+  }
+  return changed;
+}
+// Rejilla completa de un canvas, por bandas de 4 filas de baldosas (5,5 MB de memoria temporal como mucho). true si difiere de `pg`.
+function _edHtCaptureAll(canvas, ctx, grid, pg){
+  let changed = false;
+  for(let ty = 0; ty < grid.rows; ty += 4) if(_edHtCaptureRect(canvas, ctx, grid, pg, 0, ty, grid.cols - 1, ty + 3)) changed = true;
+  return changed;
+}
+// Reescribe un canvas con una rejilla (null → sólo lo vacía). putImageData ignora transformaciones/composición: píxeles exactos.
+function _edHtApply(canvas, ctx, grid){
+  if(!canvas || !ctx) return;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.restore();
+  if(!grid) return;
+  for(let i = 0; i < grid.t.length; i++){
+    const t = grid.t[i]; if(!t) continue;
+    let px;
+    if(t.u !== undefined){ const a = new Uint32Array(t.w * t.h); a.fill(t.u); px = new Uint8ClampedArray(a.buffer); }
+    else px = new Uint8ClampedArray(t.u32.buffer, t.u32.byteOffset, t.u32.byteLength);
+    ctx.putImageData(new ImageData(px, t.w, t.h), (i % grid.cols) * ED_HT, ((i / grid.cols) | 0) * ED_HT);
+  }
+}
+// Marca la zona (x,y,w,h) de `canvas` como modificada por un escritor que no es DrawLayer.continueStroke (acuarela, iluminar/oscurecer).
+function _edHistMarkCanvas(canvas, x, y, w, h){
+  if(!canvas) return;
+  for(const k of ['pen', 'pencil', 'watercolor', 'bucket']){
+    const dl = _edTmp[k];
+    if(dl && dl._canvas === canvas && dl._hdAdd){ dl._hdAdd(x, y, x + w, y + h); return; }
+  }
+  const dlR = edPages[edCurrentPage]?.layers.find(l => l.type === 'draw');
+  if(dlR && dlR._canvas === canvas && dlR._hdAdd){ dlR._hdAdd(x, y, x + w, y + h); return; }
+  _edHtUnknownDirty = true; // canvas desconocido (p. ej. el relleno real) → el próximo apunte será completo
+}
+// hint = {auto:true} → apunte de un TRAZO (sólo las baldosas que tocó); sin argumentos → apunte COMPLETO de los 5 canvas.
+function _edDrawPushHistory(hint){
   const _dlReal = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
-  const snap = {
-    pen:       _snapTmp(_edTmp.pen),
-    pencil:    _snapTmp(_edTmp.pencil),
-    watercolor:_snapTmp(_edTmp.watercolor),
-    bucket:    _snapTmp(_edTmp.bucket),
-    drawLayer: _dlReal?._canvas ? _dlReal._canvas.toDataURL() : null,
-  };
-  if(edDrawHistoryIdx >= 0 && edDrawHistory.length > 0){
-    const last = edDrawHistory[edDrawHistoryIdx];
-    if(last.pen===snap.pen && last.pencil===snap.pencil &&
-       last.watercolor===snap.watercolor && last.bucket===snap.bucket &&
-       last.drawLayer===snap.drawLayer) return;
+  const srcs = [['pen', _edTmp.pen], ['pencil', _edTmp.pencil], ['watercolor', _edTmp.watercolor], ['bucket', _edTmp.bucket], ['drawLayer', _dlReal]];
+  const prev = (edDrawHistoryIdx >= 0 && edDrawHistory.length > 0) ? edDrawHistory[edDrawHistoryIdx] : null;
+  let g = null;
+  if(hint && hint.auto && prev && prev.g && !_edHtUnknownDirty){
+    // ── camino de trazo: sólo las baldosas del rectángulo pintado ──
+    const dirty = [];
+    for(const [k, dl] of srcs){ const r = (dl && typeof dl.histTake === 'function') ? dl.histTake() : null; if(r) dirty.push([k, dl, r]); }
+    if(dirty.length){
+      g = Object.assign({}, prev.g); let changed = false;
+      for(const [k, dl, r] of dirty){
+        const pg = prev.g[k], c = dl._canvas, ctx = dl._ctx;
+        if(!pg || !c || !ctx || c.width !== pg.W || c.height !== pg.H){ g = null; break; } // forma inesperada → camino completo
+        const ng = { W: pg.W, H: pg.H, cols: pg.cols, rows: pg.rows, t: pg.t.slice() };
+        if(_edHtCaptureRect(c, ctx, ng, pg, Math.floor(r.x0 / ED_HT), Math.floor(r.y0 / ED_HT), Math.floor(r.x1 / ED_HT), Math.floor(r.y1 / ED_HT))){ g[k] = ng; changed = true; }
+      }
+      if(g && !changed) return; // el trazo no cambió ningún píxel (p. ej. goma sobre un hueco): nada que apuntar
+    }
+  }
+  if(!g){
+    // ── camino completo (cualquier otra operación, primer apunte de la sesión, o lo anterior no encaja) ──
+    g = {}; let anyChanged = !prev || !prev.g;
+    for(const [k, dl] of srcs){
+      if(dl && typeof dl.histTake === 'function') dl.histTake(); // el apunte completo cubre cualquier zona pendiente
+      const c = dl && dl._canvas, ctx = dl && dl._ctx, pg = prev && prev.g ? prev.g[k] : null;
+      if(!c || !ctx || !c.width || !c.height){ g[k] = null; if(pg) anyChanged = true; continue; }
+      const ng = _edHtGrid(c.width, c.height, pg);
+      if(_edHtCaptureAll(c, ctx, ng, pg) || !pg){ g[k] = ng; anyChanged = true; } else g[k] = pg;
+    }
+    _edHtUnknownDirty = false;
+    if(!anyChanged) return;
   }
   edDrawHistory = edDrawHistory.slice(0, edDrawHistoryIdx + 1);
-  edDrawHistory.push(snap);
+  edDrawHistory.push({ g });
   if(edDrawHistory.length > ED_MAX_DRAW_HISTORY) edDrawHistory.shift();
   edDrawHistoryIdx = edDrawHistory.length - 1;
   _edDrawUpdateUndoRedoBtns();
 }
 function _edDrawApplyHistory(snapshot){
-  if(!snapshot) return;
+  if(!snapshot || !snapshot.g) return;
   // Invalidar estado de nivel dodge/burn: el canvas vuelve a un estado anterior
   _dbOriginMap = new WeakMap();
-  const _restoreTmp = (key, url) => {
-    const dl = _edTmp[key]; if(!dl?._canvas) return;
-    const c = dl._canvas; const ctx = dl._ctx;
-    ctx.clearRect(0, 0, c.width, c.height);
-    if(url){
-      const img = new Image();
-      img.onload = () => { ctx.drawImage(img, 0, 0); edRedraw(); };
-      img.src = url;
-    }
-  };
-  _restoreTmp('pen',        snapshot.pen);
-  _restoreTmp('pencil',     snapshot.pencil);
-  _restoreTmp('watercolor', snapshot.watercolor);
-  _restoreTmp('bucket',     snapshot.bucket);
-  // Restaurar DrawLayer real (afectado por dodge/burn)
-  if(snapshot.drawLayer !== undefined){
-    const _dlR = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
-    if(_dlR?._canvas){
-      _dlR._ctx.clearRect(0,0,_dlR._canvas.width,_dlR._canvas.height);
-      if(snapshot.drawLayer){
-        const _imgDl = new Image();
-        _imgDl.onload = () => { _dlR._ctx.drawImage(_imgDl,0,0); edRedraw(); };
-        _imgDl.src = snapshot.drawLayer;
-      }
-    }
+  for(const k of ['pen', 'pencil', 'watercolor', 'bucket']){
+    const dl = _edTmp[k]; if(!dl?._canvas) continue;
+    _edHtApply(dl._canvas, dl._ctx, snapshot.g[k]);
+    if(dl.histTake) dl.histTake(); // lo pintado antes de deshacer deja de estar «pendiente»
   }
+  // Restaurar DrawLayer real (afectado por dodge/burn)
+  if(snapshot.g.drawLayer !== undefined){
+    const _dlR = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
+    if(_dlR?._canvas){ _edHtApply(_dlR._canvas, _dlR._ctx, snapshot.g.drawLayer); if(_dlR.histTake) _dlR.histTake(); }
+  }
+  _edHtUnknownDirty = false;
   edRedraw();
 }
 function edDrawUndo(){
@@ -20830,7 +21028,7 @@ function edColorErase(nx, ny){  const page = edPages[edCurrentPage]; if(!page) r
     }
   }
 
-  // Algoritmo "Color to Alpha" de Krita/GIMP (Kevin Cozens):
+  // Algoritmo "Color to Alpha" de Krita/GIMP (Kevin Cozens) — reescrito aquí, sin copiar código (ver cabecera y «Créditos»):
   // Calcula exactamente cuánto del color objetivo contribuye a cada píxel
   // y lo elimina sin dejar contorno residual.
   // 
@@ -21635,6 +21833,7 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
       d[pi + 3] = state.origData[ci * 4 + 3];
     }
     tgt.ctx.putImageData(imgD, bx, by);
+    _edHistMarkCanvas(tgt.canvas, bx, by, bw, bh); // v41.89: zona tocada (historial local por baldosas)
   }
   _dbTargets.forEach(_applyDodgeBurn);
   return { wx, wy };
@@ -21691,6 +21890,7 @@ function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   const bw   = Math.min(cw - bx, Math.ceil(x1 - x0 + size + pad*2));
   const bh   = Math.min(ch - by, Math.ceil(y1 - y0 + size + pad*2));
   if(bw <= 0 || bh <= 0) return { wx, wy };
+  _edHistMarkCanvas(fl._canvas, bx, by, bw, bh); // v41.89: zona que va a tocar este segmento (historial local por baldosas)
 
   const seg  = document.createElement('canvas');
   seg.width  = bw; seg.height = bh;
@@ -22181,14 +22381,14 @@ function edSaveDrawData(){
     // no destructiva: el contenido previo en watercolor/bucket se preserva bajo la
     // tinta; la tinta cubre visualmente (está encima en el render). Al borrar tinta,
     // el contenido previo reaparece. Nuevo D/B bajo tinta ya está bloqueado via _inkMaskData.
-    _edDrawPushHistory();
+    _edDrawPushHistory({ auto: true }); // v41.89: sólo las baldosas que tocó el trazo (ver _edHistMarkCanvas en edDodgeBurnStroke)
   } else if(window._edWcFl){
     // Acuarela: limpiar offscreen y guardar historial
     _edWatercolorCommit(window._edWcFl, edDrawSize, edDrawOpacity);
     window._edWcFl  = null;
     window._edWcLast = null;
     edRedraw();
-    _edDrawPushHistory();
+    _edDrawPushHistory({ auto: true }); // v41.89: ídem (ver _edHistMarkCanvas en _edWatercolorStroke)
   } else {
     // NOTA: el cierre automático de huecos al soltar el trazo se retiró (T-gap):
     // molestaba y ya no encajaba con el flujo actual. Ahora el cierre de huecos
@@ -22198,7 +22398,9 @@ function edSaveDrawData(){
     // la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
     // bajo la tinta y reaparece si la tinta es borrada. Nueva acuarela bajo tinta
     // ya está bloqueada inline en _edWatercolorStroke (destination-out en tiempo real).
-    _edDrawPushHistory();
+    // v41.89: tinta / lápiz / goma → apunte de TRAZO (sólo las baldosas que DrawLayer marcó como pintadas); «borrar color» (inunda varias
+    // capas, sin rectángulo conocido) sigue haciendo el apunte completo.
+    _edDrawPushHistory(edActiveTool === 'color-erase' ? undefined : { auto: true });
     // Color-erase: volver a la herramienta de dibujo al levantar el dedo
     if (edActiveTool === 'color-erase') { /* mantener activa hasta que el usuario cambie */ }
   }

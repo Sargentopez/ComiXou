@@ -25,6 +25,21 @@
  *     Autor: 37signals, LLC (Basecamp) — Javan Makhmali y Sam Stephenson
  *     Licencia: MIT
  *     https://trix-editor.org/  ·  https://github.com/basecamp/trix
+ *
+ * - gifuct-js (decodificador de GIF animados; incluido dentro de editor.js y de reader/reader.js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/gifuct-js
+ *
+ * - js-binary-schema-parser (analizador de esquemas binarios; parte de gifuct-js)
+ *     Autor: Matt Way
+ *     Licencia: MIT
+ *     https://github.com/matt-way/jsBinarySchemaParser
+ *
+ * - jsgif (función de desentrelazado de GIF; parte de gifuct-js)
+ *     Autor: Shachaf Ben-Kiki
+ *     Licencia: MIT
+ *     https://github.com/shachaf/jsgif
  */
 /* ============================================================
    utils.js — Utilidades compartidas
@@ -340,16 +355,34 @@ const _CREDITS_LIBS = [
   { name: 'pako',               descKey: 'credits_pakoDesc',   metaKey: 'credits_pakoMeta',   url: 'https://github.com/nodeca/pako' },
   { name: 'UPNG.js',            descKey: 'credits_upngDesc',   metaKey: 'credits_upngMeta',   url: 'https://github.com/photopea/UPNG.js' },
   { name: 'LZW decompression',  descKey: 'credits_lzwDesc',    metaKey: 'credits_lzwMeta',    url: 'https://gist.github.com/devunwired/4479231' },
-  { name: 'Trix',                descKey: 'credits_trixDesc',  metaKey: 'credits_trixMeta',   url: 'https://trix-editor.org/' }
+  { name: 'Trix',                descKey: 'credits_trixDesc',  metaKey: 'credits_trixMeta',   url: 'https://trix-editor.org/' },
+  // v41.89 — constaban sólo en un comentario de editor.js / reader.js; ahora también aquí y en la cabecera de cada fichero.
+  { name: 'gifuct-js',          descKey: 'credits_gifuctDesc', metaKey: 'credits_gifuctMeta', url: 'https://github.com/matt-way/gifuct-js' },
+  { name: 'js-binary-schema-parser', descKey: 'credits_jbspDesc', metaKey: 'credits_jbspMeta', url: 'https://github.com/matt-way/jsBinarySchemaParser' },
+  { name: 'jsgif',               descKey: 'credits_jsgifDesc',  metaKey: 'credits_jsgifMeta',  url: 'https://github.com/shachaf/jsgif' },
+  // Tipografías autoalojadas (fonts/typefaces.css lleva el aviso de copyright de cada familia)
+  { nameKey: 'credits_fontsName', descKey: 'credits_fontsDesc', metaKey: 'credits_fontsMeta', url: 'https://fonts.google.com/' }
+];
+// v41.89 — técnicas y algoritmos de referencia (implementación PROPIA, sin código copiado): constan también en la cabecera de editor.js.
+const _CREDITS_TECH = [
+  { nameKey: 'credits_techBezierName', descKey: 'credits_techBezierDesc', metaKey: 'credits_techBezierMeta', url: 'https://github.com/steveruizok/perfect-freehand' },
+  { nameKey: 'credits_techTilesName',  descKey: 'credits_techTilesDesc',  metaKey: 'credits_techTilesMeta',  url: 'https://krita.org/' },
+  { nameKey: 'credits_techC2aName',    descKey: 'credits_techC2aDesc',    metaKey: 'credits_techC2aMeta',    url: 'https://www.gimp.org/' }
 ];
 
-function _creditsModalHtml() {
-  const rows = _CREDITS_LIBS.map(lib => `
+function _creditsRowHtml(lib) {
+  const name = lib.nameKey ? I18n.t(lib.nameKey) : lib.name;
+  return `
     <div class="cr-row">
-      <div class="cr-name">${lib.name} <span class="cr-desc">— ${I18n.t(lib.descKey)}</span></div>
+      <div class="cr-name">${name} <span class="cr-desc">— ${I18n.t(lib.descKey)}</span></div>
       <div class="cr-meta">${I18n.t(lib.metaKey)}</div>
       <div class="cr-meta"><a href="${lib.url}" target="_blank" rel="noopener">${lib.url}</a></div>
-    </div>`).join('');
+    </div>`;
+}
+
+function _creditsModalHtml() {
+  const rows = _CREDITS_LIBS.map(_creditsRowHtml).join('');
+  const techRows = _CREDITS_TECH.map(_creditsRowHtml).join('');
 
   // Mismo texto que el fichero LICENSE de la raíz del proyecto (sin repetir
   // aquí la lista de bibliotecas de terceros, que el propio LICENSE también
@@ -367,6 +400,9 @@ function _creditsModalHtml() {
         <p class="cr-app">${I18n.t('credits_appInfo')} <a href="mailto:contacto@comxow.com">contacto@comxow.com</a></p>
         <div class="sc-section">${I18n.t('credits_thirdPartyLibs')}</div>
         ${rows}
+        <div class="sc-section">${I18n.t('credits_techTitle')}</div>
+        <p class="cr-license">${I18n.t('credits_techNote')}</p>
+        ${techRows}
         <div class="sc-section">${I18n.t('credits_license')}</div>
         ${licenseParagraphs}
         <p class="cr-license">${I18n.t('credits_contactAuth', { email: '<a href="mailto:contacto@comxow.com">contacto@comxow.com</a>' })}</p>
