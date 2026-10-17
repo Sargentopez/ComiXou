@@ -26977,7 +26977,7 @@ function edRenderOptionsPanel(mode){
         _laFs.resizeToFitText(edCanvas);
         edPushHistory(); edRedraw(); edRenderOptionsPanel('props');
         edToast(I18n.t('ed_fontSearchApplied'));
-      });
+      }, null, { sample: _laFs.text, bold: _laFs.fontBold, italic: _laFs.fontItalic }); // v41.91: la muestra del buscador es el texto del objeto
     });
     $('pp-ok')?.addEventListener('click',()=>{
       const _laOk = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
@@ -34369,6 +34369,15 @@ async function _cxLoadPagesExternalFonts(pages) {
 // ya se ha descargado+cacheado (si hacía falta) Y cargado de verdad en
 // document.fonts — nunca antes, para no aplicar un nombre que todavía
 // renderizaría con la tipografía de reserva.
+//
+// v41.91 — MUESTRA: al tocar una fuente de la lista, la franja inferior enseña
+// el TEXTO ESCRITO (el del objeto, o la selección / el documento entero del
+// Editor de textos) con esa fuente, SIN esperar a «Usar»: así se ve cómo
+// quedaría. Es una sola línea con «…» — lo que cabe lo decide el ancho
+// disponible; la franja conserva su alto reservado, así que la lista no se
+// mueve. Sin texto escrito (vacío o solo espacios) la muestra es, como antes,
+// el nombre de la fuente. Lo pasa quien abre el buscador en el 3.er parámetro:
+// { sample, bold, italic } (negrita/cursiva solo cuando hay texto de muestra).
 let _cxFontCatalogCache = null;
 async function _cxGetFontCatalog() {
   if (_cxFontCatalogCache) return _cxFontCatalogCache;
@@ -34386,8 +34395,22 @@ const _CX_FONT_CATEGORIES = [
   { id: 'monospace',    key: 'ed_fontSearchCatMonospace' },
 ];
 
-function _cxOpenFontSearch(onPick, onCancel) {
+// Texto de muestra limpio: todo en UNA línea (saltos de línea, tabuladores,
+// caracteres de control y el marcador de adjunto de Trix U+FFFC → espacio
+// simple), sin espacios sobrantes, y acotado — de sobra para cualquier ancho de
+// franja, pero sin pintar de una vez un texto enorme. Vacío → '' (= no hay
+// texto de muestra: se usa el nombre de la fuente).
+function _cxFontSampleClean(raw) {
+  const s = String(raw == null ? '' : raw)
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\ufffc\ufeff]+/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return [...s].slice(0, 160).join('').trim();
+}
+
+function _cxOpenFontSearch(onPick, onCancel, opts) {
   document.getElementById('cxFontSearchModal')?.remove();
+  const _sample = _cxFontSampleClean(opts && opts.sample);
+  const _sBold = !!(_sample && opts && opts.bold), _sItalic = !!(_sample && opts && opts.italic);
   // Reglas de la propia búsqueda — inyectadas una sola vez, no en cada
   // apertura (comprobado por id). La media query compacta cabecera/buscador/
   // categorías/vista previa cuando hay poca altura disponible (móvil en
@@ -34422,7 +34445,7 @@ function _cxOpenFontSearch(onPick, onCancel) {
       <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
       <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:110px;margin:8px 20px 0;display:flex;flex-direction:column;gap:2px;touch-action:pan-y"></div>
       <div id="cxFontSearchPreview" style="display:flex;align-items:center;gap:10px;min-height:44px;margin:8px 20px 0;padding:6px 12px;border:2px solid var(--gray-300);border-radius:10px;box-sizing:border-box">
-        <div id="cxFontSearchPreviewText" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.02rem;color:var(--gray-500)">${I18n.t('ed_fontSearchChooseHint')}</div>
+        <div id="cxFontSearchPreviewText" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.02rem;line-height:1.25;padding:3px 0;color:var(--gray-500)">${I18n.t('ed_fontSearchChooseHint')}</div>
         <button class="btn btn-primary" id="cxFontSearchUseBtn" disabled style="flex-shrink:0;padding:7px 14px;font-size:.85rem;opacity:.45;cursor:default">${I18n.t('ed_fontSearchUse')}</button>
       </div>
       <div class="mc-modal-actions">
@@ -34491,6 +34514,18 @@ function _cxOpenFontSearch(onPick, onCancel) {
     });
   }
 
+  // Fila de la fuente elegida (v41.91): se resalta con fondo + marco INTERIOR
+  // (box-shadow inset), nunca con borde/padding/peso de letra — marcar una fila
+  // no puede mover nada de la lista (el salto de scroll ya se arregló dos veces).
+  function _setRowSel(row, on) {
+    row.dataset.sel = on ? '1' : '';
+    row.style.background = on ? 'var(--gray-100)' : 'transparent';
+    row.style.boxShadow = on ? 'inset 0 0 0 2px var(--black)' : 'none';
+  }
+  function _markSelectedRow() {
+    resultsEl.querySelectorAll('button').forEach(b => _setRowSel(b, b.textContent === _currentPreviewFamily));
+  }
+
   function renderResults() {
     const q = input.value.trim().toLowerCase();
     let matches = _catalog.filter(f => (!_cat || f.category === _cat) && (!q || f.family.toLowerCase().includes(q)));
@@ -34506,7 +34541,8 @@ function _cxOpenFontSearch(onPick, onCancel) {
       row.textContent = f.family;
       row.style.cssText = 'text-align:left;padding:9px 10px;border:none;border-radius:6px;background:transparent;font-family:inherit;font-size:.92rem;cursor:pointer';
       row.addEventListener('mouseenter', () => row.style.background = 'var(--gray-100)');
-      row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+      row.addEventListener('mouseleave', () => row.style.background = row.dataset.sel === '1' ? 'var(--gray-100)' : 'transparent');
+      if (f.family === _currentPreviewFamily) _setRowSel(row, true); // tras filtrar/buscar, la elegida sigue marcada
       _makeTapSafe(row, () => showPreview(f.family));
       resultsEl.appendChild(row);
     });
@@ -34528,9 +34564,11 @@ function _cxOpenFontSearch(onPick, onCancel) {
   // pueda desplazar la lista mientras se está viendo con scroll.
   async function showPreview(family) {
     _currentPreviewFamily = family;
+    _markSelectedRow();
     useBtn.disabled = true; useBtn.style.opacity = '.45'; useBtn.style.cursor = 'default';
     previewText.style.color = 'var(--gray-500)';
     previewText.style.fontFamily = 'inherit';
+    previewText.style.fontWeight = 'normal'; previewText.style.fontStyle = 'normal'; // el aviso/error nunca hereda la negrita/cursiva de la muestra anterior
     previewText.textContent = I18n.t('ed_fontSearchDownloading');
     try {
       // Puede que ya esté cacheada de antes (otro usuario/obra la trajo ya) —
@@ -34538,9 +34576,21 @@ function _cxOpenFontSearch(onPick, onCancel) {
       // todas formas no duplica nada, solo confirma que está disponible.
       await SupabaseClient.fetchGoogleFont(family);
       await _cxLoadExternalFont(family);
+      // v41.91 — la muestra son las palabras escritas (o el nombre de la fuente
+      // si no hay texto), con la negrita/cursiva del texto original. Se espera a
+      // que ESA variante esté cargada para el texto concreto (document.fonts.load
+      // con el texto → solo trae los subconjuntos que hacen falta; en las
+      // autoalojadas dispara la carga del archivo, que _cxLoadExternalFont no
+      // toca): así nunca se ve un instante con la tipografía de reserva. Si falla
+      // (sin red / archivo ausente) se muestra con lo que haya, como antes.
+      const shown = _sample || family;
+      const fam = `'${family.replace(/'/g,"\\'")}',sans-serif`;
+      const wgt = _sBold ? '700' : '400', sty = _sItalic ? 'italic' : 'normal';
+      try { await document.fonts.load(`${sty} ${wgt} 16px ${fam}`, shown); } catch(_e) { /* se muestra igualmente */ }
       if (_currentPreviewFamily !== family) return; // se eligió otra mientras esta cargaba — no pisar el resultado más reciente
-      previewText.textContent = family;
-      previewText.style.fontFamily = `'${family.replace(/'/g,"\\'")}',sans-serif`;
+      previewText.textContent = shown;
+      previewText.style.fontFamily = fam;
+      previewText.style.fontWeight = wgt; previewText.style.fontStyle = sty;
       previewText.style.color = 'inherit';
       useBtn.disabled = false; useBtn.style.opacity = '1'; useBtn.style.cursor = 'pointer';
     } catch(e) {

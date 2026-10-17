@@ -2086,6 +2086,22 @@ function _tdWireFontControls(){
     e.preventDefault();
     freeze();
     const _savedRange = editorEl.editor?.getSelectedRange();
+    // v41.91 — muestra del buscador = el texto al que se aplicaría la fuente,
+    // con el MISMO criterio que _tdApplyScoped: la selección si la hay; con el
+    // cursor sin selección, el documento entero (si está vacío, no hay muestra
+    // y el buscador enseña el nombre de la fuente). Negrita/cursiva: las que
+    // tenga TODO ese texto (atributos comunes de Trix). Se lee ahora, con el
+    // rango todavía válido; _cxOpenFontSearch lo limpia y lo aplana a una línea.
+    let _sample = '', _sBold = false, _sItalic = false;
+    try{
+      const _doc = editorEl.editor?.getDocument();
+      if(_doc){
+        const _r = (_savedRange && _savedRange[0] !== _savedRange[1]) ? _savedRange : [0, _doc.toString().length];
+        _sample = _doc.getStringAtRange(_r);
+        const _at = _doc.getCommonAttributesAtRange(_r) || {};
+        _sBold = !!_at.bold; _sItalic = !!_at.italic;
+      }
+    }catch(_e){ _sample = ''; }
     if(typeof edCloseMenus === 'function') edCloseMenus();
     _cxOpenFontSearch(
       family => {
@@ -2097,7 +2113,8 @@ function _tdWireFontControls(){
         finishChoice();
         _tdSyncFontMenuActive();
       },
-      () => { unfreeze(); editorEl.focus(); } // canceló el buscador sin elegir nada
+      () => { unfreeze(); editorEl.focus(); }, // canceló el buscador sin elegir nada
+      { sample: _sample, bold: _sBold, italic: _sItalic }
     );
   });
   document.querySelectorAll('#dd-tdFontSize .ed-dropdown-item').forEach(btn => {
