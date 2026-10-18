@@ -14536,6 +14536,41 @@ function _edSubPathCount(pts, i) {
   return count;
 }
 
+// ── v41.93 — LA CURVATURA VIAJA CON SU NODO ─────────────────────────────────────────────────────────────────────────────────
+// Alberto: «la información de la curvatura de los nodos está vinculada con el número de nodo … si tengo un polígono con los nodos
+// 1, 2, 3 y 4 con sus curvaturas y elimino el 2, el nuevo nodo 2 debe tener la curvatura que antes tenía el 3: que visualmente no
+// cambie la info de los nodos al eliminarse o agregarse otro».
+// CAUSA: LineLayer.cornerRadii se guarda por NÚMERO de nodo (su posición en points, contando los null que separan contornos) y varios
+// caminos borraban o insertaban en points SIN renumerarlo: la curvatura se quedaba en el número y pasaba al nodo vecino. Al nodo
+// SELECCIONADO (window._edCurveVertIdx) y al del cursor desplazado (_vcof.activeNodeIdx) les pasaba lo mismo: tras borrar o insertar,
+// su número apuntaba a otro nodo y el deslizador de curvatura acababa editando el equivocado.
+// SOLUCIÓN (la estándar de los editores vectoriales —Figma, Illustrator, Inkscape—: los atributos pertenecen al VÉRTICE, no a su
+// posición), sin cambiar el formato guardado ni el lector: _edLineEditNodes(la, mutar) anota la curvatura y las selecciones por
+// IDENTIDAD del objeto-nodo, ejecuta la mutación de points (splice/shift/pop/filter conservan los objetos que sobreviven) y vuelve a
+// numerar cornerRadii y los índices de selección. Hay que llamarla ANTES de _updateBbox(), que recrea los objetos-punto al recentrar.
+// TODO borrado o inserción de nodos de un LineLayer pasa por aquí (un solo sitio que mantener, no un parche por cada camino).
+function _edLineEditNodes(la, mutate){
+  const pts0 = la.points, cr0 = la.cornerRadii;
+  const rByNode = new Map();
+  if(cr0){ for(let i = 0; i < pts0.length; i++){ const p = pts0[i], r = cr0[i]; if(p && r) rByNode.set(p, r); } }
+  // los índices de selección sólo pertenecen a la capa que se está editando
+  const own = la === _edLineLayer || (edSelectedIdx >= 0 && edLayers[edSelectedIdx] === la);
+  const selNode = (own && window._edCurveVertIdx >= 0) ? pts0[window._edCurveVertIdx] : null;
+  const vcNode  = (own && _vcof.activeNodeIdx >= 0)    ? pts0[_vcof.activeNodeIdx]    : null;
+  const res = mutate();
+  const pts1 = la.points;
+  if(cr0){
+    const cr1 = {};
+    for(let i = 0; i < pts1.length; i++){ const r = rByNode.get(pts1[i]); if(r) cr1[i] = r; }
+    la.cornerRadii = cr1;
+  }
+  if(own){
+    if(window._edCurveVertIdx >= 0) window._edCurveVertIdx = selNode ? pts1.indexOf(selNode) : -1;
+    if(_vcof.activeNodeIdx >= 0)    _vcof.activeNodeIdx    = vcNode  ? pts1.indexOf(vcNode)  : -1;
+  }
+  return res;
+}
+
 function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
   if(!la || la.type!=='line' || la.points.length < 2) return null;
   const pw=edPageW(), ph=edPageH(), z=edCamera.z;
@@ -15356,13 +15391,16 @@ function edOnStart(e){
               const _realPts = la.points.filter(Boolean);
               if(_realPts.length > 2){
                 _edShapePushHistory(); // guardar estado antes de eliminar
-                // splice directo — null marking dejaba un separador de contorno en el medio
-                la.points.splice(i, 1);
-                // Limpiar separadores null que hayan quedado al inicio/fin o consecutivos
-                // (útil en capas fusionadas multi-contorno)
-                while(la.points.length > 0 && la.points[0] === null) la.points.shift();
-                while(la.points.length > 0 && la.points[la.points.length-1] === null) la.points.pop();
-                la.points = la.points.filter((p,j,a) => p !== null || (j>0 && a[j-1]!==null));
+                // v41.93: la curvatura (cornerRadii) y la selección viajan con SU nodo — ver _edLineEditNodes
+                _edLineEditNodes(la, () => {
+                  // splice directo — null marking dejaba un separador de contorno en el medio
+                  la.points.splice(i, 1);
+                  // Limpiar separadores null que hayan quedado al inicio/fin o consecutivos
+                  // (útil en capas fusionadas multi-contorno)
+                  while(la.points.length > 0 && la.points[0] === null) la.points.shift();
+                  while(la.points.length > 0 && la.points[la.points.length-1] === null) la.points.pop();
+                  la.points = la.points.filter((p,j,a) => p !== null || (j>0 && a[j-1]!==null));
+                });
                 la._boundsDirty = true;
                 window._edCurveVertIdx = -1;
                 window._edCurveLastTapTime = 0;
@@ -16118,7 +16156,8 @@ function edOnStart(e){
           if(_sameHit2){
             _edLastNodeTapTime=0; _edLastNodeTapIdx=-1;
             if(_edLineLayer.points.length > 2){
-              _edLineLayer.points.splice(_hitNode.idx, 1);
+              // v41.93: la curvatura y la selección viajan con SU nodo (antes del _updateBbox, que recrea los puntos)
+              _edLineEditNodes(_edLineLayer, () => { _edLineLayer.points.splice(_hitNode.idx, 1); });
               if(_edLineLayer.points.length) _edLineLayer._updateBbox();
               _edShapePushHistory(); edRedraw();
             }
@@ -16307,16 +16346,8 @@ function edOnStart(e){
               ? _edSubPathCount(la.points, _lineHit.idx)
               : _n;
             if(_delMin > 2){
-              la.points.splice(_lineHit.idx,1);
-              if(la.cornerRadii && Object.keys(la.cornerRadii).length){
-                const newCR = {};
-                for(const k in la.cornerRadii){
-                  const ki = parseInt(k);
-                  if(ki < _lineHit.idx) newCR[ki] = la.cornerRadii[k];
-                  else if(ki > _lineHit.idx) newCR[ki-1] = la.cornerRadii[k];
-                }
-                la.cornerRadii = newCR;
-              }
+              // v41.93: la curvatura y la selección viajan con SU nodo (antes del _updateBbox, que recrea los puntos)
+              _edLineEditNodes(la, () => { la.points.splice(_lineHit.idx,1); });
               la._updateBbox(); _edShapePushHistory(); edRedraw();
             }
             return;
@@ -16328,16 +16359,8 @@ function edOnStart(e){
             const _pA = la.points[_segI], _pB = la.points[_segJ];
             if(_pA && _pB){
               const newLocal = {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2};
-              la.points.splice(_segJ,0,newLocal);
-              if(la.cornerRadii && Object.keys(la.cornerRadii).length){
-                const newCR = {};
-                for(const k in la.cornerRadii){
-                  const ki = parseInt(k);
-                  if(ki < _segJ) newCR[ki] = la.cornerRadii[k];
-                  else newCR[ki+1] = la.cornerRadii[k];
-                }
-                la.cornerRadii = newCR;
-              }
+              // v41.93: el nodo nuevo nace sin curvatura y el resto conserva la suya (y la selección) — ver _edLineEditNodes
+              _edLineEditNodes(la, () => { la.points.splice(_segJ,0,newLocal); });
               la._updateBbox(); _edShapePushHistory(); edRedraw();
             }
             return;
@@ -16535,7 +16558,8 @@ function edOnStart(e){
             ? _edSubPathCount(_lsLa.points, _lsHit.idx)
             : _lsLa.points.filter(Boolean).length;
           if(_delMin > 2){
-            _lsLa.points.splice(_lsHit.idx, 1);
+            // v41.93: la curvatura y la selección viajan con SU nodo (antes del _updateBbox, que recrea los puntos)
+            _edLineEditNodes(_lsLa, () => { _lsLa.points.splice(_lsHit.idx, 1); });
             _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
           }
         } else {
@@ -16545,7 +16569,8 @@ function edOnStart(e){
           const _sJ = _lsHit.nextIdx !== undefined ? _lsHit.nextIdx : (_sI+1) % _lsLa.points.length;
           const _pA = _lsLa.points[_sI], _pB = _lsLa.points[_sJ];
           if(_pA && _pB){
-            _lsLa.points.splice(_sJ, 0, {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2});
+            // v41.93: el nodo nuevo nace sin curvatura y el resto conserva la suya (y la selección)
+            _edLineEditNodes(_lsLa, () => { _lsLa.points.splice(_sJ, 0, {x:(_pA.x+_pB.x)/2, y:(_pA.y+_pB.y)/2}); });
             _lsLa._updateBbox(); _edShapePushHistory(); edRedraw();
           }
         }
@@ -34416,20 +34441,49 @@ function _cxOpenFontSearch(onPick, onCancel, opts) {
   // categorías/vista previa cuando hay poca altura disponible (móvil en
   // horizontal), para dejarle sitio de verdad a la lista: Alberto pidió que
   // se sigan viendo 3-4 fuentes ahí incluso en ese caso.
+  //
+  // v41.92 — «lo que queda fuera del cuadro en horizontal» (Alberto): a 360 px
+  // de alto el contenido medía ~425 px y el cuadro solo ~336, de modo que la
+  // franja con «Usar esta fuente» quedaba cortada y «Cancelar» entera debajo,
+  // y el único scroll que existía (el del cuadro) solo se alcanzaba arrastrando
+  // sobre la cabecera. Ahora:
+  //   · la cabecera (título, buscador, categorías en UNA fila) ocupa ~100 px en
+  //     vez de ~183 → en 336-412 px de alto TODO cabe sin scroll;
+  //   · si aun así no cabe (pantallas más bajas, o letra grande), el scroll del
+  //     cuadro sigue ahí y la franja + «Cancelar» (#cxFontSearchFoot) quedan
+  //     FIJAS abajo (position:sticky) para que nunca se pierdan de vista. Fuera
+  //     de esa media query el contenedor es display:contents (transparente: la
+  //     franja y «Cancelar» siguen siendo hijos flex directos del cuadro, así
+  //     que vertical y escritorio miden EXACTAMENTE lo mismo que antes);
+  //   · el cuadro es el único scroll del fondo (sin padding-bottom en el
+  //     overlay → ya no hay un segundo scroll de 10 px encadenado) y usa dvh;
+  //   · max-height ya no va en el style inline ni con !important: así el ajuste
+  //     de teclado de utils.js (_kbModalAdjust, que fija card.style.maxHeight)
+  //     vuelve a funcionar también en horizontal, y mientras está activo (el
+  //     style contiene max-height) la franja deja de ser fija — con el teclado
+  //     abierto el cuadro es diminuto y un pie fijo taparía el buscador.
   if (!document.getElementById('cxFontSearchStyles')) {
     const style = document.createElement('style');
     style.id = 'cxFontSearchStyles';
     style.textContent = `
+      #cxFontSearchModal .mc-modal-box { max-height: 82vh; }
+      #cxFontSearchModal #cxFontSearchFoot { display: contents; }
       @media (max-height: 480px) {
-        #cxFontSearchModal .mc-modal-box { max-height: 94vh !important; padding-bottom: 8px !important; }
-        #cxFontSearchModal .mc-modal-title { margin: 8px 0 4px !important; font-size: .95rem !important; }
-        #cxFontSearchModal #cxFontSearchInput { padding: 6px 10px !important; font-size: .85rem !important; }
-        #cxFontSearchModal #cxFontSearchCats { padding: 4px 20px 0 !important; gap: 4px !important; }
-        #cxFontSearchModal #cxFontSearchCats button { padding: 3px 9px !important; font-size: .7rem !important; }
-        #cxFontSearchModal #cxFontSearchResults { min-height: 120px !important; margin-top: 6px !important; }
+        #cxFontSearchModal { padding-bottom: 0; }
+        #cxFontSearchModal .mc-modal-box { max-height: 94vh; max-height: 94dvh; padding-bottom: 0 !important; overscroll-behavior: contain; }
+        #cxFontSearchModal .mc-modal-title { margin: 0 !important; padding: 3px 20px 2px !important; font-size: .95rem !important; }
+        #cxFontSearchModal .mc-field { margin: 5px 20px 3px !important; }
+        #cxFontSearchModal #cxFontSearchInput { padding: 5px 10px !important; font-size: .85rem !important; min-height: 34px !important; }
+        #cxFontSearchModal #cxFontSearchCats { padding: 3px 20px 0 !important; gap: 4px !important; }
+        #cxFontSearchModal #cxFontSearchCats button { padding: 3px 5px !important; font-size: .7rem !important; }
+        #cxFontSearchModal #cxFontSearchResults { min-height: 108px !important; margin-top: 5px !important; }
         #cxFontSearchModal #cxFontSearchResults button { padding: 6px 10px !important; font-size: .85rem !important; }
-        #cxFontSearchModal #cxFontSearchPreview { min-height: 40px !important; margin-top: 6px !important; padding: 5px 10px !important; }
-        #cxFontSearchModal .mc-modal-actions { margin-top: 6px !important; }
+        #cxFontSearchModal #cxFontSearchFoot { display: block; flex: none; padding-bottom: 6px; background: var(--white); }
+        #cxFontSearchModal #cxFontSearchPreview { min-height: 38px !important; margin-top: 5px !important; padding: 3px 10px !important; }
+        #cxFontSearchModal #cxFontSearchUseBtn { padding: 5px 12px !important; }
+        #cxFontSearchModal .mc-modal-actions { margin-top: 5px !important; }
+        #cxFontSearchModal #cxFontSearchCancel { padding: 5px 16px !important; font-size: .85rem !important; }
+        #cxFontSearchModal .mc-modal-box:not([style*="max-height"]) #cxFontSearchFoot { position: sticky; bottom: 0; z-index: 2; }
       }`;
     document.head.appendChild(style);
   }
@@ -34437,13 +34491,14 @@ function _cxOpenFontSearch(onPick, onCancel, opts) {
   ov.className = 'mc-modal-overlay open';
   ov.id = 'cxFontSearchModal';
   ov.innerHTML = `
-    <div class="mc-modal-box" style="max-height:82vh;width:min(440px,92vw);display:flex;flex-direction:column;padding-bottom:14px">
+    <div class="mc-modal-box" style="width:min(440px,92vw);display:flex;flex-direction:column;padding-bottom:14px">
       <h3 class="mc-modal-title"><span class="mc-modal-title-text">${I18n.t('ed_fontSearchTitle')}</span></h3>
       <div class="mc-field" style="padding:0 20px">
         <input type="text" id="cxFontSearchInput" placeholder="${I18n.t('ed_fontSearchPlaceholder')}" style="width:100%;box-sizing:border-box;padding:9px 12px;border:2px solid var(--gray-300);border-radius:8px;font-family:inherit;font-size:.9rem">
       </div>
       <div id="cxFontSearchCats" style="display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px 0"></div>
       <div id="cxFontSearchResults" style="overflow-y:auto;flex:1;min-height:110px;margin:8px 20px 0;display:flex;flex-direction:column;gap:2px;touch-action:pan-y"></div>
+      <div id="cxFontSearchFoot">
       <div id="cxFontSearchPreview" style="display:flex;align-items:center;gap:10px;min-height:44px;margin:8px 20px 0;padding:6px 12px;border:2px solid var(--gray-300);border-radius:10px;box-sizing:border-box">
         <div id="cxFontSearchPreviewText" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:1.02rem;line-height:1.25;padding:3px 0;color:var(--gray-500)">${I18n.t('ed_fontSearchChooseHint')}</div>
         <button class="btn btn-primary" id="cxFontSearchUseBtn" disabled style="flex-shrink:0;padding:7px 14px;font-size:.85rem;opacity:.45;cursor:default">${I18n.t('ed_fontSearchUse')}</button>
@@ -34451,8 +34506,13 @@ function _cxOpenFontSearch(onPick, onCancel, opts) {
       <div class="mc-modal-actions">
         <button class="btn" id="cxFontSearchCancel" style="flex:1">${I18n.t('cancel')}</button>
       </div>
+      </div>
     </div>`;
   document.body.appendChild(ov);
+  // v41.92: modal de verdad — la rueda/toques dentro del cuadro no deben llegar
+  // a los listeners globales del editor (_edWheelFn movía el lienzo en vez de
+  // desplazar el cuadro cuando éste necesita scroll por poca altura).
+  edStopCanvasLeak(ov);
 
   const input      = ov.querySelector('#cxFontSearchInput');
   const catsBox    = ov.querySelector('#cxFontSearchCats');
