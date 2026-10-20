@@ -17323,43 +17323,10 @@ function edOnMove(e){
       } else { // 'line' — mover todo
         const _newX1 = c.px - _edRuleDrag.offX;
         const _newY1 = c.py - _edRuleDrag.offY;
-        // Si la regla pertenece a un grupo, mover todo el grupo en bloque
-        const _nodeIds = [];
-        if(r.nodeA) _nodeIds.push(r.nodeA);
-        if(r.nodeB) _nodeIds.push(r.nodeB);
-        if(_nodeIds.length) {
-          const _dx = _newX1 - r.x1, _dy = _newY1 - r.y1;
-          // Recoger todas las reglas del grupo
-          const _groupRuleIds = new Set([r.id]);
-          for(const nid of _nodeIds) {
-            const _n = edRuleNodes.find(n => n.id === nid);
-            if(_n) _n.ruleIds.forEach(rid => _groupRuleIds.add(rid));
-          }
-          // Mover todas las reglas del grupo
-          for(const rid of _groupRuleIds) {
-            const _rr = edRules.find(rr => rr.id === rid);
-            if(!_rr) continue;
-            _rr.x1 += _dx; _rr.y1 += _dy;
-            _rr.x2 += _dx; _rr.y2 += _dy;
-          }
-          // Mover todos los nodos del grupo
-          const _allNodeIds = new Set(_nodeIds);
-          for(const rid of _groupRuleIds) {
-            const _rr = edRules.find(rr => rr.id === rid);
-            if(!_rr) continue;
-            if(_rr.nodeA) _allNodeIds.add(_rr.nodeA);
-            if(_rr.nodeB) _allNodeIds.add(_rr.nodeB);
-          }
-          for(const nid of _allNodeIds) {
-            const _n = edRuleNodes.find(n => n.id === nid);
-            if(_n) { _n.x += _dx; _n.y += _dy; }
-          }
-        } else {
-          r.x1 = _newX1;
-          r.y1 = _newY1;
-          r.x2 = r.x1 + _edRuleDrag.dx;
-          r.y2 = r.y1 + _edRuleDrag.dy;
-        }
+        // v41.94: qué se mueve lo decide el BLOQUEO (ver _ruleLinePlan): plataforma entera si nada está bloqueado, giro alrededor del punto de
+        // fuga si algo lo está, guía suelta sola, o nada. Antes se desplazaba siempre la plataforma entera, bloqueada o no.
+        if(!_edRuleDrag.plan) _edRuleDrag.plan = _ruleLinePlan(edRules, edRuleNodes, r, r.x1 + _edRuleDrag.offX, r.y1 + _edRuleDrag.offY);
+        _ruleLineApply(_edRuleDrag.plan, r, c.px, c.py, _newX1, _newY1, _edRuleDrag.dx, _edRuleDrag.dy);
       }
       edRedraw();
     }
@@ -27860,10 +27827,81 @@ function _edRulesDraw(ctx) {
 // aunque r.nodeA/nodeB conserve un id: así un dato incoherente jamás puede dejar un extremo dibujado pero intocable (es lo mismo que
 // decide _edRulesDraw para dibujar o no el punto del extremo — dibujo y hit-test coinciden siempre).
 function _edEndInNode(r, part) {
+  return !!_ruleEndNodeOf(edRuleNodes, r, part);
+}
+
+// ═══ v41.94 — GUÍAS UNIDAS A UN PUNTO DE FUGA BLOQUEADO: «lo bloqueado no se mueve» ═══════════════════════════════════════════════════════════════
+// Alberto: «cuando se crea una guía y se une a un punto de fuga bloqueado, puede moverse el punto de fuga bloqueado y todas sus guías desplazando
+// la única guía no bloqueada. Debe poder desbloquearse cualquier guía con un extremo en un punto de fuga bloqueado, sin que se desbloquee el punto
+// de fuga pero permitiendo mover el extremo no bloqueado de la guía».
+// CAUSA: arrastrar la LÍNEA de una guía unida a un punto de fuga desplazaba la plataforma entera (sus guías y sus puntos de fuga) SIN mirar ningún
+// bloqueo (en el editor de animaciones, al revés: sólo la guía, que se despegaba de su punto de fuga aunque seguía marcada como unida).
+// Ahora el bloqueo del punto de fuga y el de cada guía son independientes y MANDAN sobre el arrastre. «Plataforma» = guías y puntos de fuga
+// conectados entre sí (cierre transitivo por los extremos anclados):
+//   · nada de la plataforma bloqueado  → se desplaza entera (como siempre);
+//   · algo bloqueado                    → lo bloqueado no se mueve: la guía arrastrada, si tiene UN extremo en un punto de fuga, GIRA alrededor de
+//                                         él (longitud constante: su extremo libre sigue al puntero); con los DOS extremos en puntos de fuga no se mueve;
+//   · sin punto de fuga (guía suelta)   → se desplaza sola.
+// Las funciones reciben las listas (editor general: edRules/edRuleNodes · animaciones: _gcpRules/_gcpRuleNodes) y no tocan estado global.
+
+// Nodo (punto de fuga) VIVO de un extremo ('a'|'b'): existe y además lista a la guía. null si el extremo es libre.
+function _ruleEndNodeOf(nodes, r, part) {
   const nid = part === 'a' ? r.nodeA : r.nodeB;
-  if(!nid) return false;
-  for(const n of edRuleNodes) if(n.id === nid && n.ruleIds && n.ruleIds.includes(r.id)) return true;
-  return false;
+  if(!nid) return null;
+  for(const n of nodes) if(n.id === nid && n.ruleIds && n.ruleIds.includes(r.id)) return n;
+  return null;
+}
+
+// Plataforma de la guía r: { rules, nodes (todos los conectados con ella), locked (¿algún punto de fuga o guía de la plataforma bloqueado?) }.
+function _ruleRigOf(rules, nodes, r) {
+  const rs = [r], ns = [], seenR = new Set([r.id]), seenN = new Set();
+  for(let i = 0; i < rs.length; i++) {
+    for(const part of ['a', 'b']) {
+      const n = _ruleEndNodeOf(nodes, rs[i], part);
+      if(!n || seenN.has(n.id)) continue;
+      seenN.add(n.id); ns.push(n);
+      for(const q of rules) {
+        if(seenR.has(q.id)) continue;
+        if(_ruleEndNodeOf(nodes, q, 'a') === n || _ruleEndNodeOf(nodes, q, 'b') === n) { seenR.add(q.id); rs.push(q); }
+      }
+    }
+  }
+  return { rules: rs, nodes: ns, locked: rs.some(q => q.locked) || ns.some(n => n.locked) };
+}
+
+// Plan de un arrastre de LÍNEA de la guía r, agarrada en el punto de trabajo (gx,gy). Se calcula UNA vez, al primer movimiento (los bloqueos no
+// cambian durante el arrastre). → { mode: 'loose' | 'rig' | 'pivot' | 'none', ... }
+function _ruleLinePlan(rules, nodes, r, gx, gy) {
+  if(r.locked) return { mode: 'none' };
+  const na = _ruleEndNodeOf(nodes, r, 'a'), nb = _ruleEndNodeOf(nodes, r, 'b');
+  if(!na && !nb) return { mode: 'loose' };
+  const rig = _ruleRigOf(rules, nodes, r);
+  if(!rig.locked) return { mode: 'rig', rules: rig.rules, nodes: rig.nodes };
+  if(na && nb) return { mode: 'none' };
+  const part = na ? 'a' : 'b', n = na || nb;                          // extremo ANCLADO (el otro es el libre)
+  const fx = part === 'a' ? r.x2 : r.x1, fy = part === 'a' ? r.y2 : r.y1; // extremo libre al empezar
+  if(Math.hypot(gx - n.x, gy - n.y) < 1e-6) return { mode: 'none' };      // agarrada justo en el punto de fuga: sin ángulo de referencia
+  return { mode: 'pivot', part, ax: n.x, ay: n.y, ux: fx - n.x, uy: fy - n.y, g0: Math.atan2(gy - n.y, gx - n.x) };
+}
+
+// Un paso del arrastre de línea con el puntero en (px,py). (nx1,ny1) = dónde quedaría el extremo A si la guía se desplazara entera siguiendo al
+// puntero (el desfase del agarre ya está descontado); (dx,dy) = vector A→B al empezar (guía suelta).
+function _ruleLineApply(plan, r, px, py, nx1, ny1, dx, dy) {
+  if(plan.mode === 'rig') {
+    const mx = nx1 - r.x1, my = ny1 - r.y1;
+    for(const q of plan.rules) { q.x1 += mx; q.y1 += my; q.x2 += mx; q.y2 += my; }
+    for(const n of plan.nodes) { n.x += mx; n.y += my; }
+  } else if(plan.mode === 'loose') {
+    r.x1 = nx1; r.y1 = ny1; r.x2 = nx1 + dx; r.y2 = ny1 + dy;
+  } else if(plan.mode === 'pivot') {
+    // giro alrededor del extremo anclado: el extremo libre rota lo mismo que el puntero respecto al punto donde se agarró la línea
+    const qx = px - plan.ax, qy = py - plan.ay;
+    if(Math.hypot(qx, qy) < 1e-6) return;
+    const th = Math.atan2(qy, qx) - plan.g0, co = Math.cos(th), si = Math.sin(th);
+    const fx = plan.ax + plan.ux * co - plan.uy * si, fy = plan.ay + plan.ux * si + plan.uy * co;
+    if(plan.part === 'a') { r.x1 = plan.ax; r.y1 = plan.ay; r.x2 = fx; r.y2 = fy; }
+    else                  { r.x2 = plan.ax; r.y2 = plan.ay; r.x1 = fx; r.y1 = fy; }
+  }
 }
 
 // v41.75 — INTEGRIDAD DE GUÍAS Y PUNTOS DE FUGA (causa raíz de «todos los clics van al objeto en vez de al extremo de la guía, sigo sin poder
@@ -27909,7 +27947,10 @@ function _edRulesNormalize() {
     if(ids.length >= 2) {
       const f = list[0], x = f.r[f.xk], y = f.r[f.yk];
       for(const e of list) { e.r[e.xk] = x; e.r[e.yk] = y; } // el punto de fuga es el lugar común de sus extremos
-      keep.push({ id, x, y, ruleIds: ids, locked: list.every(e => !!e.r.locked) });
+      // v41.94: el bloqueo del punto de fuga viaja en cada guía (nodeALocked/nodeBLocked, ver _edRulesForSave): es independiente del de las guías
+      // (una guía nueva sin bloquear unida a un punto de fuga bloqueado). Datos antiguos (sin esos datos) → como antes: bloqueado si todas sus guías lo están.
+      const _lk = list.map(e => e.r[e.k + 'Locked']);
+      keep.push({ id, x, y, ruleIds: ids, locked: _lk.every(v => typeof v === 'boolean') ? _lk.some(Boolean) : list.every(e => !!e.r.locked) });
       seen.add(id);
     } else {
       for(const e of list) e.r[e.k] = null;
@@ -27917,7 +27958,23 @@ function _edRulesNormalize() {
     fixes++;
   }
   if(fixes) { edRuleNodes.length = 0; keep.forEach(n => edRuleNodes.push(n)); }
+  for(const r of edRules) { delete r.nodeALocked; delete r.nodeBLocked; } // v41.94: ya usados arriba; el modelo en memoria no los lleva (se recalculan al guardar)
   return fixes;
+}
+
+// v41.94 — copia de las guías para GUARDAR (copia local y nube). La nube (works.rules) sólo almacena las GUÍAS, no los puntos de fuga: al abrir
+// la obra descargada de la nube éstos se reconstruyen (ver _edRulesNormalize) y su bloqueo se deducía de si TODAS sus guías estaban bloqueadas, así
+// que un punto de fuga bloqueado con una guía nueva sin bloquear volvía «desbloqueado». Cada extremo anclado lleva ahora el bloqueo de su punto de
+// fuga (nodeALocked/nodeBLocked); la guía de la memoria no los lleva, son sólo de la copia que se guarda.
+function _edRulesForSave() {
+  return edRules.map(r => {
+    const o = Object.assign({}, r);
+    delete o.nodeALocked; delete o.nodeBLocked;
+    const na = _ruleEndNodeOf(edRuleNodes, r, 'a'), nb = _ruleEndNodeOf(edRuleNodes, r, 'b');
+    if(na) o.nodeALocked = !!na.locked;
+    if(nb) o.nodeBLocked = !!nb.locked;
+    return o;
+  });
 }
 
 function _edRulesHit(wx, wy, isTouch) {
@@ -31213,7 +31270,7 @@ async function _edCloudSaveInner() {
       _fbPages.push({ layers: _fbLayers, textLayerOpacity: _fp.textLayerOpacity ?? 1, textMode: _fp.textMode || 'sequential', orientation: _fp.orientation || _savedOrientFb });
     }
     edOrientation = _savedOrientFb; edCurrentPage = _savedPageFb;
-    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: edRules, _ruleNodes: edRuleNodes, _palette: edColorPalette.slice() } };
+    comic = { ...comic, editorData: { orientation: edOrientation, pages: _fbPages, _rules: _edRulesForSave(), _ruleNodes: edRuleNodes, _palette: edColorPalette.slice() } };
     // También reconstruir panels (renders) si están vacíos
     if (!comic.panels || !comic.panels.length) {
       // v41.44: las hojas aún sin abrir tienen los canvas pesados descargados → se
@@ -32047,7 +32104,7 @@ async function _edSaveProjectInner(_keepOverlay){
   const _editorDataObj = {
     orientation:edOrientation,
     pages:_edPages,
-    _rules: edRules,
+    _rules: _edRulesForSave(), // v41.94: con el bloqueo de cada punto de fuga (la nube sólo guarda las guías)
     _ruleNodes: edRuleNodes,
     _palette: edColorPalette.slice(), // v40.45: muestras de color de la obra
     // v40.77: persistir también el flag ESTRUCTURAL de nube (añadir/borrar/
@@ -42850,6 +42907,34 @@ function _gcpDrawMultiSel() {
 }
 
 function _gcpHandleDown(e) {
+  // ── v41.95 — DEDO «FANTASMA» EN EL MAPA DE PUNTEROS (Alberto, táctil: «una vez insertado un objeto no me ha dejado
+  // draguearlo ni redimensionarlo con sus puntos de arrastre ni gestos»). ──────────────────────────────────────────
+  // _gcpPtrMap cuenta los dedos apoyados: con 2 entradas el pointerdown entra en la rama de PELLIZCO y vuelve ANTES
+  // de _gcpDoSelectDrag (sin arrastre, sin tiradores, sin escalar/girar el objeto: solo se movía la cámara). Una
+  // entrada que se quedaba «viva» convertía TODO toque posterior de un solo dedo en un pellizco. Se quedaba viva así:
+  //  · _gcpHandleMove registraba CUALQUIER puntero que se moviera, aunque su pointerdown no hubiera pasado por aquí
+  //    (un dedo de verdad nunca está quieto: el temblor del toque genera pointermove siempre);
+  //  · los botones de la UI del GCP que cierran con pointerup + stopPropagation (✕ de la Biblioteca, 💾 Frame, ＋,
+  //    deshacer/rehacer, previsualizar, menús…) nunca dejan llegar ese pointerup a _gcpHandleUp, el único que borra.
+  // Resultado: tocar la ✕ de la Biblioteca tras insertar un objeto dejaba un dedo fantasma hasta la siguiente
+  // inserción (la única otra limpieza, en _gcpPushLayer). Arreglo en la raíz, en dos piezas que se complementan:
+  //  1) _gcpHandleMove ya NO da de alta punteros: solo actualiza los que entraron por el pointerdown de aquí abajo;
+  //  2) un pointerdown PRIMARIO (por definición del estándar Pointer Events, el único dedo apoyado de su tipo: el
+  //     segundo dedo de un pellizco NUNCA lo es) no puede convivir con ningún otro puntero activo, así que se
+  //     descartan todos los anteriores y se parte de cero. Cualquier resto de un pointerup perdido muere aquí.
+  if (e.isPrimary) {
+    _gcpPtrMap.clear();
+    _gcpPinching = false; _gcpPinchDist0 = 0; _gcpPinchObj = null; _gcpSelBeforePinch = -1;
+  }
+  // Alta del puntero ANTES de cualquier return (también el de los guards de abajo): imprescindible para que el mapa
+  // tenga tamaño 2 al llegar el segundo dedo (sin esto, los returns anticipados dejan el puntero sin rastrear).
+  // Excepción: un toque sobre un CONTROL de la interfaz del GCP (p. ej. Deshacer/Rehacer de la barra flotante, que
+  // no figura en la lista de UI de _edDocDownFn y por eso llega hasta aquí) no es un dedo sobre el lienzo —con el mismo
+  // criterio _gcpDoSelectDrag lo descarta— y su pointerup (pointerup + stopPropagation) no llega nunca a _gcpHandleUp.
+  const _gcpEl0 = document.getElementById('gcpCanvas');
+  if (!(e.target && e.target !== _gcpEl0 && e.target.closest?.('#gcpShell'))) {
+    _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
   // Guard anti dedo-fantasma: ignorar eventos táctiles generados sinteticamente
   // por Android al cerrar un overlay (biblioteca, etc.)
   if (e.pointerType === 'touch' && window._gcpBibInsertGuard && Date.now() < window._gcpBibInsertGuard) {
@@ -42911,10 +42996,7 @@ function _gcpHandleDown(e) {
       }
     }
   }
-  // ── Registrar pointer SIEMPRE antes de cualquier return —————————————————
-  // Imprescindible para que el mapa tenga tamaño 2 al llegar el segundo dedo
-  // (sin esto, los returns anticipados dejan el puntero sin rastrear y el pinch falla)
-  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // (v41.95: el alta del puntero en _gcpPtrMap se hace arriba del todo, antes de los guards.)
 
   // Si el panel de propiedades GCP está abierto y se toca fuera de él → cerrarlo
   const _gppEl = document.getElementById('gcpPropsPanel');
@@ -43731,8 +43813,11 @@ function _gcpRemoveCircularInterp() {
 }
 
 function _gcpHandleMove(e) {
-  // Actualizar pointer en el mapa propio del GCP (siempre, aunque no estuviera rastreado)
-  _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  // Actualizar la posición del pointer en el mapa propio del GCP — SOLO si ya estaba dado de alta por su pointerdown
+  // (_gcpHandleDown). v41.95: antes se daba de alta aquí cualquier puntero que se moviera, y el temblor de un dedo
+  // que tocaba un botón de la UI (✕ de la Biblioteca…) dejaba una entrada que nunca se borraba → «dedo fantasma»
+  // que convertía cada toque siguiente en un pellizco (ver el comentario de _gcpHandleDown).
+  if (_gcpPtrMap.has(e.pointerId)) _gcpPtrMap.set(e.pointerId, { x: e.clientX, y: e.clientY });
   // Longpress de rubber band táctil pendiente: si el dedo se mueve ANTES de que
   // expiren los 400ms, promoverlo YA a rubber band real (desde el punto de toque
   // original) en vez de cancelarlo sin más. Antes se cancelaba incondicionalmente
@@ -43824,9 +43909,10 @@ function _gcpHandleMove(e) {
           } else {
             const _nx1 = _c2.px - _gcpRuleDrag.offX;
             const _ny1 = _c2.py - _gcpRuleDrag.offY;
-            _r.x2 = _nx1 + _gcpRuleDrag.dx;
-            _r.y2 = _ny1 + _gcpRuleDrag.dy;
-            _r.x1 = _nx1; _r.y1 = _ny1;
+            // v41.94: igual que en el editor general (ver _ruleLinePlan). Antes la línea se movía SOLA aunque la guía estuviera unida a un punto de
+            // fuga: se despegaba de él sin dejar de figurar como unida.
+            if (!_gcpRuleDrag.plan) _gcpRuleDrag.plan = _ruleLinePlan(_gcpRules, _gcpRuleNodes, _r, _r.x1 + _gcpRuleDrag.offX, _r.y1 + _gcpRuleDrag.offY);
+            _ruleLineApply(_gcpRuleDrag.plan, _r, _c2.px, _c2.py, _nx1, _ny1, _gcpRuleDrag.dx, _gcpRuleDrag.dy);
           }
         }
       }
@@ -47250,6 +47336,16 @@ function _gcpSbDiag() {
   _edSbStartCapture(); // activar captura global si no está activa
   const lines = [];
   const L = s => lines.push(s);
+
+  // v41.95 — TOQUES Y GESTOS: con el lienzo SIN tocar, _gcpPtrMap debe estar vacío. Si quedara una entrada («dedo fantasma»), el siguiente
+  // toque de UN dedo se trataría como pellizco y no arrastraría ni redimensionaría el objeto (ver _gcpHandleDown).
+  L('── Toques y gestos (si un objeto no se deja arrastrar ni redimensionar) ──');
+  try {
+    const _gp = [..._gcpPtrMap.keys()];
+    L('dedos registrados (_gcpPtrMap)=' + _gp.length + (_gp.length ? ' [' + _gp.join(',') + '] ← con la pantalla sin tocar, el siguiente toque contaría como pellizco' : ' (correcto: ninguno)') + ' · pellizco en curso=' + !!_gcpPinching);
+    L('arrastrando=' + !!edIsDragging + ' · redimensionando=' + !!edIsResizing + ' · girando=' + !!edIsRotating + ' · guía arrastrada=' + !!_gcpRuleDrag + ' · multiselección=' + (window._gcpMultiSel || []).length + ' · objeto seleccionado=' + window._gcpSelIdx);
+    L('último panel de la interfaz cerrado hace ' + (window._gcpUiClosedAt ? (Date.now() - window._gcpUiClosedAt) + ' ms' : '—') + ' · escudo anti-toque-fantasma de la Biblioteca=' + (window._gcpBibInsertGuard ? (window._gcpBibInsertGuard - Date.now()) + ' ms' : '—'));
+  } catch (_te) { L('  (error al leer el estado de los toques: ' + (_te && _te.message || _te) + ')'); }
 
   L('── Subir/bajar capas (Matriz) ──');
   L('window._gcpLayers.length: ' + (window._gcpLayers ? window._gcpLayers.length : 'null'));
