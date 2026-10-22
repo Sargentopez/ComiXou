@@ -108,4 +108,18 @@ TÉCNICAS DE REFERENCIA (implementación propia, sin código copiado)
 - Historial de dibujo por baldosas con estructura compartida: técnica de los
   programas de pintura Krita, GIMP y MyPaint.
 - «Borrar color» (Color to Alpha): algoritmo de GIMP/Krita (Kevin Cozens).
+- Relleno acotado bajo la tinta (crecer unos píxeles y parar en el píxel más
+  opaco): técnica de Clip Studio Paint («Escalado del área» → «Hasta el píxel
+  más oscuro») y de la herramienta Relleno de Krita («Grow selection» + «Stop
+  growing at the darkest and/or more opaque pixels»).
+- Cierre virtual de huecos al rellenar (la tinta se dilata unos píxeles, se
+  rellena y el relleno vuelve a crecer; sólo se cierra la máscara de barrera,
+  nunca el dibujo): idea de la opción «Close gap» de la herramienta Relleno de
+  Clip Studio Paint y de Krita 5.3.
+- Antialiasing del borde del relleno al borrar la tinta, también entre dos
+  rellenos de distinto color (posición del borde con precisión de subpíxel a
+  partir de la máscara suavizada y cobertura exacta de área por píxel):
+  aproximación de distancia de primer orden de G. Taubin («Distance
+  Approximations for Rasterizing Implicit Curves», ACM TOG 1994) y
+  rasterizador de FreeType.
 ──────────────────────────────────────────────────────────────────────────

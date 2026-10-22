@@ -54,6 +54,23 @@
  * - «Borrar color» (Color to Alpha)
  *     Algoritmo de GIMP/Krita (Kevin Cozens), reescrito aquí.
  *     https://www.gimp.org/
+ *
+ * - Relleno acotado bajo la tinta: crecer unos px y parar en el píxel más opaco (v41.97)
+ *     Técnica estándar de Clip Studio Paint («Escalado del área» → «Hasta el píxel más oscuro») y de la herramienta Relleno de Krita
+ *     («Grow selection» + «Stop growing at the darkest and/or more opaque pixels»).
+ *     https://docs.krita.org/en/reference_manual/tools/fill.html  ·  https://www.clipstudio.net/
+ *
+ * - Cierre virtual de huecos al rellenar: la tinta se dilata r px, se rellena y el relleno vuelve a crecer r px (v41.98)
+ *     Idea de la opción «Close gap» (cerrar huecos) de la herramienta Relleno de Clip Studio Paint y de Krita 5.3: los huecos menores que el valor
+ *     se consideran cerrados; sólo se cierra la máscara de barrera, nunca el dibujo.
+ *     https://docs.krita.org/en/reference_manual/tools/fill.html  ·  https://tips.clip-studio.com/en-us/articles/590
+ *
+ * - Antialiasing del borde del relleno al quitar la tinta: posición subpíxel del borde a partir de la máscara suavizada + cobertura exacta de área (v42.02)
+ *     Distancia al borde con la aproximación de primer orden d ≈ f/|∇f| (G. Taubin, «Distance Approximations for Rasterizing Implicit Curves»,
+ *     ACM Transactions on Graphics, 1994) y cobertura exacta del píxel por el borde, como calcula el rasterizador «smooth» de FreeType.
+ *     v42.03: la misma técnica, con una máscara de «color A / color B», suaviza también la frontera entre dos rellenos de distinto color que quedan
+ *     en contacto al borrar la línea de tinta que los separaba (y se cierran las costuras transparentes de 1 px que dejaba esa línea).
+ *     https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves  ·  https://freetype.org/
  */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
@@ -3633,6 +3650,12 @@ class DrawLayer extends BaseLayer {
     const r = { x0: this._hdX0, y0: this._hdY0, x1: this._hdX1, y1: this._hdY1 };
     this._hdX0 = Infinity; this._hdY0 = Infinity; this._hdX1 = -Infinity; this._hdY1 = -Infinity;
     return r;
+  }
+  // v42.02: como histTake() pero SIN vaciar el rectángulo (lo consumirá _edDrawPushHistory): lo usa el suavizado del borde del relleno al
+  // soltar el borrador (_edSmoothFillAfterErase) para saber qué zona ha tocado el trazo.
+  histPeek(){
+    if(!(this._hdX1 >= this._hdX0 && this._hdY1 >= this._hdY0)) return null;
+    return { x0: this._hdX0, y0: this._hdY0, x1: this._hdX1, y1: this._hdY1 };
   }
   rvArm(){ this._rv = { tiles: new Map(), hd: [this._hdX0, this._hdY0, this._hdX1, this._hdY1] }; }
   rvDisarm(){ this._rv = null; }
@@ -15939,6 +15962,11 @@ function edOnStart(e){
     if(_ceDrawOpen){
       _edDrawPushHistory();
       _edColorErase(_cCE.nx, _cCE.ny);
+      // v42.02: quitar un color de tinta deja al descubierto el borde duro del relleno → mismo antialiasing que al usar la goma. Y se
+      // apunta el RESULTADO (antes sólo se apuntaba el estado anterior, así que un «deshacer» saltaba un paso de más: devolvía la tinta
+      // pero además quitaba el relleno).
+      try { _edSmoothFillAfterErase(true); } catch(_e) { console.warn('[fill-aa] suavizado al borrar color:', _e); }
+      _edDrawPushHistory();
       edRedraw();
     } else {
       edColorErase(_cCE.nx, _cCE.ny);
@@ -19688,6 +19716,293 @@ function _edGetOrCreateDrawLayer(){
 /* ══════════════════════════════════════════
    FLOOD FILL (Scanline algorithm)
    ══════════════════════════════════════════ */
+
+/* ── Relleno BAJO la tinta, acotado (v41.97) ───────────────────────────────
+ * El núcleo del relleno (`filled`) acaba justo donde empieza la tinta visible
+ * (alfa > 10). Si se parase ahí, el borde antialiasado de la tinta (alfa
+ * 11…254) dejaría un halo claro entre el color y la línea; por eso el relleno
+ * se mete un poco BAJO la tinta.
+ *
+ * Es la técnica estándar de los programas de pintura — «Escalado del área»
+ * con el método «Hasta el píxel más oscuro» en Clip Studio Paint, y «Grow
+ * selection» + «Stop growing at the darkest and/or more opaque pixels» en la
+ * herramienta Relleno de Krita —: crecer como MUCHO N px y parar en el píxel
+ * más opaco de la línea. Implementación propia; sólo se toma la idea.
+ *
+ *   · «Parar en lo más opaco» (ya existía): sólo se avanza a un vecino si su
+ *     tinta es ESTRICTAMENTE más opaca que la máxima ya vista por ese camino.
+ *     Así el relleno no atraviesa una línea fina ni asoma por el otro lado.
+ *   · Tope de profundidad (NUEVO): a lo sumo `maxDepth` px (pasos de 4
+ *     vecinos) desde el núcleo. Sin tope, con tinta semitransparente RAYADA
+ *     (varias pasadas superpuestas: la opacidad sube y baja sin orden) siempre
+ *     había algún camino de alfa creciente más hondo — el relleno entraba
+ *     10-17 px bajo la tinta, de forma muy irregular, y al borrar la tinta el
+ *     cuadrado quedaba rasgado (muestra de Alberto, 21/10/2026). Con tinta
+ *     opaca la rampa del borde mide 1-2 px, así que el tope de 2 px NO cambia
+ *     nada ahí; con tinta rayada deja un ancho regular de 2 px, sea cual sea
+ *     la opacidad.
+ *
+ * Antes hubo una «fase 2» (degradado bajo la tinta para que el borde no
+ * quedara rayado al borrar la tinta encima). No funcionó: con tinta fina
+ * atravesaba la línea entera y aparecía al otro lado, y se colaba por
+ * cualquier otra línea conectada. Pedido explícito de Alberto: quitarla — para
+ * el borde rayado al borrar tinta, el suavizado manual; nada automático que
+ * se extienda por donde no debe. Esta función NO añade degradado: sólo
+ * decide qué píxeles de tinta quedan cubiertos por el color (alfa `fA`).
+ *
+ * filled  — Uint8Array(W*H) con 1 en el núcleo del relleno
+ * rgba    — datos RGBA (W*H*4) de la capa de tinta; sólo se lee el alfa
+ * Devuelve Uint8Array(W*H): `fA` en los píxeles de la extensión, 0 en el resto.
+ */
+const _ED_FILL_UNDER_INK_PX = 2;
+function _edFillUnderInk(filled, rgba, W, H, fA, maxDepth) {
+  const cap = (maxDepth | 0) > 0 ? (maxDepth | 0) : _ED_FILL_UNDER_INK_PX;
+  const depth = new Uint8Array(W * H); // 0 = no alcanzado · 1…cap = anillo de la extensión
+  const peak  = new Uint8Array(W * H); // máxima opacidad de tinta vista por el camino que llegó aquí
+  const q = [];
+  // Semillas (anillo 1): vecinos directos del núcleo que tengan tinta. El
+  // primer píxel siempre se acepta: aún no sabemos si la tinta sigue subiendo.
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = y * W + x;
+      if (!filled[idx]) continue;
+      for (let k = 0; k < 4; k++) {
+        let j;
+        if (k === 0)      { if (x <= 0)     continue; j = idx - 1; }
+        else if (k === 1) { if (x >= W - 1) continue; j = idx + 1; }
+        else if (k === 2) { if (y <= 0)     continue; j = idx - W; }
+        else              { if (y >= H - 1) continue; j = idx + W; }
+        if (filled[j] || depth[j]) continue;
+        const a = rgba[j * 4 + 3];
+        if (a <= 0) continue;
+        depth[j] = 1; peak[j] = a; q.push(j);
+      }
+    }
+  }
+  // BFS por anillos (cada píxel se fija UNA sola vez). A un vecino sólo se
+  // pasa si su tinta sigue subiendo respecto al pico del camino; el pico se
+  // arrastra, así que `a <= pm` también descarta la ausencia de tinta (pm ≥ 1).
+  for (let qh = 0; qh < q.length; qh++) {
+    const idx = q[qh], d = depth[idx];
+    if (d >= cap) continue;
+    const pm = peak[idx];
+    const y = (idx / W) | 0, x = idx - y * W;
+    for (let k = 0; k < 4; k++) {
+      let j;
+      if (k === 0)      { if (x <= 0)     continue; j = idx - 1; }
+      else if (k === 1) { if (x >= W - 1) continue; j = idx + 1; }
+      else if (k === 2) { if (y <= 0)     continue; j = idx - W; }
+      else              { if (y >= H - 1) continue; j = idx + W; }
+      if (filled[j] || depth[j]) continue;       // núcleo o ya fijado
+      const a = rgba[j * 4 + 3];
+      if (a <= pm) continue;                      // la tinta ya no sube: no propagar
+      depth[j] = d + 1; peak[j] = a; q.push(j);
+    }
+  }
+  const ext = new Uint8Array(W * H);
+  for (let i = 0; i < q.length; i++) ext[q[i]] = fA;
+  return ext;
+}
+
+/* ── Fuga del relleno: cierre VIRTUAL de huecos (v41.98) ──
+ * Si el relleno normal se escapa por casi todo el lienzo (≥ 90 %), el contorno
+ * tiene un hueco (trazos que no llegan a tocarse) o poros (lápiz suave: la
+ * textura del grafito deja píxeles casi transparentes entre los granos).
+ * Es el ÚNICO mecanismo contra las fugas: en v41.100 se retiró el cierre
+ * automático antiguo (_edCloseInkGapsInRegion), que sólo arreglaba huecos de
+ * ≤ 2 px entre tinta ≥ 78 % opaca y además ESCRIBÍA píxeles de tinta en el dibujo.
+ *
+ * Aquí se aplica la idea estándar de los programas de pintura: la opción
+ * «Close gap» (cerrar huecos) de la herramienta Relleno de Clip Studio Paint y
+ * de Krita 5.3 — «los huecos menores que este valor se consideran cerrados» —.
+ * No toca el dibujo: sólo trabaja sobre la MÁSCARA de barrera con la que se
+ * calcula el relleno. Implementación propia; sólo se toma la idea.
+ *
+ *   1. Sólo se reintenta cuando el relleno normal se ha escapado: todo lo que
+ *      ya funcionaba queda IDÉNTICO.
+ *   2. La tinta cuenta desde alfa > 2 (normal: > 10): los poros y los tramos
+ *      finos de tinta suave siguen siendo pared.
+ *   3. Se DILATA la tinta r px (elemento cuadrado): dos extremos de trazo con
+ *      hasta 2·r px libres entre ellos se funden, sea cual sea la forma del hueco
+ *      (en línea, en esquina, en diagonal). Se rellena fuera de la tinta dilatada.
+ *   4. El relleno se vuelve a CRECER r px, pero sólo por píxeles sin tinta y
+ *      paso a paso (nunca salta a través de un hueco): así llega hasta la
+ *      tinta de verdad y no se pierde la franja que la dilatación quitó. En el
+ *      hueco el relleno acaba en línea recta, a ras del contorno.
+ *   5. Se usa el radio MÁS PEQUEÑO que contenga el relleno
+ *      (_ED_FILL_GAP_RADII; búsqueda por bisección). Si ni el mayor sirve se
+ *      devuelve null y todo sigue exactamente como antes.
+ *   6. v42.01 — SÓLO se cierran huecos de hasta 2 px (_ED_FILL_MAX_GAP_PX), tenga
+ *      la tinta la opacidad que tenga. Un hueco mayor es un contorno abierto de
+ *      verdad: el relleno se escapa, no se adivina por dónde cerrarlo.
+ *      El hueco se mide entre píxeles de tinta visibles (alfa > 2): las puntas
+ *      afiladas y el grano del lápiz dejan un hueco REAL mayor que el que parece
+ *      al dibujar; si ese hueco real pasa de 2 px, el relleno se escapa.
+ */
+const _ED_FILL_LEAK_FRAC   = 0.9;                              // relleno ≥ 90 % del lienzo = fuga
+const _ED_FILL_RETRY_ALPHA = 2;                                // al reintentar, alfa > 2 ya es pared (normal: > 10)
+// v42.01 — hueco MÁXIMO que se cierra: 2 px entre tinta y tinta, con cualquier opacidad de tinta (antes el
+// margen llegaba a ~32 px: exagerado). Un radio r cierra huecos de hasta 2·r px → sólo radios 0 y 1.
+const _ED_FILL_MAX_GAP_PX  = 2;
+const _ED_FILL_GAP_RADII   = Array.from({ length: Math.ceil(_ED_FILL_MAX_GAP_PX / 2) + 1 }, (_, i) => i);   // [0, 1]: radio de la dilatación en px (0 = sólo el umbral más bajo)
+
+// Relleno por tramos (mismo algoritmo que edFloodFill) sobre una máscara de
+// paredes: wall[i] = 1 → pared. Devuelve { filled, count }.
+function _edFillScanMask(wall, W, H, sx, sy) {
+  const filled = new Uint8Array(W * H);
+  if (wall[sy * W + sx]) return { filled, count: 0 };
+  let count = 1;
+  filled[sy * W + sx] = 1;
+  const st = [sy, sx, sx, 1, sy, sx, sx, -1];          // (y, izq, der, dy) ×N
+  while (st.length) {
+    const dy = st.pop(), right = st.pop(), left = st.pop(), y = st.pop();
+    const ny = y + dy;
+    if (ny < 0 || ny >= H) continue;
+    const row = ny * W;
+    let x = left;
+    while (x > 0 && !filled[row + x - 1] && !wall[row + x - 1]) x--;
+    let rx = right;
+    while (rx < W - 1 && !filled[row + rx + 1] && !wall[row + rx + 1]) rx++;
+    let seg = -1;
+    for (let c = x; c <= rx; c++) {
+      const idx = row + c;
+      if (!filled[idx] && !wall[idx]) {
+        if (seg === -1) seg = c;
+        filled[idx] = 1; count++;
+      } else if (seg !== -1) {
+        st.push(ny, seg, c - 1, dy, ny, seg, c - 1, -dy);
+        seg = -1;
+      }
+    }
+    if (seg !== -1) st.push(ny, seg, rx, dy, ny, seg, rx, -dy);
+  }
+  return { filled, count };
+}
+
+// Dilata r px la máscara de paredes `M` (1 = tinta): elemento cuadrado, r
+// anillos de 8 vecinos. Sólo recorre el entorno de la tinta (caja `bb`), no el
+// lienzo entero. Devuelve un Uint8Array NUEVO; M no se modifica.
+function _edFillDilateMask(M, W, H, bb, r) {
+  const D = new Uint8Array(M);
+  if (r <= 0) return D;
+  let q = new Int32Array(1 << 15), qn = 0;
+  const push = (i) => { if (qn === q.length) { const n = new Int32Array(q.length * 2); n.set(q); q = n; } q[qn++] = i; };
+  // frontera de la tinta: píxeles de M con algún vecino (8) sin tinta
+  for (let y = bb.y0; y <= bb.y1; y++) {
+    for (let x = bb.x0; x <= bb.x1; x++) {
+      const i = y * W + x;
+      if (!M[i]) continue;
+      let libre = false;
+      for (let dy = -1; dy <= 1 && !libre; dy++) {
+        const yy = y + dy; if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx; if (xx < 0 || xx >= W) continue;
+          if (!M[yy * W + xx]) { libre = true; break; }
+        }
+      }
+      if (libre) push(i);
+    }
+  }
+  let head = 0, finCapa = qn;
+  for (let paso = 0; paso < r; paso++) {
+    for (; head < finCapa; head++) {
+      const i = q[head], y = (i / W) | 0, x = i - y * W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy; if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx; if (xx < 0 || xx >= W) continue;
+          const j = yy * W + xx;
+          if (!D[j]) { D[j] = 1; push(j); }
+        }
+      }
+    }
+    finCapa = qn;
+  }
+  return D;
+}
+
+// Hace crecer `filled` r anillos (8 vecinos) SÓLO por píxeles sin tinta (M = 0),
+// paso a paso: no salta a través de un hueco ni de una línea. Modifica `filled`
+// y devuelve cuántos píxeles ha añadido.
+function _edFillRegrow(filled, M, W, H, bb, r) {
+  let q = new Int32Array(1 << 15), qn = 0, anadidos = 0;
+  const push = (i) => { if (qn === q.length) { const n = new Int32Array(q.length * 2); n.set(q); q = n; } q[qn++] = i; };
+  const x0 = Math.max(0, bb.x0 - r - 1), y0 = Math.max(0, bb.y0 - r - 1);
+  const x1 = Math.min(W - 1, bb.x1 + r + 1), y1 = Math.min(H - 1, bb.y1 + r + 1);
+  // capa 0: píxeles del relleno con algún vecino (8) libre aún sin rellenar
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = y * W + x;
+      if (!filled[i]) continue;
+      let borde = false;
+      for (let dy = -1; dy <= 1 && !borde; dy++) {
+        const yy = y + dy; if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx; if (xx < 0 || xx >= W) continue;
+          const j = yy * W + xx;
+          if (!filled[j] && !M[j]) { borde = true; break; }
+        }
+      }
+      if (borde) push(i);
+    }
+  }
+  let head = 0, finCapa = qn;
+  for (let paso = 0; paso < r; paso++) {
+    for (; head < finCapa; head++) {
+      const i = q[head], y = (i / W) | 0, x = i - y * W;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy; if (yy < 0 || yy >= H) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx; if (xx < 0 || xx >= W) continue;
+          const j = yy * W + xx;
+          if (!filled[j] && !M[j]) { filled[j] = 1; anadidos++; push(j); }
+        }
+      }
+    }
+    finCapa = qn;
+  }
+  return anadidos;
+}
+
+// Reintento de un relleno que se ha escapado: devuelve { filled, r, count } con
+// el relleno contenido por el radio más pequeño que lo logre, o null si no hay
+// forma (lienzo sin tinta, semilla sobre tinta o ni el radio mayor sirve).
+// orig = RGBA del lienzo de referencia (sólo se lee el alfa); (sx, sy) = semilla.
+function _edFillRetryVirtual(orig, W, H, sx, sy) {
+  const N = W * H;
+  const M = new Uint8Array(N);
+  let x0 = W, y0 = H, x1 = -1, y1 = -1, tinta = 0;
+  for (let y = 0; y < H; y++) {
+    const row = y * W; let a = -1, b = -1;
+    for (let x = 0; x < W; x++) {
+      if (orig[(row + x) * 4 + 3] > _ED_FILL_RETRY_ALPHA) { M[row + x] = 1; tinta++; if (a < 0) a = x; b = x; }
+    }
+    if (a >= 0) { if (a < x0) x0 = a; if (b > x1) x1 = b; if (y < y0) y0 = y; y1 = y; }
+  }
+  if (!tinta || M[sy * W + sx]) return null;
+  const bb = { x0, y0, x1, y1 };
+  const limite = N * _ED_FILL_LEAK_FRAC;
+  const intento = (r) => {
+    const sc = _edFillScanMask(_edFillDilateMask(M, W, H, bb, r), W, H, sx, sy);
+    return { r, filled: sc.filled, count: sc.count };
+  };
+  const radios = _ED_FILL_GAP_RADII;
+  // Primero el radio mayor: si ni así se contiene (p. ej. rellenar el fondo de
+  // una página con poco dibujo) se sale enseguida, sin probar los demás.
+  let mejor = intento(radios[radios.length - 1]);
+  if (mejor.count >= limite) return null;
+  // Bisección: el menor radio que no se escapa (si crece el radio, el relleno sólo puede encoger).
+  let lo = 0, hi = radios.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1, t = intento(radios[mid]);
+    if (t.count < limite) { hi = mid; mejor = t; } else lo = mid + 1;
+  }
+  if (!mejor.count) return null;                 // la semilla queda dentro de la tinta dilatada: sin solución
+  let count = mejor.count;
+  if (mejor.r > 0) count += _edFillRegrow(mejor.filled, M, W, H, bb, mejor.r);
+  return { filled: mejor.filled, r: mejor.r, count };
+}
+
 // Flood fill usando refCanvas como referencia de bordes,
 // escribiendo el resultado en flTarget._ctx (FillLayer).
 // refCanvas puede ser el _canvas del StrokeLayer (ya renderizado en workspace).
@@ -19720,6 +20035,10 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   const wy = Math.round(FH / 2 + ly);
   const W = FW, H = FH;
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+  // v42.03 — Alberto: «aunque el relleno se extienda un poco bajo la tinta, al tocar la tinta con el bote ese toque no debe pasarse al relleno
+  // que hay debajo». Si el punto tocado es TINTA VISIBLE (misma regla que el resto: alfa > 10), el toque no hace nada: antes la semilla caía
+  // sobre la propia tinta y se «rellenaba» su silueta, recoloreando la extensión del relleno bajo ella (y dejando un trazo fantasma al borrarla).
+  if (orig[(wy * W + wx) * 4 + 3] > 10) { _edFCL('_edFloodFillOnLayer: el toque cae sobre tinta visible → se ignora (no se toca el relleno que hay bajo la tinta)'); return; }
 
   // v41.07 — BUGFIX Alberto: el umbral de 128 (50% opacidad) clasificaba
   // tinta deliberadamente semitransparente (p.ej. opacidad de tinta al
@@ -19750,7 +20069,7 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
            Math.abs(fd[i+2]-tB)<=TOL && Math.abs(fd[i+3]-tA)<=TOL;
   }
 
-  const filled = new Uint8Array(W*H);
+  let filled = new Uint8Array(W*H);   // let: el cierre virtual (v41.98) puede sustituirlo
   const stack = [];
   stack.push({y:wy, left:wx, right:wx, dy:1});
   stack.push({y:wy, left:wx, right:wx, dy:-1});
@@ -19784,90 +20103,25 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   }
 
   // ── Detección de fuga (igual que en edFloodFill): si el relleno alcanza
-  // casi toda el área del stroke, se ha colado por un hueco de tinta —
-  // cerrar huecos en el propio canvas del stroke y reintentar una vez.
+  // casi toda el área del stroke, se ha colado por un hueco de tinta.
+  // v41.100 — Se corrige SÓLO con el cierre VIRTUAL de huecos (v41.98, sobre la
+  // máscara de barrera): el antiguo cierre que escribía tinta en el dibujo se retiró.
   let _folFilledCount = 0;
   for (let _fci = 0; _fci < W*H; _fci++) if (filled[_fci]) _folFilledCount++;
   const _folLeak = (_folFilledCount / (W*H)) >= 0.9;
-  if (_folLeak && !window._edFillGapRetry && _selLa?._canvas) {
-    const _gapsClosed = _edCloseInkGapsInRegion(_selLa, 0, 0, _selLa._canvas.width-1, _selLa._canvas.height-1);
-    if (_gapsClosed) {
-      window._edFillGapRetry = true;
-      try { _edFloodFillOnLayer(refCanvas, flTarget, nx, ny); } finally { window._edFillGapRetry = false; }
-      return;
-    }
-    // Sin huecos cercanos que cerrar: seguir con el relleno tal cual.
+  // Cierre VIRTUAL de huecos de hasta 2 px (con cualquier opacidad de tinta; lápiz suave incluido): ver _edFillRetryVirtual.
+  if (_folLeak && tA === 0) {
+    let _vr = null;
+    try { _vr = _edFillRetryVirtual(orig, W, H, wx, wy); } catch (_e) { console.warn('[fill] cierre virtual:', _e); }
+    if (_vr) filled = _vr.filled;
   }
 
-  // ── Relleno bajo la tinta hasta su propio pico de opacidad ──────────────
-  // Mientras la tinta va subiendo (o está en su pico ya alcanzado, aunque se
-  // mantenga plana después) el relleno va al 100%. Esto cubre toda la rampa
-  // de entrada de la tinta y su núcleo opaco, por ancho que sea — así el
-  // relleno llega al 100% justo hasta donde la propia tinta también está al
-  // 100%, sin línea de corte. En cuanto la tinta deja de subir respecto al
-  // máximo visto hasta ahora por ese camino, la propagación se DETIENE ahí
-  // mismo — sin degradado ni avance por debajo del resto de la tinta.
-  //
-  // Antes había una "fase 2" aquí (degradado de varios niveles bajo la
-  // tinta, pensado para que el borde no quedara rayado al borrar la tinta
-  // encima). No funcionó: el BFS no tenía forma de distinguir "la tinta que
-  // de verdad delimita este relleno" de cualquier OTRA línea de tinta
-  // conectada que saliera de ahí — con tinta fina (pocos píxeles de ancho)
-  // llegaba a atravesarla entera y aparecer al otro lado, y si de la tinta
-  // partía otra línea distinta, el degradado se colaba por ella también.
-  // Pedido explícito de Alberto: quitarla — para el borde rayado al borrar
-  // tinta, usar el suavizado manual, no uno automático que se extiende por
-  // donde no debe.
-  let _extAlphaOL = null;
-  {
-    const _runMax = new Int16Array(W*H).fill(-1); // -1 = no alcanzado por el relleno
-    const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
-    const _q = [];
-    const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
-    // Sembrar: vecinos directos del núcleo del relleno que tengan tinta (el
-    // primer píxel siempre se acepta: aún no sabemos si la tinta sigue
-    // subiendo, se trata como si viniera de un máximo de -∞)
-    for (let y=0; y<H; y++){
-      for (let x=0; x<W; x++){
-        const idx = y*W+x;
-        if (!filled[idx]) continue;
-        for (const [ddx,ddy] of _NB){
-          const nx=x+ddx, ny=y+ddy;
-          if (nx<0||nx>=W||ny<0||ny>=H) continue;
-          const nidx = ny*W+nx;
-          if (filled[nidx] || _runMax[nidx] !== -1) continue;
-          const inkA = orig[nidx*4+3];
-          if (inkA <= 0) continue;
-          _runMax[nidx] = inkA;
-          _q.push(nidx);
-        }
-      }
-    }
-    // BFS estricta: cada píxel se visita y fija una sola vez. Solo se
-    // propaga a un vecino si su tinta sigue subiendo respecto al máximo ya
-    // visto por ese camino — en cuanto deja de subir, ese vecino se queda
-    // sin marcar (no se rellena) y esa rama de la propagación termina ahí.
-    for (let _qh=0; _qh<_q.length; _qh++){
-      const idx = _q[_qh];
-      const predMax = _runMax[idx];
-      const x = idx % W, y = (idx / W) | 0;
-      for (const [ddx,ddy] of _NB){
-        const nx=x+ddx, ny=y+ddy;
-        if (nx<0||nx>=W||ny<0||ny>=H) continue;
-        const nidx = ny*W+nx;
-        if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
-        const inkA = orig[nidx*4+3];
-        if (inkA <= 0 || inkA <= predMax) continue; // la tinta ya no sube: no propagar
-        _runMax[nidx] = inkA;
-        if (_q.length < _MAX_Q) _q.push(nidx);
-      }
-    }
-    _extAlphaOL = new Uint8Array(W*H);
-    for (let i=0; i<W*H; i++){
-      if (filled[i] || _runMax[i] < 0) continue;
-      _extAlphaOL[i] = fA;
-    }
-  }
+  // ── Relleno bajo la tinta, acotado a unos px (ver _edFillUnderInk) ──────
+  // La capa puede mostrarse más grande que su lienzo: entonces el borde de la
+  // tinta se ensancha en la misma proporción al remuestrear, y el tope también.
+  const _bkW = _selLa?._canvas?.width || W, _bkH = _selLa?._canvas?.height || H;
+  const _extAlphaOL = _edFillUnderInk(filled, orig, W, H, fA,
+    Math.min(8, Math.ceil(_ED_FILL_UNDER_INK_PX * Math.max(1, W / _bkW, H / _bkH))));
 
   // Escribir en el FillLayer (igual que el flujo normal)
   const prevFill = flTarget._ctx.getImageData(0, 0, W, H).data;
@@ -19892,6 +20146,20 @@ function _edFloodFillOnLayer(refCanvas, flTarget, nx, ny) {
   // Guardar DESPUÉS del fill — igual que edFloodFill
   _edDrawPushHistory();
   edPushHistory(); edRedraw();
+}
+
+// v42.03 — ¿el punto (wx, wy) del lienzo de trabajo cae sobre TINTA visible? Tinta = lo que limita el relleno y se ve encima de él: pluma ∪ lápiz ∪
+// acuarela (la misma convención que usa la herramienta de degradado: alfa del conjunto > 10, el umbral de «contenido visible» de todo el código).
+// Se lee UN píxel por capa (drawImage de 1×1 sobre un canvas de 1×1), sin recorrer el lienzo de trabajo.
+let _edSeedProbe = null;
+function _edFillSeedOnInk(wx, wy, inkCanvases) {
+  const cs = inkCanvases.filter(c => c && wx >= 0 && wy >= 0 && wx < c.width && wy < c.height);
+  if (!cs.length) return false;
+  if (!_edSeedProbe) { _edSeedProbe = document.createElement('canvas'); _edSeedProbe.width = 1; _edSeedProbe.height = 1; }
+  const g = _edSeedProbe.getContext('2d', { willReadFrequently: true });
+  g.clearRect(0, 0, 1, 1);
+  for (const c of cs) g.drawImage(c, wx, wy, 1, 1, 0, 0, 1, 1);
+  return g.getImageData(0, 0, 1, 1).data[3] > 10;
 }
 
 function edFloodFill(nx, ny){
@@ -19922,6 +20190,12 @@ function edFloodFill(nx, ny){
   const wx = Math.round(edMarginX() + nx * edPageW());
   const wy = Math.round(edMarginY() + ny * edPageH());
   if(wx < 0 || wx >= W || wy < 0 || wy >= H) return;
+  // v42.03 — el toque sobre tinta visible no se pasa al relleno que hay debajo (ver _edFillSeedOnInk). Sin capas temporales (ruta de compatibilidad
+  // de más abajo) la tinta es el propio canvas del DrawLayer.
+  if (_edFillSeedOnInk(wx, wy, (!_edTmp.bucket && !_edTmp.pen) ? [canvas] : [_edTmp.watercolor?._canvas, _edTmp.pencil?._canvas, _edTmp.pen?._canvas])) {
+    _edFCL('edFloodFill: el toque cae sobre tinta visible → se ignora (no se toca el relleno que hay bajo la tinta)');
+    return;
+  }
 
   // Trabajar siempre sobre el canvas completo para que el fill
   // cruce la frontera lienzo/margen sin restricciones
@@ -19994,7 +20268,7 @@ function edFloodFill(nx, ny){
     return Math.abs(fd[i  ]-tR)<=TOL && Math.abs(fd[i+1]-tG)<=TOL &&
            Math.abs(fd[i+2]-tB)<=TOL && Math.abs(fd[i+3]-tA)<=TOL;
   }
-  const filled = new Uint8Array(fw*fh);
+  let filled = new Uint8Array(fw*fh);   // let: el cierre virtual (v41.98) puede sustituirlo
   const stack = [];
   stack.push({y:ly, left:lx, right:lx, dy:1});
   stack.push({y:ly, left:lx, right:lx, dy:-1});
@@ -20031,102 +20305,28 @@ function edFloodFill(nx, ny){
 
   // ── Detección de fuga: si el relleno ha alcanzado casi todo el lienzo de
   // trabajo, es señal de que se ha colado por un hueco de tinta. En vez de
-  // pintarlo todo, cerramos los huecos más cercanos en la capa de tinta
-  // (mismo algoritmo que usaba la antigua herramienta manual "Cerrar
-  // huecos") y reintentamos el relleno UNA sola vez.
+  // pintarlo todo se aplica el cierre VIRTUAL de huecos (v41.98), que trabaja
+  // sólo sobre la máscara de barrera. v41.100 — el antiguo cierre que escribía
+  // tinta en el dibujo y reintentaba el relleno se retiró: la tinta no se toca nunca.
   let _ffFilledCount = 0;
   for (let _fci = 0; _fci < fw*fh; _fci++) if (filled[_fci]) _ffFilledCount++;
   const _ffLeak = (_ffFilledCount / (fw*fh)) >= 0.9;
   _edFCL('edFloodFill: filled=' + _ffFilledCount + '/' + (fw*fh) + ' (' + (_ffFilledCount/(fw*fh)*100).toFixed(1) + '%) — ¿fuga? ' + (_ffLeak ? 'SÍ' : 'no'));
-  if (_ffLeak && !window._edFillGapRetry) {
-    const _inkLayer = _edTmp.pen || dl;
-    const _gapsClosed = _inkLayer?._canvas &&
-      _edCloseInkGapsInRegion(_inkLayer, 0, 0, _inkLayer._canvas.width-1, _inkLayer._canvas.height-1);
-    _edFCL('edFloodFill: fuga detectada — huecos cerrados: ' + (_gapsClosed ? 'SÍ, reintentando' : 'NO, sin huecos cercanos que cerrar'));
-    if (_gapsClosed) {
-      window._edFillGapRetry = true;
-      try { edFloodFill(nx, ny); } finally { window._edFillGapRetry = false; }
-      return;
-    }
-    // Sin huecos cercanos que cerrar: no hay fuga corregible automáticamente,
-    // seguir con el relleno tal cual (igual que si esta detección no existiera).
+  // Cierre VIRTUAL de huecos de hasta 2 px (con cualquier opacidad de tinta; lápiz suave incluido): ver _edFillRetryVirtual.
+  if (_ffLeak && tA === 0) {
+    let _vr = null;
+    try { _vr = _edFillRetryVirtual(orig, fw, fh, lx, ly); } catch (_e) { console.warn('[fill] cierre virtual:', _e); }
+    _edFCL('edFloodFill: cierre virtual de huecos — ' + (_vr ? 'SÍ (radio ' + _vr.r + ' px, relleno ' + _vr.count + ' px)' : 'no aplicable'));
+    if (_vr) filled = _vr.filled;
   }
 
-  // ── Relleno bajo la tinta hasta su propio pico de opacidad ──────────────
-  // El núcleo del relleno (filled=1) tendría un borde recto justo donde
-  // empieza la tinta si se parase ahí sin más — mientras la tinta va
-  // subiendo (o está en su pico ya alcanzado, aunque se mantenga plana
-  // después) el relleno va al 100%. Esto cubre toda la rampa de entrada de
-  // la tinta y su núcleo opaco, por ancho que sea — el relleno llega al
-  // 100% justo hasta donde la propia tinta también está al 100%, sin línea
-  // de corte. En cuanto la tinta deja de subir respecto al máximo visto
-  // hasta ahora por ese camino, la propagación se DETIENE ahí mismo — sin
-  // degradado ni avance por debajo del resto de la tinta.
-  //
-  // Antes había una "fase 2" aquí (degradado de varios niveles bajo la
-  // tinta, pensado para que ese borde no quedara rayado al borrar la tinta
-  // encima — había que pulsar "Suavizar" a mano). No funcionó: el BFS no
-  // tenía forma de distinguir "la tinta que de verdad delimita este
-  // relleno" de cualquier OTRA línea de tinta conectada que saliera de
-  // ahí — con tinta fina (pocos píxeles de ancho) llegaba a atravesarla
-  // entera y aparecer al otro lado, y si de la tinta partía otra línea
-  // distinta, el degradado se colaba por ella también. Pedido explícito de
-  // Alberto: quitarla — para el borde rayado al borrar tinta, usar el
-  // suavizado manual, no uno automático que se extiende por donde no debe.
+  // ── Relleno bajo la tinta, acotado a unos px (ver _edFillUnderInk) ──────
   let _extAlpha = null;
   {
     const _inkRef = _edTmp.pen || dl;
     if (_inkRef?._canvas && _inkRef._canvas.width === fw && _inkRef._canvas.height === fh) {
       const _inkCtx = _inkRef._ctx || _inkRef._canvas.getContext('2d');
-      const _inkData = _inkCtx.getImageData(0, 0, fw, fh).data;
-      const _runMax = new Int16Array(fw*fh).fill(-1); // -1 = no alcanzado por el relleno
-      const _NB = [[1,0],[-1,0],[0,1],[0,-1]];
-      const _q = [];
-      const _MAX_Q = 2000000; // salvaguarda: no debería alcanzarse en uso normal
-      // Sembrar: vecinos directos del núcleo del relleno que tengan tinta
-      // (el primer píxel siempre se acepta: aún no sabemos si la tinta
-      // sigue subiendo, se trata como si viniera de un máximo de -∞)
-      for (let y=0; y<fh; y++){
-        for (let x=0; x<fw; x++){
-          const idx = y*fw+x;
-          if (!filled[idx]) continue;
-          for (const [ddx,ddy] of _NB){
-            const nx=x+ddx, ny=y+ddy;
-            if (nx<0||nx>=fw||ny<0||ny>=fh) continue;
-            const nidx = ny*fw+nx;
-            if (filled[nidx] || _runMax[nidx] !== -1) continue;
-            const inkA = _inkData[nidx*4+3];
-            if (inkA <= 0) continue;
-            _runMax[nidx] = inkA;
-            _q.push(nidx);
-          }
-        }
-      }
-      // BFS estricta: cada píxel se visita y fija UNA sola vez. Solo se
-      // propaga a un vecino si su tinta sigue subiendo respecto al máximo
-      // ya visto por ese camino — en cuanto deja de subir, ese vecino se
-      // queda sin marcar (no se rellena) y esa rama de la propagación
-      // termina ahí.
-      for (let _qh=0; _qh<_q.length; _qh++){
-        const idx = _q[_qh];
-        const predMax = _runMax[idx];
-        const x = idx % fw, y = (idx / fw) | 0;
-        for (const [ddx,ddy] of _NB){
-          const nx=x+ddx, ny=y+ddy;
-          if (nx<0||nx>=fw||ny<0||ny>=fh) continue;
-          const nidx = ny*fw+nx;
-          if (filled[nidx] || _runMax[nidx] !== -1) continue; // ya fijado o es núcleo
-          const inkA = _inkData[nidx*4+3];
-          if (inkA <= 0 || inkA <= predMax) continue; // la tinta ya no sube: no propagar
-          _runMax[nidx] = inkA;
-          if (_q.length < _MAX_Q) _q.push(nidx);
-        }
-      }
-      _extAlpha = new Uint8Array(fw*fh);
-      for (let i=0; i<fw*fh; i++){
-        if (filled[i] || _runMax[i] < 0) continue;
-        _extAlpha[i] = fA;
-      }
+      _extAlpha = _edFillUnderInk(filled, _inkCtx.getImageData(0, 0, fw, fh).data, fw, fh, fA);
     }
   }
 
@@ -20195,20 +20395,416 @@ function edFloodFill(nx, ny){
   edPushHistory(); edRedraw();
 }
 
-// ── Suavizar bordes del relleno con antialiasing ──────────────────────────────
+// ── Antialiasing del borde del relleno (v42.02) ──────────────────────────────────────────────────────────────────
+// Alberto: «Había un sistema que al borrar la tinta suavizaba los bordes de los rellenos; no parece estar funcionando. El mismo antialiasing
+// que tiene la tinta debería pasarse al relleno al borrarse la tinta».
+// CAUSA (medida en Chromium 141 con borrador real): el sistema anterior suavizaba con ctx.filter = 'blur(0.75px)', y el navegador IGNORA ese
+//   filtro con radios ≤ 0,75 px (la fila de alfa de un escalón salía idéntica: 255,255,255,0,0,0; con 0,9 px ya difumina). El suavizado «se
+//   ejecutaba» (applied=true en el log) pero no cambiaba ni un píxel. Además sólo se disparaba al pulsar OK y comparando con la tinta que había
+//   AL ENTRAR en la sesión: la tinta dibujada y borrada en la misma sesión (lo normal al crear: línea → bote → borrar la línea) no se detectaba.
+// SOLUCIÓN — cálculo propio (sin ctx.filter: mismo resultado en cualquier navegador) y en el momento de borrar:
+//   1) QUÉ borde: el del relleno que estaba bajo o junto a la tinta que acaba de desaparecer (su alfa bajó ≥ _ED_AA_INK_DROP_MIN: estado anterior
+//      del historial por baldosas frente al actual). Los bordes que la tinta sigue tapando, o que nunca tuvieron tinta, no se tocan.
+//   2) DÓNDE está el borde con precisión de subpíxel: la máscara binaria del relleno se suaviza con una gaussiana (σ = 1 px) y la distancia del
+//      píxel a la isolínea 0,5 se estima con la aproximación de primer orden d ≈ (g − 0,5) / |∇g| (G. Taubin, «Distance Approximations for
+//      Rasterizing Implicit Curves», ACM Transactions on Graphics, 1994); la dirección del borde sale del propio gradiente.
+//   3) CUÁNTO cubre: alfa = cobertura EXACTA del píxel por ese borde (área de un cuadrado unidad cortado por una recta), que es lo que calcula
+//      el rasterizador de FreeType («the exact coverage of the outline on each pixel cell») — o sea, el mismo antialiasing que tiene la tinta.
+//   Garantías: sólo se tocan los píxeles del contorno (una fila a cada lado) y nunca sube el alfa de un píxel que ya tenía relleno; las líneas o
+//   puntas más finas de ≈ 2 px y los píxeles sin gradiente fiable se dejan como están; repetirlo no cambia nada (idempotente: el soporte binario
+//   se recupera del propio alfa, que vale ≥ la mitad de la referencia local dentro y menos fuera). Medido contra la cobertura analítica de rectas
+//   y círculos, el error medio baja de 0,24 a ≈ 0,11 por píxel de borde y el área del relleno se conserva (sesgo ≈ 0).
+//   (CRÉDITOS: técnicas estándar; implementación PROPIA, sin código copiado — ver la cabecera de este fichero y «Créditos» en la app.)
+const _ED_AA_SIGMA = 1.0;       // σ (px) de la gaussiana que suaviza la máscara del relleno
+const _ED_AA_INK_DROP_MIN = 40; // la tinta cuenta como «borrada» donde su alfa (0–255) baja al menos esto: ignora el grano / el borde blando de la goma
+const _ED_AA_GMIN = 0.1;        // gradiente mínimo del soporte suavizado (un borde recto con σ = 1 da ≈ 0,4): por debajo no hay borde fiable
+const _ED_AA_PROBE = 1.5;       // guarda de grosor: 1,5 px hacia dentro del borde tiene que haber relleno (si no, es una línea o punta finas)
+const _ED_AA_MARGIN = 6;        // contexto alrededor de la zona expuesta: radio del núcleo (3) + vecindad del contorno (1) + guarda de grosor (2)
+const _ED_LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+let _edAAK = null;
+function _edAAKernel() { // gaussiana 2-D y sus derivadas (en x e y), normalizada a suma 1 sobre la ventana truncada a 2,5 σ
+  if (_edAAK) return _edAAK;
+  const s = _ED_AA_SIGMA, R = Math.max(1, Math.ceil(2.5 * s)), n = 2 * R + 1;
+  const G = new Float32Array(n * n), GX = new Float32Array(n * n), GY = new Float32Array(n * n);
+  let sum = 0;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) { const g = Math.exp(-(dx * dx + dy * dy) / (2 * s * s)); G[(dy + R) * n + dx + R] = g; sum += g; }
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    const i = (dy + R) * n + dx + R;
+    G[i] /= sum; GX[i] = dx / (s * s) * G[i]; GY[i] = dy / (s * s) * G[i];
+  }
+  return (_edAAK = { R, n, G, GX, GY });
+}
+// Cobertura exacta de un píxel unidad por un semiplano cuyo borde está a distancia firmada t del centro del píxel (t > 0: el centro queda
+// dentro) y tiene normal (nx, ny) unitaria apuntando hacia dentro. Con a ≥ b los valores absolutos de la normal, la cobertura es la función
+// de distribución de la suma de dos uniformes (trapecio): lineal en |t| ≤ (a−b)/2 y parabólica hasta |t| = (a+b)/2.
+function _edAACoverage(t, nx, ny) {
+  let a = Math.abs(nx), b = Math.abs(ny);
+  if (b > a) { const q = a; a = b; b = q; }
+  const h = (a + b) * 0.5;
+  if (t >= h) return 1;
+  if (t <= -h) return 0;
+  if (Math.abs(t) <= (a - b) * 0.5) return 0.5 + t / a;
+  if (t > 0) { const q = h - t; return 1 - q * q / (2 * a * b); }
+  const q = h + t; return q * q / (2 * a * b);
+}
+// ── Frontera entre DOS COLORES (v42.03) ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Alberto: «dos rellenos de distintos colores separados por una línea fina de tinta: al borrarse la línea, si ambos colores llegan a tocarse no
+// existe un suavizado entre ambos, quedando un corte de color rateado». El antialiasing de arriba sólo veía el límite «hay relleno / no hay»
+// (alfa); entre dos colores los dos lados tienen alfa 255 y no había nada que suavizar. Misma técnica, otra máscara:
+//   · en vez de «¿hay relleno?», la máscara dice «¿de qué color es?»: +1 el color A del píxel, −1 el color B del otro lado, 0 lo que no es
+//     ninguno de los dos (transparente o un tercer color). Los dos colores salen del entorno 7×7 de cada píxel: el par MÁS LEJANO entre los
+//     píxeles sólidos (las mezclas caen en el segmento A–B, así que el par más lejano es siempre el de colores puros).
+//   · gaussiana (σ = 1) de la máscara → d = f / |∇f| (Taubin) y normal; cobertura EXACTA del píxel por el borde; color = cob·A + (1−cob)·B.
+//   · un píxel de un color no baja de 0,5 + δ de ese color (conserva su clase) y no se escribe si ya vale ± 1: repetirlo no cambia nada.
+//   · guarda de grosor: a 2,5 px del borde, hacia cada lado, tiene que haber un píxel del color de ese lado (bandas de < 3 px: se dejan).
+//   · un degradado no es una frontera: hace falta un SALTO de ≥ _ED_AA_COL_STEP entre dos vecinos.
+// Rendijas: las extensiones de los dos rellenos bajo la tinta (_edFillUnderInk, 2 px cada una) no siempre llegan a tocarse: con una línea de 3 px
+// y su borde antialiasado, en algunas filas queda un píxel transparente entre los dos colores (un puntito blanco al borrar la línea). Un píxel
+// casi transparente enfrentado (en horizontal, vertical o diagonal) a dos píxeles sólidos de color distinto se rellena con el color de uno de
+// ellos — el que más pesa en su vecindad 3×3 — y después la frontera se suaviza entera.
+const _ED_AA_COL_STEP = 24;      // salto mínimo de color (canal máximo, 0–255) entre dos vecinos para que haya una frontera y no un degradado
+const _ED_AA_COL_TOL = 8;        // tolerancia (canal máximo) al comprobar que un píxel «es» el color de un lado
+const _ED_AA_COL_OFF2 = 144;     // distancia² RGB máxima de un color al segmento A–B para contar como mezcla de los dos (12²)
+const _ED_AA_COL_PROBE = 2.5;    // guarda de grosor: a 2,5 px del borde, hacia cada lado, tiene que estar el color de ese lado
+const _ED_AA_COL_DELTA = 0.0625; // un píxel de un color no baja de 0,5 + δ de ese color (conserva su clase)
+// Cierre de rendijas de 1 px. Devuelve [píxel, vecino del que toma el color, …]; no modifica d (lo escribe el llamador).
+function _edAACloseSeams(d, w, h, ex, runs, b0) {
+  const out = [];
+  runs(b0, (y0, y1, x0, x1) => {
+    const ya = y0 < 1 ? 1 : y0, yb = y1 > h - 1 ? h - 1 : y1, xa = x0 < 1 ? 1 : x0, xb = x1 > w - 1 ? w - 1 : x1;
+    for (let y = ya; y < yb; y++) {
+      for (let x = xa; x < xb; x++) {
+        const s = y * w + x;
+        if (!ex[s] || d[s * 4 + 3] >= 128) continue;
+        let P3 = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const a = d[(s + dy * w + dx) * 4 + 3]; if (a > P3) P3 = a; }
+        if (P3 === 0 || d[s * 4 + 3] * 2 >= P3) continue;
+        for (let k = 0; k < 4; k++) {
+          const o = k === 0 ? -1 : k === 1 ? -w : k === 2 ? -w - 1 : w - 1; // un lado de la pareja: (−1,0) (0,−1) (−1,−1) (−1,+1); el otro es el opuesto
+          const p = s + o, q = s - o;
+          if (d[p * 4 + 3] * 2 < P3 || d[q * 4 + 3] * 2 < P3) continue;
+          const pr = d[p * 4], pg = d[p * 4 + 1], pb = d[p * 4 + 2], qr = d[q * 4], qg = d[q * 4 + 1], qb = d[q * 4 + 2];
+          if (Math.max(Math.abs(pr - qr), Math.abs(pg - qg), Math.abs(pb - qb)) < _ED_AA_COL_STEP) continue;
+          let cp = 0, cq = 0; // peso de cada lado: píxeles sólidos de su color en la vecindad 3×3
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const j = s + dy * w + dx; if (d[j * 4 + 3] * 2 < P3) continue;
+            const jr = d[j * 4], jg = d[j * 4 + 1], jb = d[j * 4 + 2];
+            if (Math.max(Math.abs(jr - pr), Math.abs(jg - pg), Math.abs(jb - pb)) <= _ED_AA_COL_TOL) cp++;
+            else if (Math.max(Math.abs(jr - qr), Math.abs(jg - qg), Math.abs(jb - qb)) <= _ED_AA_COL_TOL) cq++;
+          }
+          out.push(s, cq > cp ? q : p);
+          break;
+        }
+      }
+    }
+  });
+  return out;
+}
+// Frontera entre dos colores. d: RGBA (sólo se lee); ex: zona de interés; S: soporte (alfa ≥ la mitad de la referencia local); runs/b0: bloques con
+// algún píxel de ex. Devuelve {idx, rgb} con los píxeles a cambiar y su color nuevo (el alfa no se toca): el llamador los escribe tras calcularlos todos.
+function _edAAColorEdges(d, w, h, ex, S, runs, b0) {
+  const K = _edAAKernel(), R = K.R, kn = K.n, N = w * h;
+  const u32 = new Uint32Array(d.buffer, d.byteOffset, N);
+  const idx = [], rgb = [];
+  const near = (qx, qy, cr, cg, cb) => { // ¿el píxel (qx,qy) es sólido y de ese color?
+    if (qx < 0 || qx >= w || qy < 0 || qy >= h) return false;
+    const j = qy * w + qx; if (!S[j]) return false;
+    return Math.max(Math.abs(d[j * 4] - cr), Math.abs(d[j * 4 + 1] - cg), Math.abs(d[j * 4 + 2] - cb)) <= _ED_AA_COL_TOL;
+  };
+  const farthest = (x, y, ir, ig, ib) => { // píxel sólido del entorno (2R+1)² cuyo color está más lejos de (ir,ig,ib); −1 si no hay
+    let best = -1, bd = -1;
+    for (let dy = -R; dy <= R; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue;
+      for (let dx = -R; dx <= R; dx++) { const xx = x + dx; if (xx < 0 || xx >= w) continue;
+        const j = yy * w + xx; if (!S[j]) continue;
+        const e0 = d[j * 4] - ir, e1 = d[j * 4 + 1] - ig, e2 = d[j * 4 + 2] - ib, dd = e0 * e0 + e1 * e1 + e2 * e2;
+        if (dd > bd) { bd = dd; best = j; } } }
+    return best;
+  };
+  const one = (x, y, i) => {
+    const ir = d[i * 4], ig = d[i * 4 + 1], ib = d[i * 4 + 2];
+    // los dos colores del entorno: par más lejano (dos pasadas); A = el más cercano al color del píxel
+    const q = farthest(x, y, ir, ig, ib); if (q < 0) return;
+    const qr = d[q * 4], qg = d[q * 4 + 1], qb = d[q * 4 + 2];
+    const r = farthest(x, y, qr, qg, qb); if (r < 0) return;
+    const rr = d[r * 4], rg = d[r * 4 + 1], rb = d[r * 4 + 2];
+    const dq = (qr - ir) ** 2 + (qg - ig) ** 2 + (qb - ib) ** 2, dr = (rr - ir) ** 2 + (rg - ig) ** 2 + (rb - ib) ** 2;
+    let Ar, Ag, Ab, Br, Bg, Bb;
+    if (dr <= dq) { Ar = rr; Ag = rg; Ab = rb; Br = qr; Bg = qg; Bb = qb; } else { Ar = qr; Ag = qg; Ab = qb; Br = rr; Bg = rg; Bb = rb; }
+    const ab0 = Ar - Br, ab1 = Ag - Bg, ab2c = Ab - Bb, ab2 = ab0 * ab0 + ab1 * ab1 + ab2c * ab2c;
+    if (Math.max(Math.abs(ab0), Math.abs(ab1), Math.abs(ab2c)) < _ED_AA_COL_STEP) return;
+    // máscara de color (+1 A · −1 B · 0 ni uno ni otro), gaussiana y gradiente (bordes del rectángulo replicados)
+    let f = 0, fx = 0, fy = 0, bd = false, selfOk = false;
+    for (let dy = -R; dy <= R; dy++) {
+      let yy = y + dy; if (yy < 0) yy = 0; else if (yy >= h) yy = h - 1;
+      const ko = (dy + R) * kn + R;
+      for (let dx = -R; dx <= R; dx++) {
+        let xx = x + dx; if (xx < 0) xx = 0; else if (xx >= w) xx = w - 1;
+        const j = yy * w + xx; if (!S[j]) continue;
+        const e0 = d[j * 4] - Br, e1 = d[j * 4 + 1] - Bg, e2 = d[j * 4 + 2] - Bb;
+        const t = (e0 * ab0 + e1 * ab1 + e2 * ab2c) / ab2; // posición sobre el segmento B(0) → A(1)
+        if (t < -0.15 || t > 1.15) continue;
+        if (e0 * e0 + e1 * e1 + e2 * e2 - t * t * ab2 > _ED_AA_COL_OFF2) continue; // fuera del segmento: un tercer color
+        const m = t >= 0.5 ? 1 : -1;
+        f += m * K.G[ko + dx]; fx += m * K.GX[ko + dx]; fy += m * K.GY[ko + dx];
+        if (dx === 0 && dy === 0) selfOk = (m === 1);
+        else if (m === -1 && dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1 && x + dx >= 0 && x + dx < w && y + dy >= 0 && y + dy < h) bd = true;
+      }
+    }
+    if (!selfOk || !bd) return; // el píxel no es de A, o no toca ningún píxel de B
+    const gm = Math.sqrt(fx * fx + fy * fy);
+    if (gm < 2 * _ED_AA_GMIN) return; // (la máscara va de −1 a +1: el doble que la del alfa)
+    const nx = fx / gm, ny = fy / gm; // normal unitaria hacia el lado de A
+    let dist = f / gm; if (dist > 1.5) dist = 1.5; else if (dist < -1.5) dist = -1.5;
+    // guarda de grosor
+    const bx = x - dist * nx, by = y - dist * ny;
+    if (!near(Math.round(bx + nx * _ED_AA_COL_PROBE), Math.round(by + ny * _ED_AA_COL_PROBE), Ar, Ag, Ab)) return;
+    if (!near(Math.round(bx - nx * _ED_AA_COL_PROBE), Math.round(by - ny * _ED_AA_COL_PROBE), Br, Bg, Bb)) return;
+    let cov = _edAACoverage(dist, nx, ny);
+    if (cov < 0.5 + _ED_AA_COL_DELTA) cov = 0.5 + _ED_AA_COL_DELTA; // conserva su clase (idempotencia)
+    const nr = Math.round(cov * Ar + (1 - cov) * Br), ng = Math.round(cov * Ag + (1 - cov) * Bg), nb = Math.round(cov * Ab + (1 - cov) * Bb);
+    if (Math.abs(nr - ir) <= 1 && Math.abs(ng - ig) <= 1 && Math.abs(nb - ib) <= 1) return;
+    idx.push(i); rgb.push(nr, ng, nb);
+  };
+  runs(b0, (y0, y1, x0, x1) => {
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = y * w + x;
+        if (!ex[i] || !S[i]) continue;
+        const ir = d[i * 4], ig = d[i * 4 + 1], ib = d[i * 4 + 2];
+        let cand = false; // ¿algún vecino sólido con un color claramente distinto?
+        for (let dy = -1; dy <= 1 && !cand; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx < 0 || xx >= w || (dx === 0 && dy === 0)) continue;
+            const j = yy * w + xx; if (u32[j] === u32[i] || !S[j]) continue;
+            if (Math.max(Math.abs(d[j * 4] - ir), Math.abs(d[j * 4 + 1] - ig), Math.abs(d[j * 4 + 2] - ib)) >= _ED_AA_COL_STEP) { cand = true; break; } } }
+        if (cand) one(x, y, i);
+      }
+    }
+  });
+  return { idx, rgb };
+}
+// Núcleo puro (tres etapas: 1.ª rendijas y frontera ENTRE DOS COLORES — v42.03 —, 2.ª borde «relleno / no relleno» por el alfa — v42.02 —; ver arriba). d: RGBA (Uint8ClampedArray) del relleno en un rectángulo w×h — se modifica en sitio; exp: Uint8Array w×h con 1 donde la tinta
+// acaba de desaparecer. Devuelve {n, x0, y0, x1, y1} (cuántos píxeles cambió y su caja, en coordenadas del rectángulo) o null si no cambió nada.
+// Zona de interés (ROI): ex = exp dilatado 3×3 (¿hay tinta quitada a ≤ 1 px?). La referencia local P y el soporte S sólo se calculan en los
+// bloques de _ED_AA_BS×_ED_AA_BS que contienen algún píxel de ex más 1 bloque alrededor (el contorno lee S hasta ≈ 4 px más allá y P a 3 px de
+// cada uno de ellos), y el máximo horizontal en otro bloque más. Con exposición dispersa (un trazo largo de goma que cruza el dibujo, o una
+// goma pequeña en un rectángulo grande) no se recorre todo el rectángulo; con el dibujo entero expuesto la zona es el rectángulo y el coste es el
+// de siempre. El resultado es EXACTAMENTE el de recorrerlo todo (se comprueba contra la versión sin ROI en el banco de pruebas).
+const _ED_AA_BS = 16;
+function _edAAFillEdges(d, w, h, exp) {
+  const K = _edAAKernel(), R = K.R, kn = K.n, N = w * h, BS = _ED_AA_BS;
+  const bw = Math.ceil(w / BS), bh = Math.ceil(h / BS);
+  const al = new Uint8Array(N), mh = new Uint8Array(N), mr = new Uint8Array(N), S = new Uint8Array(N), ex = new Uint8Array(N);
+  // 0) ex (dilatación 3×3 de exp: horizontal en mh, que aquí sólo es temporal, y vertical en ex) y bloques con algún ex
+  const b0 = new Uint8Array(bw * bh); let any = false;
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    for (let x = 0; x < w; x++) {
+      mh[o + x] = (exp[o + x] || (x > 0 && exp[o + x - 1]) || (x < w - 1 && exp[o + x + 1])) ? 1 : 0;
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    const o = y * w, bo = ((y / BS) | 0) * bw;
+    for (let x = 0; x < w; x++) {
+      if (mh[o + x] || (y > 0 && mh[o - w + x]) || (y < h - 1 && mh[o + w + x])) { ex[o + x] = 1; b0[bo + ((x / BS) | 0)] = 1; any = true; }
+    }
+  }
+  if (!any) return null;
+  const dil = (src) => { // un bloque más alrededor
+    const out = new Uint8Array(bw * bh);
+    for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
+      if (!src[by * bw + bx]) continue;
+      for (let j = by > 0 ? by - 1 : 0, je = by < bh - 1 ? by + 1 : bh - 1; j <= je; j++)
+        for (let i = bx > 0 ? bx - 1 : 0, ie = bx < bw - 1 ? bx + 1 : bw - 1; i <= ie; i++) out[j * bw + i] = 1;
+    }
+    return out;
+  };
+  const bA = dil(b0), bA1 = dil(bA);
+  const runs = (fl, fn) => { // tramos de bloques contiguos de cada fila de bloques → fn(y0, y1, x0, x1) en píxeles
+    for (let by = 0; by < bh; by++) {
+      const y0 = by * BS, y1 = y0 + BS < h ? y0 + BS : h, fo = by * bw;
+      let bx = 0;
+      while (bx < bw) {
+        if (!fl[fo + bx]) { bx++; continue; }
+        let e = bx; while (e + 1 < bw && fl[fo + e + 1]) e++;
+        fn(y0, y1, bx * BS, (e + 1) * BS < w ? (e + 1) * BS : w);
+        bx = e + 1;
+      }
+    }
+  };
+  // 0b) Rendijas de 1 px entre dos colores: se cierran ANTES de calcular el soporte (así el hueco ya no cuenta como «fuera»)
+  let x0 = w, y0 = h, x1 = -1, y1 = -1; // caja de lo cambiado (todas las etapas)
+  const seamL = _edAACloseSeams(d, w, h, ex, runs, b0);
+  for (let k = 0; k < seamL.length; k += 2) {
+    const i = seamL[k], q = seamL[k + 1] * 4, o = i * 4, x = i % w, y = (i / w) | 0;
+    d[o] = d[q]; d[o + 1] = d[q + 1]; d[o + 2] = d[q + 2]; d[o + 3] = d[q + 3];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  // 1) Referencia local P = máximo 7×7 del alfa (la «meseta» del relleno: un píxel de dentro no tocado queda a ≤ 3 px de cualquier píxel del
+  //    contorno) y soporte binario S: alfa ≥ la mitad de P. Un relleno recién hecho (alfa plano) da el soporte «alfa > 0»; un borde ya suavizado
+  //    devuelve EL MISMO soporte, porque abajo cada píxel conserva su clase (dentro ≥ P/2, fuera < P/2): de ahí que repetir el cálculo no cambie nada.
+  for (let i = 0; i < N; i++) al[i] = d[i * 4 + 3];
+  runs(bA1, (y0, y1, x0, x1) => {
+    for (let y = y0; y < y1; y++) {
+      const o = y * w;
+      for (let x = x0; x < x1; x++) {
+        let m = 0;
+        const xa = x > 2 ? x - 3 : 0, xb = x < w - 3 ? x + 3 : w - 1;
+        for (let xx = xa; xx <= xb; xx++) { const v = al[o + xx]; if (v > m) m = v; }
+        mh[o + x] = m;
+      }
+    }
+  });
+  runs(bA, (y0, y1, x0, x1) => {
+    for (let y = y0; y < y1; y++) {
+      const ya = y > 2 ? y - 3 : 0, yb = y < h - 3 ? y + 3 : h - 1;
+      for (let x = x0; x < x1; x++) {
+        let m = 0;
+        for (let yy = ya; yy <= yb; yy++) { const v = mh[yy * w + x]; if (v > m) m = v; }
+        const i = y * w + x, a = al[i];
+        mr[i] = m;
+        S[i] = (a > 0 && a * 2 >= m) ? 1 : 0;
+      }
+    }
+  });
+  // 1b) Frontera entre dos colores (sólo calcula; se escribe en el paso 3, antes que el alfa)
+  const colR = _edAAColorEdges(d, w, h, ex, S, runs, b0);
+  // 2) Píxeles del contorno cerca de tinta quitada → alfa nuevo
+  const outI = [], outA = [], outS = [];
+  runs(b0, (y0, y1, x0, x1) => {
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = y * w + x;
+        if (!ex[i]) continue;
+        const inS = S[i];
+        let bd = false;
+        scan: for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx < 0 || xx >= w) continue; if (S[yy * w + xx] !== inS) { bd = true; break scan; } } }
+        const P = mr[i];
+        if (!bd || P === 0) continue;
+        // gaussiana del soporte y su gradiente (bordes del rectángulo replicados)
+        let g = 0, gx = 0, gy = 0;
+        for (let dy = -R; dy <= R; dy++) {
+          let yy = y + dy; if (yy < 0) yy = 0; else if (yy >= h) yy = h - 1;
+          const o = yy * w, ko = (dy + R) * kn + R;
+          for (let dx = -R; dx <= R; dx++) {
+            let xx = x + dx; if (xx < 0) xx = 0; else if (xx >= w) xx = w - 1;
+            if (!S[o + xx]) continue;
+            g += K.G[ko + dx]; gx += K.GX[ko + dx]; gy += K.GY[ko + dx];
+          }
+        }
+        const gm = Math.sqrt(gx * gx + gy * gy);
+        if (gm < _ED_AA_GMIN) continue;
+        const nx = gx / gm, ny = gy / gm; // normal unitaria hacia dentro
+        let dist = (g - 0.5) / gm;        // distancia firmada del centro del píxel al borde (> 0: dentro)
+        if (dist > 1.5) dist = 1.5; else if (dist < -1.5) dist = -1.5;
+        // guarda de grosor: desde el punto del borde, _ED_AA_PROBE px hacia dentro tiene que haber relleno
+        const qx = Math.round(x + nx * (_ED_AA_PROBE - dist)), qy = Math.round(y + ny * (_ED_AA_PROBE - dist));
+        if (qx < 0 || qx >= w || qy < 0 || qy >= h || !S[qy * w + qx]) continue;
+        const a0 = al[i], half = (P + 1) >> 1; // half = ceil(P/2): dentro (S=1) ⇒ alfa ≥ half; fuera (S=0) ⇒ alfa ≤ half − 1
+        let na = Math.round(_edAACoverage(dist, nx, ny) * P);
+        if (inS) { if (na < half) na = half; }            // un píxel de dentro no baja de la mitad: conserva su clase (idempotencia)
+        else     { if (na > half - 1) na = half - 1; }    // uno de fuera no llega a la mitad
+        if (a0 > 0 && na > a0) na = a0;                   // nunca sube el alfa de un píxel que ya tenía relleno
+        if (na === a0 || (a0 === 0 && na < 1)) continue;
+        let src = -1; // un píxel que estaba a 0 «se enciende»: toma el color del vecino con más alfa
+        if (a0 === 0) {
+          let best = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy; if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
+            const j = yy * w + xx, aj = al[j]; if (aj > best) { best = aj; src = j; }
+          }
+          if (src < 0) continue;
+        }
+        outI.push(i); outA.push(na); outS.push(src);
+      }
+    }
+  });
+  if (!outI.length && !colR.idx.length && !seamL.length) return null;
+  // 3) Escribir (después de calcularlo todo: ningún píxel ve el resultado de otro): primero el color de la frontera y luego el alfa — así un píxel
+  //    «encendido» (alfa 0 → >0) copia ya el color mezclado de su vecino
+  for (let k = 0; k < colR.idx.length; k++) {
+    const i = colR.idx[k], x = i % w, y = (i / w) | 0;
+    d[i * 4] = colR.rgb[k * 3]; d[i * 4 + 1] = colR.rgb[k * 3 + 1]; d[i * 4 + 2] = colR.rgb[k * 3 + 2];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  for (let k = 0; k < outI.length; k++) {
+    const i = outI[k], x = i % w, y = (i / w) | 0;
+    d[i * 4 + 3] = outA[k];
+    if (outS[k] >= 0) { const s = outS[k] * 4; d[i * 4] = d[s]; d[i * 4 + 1] = d[s + 1]; d[i * 4 + 2] = d[s + 2]; }
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return { n: seamL.length / 2 + colR.idx.length + outI.length, x0, y0, x1, y1 };
+}
+// Lee el rectángulo (rx,ry,rw,rh) del relleno, le aplica _edAAFillEdges y escribe de vuelta SÓLO la caja de lo que cambió (putImageData con
+// rectángulo sucio: el resto del canvas no se reescribe). Devuelve {n, x0, y0, x1, y1} en coordenadas del canvas, o null si no cambió nada.
+function _edAASmoothRect(fillCtx, rx, ry, rw, rh, exp) {
+  const t0 = performance.now();
+  const img = fillCtx.getImageData(rx, ry, rw, rh);
+  const t1 = performance.now();
+  const res = _edAAFillEdges(img.data, rw, rh, exp);
+  const t2 = performance.now();
+  if (!res) return null;
+  fillCtx.putImageData(img, rx, ry, res.x0, res.y0, res.x1 - res.x0 + 1, res.y1 - res.y0 + 1);
+  const t3 = performance.now();
+  return { n: res.n, x0: rx + res.x0, y0: ry + res.y0, x1: rx + res.x1, y1: ry + res.y1, ms: { read: t1 - t0, core: t2 - t1, put: t3 - t2 } };
+}
+// Alfa (Uint8Array w×h) de un rectángulo de una rejilla de baldosas del historial (ver _edHtGrid). Baldosa null = transparente; {u} = un solo
+// valor RGBA; {u32} = píxeles (Uint32 del ImageData: el alfa es el byte alto en little-endian).
+function _edHtAlphaRect(grid, x, y, w, h) {
+  const out = new Uint8Array(w * h);
+  if (!grid) return out;
+  const T = ED_HT, sh = _ED_LITTLE_ENDIAN ? 24 : 0;
+  const tx0 = Math.max(0, Math.floor(x / T)), tx1 = Math.min(grid.cols - 1, Math.floor((x + w - 1) / T));
+  const ty0 = Math.max(0, Math.floor(y / T)), ty1 = Math.min(grid.rows - 1, Math.floor((y + h - 1) / T));
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+    const t = grid.t[ty * grid.cols + tx]; if (!t) continue;
+    const px = tx * T, py = ty * T;
+    const ix0 = Math.max(x, px), iy0 = Math.max(y, py), ix1 = Math.min(x + w, px + t.w), iy1 = Math.min(y + h, py + t.h);
+    for (let yy = iy0; yy < iy1; yy++) {
+      const o = (yy - y) * w - x;
+      if (t.u !== undefined) { const a = (t.u >>> sh) & 255; if (a) for (let xx = ix0; xx < ix1; xx++) out[o + xx] = a; }
+      else { const ro = (yy - py) * t.w - px; for (let xx = ix0; xx < ix1; xx++) out[o + xx] = (t.u32[ro + xx] >>> sh) & 255; }
+    }
+  }
+  return out;
+}
+// ¿Alguna baldosa de la rejilla con contenido toca el rectángulo? (Descarta rápido: sin relleno cerca no hay borde que suavizar.)
+function _edHtGridHasContent(grid, x, y, w, h) {
+  if (!grid) return false;
+  const T = ED_HT;
+  const tx0 = Math.max(0, Math.floor(x / T)), tx1 = Math.min(grid.cols - 1, Math.floor((x + w - 1) / T));
+  const ty0 = Math.max(0, Math.floor(y / T)), ty1 = Math.min(grid.rows - 1, Math.floor((y + h - 1) / T));
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) if (grid.t[ty * grid.cols + tx]) return true;
+  return false;
+}
+// Caja (en píxeles, x1/y1 exclusivos) de las baldosas con contenido de una rejilla del historial, o null si está vacía. Cuesta recorrer las
+// baldosas (≈400 en un lienzo de 2700×2340), no los píxeles.
+function _edHtContentBBox(grid, W, H) {
+  if (!grid) return null;
+  const T = ED_HT; let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+  for (let ty = 0; ty < grid.rows; ty++) for (let tx = 0; tx < grid.cols; tx++) {
+    if (!grid.t[ty * grid.cols + tx]) continue;
+    if (tx * T < x0) x0 = tx * T; if (ty * T < y0) y0 = ty * T;
+    if ((tx + 1) * T > x1) x1 = (tx + 1) * T; if ((ty + 1) * T > y1) y1 = (ty + 1) * T;
+  }
+  return x1 < 0 ? null : { x0, y0, x1: Math.min(W, x1), y1: Math.min(H, y1) };
+}
+
+// Botón «Suavizar» del panel de relleno: antialiasing de TODOS los bordes del relleno actual (mismo núcleo; antes: blur(0.75px) de todo el
+// canvas, que el navegador ignoraba).
 function _edFillSmooth() {
   const bk = _edTmp.bucket;
   if (!bk?._canvas) { edToast(I18n.t('ed_noFillToSmooth')); return; }
   const w = bk._canvas.width, h = bk._canvas.height;
   if (!w || !h) { edToast(I18n.t('ed_noFillToSmooth')); return; }
-  // Aplicar blur Gaussiano sobre canvas temporal → antialiasing de bordes
-  const tmp = document.createElement('canvas');
-  tmp.width = w; tmp.height = h;
-  const tCtx = tmp.getContext('2d');
-  tCtx.filter = 'blur(0.75px)';
-  tCtx.drawImage(bk._canvas, 0, 0);
-  bk._ctx.clearRect(0, 0, w, h);
-  bk._ctx.drawImage(tmp, 0, 0);
+  // Sólo donde hay relleno (más el margen del núcleo): el lienzo de trabajo entero son ≈ 6 M de píxeles y en un móvil costaría segundos.
+  const t0 = performance.now();
+  const bb = StrokeLayer._boundingBox(bk._canvas);
+  if (!bb) { edToast(I18n.t('ed_noFillToSmooth')); return; }
+  const rx = Math.max(0, bb.x - _ED_AA_MARGIN), ry = Math.max(0, bb.y - _ED_AA_MARGIN);
+  const rw = Math.min(w, bb.x + bb.w + _ED_AA_MARGIN) - rx, rh = Math.min(h, bb.y + bb.h + _ED_AA_MARGIN) - ry;
+  const res = (rw > 0 && rh > 0) ? _edAASmoothRect(bk._ctx, rx, ry, rw, rh, new Uint8Array(rw * rh).fill(1)) : null;
+  _edFCL('_edFillSmooth (botón): borde de relleno suavizado ' + (res ? res.n + ' px' : '0 px') + ' · rect ' + rw + '×' + rh + ' · ' + (performance.now() - t0).toFixed(1) + ' ms');
   _edDrawPushHistory();
   edPushHistory();
   edRedraw();
@@ -20217,8 +20813,8 @@ function _edFillSmooth() {
 
 // ── Suavizado AUTOMÁTICO y localizado al borrar tinta que limitaba un relleno ──
 // Estudio pedido por Alberto tras retirar el sistema de "fase 2" (que se
-// colaba por ramas de tinta ajenas — ver el bloque de "Relleno bajo la tinta
-// hasta su propio pico de opacidad" más arriba). La diferencia de fondo: allí
+// colaba por ramas de tinta ajenas — ver "Relleno BAJO la tinta, acotado"
+// (_edFillUnderInk) más arriba). La diferencia de fondo: allí
 // no se sabía TODAVÍA cuánta tinta se borraría después, así que había que
 // "adivinar" propagándose por el contorno — de ahí los escapes. Aquí se
 // dispara justo AL BORRAR, cuando ya se sabe exactamente qué píxeles de
@@ -20239,125 +20835,114 @@ function _edSnapshotInkAlpha(drawLayerLike) {
   return { alpha, w: c.width, h: c.height };
 }
 
-// Compara una instantánea de alfa de tinta ANTES (oldSnap, ver
-// _edSnapshotInkAlpha) contra el estado ACTUAL del mismo canvas de tinta, y
-// allí donde ha bajado de forma notable Y había relleno sólido justo debajo,
-// aplica sobre fillCtx el mismo blur que _edFillSmooth — pero SOLO en esa
-// franja exacta (con un pequeño margen para que el blur tenga contorno
-// alrededor), nunca al lienzo entero. Devuelve true si suavizó algo.
+// Suavizado al PULSAR OK / al vaciar la capa de tinta entera (red de seguridad): compara una instantánea de alfa de tinta ANTES (oldSnap, ver
+// _edSnapshotInkAlpha) contra el estado ACTUAL del mismo canvas de tinta, y allí donde ha bajado de forma notable (_ED_AA_INK_DROP_MIN) aplica
+// al relleno el antialiasing de _edAAFillEdges — SOLO en esa franja (con el margen que necesita el núcleo), nunca al lienzo entero.
+// Devuelve true si cambió algún píxel del relleno. v42.02: ya no usa ctx.filter (ver «Antialiasing del borde del relleno»); es idempotente,
+// así que repasar lo que el borrador ya suavizó en vivo (_edSmoothFillAfterErase) no lo cambia.
 function _edAutoSmoothExposedFillEdges(fillCtx, inkCtx, oldSnap) {
   if (!fillCtx || !inkCtx || !oldSnap) return false;
   const fw = oldSnap.w, fh = oldSnap.h;
   if (!fw || !fh) return false;
 
   const newAlphaFull = inkCtx.getImageData(0, 0, fw, fh).data;
-  const fillImgData = fillCtx.getImageData(0, 0, fw, fh);
-  const fd = fillImgData.data;
-
-  // Umbral de bajada de tinta: ignora el ruido normal del propio trazo
-  // (antialiasing, superposición de pasadas) y solo cuenta bajadas claras,
-  // de verdad debidas a un borrado. Umbral de relleno: solo interesa donde
-  // había relleno realmente SÓLIDO debajo (el núcleo o la rampa extendida
-  // de la fase 1 del relleno) — sin relleno ahí, no hay nada que suavizar.
-  const INK_DROP_MIN = 40;
-  const FILL_SOLID_MIN = 200;
-
-  // Paso 1 — candidatos: tinta borrada Y relleno sólido debajo (igual que
-  // antes). Por sí solo esto NO basta: si se borra un tramo ANCHO de tinta
-  // que tenía relleno sólido debajo en varios píxeles de profundidad
-  // (fase 1 puede extender el relleno bastante bajo tinta gruesa), difuminar
-  // TODOS esos píxeles por igual ensancha el halo mucho más de lo que
-  // debería — el relleno "crece" visualmente respecto a lo que ocupaba
-  // antes de borrar la tinta. Bug reportado por Alberto.
-  const candidate = new Uint8Array(fw*fh);
-  for (let y=0; y<fh; y++){
-    const rowBase = y*fw;
-    for (let x=0; x<fw; x++){
-      const i = rowBase+x;
-      if ((oldSnap.alpha[i] - newAlphaFull[i*4+3]) < INK_DROP_MIN) continue;
-      if (fd[i*4+3] < FILL_SOLID_MIN) continue;
-      candidate[i] = 1;
+  const old = oldSnap.alpha;
+  let minX = fw, minY = fh, maxX = -1, maxY = -1;
+  for (let y = 0; y < fh; y++) {
+    const o = y * fw;
+    for (let x = 0; x < fw; x++) {
+      if (old[o + x] - newAlphaFull[(o + x) * 4 + 3] < _ED_AA_INK_DROP_MIN) continue;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
     }
   }
+  if (maxX < 0) return false;
 
-  // Paso 2 — de los candidatos, quedarnos SOLO con los que están en el
-  // CONTORNO real del relleno: al menos un vecino (8 direcciones, incluye
-  // diagonales para que una esquina no se cuele sin marcar) con relleno NO
-  // sólido, o el borde del propio lienzo. Los píxeles candidatos que están
-  // varios píxeles hacia DENTRO del relleno (rodeados de relleno sólido por
-  // todos lados) no son contorno — se dejan exactamente como estaban, al
-  // 100%, sin difuminar. Así el antialiasing arranca justo en el límite de
-  // opacidad 100% del relleno (pedido explícito de Alberto) y nunca se
-  // extiende más allá de lo que el relleno ya ocupaba antes de borrar la
-  // tinta — por ancho que fuera el tramo de tinta borrado.
-  const NB8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-  const mask = new Uint8Array(fw*fh);
-  let any = false, minX=fw, minY=fh, maxX=-1, maxY=-1;
-  for (let y=0; y<fh; y++){
-    for (let x=0; x<fw; x++){
-      const i = y*fw+x;
-      if (!candidate[i]) continue;
-      let isContour = false;
-      for (const [ddx,ddy] of NB8){
-        const nx=x+ddx, ny=y+ddy;
-        if (nx<0||nx>=fw||ny<0||ny>=fh){ isContour = true; break; }
-        if (fd[(ny*fw+nx)*4+3] < FILL_SOLID_MIN){ isContour = true; break; }
-      }
-      if (!isContour) continue;
-      mask[i] = 1; any = true;
-      if (x<minX) minX=x; if (x>maxX) maxX=x;
-      if (y<minY) minY=y; if (y>maxY) maxY=y;
+  const bx = Math.max(0, minX - _ED_AA_MARGIN), by = Math.max(0, minY - _ED_AA_MARGIN);
+  const bx2 = Math.min(fw - 1, maxX + _ED_AA_MARGIN), by2 = Math.min(fh - 1, maxY + _ED_AA_MARGIN);
+  const bw = bx2 - bx + 1, bh = by2 - by + 1;
+  const exp = new Uint8Array(bw * bh);
+  for (let y = 0; y < bh; y++) {
+    const o = (by + y) * fw + bx;
+    for (let x = 0; x < bw; x++) {
+      if (old[o + x] - newAlphaFull[(o + x) * 4 + 3] >= _ED_AA_INK_DROP_MIN) exp[y * bw + x] = 1;
     }
   }
-  if (!any) return false;
+  return !!_edAASmoothRect(fillCtx, bx, by, bw, bh, exp);
+}
 
-  // Recorte de trabajo con margen (el blur necesita contorno alrededor del
-  // borde real para que el resultado no quede con un canto duro en el
-  // límite del propio recorte) — algo más ancho que para una sola pasada,
-  // ya que dos blurs encadenados alcanzan un poco más lejos que uno solo.
-  const PAD = 5;
-  const bx = Math.max(0, minX-PAD), by = Math.max(0, minY-PAD);
-  const bx2 = Math.min(fw-1, maxX+PAD), by2 = Math.min(fh-1, maxY+PAD);
-  const bw = bx2-bx+1, bh = by2-by+1;
+// ── Suavizado EN VIVO: justo al soltar el borrador (o «borrar color») ────────────────────────────────────────────
+// Se llama desde edSaveDrawData ANTES de apuntar el trazo en el historial, así que el relleno suavizado entra en el MISMO apunte que el
+// borrado (un solo «deshacer» devuelve la tinta Y el borde duro del relleno). El estado ANTERIOR de la tinta sale gratis del historial por
+// baldosas (edDrawHistory[idx].g.pen / .pencil: baldosas inmutables del apunte anterior); el actual, de una lectura del rectángulo del trazo
+// en la capa que se borró. La otra capa de tinta (lápiz si se borra tinta y al revés) no cambia con el trazo, así que no se vuelve a leer.
+//   wholeCanvas=true («borrar color» / vaciar capa, sin rectángulo de trazo) → compara las dos capas de tinta enteras, pero sólo dentro de la
+//   caja donde hay relleno y antes había tinta.
+// Devuelve true si cambió algún píxel del relleno. Cualquier cosa inesperada (sin apunte previo, tamaños distintos…) → false, sin tocar nada:
+// queda la red de seguridad de _edFreezeDrawLayer.
+function _edSmoothFillAfterErase(wholeCanvas) {
+  const bk = _edTmp.bucket;
+  if (!bk?._canvas || !bk._ctx) return false;
+  const prev = (edDrawHistoryIdx >= 0 && edDrawHistory.length > 0) ? edDrawHistory[edDrawHistoryIdx] : null;
+  if (!prev || !prev.g || _edHtUnknownDirty) return false;
+  const W = bk._canvas.width, H = bk._canvas.height;
+  const gP = prev.g.pen, gC = prev.g.pencil, gB = prev.g.bucket;
+  if (!gB || gB.W !== W || gB.H !== H) return false;
+  if ((gP && (gP.W !== W || gP.H !== H)) || (gC && (gC.W !== W || gC.H !== H))) return false;
 
-  // Misma técnica que _edFillSmooth (filter:blur(0.75px) vía drawImage —
-  // putImageData no respeta filter, por eso el recorte se extrae primero a
-  // un canvas normal y el blur se aplica en el drawImage del paso siguiente).
-  // DOS pasadas encadenadas (pedido explícito de Alberto: con una sola
-  // seguía viéndose el borde bastante rateado al quitar la tinta) — la
-  // segunda difumina el resultado ya difuminado de la primera, sobre un
-  // segundo canvas temporal.
-  const cropCanvas = document.createElement('canvas');
-  cropCanvas.width = bw; cropCanvas.height = bh;
-  cropCanvas.getContext('2d').putImageData(fillImgData, -bx, -by, bx, by, bw, bh);
-
-  const blurCanvas = document.createElement('canvas');
-  blurCanvas.width = bw; blurCanvas.height = bh;
-  const blurCtx = blurCanvas.getContext('2d');
-  blurCtx.filter = 'blur(0.75px)';
-  blurCtx.drawImage(cropCanvas, 0, 0);
-
-  const blurCanvas2 = document.createElement('canvas');
-  blurCanvas2.width = bw; blurCanvas2.height = bh;
-  const blurCtx2 = blurCanvas2.getContext('2d');
-  blurCtx2.filter = 'blur(0.75px)';
-  blurCtx2.drawImage(blurCanvas, 0, 0);
-  const blurredData = blurCtx2.getImageData(0, 0, bw, bh).data;
-
-  // Recomponer: SOLO los píxeles marcados toman el valor difuminado — el
-  // resto del recorte (relleno bajo tinta que sigue intacta ahí, aunque
-  // esté dentro del mismo bbox) se queda exactamente como estaba, así que
-  // no se toca ningún borde que la tinta siga tapando de verdad.
-  for (let yy=0; yy<bh; yy++){
-    for (let xx=0; xx<bw; xx++){
-      const gx = bx+xx, gy = by+yy, gi = gy*fw+gx;
-      if (!mask[gi]) continue;
-      const si = (yy*bw+xx)*4, di = gi*4;
-      fd[di]=blurredData[si]; fd[di+1]=blurredData[si+1];
-      fd[di+2]=blurredData[si+2]; fd[di+3]=blurredData[si+3];
-    }
+  // Capa de tinta que ha recibido el borrado y zona tocada
+  let key = null, rx0 = 0, ry0 = 0, rx1 = W, ry1 = H;
+  if (!wholeCanvas) {
+    key = window._edEraserLayer || _edTmp.active;       // igual que _edTmpProxy()
+    if (!_edTmp[key]) key = 'pen';
+    if (key !== 'pen' && key !== 'pencil') return false; // acuarela / relleno: no hay tinta que quitar
+    const r = _edTmp[key].histPeek ? _edTmp[key].histPeek() : null;
+    if (!r) return false;
+    rx0 = Math.max(0, Math.floor(r.x0) - _ED_AA_MARGIN); ry0 = Math.max(0, Math.floor(r.y0) - _ED_AA_MARGIN);
+    rx1 = Math.min(W, Math.ceil(r.x1) + _ED_AA_MARGIN);  ry1 = Math.min(H, Math.ceil(r.y1) + _ED_AA_MARGIN);
+  } else {
+    // «borrar color» / vaciar capa no tienen rectángulo de trazo: se limita a donde HAY relleno y antes HABÍA tinta (caja de baldosas con
+    // contenido), en vez de recorrer el lienzo entero (6,3 M de píxeles en 2700×2340).
+    const bF = _edHtContentBBox(gB, W, H), bI = _edHtContentBBox(gP, W, H), bK = _edHtContentBBox(gC, W, H);
+    if (!bF || (!bI && !bK)) return false;
+    const ix0 = Math.min(bI ? bI.x0 : Infinity, bK ? bK.x0 : Infinity), iy0 = Math.min(bI ? bI.y0 : Infinity, bK ? bK.y0 : Infinity);
+    const ix1 = Math.max(bI ? bI.x1 : -1, bK ? bK.x1 : -1),             iy1 = Math.max(bI ? bI.y1 : -1, bK ? bK.y1 : -1);
+    rx0 = Math.max(0, Math.max(bF.x0, ix0) - _ED_AA_MARGIN); ry0 = Math.max(0, Math.max(bF.y0, iy0) - _ED_AA_MARGIN);
+    rx1 = Math.min(W, Math.min(bF.x1, ix1) + _ED_AA_MARGIN);  ry1 = Math.min(H, Math.min(bF.y1, iy1) + _ED_AA_MARGIN);
   }
-  fillCtx.putImageData(fillImgData, 0, 0);
+  const rw = rx1 - rx0, rh = ry1 - ry0;
+  if (rw <= 0 || rh <= 0) return false;
+  if (!_edHtGridHasContent(gB, rx0, ry0, rw, rh)) return false; // ahí no hay relleno: nada que suavizar
+
+  const t0 = performance.now();
+  const bP = _edHtAlphaRect(gP, rx0, ry0, rw, rh), bC = _edHtAlphaRect(gC, rx0, ry0, rw, rh); // tinta ANTES del trazo
+  const tA = performance.now();
+  const rdA = (layer) => { // alfa ACTUAL de una capa en el rectángulo
+    const out = new Uint8Array(rw * rh);
+    if (!layer?._canvas || !layer._ctx) return out;
+    const dd = layer._ctx.getImageData(rx0, ry0, rw, rh).data;
+    for (let i = 0, n = rw * rh; i < n; i++) out[i] = dd[i * 4 + 3];
+    return out;
+  };
+  const aP = (wholeCanvas || key === 'pen')    ? rdA(_edTmp.pen)    : bP;
+  const aC = (wholeCanvas || key === 'pencil') ? rdA(_edTmp.pencil) : bC;
+  const tB = performance.now();
+  const exp = new Uint8Array(rw * rh);
+  let nExp = 0;
+  for (let i = 0, n = rw * rh; i < n; i++) {
+    const b = bP[i] > bC[i] ? bP[i] : bC[i], a = aP[i] > aC[i] ? aP[i] : aC[i];
+    if (b - a >= _ED_AA_INK_DROP_MIN) { exp[i] = 1; nExp++; }
+  }
+  if (!nExp) return false;
+  const tC = performance.now();
+
+  const res = _edAASmoothRect(bk._ctx, rx0, ry0, rw, rh, exp);
+  const tD = performance.now();
+  _edFCL('_edSmoothFillAfterErase (' + (wholeCanvas ? 'borrar color / vaciar capa' : 'borrador sobre ' + key) + '): rect ' + rw + '×' + rh + ' · tinta quitada ' + nExp + ' px · borde de relleno suavizado ' +
+    (res ? res.n + ' px' : '0 px (nada que suavizar)') + ' · ' + (tD - t0).toFixed(1) + ' ms [tinta previa ' + (tA - t0).toFixed(1) + ' · tinta actual ' + (tB - tA).toFixed(1) +
+    ' · máscara ' + (tC - tB).toFixed(1) + (res && res.ms ? ' · lee relleno ' + res.ms.read.toFixed(1) + ' · núcleo ' + res.ms.core.toFixed(1) + ' · escribe ' + res.ms.put.toFixed(1) : '') + ']');
+  if (!res) return false;
+  _edHistMarkCanvas(bk._canvas, res.x0, res.y0, res.x1 - res.x0 + 1, res.y1 - res.y0 + 1); // entra en el apunte de este trazo
   return true;
 }
 
@@ -21713,6 +22298,8 @@ function _edThresholdInkMask(srcCanvas, srcCtx, bx, by, bw, bh) {
 //  Cada canal se clampea independientemente en 0/255.
 //  El origen se guarda la primera vez que se toca cada pixel:
 //  permite restaurar el tono original aunque algún canal haya llegado a 0/255.
+//  v41.99: se vuelve a este sistema, idéntico al de v41.95, a petición de Alberto. El «modelo
+//  físico» (luz lineal CIE L* + inclinación espectral por canal) de v41.96–v41.98 NO le gustó: no reponerlo.
 // ══════════════════════════════════════════
 
 /* Devuelve el estado (origin + level) para un canvas, creándolo si es la primera vez. */
@@ -22295,104 +22882,6 @@ function edContinuePaint(e, _noRender){
   if(!_noRender){ edRedraw(); edMoveBrush(e); }
   return true;
 }
-// Cierre de huecos para la capa de tinta (pen/estilografo).
-// Escanea SOLO DOS VENTANAS PEQUENAS: una alrededor del inicio del trazo
-// y otra alrededor del fin. Esto evita conexiones en angulos agudos del
-// cuerpo del trazo. Para giros diagonales tambien rellena los pixeles
-// adyacentes en L para bloquear el relleno con conectividad 8.
-// Cierra huecos de 1-2px de tinta dentro de una región del canvas, uniendo
-// extremos de trazo cercanos con un píxel interpolado entre ambos colores.
-// Es el mismo algoritmo que usaba la antigua herramienta manual "Cerrar
-// huecos" (retirada porque molestaba y ya no encajaba con el flujo actual).
-// Ahora se invoca automáticamente desde el relleno (edFloodFill /
-// _edFloodFillOnLayer) SOLO cuando éste detecta que va a pintar casi todo
-// el lienzo (fuga por hueco), y sobre la región indicada — normalmente el
-// canvas de tinta completo, ya que en el momento del relleno no sabemos
-// dónde está el hueco que causó la fuga.
-// Devuelve true si se cerró algún hueco (conviene entonces reintentar el relleno).
-function _edCloseInkGapsInRegion(dl, x0, y0, x1, y1) {
-  if (!dl?._canvas) return false;
-  const src = dl._canvas;
-  // No asumir dl._ctx cacheado: StrokeLayer, por ejemplo, no lo guarda como
-  // propiedad (solo lo usa una vez, localmente, en su constructor).
-  const ctx = dl._ctx || src.getContext('2d');
-  const SOLID=200, EMPTY=30, MAX_SEP=2;
-  const dirs8=[[1,0],[0,1],[-1,0],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
-
-  const wx0=Math.max(0, Math.floor(x0));
-  const wy0=Math.max(0, Math.floor(y0));
-  const wx1=Math.min(src.width -1, Math.ceil(x1));
-  const wy1=Math.min(src.height-1, Math.ceil(y1));
-  const rw=wx1-wx0+1, rh=wy1-wy0+1;
-  if (rw<3||rh<3) return false;
-
-  const imgD=ctx.getImageData(wx0,wy0,rw,rh);
-  const d=imgD.data;
-  const toFill=new Map(); // idx → {r,g,b}
-
-  // Encolar pixel (lx,ly) si es transparente (alpha < EMPTY) y no esta ya encolado
-  const _tryQ=(lx,ly,r,g,b)=>{
-    if(lx<0||lx>=rw||ly<0||ly>=rh) return;
-    const idx=(ly*rw+lx)*4;
-    if(d[idx+3]>=EMPTY||toFill.has(idx)) return;
-    toFill.set(idx,{r,g,b});
-  };
-
-  for(let y=0;y<rh;y++){
-    for(let x=0;x<rw;x++){
-      const pi=(y*rw+x)*4;
-      if(d[pi+3]<SOLID) continue; // solo desde pixeles solidos
-      const r0=d[pi],g0=d[pi+1],b0=d[pi+2];
-
-      for(let di=0;di<8;di++){
-        const dx=dirs8[di][0], dy=dirs8[di][1];
-        const isDiag=(dx!==0&&dy!==0);
-        const gapLocs=[]; // coords locales de pixeles de hueco
-
-        for(let step=1;step<=MAX_SEP+1;step++){
-          const nx=x+dx*step, ny=y+dy*step;
-          if(nx<0||nx>=rw||ny<0||ny>=rh) break;
-          const np=(ny*rw+nx)*4, na=d[np+3];
-          if(na>=SOLID){
-            // Extremo solido encontrado: si hay hueco valido, rellenar
-            if(gapLocs.length>=1){
-              const r1=d[np],g1=d[np+1],b1=d[np+2],n=gapLocs.length;
-              for(let i=0;i<n;i++){
-                const {lx:gx,ly:gy}=gapLocs[i];
-                const t=(i+1)/(n+1);
-                const rf=Math.round(r0*(1-t)+r1*t);
-                const gf=Math.round(g0*(1-t)+g1*t);
-                const bf=Math.round(b0*(1-t)+b1*t);
-                // Rellenar el pixel del hueco (primer escritura gana)
-                const gpi=(gy*rw+gx)*4;
-                if(!toFill.has(gpi)) toFill.set(gpi,{r:rf,g:gf,b:bf});
-                // Escalon diagonal: rellenar pixeles en L adyacentes
-                // para evitar que el relleno pase por conectividad diagonal
-                if(isDiag){
-                  _tryQ(gx-dx,gy,rf,gf,bf); // componente horizontal inversa
-                  _tryQ(gx,gy-dy,rf,gf,bf); // componente vertical inversa
-                }
-              }
-            }
-            break;
-          } else if(na<EMPTY){
-            gapLocs.push({lx:nx,ly:ny});
-            if(gapLocs.length>MAX_SEP) break;
-          } else { break; } // semitransparente: ni hueco ni solido, parar
-        }
-      }
-    }
-  }
-  if(!toFill.size) return false;
-  for(const [idx,{r,g,b}] of toFill){
-    // Nunca sobreescribir tinta existente
-    if(d[idx+3]>=SOLID) continue;
-    d[idx]=r; d[idx+1]=g; d[idx+2]=b; d[idx+3]=255;
-  }
-  ctx.putImageData(imgD,wx0,wy0);
-  return true;
-}
-
 function edSaveDrawData(){
   _edSmFinish(); // v41.88: remata el último medio tramo del trazo suavizado ANTES de empujar nada al historial
   _edPenPendingStroke = null;
@@ -22422,13 +22911,20 @@ function edSaveDrawData(){
     _edDrawPushHistory({ auto: true }); // v41.89: ídem (ver _edHistMarkCanvas en _edWatercolorStroke)
   } else {
     // NOTA: el cierre automático de huecos al soltar el trazo se retiró (T-gap):
-    // molestaba y ya no encajaba con el flujo actual. Ahora el cierre de huecos
-    // solo se dispara desde el relleno (edFloodFill/_edFloodFillOnLayer), y solo
-    // si detecta que va a pintar casi todo el lienzo (fuga) — ver _edCloseInkGapsInRegion.
+    // molestaba y ya no encajaba con el flujo actual. Desde v41.100 tampoco se rellena
+    // con tinta ningún hueco al rellenar: las fugas del bote las evita el cierre VIRTUAL
+    // (edFloodFill/_edFloodFillOnLayer → _edFillRetryVirtual), que no toca el dibujo.
+    // (Los campos _gc* de DrawLayer son restos inertes de aquel cierre: sólo se escriben, nadie los lee.)
     // NOTA: NO llamar _edApplyInkMaskToWatercolor() al terminar un trazo de tinta —
     // la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
     // bajo la tinta y reaparece si la tinta es borrada. Nueva acuarela bajo tinta
     // ya está bloqueada inline en _edWatercolorStroke (destination-out en tiempo real).
+    // v42.02: la goma / «borrar color» acaba de quitar tinta → el borde del relleno que queda al descubierto recibe el antialiasing de la tinta
+    // (ver «Antialiasing del borde del relleno»). Va ANTES del apunte, así el relleno suavizado entra en el MISMO apunte que el borrado.
+    if (edActiveTool === 'eraser' || edActiveTool === 'color-erase') {
+      try { if (_edSmoothFillAfterErase(edActiveTool === 'color-erase')) edRedraw(); }
+      catch (_e) { console.warn('[fill-aa] suavizado al borrar:', _e); }
+    }
     // v41.89: tinta / lápiz / goma → apunte de TRAZO (sólo las baldosas que DrawLayer marcó como pintadas); «borrar color» (inunda varias
     // capas, sin rectángulo conocido) sigue haciendo el apunte completo.
     _edDrawPushHistory(edActiveTool === 'color-erase' ? undefined : { auto: true });
@@ -23949,12 +24445,15 @@ function _edFreezeDrawLayer(){
     ' | pencil: ' + _edFCCanvasInfo(_edTmp.pencil?._canvas, _edTmp.pencil?._ctx) +
     ' | watercolor: ' + _edFCCanvasInfo(_edTmp.watercolor?._canvas, _edTmp.watercolor?._ctx));
   // Suavizado automático de la tinta borrada durante la sesión (ver
-  // _edDrawInitHistory para la instantánea de entrada) — SOLO al congelar,
-  // no en cada trazo del borrador (pedido explícito de Alberto: por si se
-  // borra y se afina varias veces seguidas antes de terminar). Tiene que ir
-  // ANTES de _edTmpComposite(): el blur se aplica sobre _edTmp.bucket
-  // (relleno todavía temporal) para que quede horneado en el FillLayer real
-  // igual que el resto de la sesión, no como un paso aparte después.
+  // _edDrawInitHistory para la instantánea de entrada). v42.02: el grueso del
+  // trabajo ya lo hace _edSmoothFillAfterErase en cada trazo de goma; esto es
+  // la RED DE SEGURIDAD de lo que quedara sin suavizar (tinta de la instantánea
+  // de entrada que desapareció por otra vía). Antes se hacía SÓLO aquí «por si
+  // se borra y se afina varias veces» (blur que se acumulaba); el cálculo
+  // actual es idempotente, así que repasar lo ya suavizado no lo cambia. Tiene
+  // que ir ANTES de _edTmpComposite(): se aplica sobre _edTmp.bucket (relleno
+  // todavía temporal) para que quede horneado en el FillLayer real igual que
+  // el resto de la sesión, no como un paso aparte después.
   if (_edInkBaselineAlpha && _edTmp.pen?._canvas && _edTmp.bucket?._canvas) {
     let _smoothApplied = null, _smoothError = null;
     try {
@@ -25764,6 +26263,10 @@ function edRenderOptionsPanel(mode){
         _edDrawPushHistory();
         const _dlCl = _edTmp[_edTmp.active];
         if(_dlCl?._canvas) _dlCl._ctx.clearRect(0,0,_dlCl._canvas.width,_dlCl._canvas.height);
+        // v42.02: vaciar la tinta / el lápiz deja al descubierto el borde del relleno → antialiasing (entra en el apunte de abajo)
+        if(_edTmp.active === 'pen' || _edTmp.active === 'pencil'){
+          try { _edSmoothFillAfterErase(true); } catch(_e) { console.warn('[fill-aa] suavizado al vaciar capa:', _e); }
+        }
         // Bug fix: nullar _preEditCanvas del layer real correspondiente para que
         // _cropGroupLayer no restaure el contenido borrado explicitamente
         const _pageCl = edPages[edCurrentPage];

@@ -367,7 +367,13 @@ const _CREDITS_LIBS = [
 const _CREDITS_TECH = [
   { nameKey: 'credits_techBezierName', descKey: 'credits_techBezierDesc', metaKey: 'credits_techBezierMeta', url: 'https://github.com/steveruizok/perfect-freehand' },
   { nameKey: 'credits_techTilesName',  descKey: 'credits_techTilesDesc',  metaKey: 'credits_techTilesMeta',  url: 'https://krita.org/' },
-  { nameKey: 'credits_techC2aName',    descKey: 'credits_techC2aDesc',    metaKey: 'credits_techC2aMeta',    url: 'https://www.gimp.org/' }
+  { nameKey: 'credits_techC2aName',    descKey: 'credits_techC2aDesc',    metaKey: 'credits_techC2aMeta',    url: 'https://www.gimp.org/' },
+  // v41.97 — relleno acotado bajo la tinta (editor.js · _edFillUnderInk)
+  { nameKey: 'credits_techFillName',   descKey: 'credits_techFillDesc',   metaKey: 'credits_techFillMeta',   url: 'https://docs.krita.org/en/reference_manual/tools/fill.html' },
+  // v41.98 — cierre virtual de huecos al rellenar (editor.js · _edFillRetryVirtual)
+  { nameKey: 'credits_techGapName',    descKey: 'credits_techGapDesc',    metaKey: 'credits_techGapMeta',    url: 'https://tips.clip-studio.com/en-us/articles/590' },
+  // v42.02 / v42.03 — antialiasing del borde del relleno al quitar la tinta, también entre dos colores (editor.js · _edAAFillEdges)
+  { nameKey: 'credits_techAAName',     descKey: 'credits_techAADesc',     metaKey: 'credits_techAAMeta',     url: 'https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves' }
 ];
 
 function _creditsRowHtml(lib) {
