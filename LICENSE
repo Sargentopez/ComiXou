@@ -122,4 +122,9 @@ TÉCNICAS DE REFERENCIA (implementación propia, sin código copiado)
   aproximación de distancia de primer orden de G. Taubin («Distance
   Approximations for Rasterizing Implicit Curves», ACM TOG 1994) y
   rasterizador de FreeType.
+- Difuminar (mezclar colores arrastrando el pincel sobre acuarela y
+  relleno): el pincel arrastra una muestra de la pintura y la mezcla con
+  lo que encuentra a su paso; técnica de la herramienta Difuminar de GIMP
+  y de Photoshop y del «Color Smudge» de Krita.
+  https://docs.gimp.org/en/gimp-tool-smudge.html
 ──────────────────────────────────────────────────────────────────────────

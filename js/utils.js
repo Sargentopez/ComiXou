@@ -373,7 +373,9 @@ const _CREDITS_TECH = [
   // v41.98 — cierre virtual de huecos al rellenar (editor.js · _edFillRetryVirtual)
   { nameKey: 'credits_techGapName',    descKey: 'credits_techGapDesc',    metaKey: 'credits_techGapMeta',    url: 'https://tips.clip-studio.com/en-us/articles/590' },
   // v42.02 / v42.03 — antialiasing del borde del relleno al quitar la tinta, también entre dos colores (editor.js · _edAAFillEdges)
-  { nameKey: 'credits_techAAName',     descKey: 'credits_techAADesc',     metaKey: 'credits_techAAMeta',     url: 'https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves' }
+  { nameKey: 'credits_techAAName',     descKey: 'credits_techAADesc',     metaKey: 'credits_techAAMeta',     url: 'https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves' },
+  // v42.04 — Difuminar: mezcla colores arrastrando el pincel (editor.js · _edSmudgeStroke)
+  { nameKey: 'credits_techSmudgeName', descKey: 'credits_techSmudgeDesc', metaKey: 'credits_techSmudgeMeta', url: 'https://docs.gimp.org/en/gimp-tool-smudge.html' }
 ];
 
 function _creditsRowHtml(lib) {

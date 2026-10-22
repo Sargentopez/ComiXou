@@ -71,6 +71,11 @@
  *     v42.03: la misma técnica, con una máscara de «color A / color B», suaviza también la frontera entre dos rellenos de distinto color que quedan
  *     en contacto al borrar la línea de tinta que los separaba (y se cierran las costuras transparentes de 1 px que dejaba esa línea).
  *     https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves  ·  https://freetype.org/
+ *
+ * - Difuminar (smudge): mezclar colores arrastrando el pincel sobre acuarela y relleno (v42.04)
+ *     Técnica de la herramienta Difuminar de GIMP y de Photoshop y del «Color Smudge» de Krita (modo «Smearing»): el pincel arrastra una muestra de la
+ *     pintura («carry») y en cada sello recoge una parte de lo que hay debajo y deja una parte de lo que lleva.
+ *     https://docs.gimp.org/en/gimp-tool-smudge.html  ·  https://docs.krita.org/en/reference_manual/brushes/brush_engines/color_smudge_engine.html
  */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
@@ -1477,8 +1482,8 @@ let _edGradC1 = '#000000';     // color 1 del degradado
 let _edGradC2 = '#ffffff';     // color 2 del degradado
 let _edGradType = 'linear';    // 'linear' | 'radial'
 let _edGradPtStart = null;     // punto inicio del trazo {nx, ny}
-let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn)
-let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer activo
+let edDodgeBurnSign = 1;         // +1 = iluminar (dodge), -1 = oscurecer (burn), 0 = DIFUMINAR (v42.04: comparte el interruptor, ver _edIsSmudge)
+let _edDodgeBurnActive = false; // true = modo iluminar/oscurecer/difuminar activo (¡no es sólo D/B!: para D/B puro usar _edIsDodgeBurn())
 // ── Dodge/Burn: estado de nivel por canvas ────────────────────────────────
 // WeakMap<canvas, {origData:Uint8ClampedArray, levelData:Float32Array, w, h}>
 // origData: RGBA del pixel en el momento de su primer toque.
@@ -1521,6 +1526,7 @@ const ED_TOOL_PARAM_DEFAULTS = {
   watercolor: { size: 20,   opacity: 7   },
   bucket:     { size: null, opacity: 100 },
   dodge:      { size: 20,   opacity: 7   }, // sobre bote: 100 % (ver _edToolParamDefault)
+  smudge:     { size: 20,   opacity: 60  }, // v42.04: Difuminar — «Op%» = fuerza (longitud del rastro), ver _edSmudgeNew
   eraser:     { size: 20,   opacity: 100 }
 };
 let _edToolParams = {}; // {clave de herramienta: {size, opacity}} — se vacía al empezar una sesión de dibujo
@@ -22323,7 +22329,221 @@ function _dbPixelFromLevel(origR, origG, origB, level) {
   ];
 }
 
+// ══════════════════════════════════════════
+//  DIFUMINAR (smudge) — v42.04
+//  Mezcla colores arrastrando el pincel sobre acuarela y/o relleno (entre sí o cada uno consigo mismo).
+//  Es un modo hermano de iluminar/oscurecer: comparte su interruptor (_edDodgeBurnActive) y toda su fontanería de puntero, cursor,
+//  cursor desplazado e historial, y se distingue por edDodgeBurnSign === 0 (ver _edIsSmudge). Técnica estándar de la herramienta
+//  «Difuminar» de GIMP y de Photoshop y del «Color Smudge» de Krita (modo «Smearing»): el pincel arrastra una muestra de la pintura
+//  («carry», en coordenadas locales del pincel); en cada sello recoge una parte de lo que hay debajo y deja una parte de lo que lleva.
+//  Implementación PROPIA (sin código copiado):
+//    · un sello cada 10 % del diámetro a lo largo del trazo: el resultado no depende de cómo el navegador reparta los eventos;
+//    · cada sello cae en coseno elevado (meseta del 20 % central): sin bordes duros ni granulado;
+//    · la recogida se suaviza con un desenfoque de caja (radio ≈ D/6): al cruzar la unión entre dos colores sale una transición
+//      continua en vez de arrastrar un color intacto;
+//    · «Op%» = fuerza = longitud del rastro: lo llevado pesa Op% tras ≈ 0,2 diámetros de recorrido (100 % = no recoge nada);
+//    · coma flotante con alfa premultiplicado: sólo combinaciones convexas → nunca se sale de rango ni aparecen halos;
+//    · cada lienzo (acuarela, relleno) lleva su propio rastro y el color visible sale de componerlos, así se mezcla acuarela↔relleno,
+//      relleno↔relleno y acuarela↔acuarela sin fundir las capas entre sí;
+//    · la tinta con opacidad ≥ 90 % (_ED_INK_LIMIT_ALPHA) bloquea: ni se recoge ni se deposita bajo ella (igual que iluminar/oscurecer).
+// ══════════════════════════════════════════
+const _ED_SMUDGE_PLATEAU = 0.2;  // fracción central del radio con efecto pleno (de ahí al borde cae en coseno)
+const _ED_SMUDGE_REACH   = 0.2;  // «alcance» en diámetros: tras esa distancia lo recogido pesa Op%
+const _ED_SMUDGE_SPACING = 0.1;  // separación entre sellos (fracción del diámetro)
+const _ED_SMUDGE_SOFT    = 0.7;  // parte de la recogida que es media local (0 = píxel exacto, 1 = media de caja)
+let _edSmudgeSt = null;          // estado del trazo en curso (null = ninguno)
+const _edSmudgePool = { buf: null, blk: null }; // memoria reutilizada entre eventos (evita basura en trazos rápidos)
+function _edIsSmudge(){ return !!_edDodgeBurnActive && edDodgeBurnSign === 0; }
+// Iluminar/oscurecer «de verdad» (excluye difuminar, que comparte el interruptor _edDodgeBurnActive)
+function _edIsDodgeBurn(){ return !!_edDodgeBurnActive && edDodgeBurnSign !== 0; }
+
+// Icono de Difuminar: dedo que arrastra dos colores (rojo y azul) y los funde en morado bajo la yema — la misma idea que el icono
+// «Difuminar» de Photoshop/Krita/Procreate. SVG propio de viewBox 32×32; px = lado en píxeles; inline = alineado con texto (modal de ayuda).
+function _edSmudgeIcon(px, inline){
+  const s = px || 24;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="${s}" height="${s}" style="${inline ? 'display:inline-block;vertical-align:middle;' : 'display:block;'}flex-shrink:0;pointer-events:none"><path d="M2.4 17.4 C 7.4 15.2, 11.4 20.8, 17.2 22.8" fill="none" stroke="#e5484d" stroke-width="5.4" stroke-linecap="round"/><path d="M2.4 26.8 C 7.4 27.6, 12.4 25.2, 17.2 23.2" fill="none" stroke="#3e63dd" stroke-width="5.4" stroke-linecap="round"/><path d="M9.6 21.6 C 12.2 22.8, 14.6 23, 17.4 23" fill="none" stroke="#8d4fc9" stroke-width="4.2" stroke-linecap="round" opacity=".85"/><g transform="translate(16.6 24.9) rotate(24)"><path d="M-5.6 -36 V-5.6 A5.6 5.6 0 0 0 5.6 -5.6 V-36 Z" fill="#f4c9a6" stroke="#8c5a3c" stroke-width="1.4" stroke-linejoin="round"/><path d="M-3.3 -13.4 h6.6 v6 a3.3 3.3 0 0 1 -6.6 0 z" fill="#fbe7d6" stroke="#c9936f" stroke-width=".9" stroke-linejoin="round"/></g></svg>`;
+}
+
+// Parámetros fijos del trazo (se toman al empezarlo) y memoria de trabajo.
+function _edSmudgeNew(D, S){
+  const r = D / 2, R = Math.ceil(r) + 1, sp = Math.max(1, _ED_SMUDGE_SPACING * D);
+  const rho = S >= 1 ? 1 : Math.pow(Math.max(0.005, S), sp / (_ED_SMUDGE_REACH * D)); // persistencia de lo llevado entre sellos
+  const b = Math.max(1, Math.round(D / 6)), PS = 2 * R + 1, PW = PS + 2 * b;
+  return { D, S, r, R, sp, rho, b, rem: 0, lx: 0, ly: 0, changed: false, cv: new Map(),
+           T: new Float32Array(PW * PW * 4), B: new Float32Array(PW * PS * 4) };
+}
+// Posiciones de los sellos entre el último punto del trazo y (x1,y1), arrastrando el resto de distancia de un tramo al siguiente.
+function _edSmudgeDabs(st, x1, y1){
+  const dx = x1 - st.lx, dy = y1 - st.ly, L = Math.hypot(dx, dy), out = [];
+  if (L < 1e-9) return out;
+  let pos = st.sp - st.rem;
+  while (pos <= L + 1e-9) { out.push(st.lx + dx * pos / L, st.ly + dy * pos / L); pos += st.sp; }
+  st.rem = L - (pos - st.sp); if (st.rem < 0) st.rem = 0;
+  st.lx = x1; st.ly = y1;
+  return out;
+}
+// Lo que lleva el pincel al empezar = la pintura que hay bajo él (alfa premultiplicado, 0..255, parche (2R+1)² en coordenadas del pincel).
+function _edSmudgeInitCarry(st, tg, cx, cy){
+  const R = st.R, PS = 2 * R + 1, carry = new Float32Array(PS * PS * 4);
+  const ci = Math.round(cx), cj = Math.round(cy), W = tg.canvas.width, H = tg.canvas.height;
+  const x0 = Math.max(0, ci - R), y0 = Math.max(0, cj - R), x1 = Math.min(W, ci + R + 1), y1 = Math.min(H, cj + R + 1);
+  if (x1 <= x0 || y1 <= y0) return carry;
+  const w = x1 - x0, d = tg.ctx.getImageData(x0, y0, w, y1 - y0).data;
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const si = ((y - y0) * w + (x - x0)) * 4, a = d[si + 3]; if (!a) continue;
+    const ki = ((y - (cj - R)) * PS + (x - (ci - R))) * 4, f = a / 255;
+    carry[ki] = d[si] * f; carry[ki + 1] = d[si + 1] * f; carry[ki + 2] = d[si + 2] * f; carry[ki + 3] = a;
+  }
+  return carry;
+}
+// Núcleo: recorre los sellos sobre `buf` (RGBA premultiplicado, float, región bw×bh que empieza en (ox,oy) del lienzo).
+// Por cada píxel del sello: recogida pk = u + β·(media_local(u) − u); lo llevado c ← ρ·c + (1−ρ)·pk; píxel u ← u + k·(c − u),
+// con k = caída en coseno del sello. `blk` (o null) marca píxeles bloqueados por tinta.
+function _edSmudgeApply(st, buf, bw, bh, ox, oy, carry, blk, dabs){
+  const nd = dabs.length >> 1, r = st.r, R = st.R, b = st.b, rho = st.rho, mrho = 1 - rho, beta = _ED_SMUDGE_SOFT;
+  const PS = 2 * R + 1, PW = PS + 2 * b, nb = 2 * b + 1, inv = 1 / (1 - _ED_SMUDGE_PLATEAU), PI = Math.PI, T = st.T, B = st.B;
+  for (let n = 0; n < nd; n++) {
+    const cx = dabs[2 * n], cy = dabs[2 * n + 1], x0 = Math.round(cx) - R, y0 = Math.round(cy) - R;
+    // 1) ventana con el contenido actual (bordes de la región replicados) y su media de caja separable (suma deslizante)
+    for (let j = 0; j < PW; j++) {
+      let py = y0 - b + j - oy; py = py < 0 ? 0 : (py >= bh ? bh - 1 : py);
+      for (let i = 0; i < PW; i++) {
+        let px = x0 - b + i - ox; px = px < 0 ? 0 : (px >= bw ? bw - 1 : px);
+        const bi = (py * bw + px) * 4, ti = (j * PW + i) * 4;
+        T[ti] = buf[bi]; T[ti + 1] = buf[bi + 1]; T[ti + 2] = buf[bi + 2]; T[ti + 3] = buf[bi + 3];
+      }
+    }
+    for (let j = 0; j < PW; j++) {
+      const rowT = j * PW * 4, rowB = j * PS * 4;
+      let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+      for (let q = 0; q < nb; q++) { const ti = rowT + q * 4; s0 += T[ti]; s1 += T[ti + 1]; s2 += T[ti + 2]; s3 += T[ti + 3]; }
+      for (let i = 0; i < PS; i++) {
+        const bi = rowB + i * 4; B[bi] = s0 / nb; B[bi + 1] = s1 / nb; B[bi + 2] = s2 / nb; B[bi + 3] = s3 / nb;
+        if (i + 1 < PS) { const ao = rowT + (i + nb) * 4, ro = rowT + i * 4;
+          s0 += T[ao] - T[ro]; s1 += T[ao + 1] - T[ro + 1]; s2 += T[ao + 2] - T[ro + 2]; s3 += T[ao + 3] - T[ro + 3]; }
+      }
+    }
+    for (let i = 0; i < PS; i++) {
+      let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+      for (let q = 0; q < nb; q++) { const bi = (q * PS + i) * 4; s0 += B[bi]; s1 += B[bi + 1]; s2 += B[bi + 2]; s3 += B[bi + 3]; }
+      for (let j = 0; j < PS; j++) {
+        const ti = (j * PS + i) * 4; T[ti] = s0 / nb; T[ti + 1] = s1 / nb; T[ti + 2] = s2 / nb; T[ti + 3] = s3 / nb;
+        if (j + 1 < PS) { const ao = ((j + nb) * PS + i) * 4, ro = (j * PS + i) * 4;
+          s0 += B[ao] - B[ro]; s1 += B[ao + 1] - B[ro + 1]; s2 += B[ao + 2] - B[ro + 2]; s3 += B[ao + 3] - B[ro + 3]; }
+      }
+    }
+    // 2) recoger y depositar
+    for (let j = 0; j < PS; j++) {
+      const py = y0 + j - oy; if (py < 0 || py >= bh) continue;
+      const dy = (y0 + j + 0.5) - cy;
+      for (let i = 0; i < PS; i++) {
+        const px = x0 + i - ox; if (px < 0 || px >= bw) continue;
+        const dx = (x0 + i + 0.5) - cx, d = Math.sqrt(dx * dx + dy * dy);
+        if (d >= r) continue;
+        const pi = py * bw + px; if (blk && blk[pi]) continue;
+        let t = (d / r - _ED_SMUDGE_PLATEAU) * inv; if (t < 0) t = 0;
+        const k = 0.5 * (1 + Math.cos(PI * t)), bi = pi * 4, ki = (j * PS + i) * 4;
+        for (let c = 0; c < 4; c++) {
+          const u = buf[bi + c], cv = rho * carry[ki + c] + mrho * (u + beta * (T[ki + c] - u));
+          carry[ki + c] = cv; buf[bi + c] = u + k * (cv - u);
+        }
+      }
+    }
+  }
+}
+// Un tramo del trazo (mismo contrato que edDodgeBurnStroke: devuelve {wx,wy} = último punto, que el llamador pasa como lastWx/lastWy).
+// La primera llamada de cada trazo (lastWx === null) sólo toma la muestra inicial: un toque suelto no cambia nada.
+function _edSmudgeStroke(nx, ny, lastWx, lastWy){
+  const page = edPages[edCurrentPage]; if (!page) return;
+  const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
+  const fl = dl._fillLayerId ? page.layers.find(l => l.type === 'fill' && l._drawLayerId === dl._fillLayerId) : null;
+  // Mismos lienzos que iluminar/oscurecer: acuarela y bote de la sesión (o, sin sesión, el relleno real)
+  const tgs = [];
+  if (_edTmp.watercolor?._canvas) tgs.push({ canvas: _edTmp.watercolor._canvas, ctx: _edTmp.watercolor._ctx });
+  if (_edTmp.bucket?._canvas)     tgs.push({ canvas: _edTmp.bucket._canvas,     ctx: _edTmp.bucket._ctx });
+  if (fl?._canvas && tgs.length === 0) tgs.push({ canvas: fl._canvas, ctx: fl._ctx });
+  if (tgs.length === 0) return;
+  const wx = edMarginX() + nx * edPageW(), wy = edMarginY() + ny * edPageH();
+  let st = _edSmudgeSt;
+  if (!st || lastWx === null || lastWx === undefined || lastWy === null || lastWy === undefined) {
+    st = _edSmudgeSt = _edSmudgeNew(Math.max(1, Math.round(edDrawSize)), Math.min(1, Math.max(0.01, edDrawOpacity / 100)));
+    st.lx = wx; st.ly = wy;
+    for (const tg of tgs) st.cv.set(tg.canvas, _edSmudgeInitCarry(st, tg, wx, wy));
+    return { wx, wy };
+  }
+  const dabs = _edSmudgeDabs(st, wx, wy);
+  if (!dabs.length) return { wx, wy };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let i = 0; i < dabs.length; i += 2) {
+    const x = dabs[i], y = dabs[i + 1];
+    if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  const m = st.R + st.b + 1, pen = _edTmp.pen;
+  let blkKey = '', blkArr = null; // máscara de tinta del último rectángulo pedido (acuarela y bote suelen compartirlo)
+  for (const tg of tgs) {
+    const cvs = tg.canvas, W = cvs.width, H = cvs.height;
+    const bx = Math.max(0, Math.floor(minX) - m), by = Math.max(0, Math.floor(minY) - m);
+    const bw = Math.min(W, Math.ceil(maxX) + m + 1) - bx, bh = Math.min(H, Math.ceil(maxY) + m + 1) - by;
+    if (bw <= 0 || bh <= 0) continue;
+    let carry = st.cv.get(cvs);
+    if (!carry) { carry = _edSmudgeInitCarry(st, tg, dabs[0], dabs[1]); st.cv.set(cvs, carry); }
+    const img = tg.ctx.getImageData(bx, by, bw, bh), d = img.data, n4 = bw * bh * 4;
+    if (!_edSmudgePool.buf || _edSmudgePool.buf.length < n4) _edSmudgePool.buf = new Float32Array(Math.max(n4, 16384));
+    const buf = _edSmudgePool.buf;
+    let content = false;
+    for (let i = 0; i < n4; i += 4) {
+      const a = d[i + 3];
+      if (a === 0) { buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 0; continue; }
+      content = true; const f = a / 255;
+      buf[i] = d[i] * f; buf[i + 1] = d[i + 1] * f; buf[i + 2] = d[i + 2] * f; buf[i + 3] = a;
+    }
+    if (!content) { // región vacía: sólo hay algo que hacer si el pincel aún lleva pintura que dejar
+      let has = false; for (let i = 3; i < carry.length; i += 4) if (carry[i] > 0.05) { has = true; break; }
+      if (!has) continue;
+    }
+    // Tinta ≥ 90 % → píxel bloqueado
+    let blk = null;
+    if (pen?._canvas && pen._canvas.width >= bx + bw && pen._canvas.height >= by + bh) {
+      const key = bx + ',' + by + ',' + bw + ',' + bh;
+      if (key !== blkKey) {
+        blkKey = key; blkArr = null;
+        const id = pen._ctx.getImageData(bx, by, bw, bh).data, np = bw * bh;
+        if (!_edSmudgePool.blk || _edSmudgePool.blk.length < np) _edSmudgePool.blk = new Uint8Array(Math.max(np, 4096));
+        const bk = _edSmudgePool.blk; let any = false;
+        for (let i = 0, j = 3; i < np; i++, j += 4) { const v = id[j] >= _ED_INK_LIMIT_ALPHA ? 1 : 0; bk[i] = v; if (v) any = true; }
+        if (any) blkArr = bk;
+      }
+      blk = blkArr;
+    }
+    _edSmudgeApply(st, buf, bw, bh, bx, by, carry, blk, dabs);
+    // Volcar SÓLO los píxeles que cambian de verdad (así el resto del lienzo no se toca ni un bit)
+    let x0 = bw, y0 = bh, x1 = -1, y1 = -1;
+    for (let y = 0; y < bh; y++) {
+      for (let x = 0, i = y * bw * 4; x < bw; x++, i += 4) {
+        const a = buf[i + 3]; let r, g, bb, aa;
+        if (a < 0.5) { r = 0; g = 0; bb = 0; aa = 0; }
+        else {
+          const k = 255 / a; aa = Math.round(a); if (aa > 255) aa = 255;
+          r = Math.round(buf[i] * k); g = Math.round(buf[i + 1] * k); bb = Math.round(buf[i + 2] * k);
+          if (r > 255) r = 255; if (g > 255) g = 255; if (bb > 255) bb = 255;
+        }
+        if (d[i] !== r || d[i + 1] !== g || d[i + 2] !== bb || d[i + 3] !== aa) {
+          d[i] = r; d[i + 1] = g; d[i + 2] = bb; d[i + 3] = aa;
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+    }
+    if (x1 < 0) continue;
+    tg.ctx.putImageData(img, bx, by, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    _edHistMarkCanvas(cvs, bx + x0, by + y0, x1 - x0 + 1, y1 - y0 + 1); // zona tocada (historial local por baldosas)
+    _dbOriginMap.delete(cvs); // el contenido cambió: el origen de iluminar/oscurecer ya no vale
+    st.changed = true;
+  }
+  return { wx, wy };
+}
+
 function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
+  if (edDodgeBurnSign === 0) return _edSmudgeStroke(nx, ny, lastWx, lastWy); // v42.04: Difuminar (ver arriba)
   const page = edPages[edCurrentPage]; if (!page) return;
   const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return;
   const fl = dl._fillLayerId ? page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId) : null;
@@ -22674,6 +22894,7 @@ function edStartPaint(e){
   edPainting = true;
   window._edStrokeCount = (window._edStrokeCount || 0) + 1;
   _edPaintStatic.valid = false; // nuevo trazo: invalidar cache del trazo anterior
+  _edSmudgeSt = null; // v42.04: Difuminar empieza cada trazo con la muestra de lo que haya bajo el pincel
   // Herramienta borrar color
   if (edActiveTool === 'color-erase') {
     _edGetOrCreateDrawLayer();
@@ -22901,7 +23122,11 @@ function edSaveDrawData(){
     // no destructiva: el contenido previo en watercolor/bucket se preserva bajo la
     // tinta; la tinta cubre visualmente (está encima en el render). Al borrar tinta,
     // el contenido previo reaparece. Nuevo D/B bajo tinta ya está bloqueado via _inkMaskData.
-    _edDrawPushHistory({ auto: true }); // v41.89: sólo las baldosas que tocó el trazo (ver _edHistMarkCanvas en edDodgeBurnStroke)
+    // v42.04: Difuminar sin haber tocado nada (un toque suelto, o un arrastre por zona vacía) no deja apunte: no hay nada que deshacer
+    // (y se evita la captura completa de los 5 lienzos que haría _edDrawPushHistory sin ninguna zona marcada).
+    const _smNoop = _edIsSmudge() && !(_edSmudgeSt && _edSmudgeSt.changed);
+    _edSmudgeSt = null;
+    if (!_smNoop) _edDrawPushHistory({ auto: true }); // v41.89: sólo las baldosas que tocó el trazo (ver _edHistMarkCanvas en edDodgeBurnStroke)
   } else if(window._edWcFl){
     // Acuarela: limpiar offscreen y guardar historial
     _edWatercolorCommit(window._edWcFl, edDrawSize, edDrawOpacity);
@@ -24887,7 +25112,7 @@ function _edSyncToolColor(){
 // bote).
 function _edToolKey(){
   if (edActiveTool === 'eraser') return 'eraser';
-  if (_edDodgeBurnActive) return 'dodge';
+  if (_edDodgeBurnActive) return edDodgeBurnSign === 0 ? 'smudge' : 'dodge'; // v42.04: Difuminar = signo 0
   return _edTmp.active;
 }
 // Valores por defecto de una herramienta la primera vez que se usa en la sesión.
@@ -26083,7 +26308,7 @@ function edRenderOptionsPanel(mode){
   <!-- FILA 2: Controles -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:6px;padding:4px 0;min-height:32px;width:100%">
 
-    ${isFill ? `<button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edDodgeBurnActive?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:43px;height:33px;opacity:${_edDodgeBurnActive?1:0.4};display:inline-flex;" title="${I18n.t('ed_dodgeBurnSimpleTitle')}"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span id="op-fill-dodge-dark" style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span id="op-fill-dodge-light" style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button><div id="op-fill-dodge-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_dodgeLighten')}</span><button id="op-fill-dodge-pop-light" style="border:1px solid var(--gray-300);border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:38px;height:38px;background:#fff;color:#111;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;line-height:1" title="${I18n.t('ed_dodgeLighten')}">+</button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_dodgeDarken')}</span><button id="op-fill-dodge-pop-dark" style="border:1px solid var(--gray-300);border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:38px;height:38px;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;line-height:1" title="${I18n.t('ed_dodgeDarken')}">−</button></div></div><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
+    ${isFill ? `<button id="op-fill-dodge" style="flex-shrink:0;border:2px solid ${_edIsDodgeBurn()?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:43px;height:33px;opacity:${_edIsDodgeBurn()?1:0.4};display:inline-flex;" title="${I18n.t('ed_dodgeBurnSimpleTitle')}"><span style="pointer-events:none;display:flex;width:100%;height:100%"><span id="op-fill-dodge-dark" style="flex:1;background:#111;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff;line-height:1;outline:${_edDodgeBurnActive&&edDodgeBurnSign===-1?'2px solid #f90':'none'};outline-offset:-2px">−</span><span id="op-fill-dodge-light" style="flex:1;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#111;line-height:1;border-left:1px solid #ccc;outline:${_edDodgeBurnActive&&edDodgeBurnSign===1?'2px solid #f90':'none'};outline-offset:-2px">+</span></span></button><div id="op-fill-dodge-pop" style="display:none;position:fixed;z-index:1200;background:var(--white);border:1px solid var(--gray-300);border-radius:10px;padding:6px;box-shadow:0 6px 24px rgba(0,0,0,.3),0 0 0 1px rgba(0,0,0,.07);flex-direction:row;align-items:flex-start;gap:6px;"><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_dodgeLighten')}</span><button id="op-fill-dodge-pop-light" style="border:1px solid var(--gray-300);border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:38px;height:38px;background:#fff;color:#111;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;line-height:1" title="${I18n.t('ed_dodgeLighten')}">+</button></div><div style="display:flex;flex-direction:column;align-items:center;gap:2px"><span style="font-size:0.55rem;font-weight:700;color:#888;letter-spacing:.03em">${I18n.t('ed_dodgeDarken')}</span><button id="op-fill-dodge-pop-dark" style="border:1px solid var(--gray-300);border-radius:6px;padding:0;overflow:hidden;cursor:pointer;width:38px;height:38px;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;line-height:1" title="${I18n.t('ed_dodgeDarken')}">−</button></div></div><button id="op-fill-smudge" style="flex-shrink:0;border:2px solid ${_edIsSmudge()?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:0;cursor:pointer;width:37px;height:33px;opacity:${_edIsSmudge()?1:0.4};display:inline-flex;align-items:center;justify-content:center;background:transparent" title="${I18n.t('ed_smudgeTitle')}">${_edSmudgeIcon(26)}</button><div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>` : ''}
     ${(!isFill || edFillBrushType === 'watercolor' || _edDodgeBurnActive) ? `
 
     <button id="op-size-btn"
@@ -26360,7 +26585,7 @@ function edRenderOptionsPanel(mode){
       if(!_opDodgePop) return;
       const isOpen = _opDodgePop.style.display === 'flex';
       if(isOpen){ _opDodgePop.style.display = 'none'; return; }
-      if(_edDodgeBurnActive){
+      if(_edIsDodgeBurn()){ // v42.04: sólo si lo activo ES iluminar/oscurecer (con Difuminar activo se abre el popover para pasar a D/B)
         // Activo y popover cerrado → desactivar, manteniendo el tipo de
         // relleno actual (acuarela o bote) — ver _edDodgeBurnDeactivate.
         _edDodgeBurnDeactivate();
@@ -26399,6 +26624,15 @@ function edRenderOptionsPanel(mode){
       if(!_opDodgePop.contains(e.target) && e.target !== _opDodgeBtn)
         _opDodgePop.style.display = 'none';
     }, { passive: true });
+    // ── Difuminar (v42.04) — botón de dos estados al lado de iluminar/oscurecer: activa/desactiva, conservando el tipo de relleno
+    // actual (acuarela o bote), igual que _edDodgeBurnDeactivate. Actúa a la vez sobre los lienzos de acuarela y de relleno.
+    $('op-fill-smudge')?.addEventListener('click', e => {
+      e.stopPropagation();
+      if(_opDodgePop) _opDodgePop.style.display = 'none';
+      if(_edIsSmudge()) _edDodgeBurnDeactivate(); else _edDodgeBurnActivate(0);
+      _edbSyncTool();
+      edRenderOptionsPanel('draw');
+    });
     $('op-fill-bucket')?.addEventListener('click', e => {
       e.stopPropagation();
       _edDodgeBurnActive = false;
@@ -29253,6 +29487,7 @@ function edInitDrawBar() {
           : 'background:transparent;color:rgba(255,255,255,.75);'
       ].join('');
       btn.innerHTML = `<span style="font-size:1.4rem;line-height:1">${item.icon}</span>`;
+      if (item.title) btn.title = item.title; // v42.04: tooltip opcional (Difuminar)
       btn.addEventListener('pointerdown', e => { e.stopPropagation(); window._edbPopItemTouched = true; });
       btn.addEventListener('pointerup', e => {
         e.stopPropagation();
@@ -29491,7 +29726,7 @@ function edInitDrawBar() {
         btn.style.cssText = [
           'display:flex;align-items:center;justify-content:center;border:none;border-radius:8px',
           'padding:6px;cursor:pointer;width:44px;height:44px;',
-          _edDodgeBurnActive
+          _edIsDodgeBurn() // v42.04: con Difuminar activo, este botón NO se marca (comparten interruptor)
             ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);'
             : 'background:transparent;'
         ].join('');
@@ -29507,6 +29742,12 @@ function edInitDrawBar() {
         });
         return { customEl: btn };
       })(),
+      // Difuminar (v42.04) — justo al lado de Iluminar/Oscurecer (petición de Alberto). Mezcla colores arrastrando, sobre acuarela
+      // y relleno a la vez; es un modo hermano de iluminar/oscurecer (edDodgeBurnSign === 0), así que se activa igual (ver
+      // _edDodgeBurnActivate) y no necesita el popover de elección.
+      { icon: _edSmudgeIcon(30), active: _edIsSmudge(), title: I18n.t('ed_smudgeTitle'),
+        action:()=>{ _edDodgeBurnActivate(0); _edbSyncTool(); edRenderOptionsPanel('draw'); }
+      },
       // Bote de pintura (Fondo)
       { icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="27" height="25" style="image-rendering:pixelated;vertical-align:middle"/>`, active: _edTmp.active === 'bucket' && !_edDodgeBurnActive,
         action:()=>{ _edDodgeBurnActive=false; _edTmp.active='bucket'; edFillBrushType='bucket'; edDrawOpacity=100; edActiveTool='fill'; edCanvas.className='tool-fill'; _edSyncFillCursor(); _edbSyncTool(); edRenderOptionsPanel('draw'); }
@@ -30045,7 +30286,9 @@ function _edbSyncTool() {
       // acuarela/bote normal para que se note que la herramienta activa
       // es iluminar/oscurecer (y no la que estuviera antes) — regresión
       // reportada por Alberto, restaurando el diseño bicolor previo.
-      if (_edDodgeBurnActive) {
+      if (_edIsSmudge()) {
+        penBtn.innerHTML = _edSmudgeIcon(26); // v42.04: Difuminar (dedo que mezcla dos colores)
+      } else if (_edDodgeBurnActive) {
         const _s = edDodgeBurnSign === -1;
         penBtn.innerHTML = '<span style="display:inline-flex;width:22px;height:22px;border-radius:3px;background:'+(_s?'#111':'#fff')+';border:'+(_s?'none':'1px solid #888')+';align-items:center;justify-content:center;vertical-align:middle"><span style="font-size:14px;font-weight:900;color:'+(_s?'#fff':'#111')+';line-height:1">'+(_s?'−':'+')+'</span></span>';
       } else {
@@ -30180,28 +30423,38 @@ window._edDodgeBurnDeactivate = _edDodgeBurnDeactivate;
 // barra flotante) desde el estado compartido (_edDodgeBurnActive/
 // edDodgeBurnSign) — mismo patrón que _edbSyncOffsetBtn().
 function _edbSyncDodgeBtn(){
-  const isDark = edDodgeBurnSign === -1; // true = oscurecer, false = iluminar
+  // v42.04: Difuminar comparte _edDodgeBurnActive (signo 0); aquí sólo cuenta como «iluminar/oscurecer» el D/B puro
+  const db = _edIsDodgeBurn();
+  const isDark = edDodgeBurnSign === -1; // true = oscurecer
+  const isLight = edDodgeBurnSign === 1; // true = iluminar
   // Botones iluminar/oscurecer en el popover (compartido, abierto desde el
   // panel o desde el popup del pincel de la barra flotante)
   const edbPopLight = $('edb-dodge-pop-light');
-  if(edbPopLight) edbPopLight.style.outline = (_edDodgeBurnActive && !isDark) ? '2px solid #f90' : 'none';
+  if(edbPopLight) edbPopLight.style.outline = (db && isLight) ? '2px solid #f90' : 'none';
   const edbPopDark = $('edb-dodge-pop-dark');
-  if(edbPopDark) edbPopDark.style.outline = (_edDodgeBurnActive && isDark) ? '2px solid #f90' : 'none';
+  if(edbPopDark) edbPopDark.style.outline = (db && isDark) ? '2px solid #f90' : 'none';
   // Botón del PANEL (op-fill-dodge): mitades oscuro/claro + borde/opacidad general
   const opDark  = $('op-fill-dodge-dark');
   const opLight = $('op-fill-dodge-light');
-  if(opDark)  opDark.style.outline  = (_edDodgeBurnActive && isDark)  ? '2px solid #f90' : 'none';
-  if(opLight) opLight.style.outline = (_edDodgeBurnActive && !isDark) ? '2px solid #f90' : 'none';
+  if(opDark)  opDark.style.outline  = (db && isDark)  ? '2px solid #f90' : 'none';
+  if(opLight) opLight.style.outline = (db && isLight) ? '2px solid #f90' : 'none';
   const opBtn = $('op-fill-dodge');
   if(opBtn){
-    opBtn.style.borderColor = _edDodgeBurnActive ? 'var(--black)' : 'var(--gray-300)';
-    opBtn.style.opacity = _edDodgeBurnActive ? '1' : '0.4';
+    opBtn.style.borderColor = db ? 'var(--black)' : 'var(--gray-300)';
+    opBtn.style.opacity = db ? '1' : '0.4';
   }
   // Botones iluminar/oscurecer en el popover del PANEL
   const opPopLight = $('op-fill-dodge-pop-light');
-  if(opPopLight) opPopLight.style.outline = (_edDodgeBurnActive && !isDark) ? '2px solid #f90' : 'none';
+  if(opPopLight) opPopLight.style.outline = (db && isLight) ? '2px solid #f90' : 'none';
   const opPopDark = $('op-fill-dodge-pop-dark');
-  if(opPopDark) opPopDark.style.outline = (_edDodgeBurnActive && isDark) ? '2px solid #f90' : 'none';
+  if(opPopDark) opPopDark.style.outline = (db && isDark) ? '2px solid #f90' : 'none';
+  // Botón Difuminar del PANEL (op-fill-smudge)
+  const opSm = $('op-fill-smudge');
+  if(opSm){
+    const sm = _edIsSmudge();
+    opSm.style.borderColor = sm ? 'var(--black)' : 'var(--gray-300)';
+    opSm.style.opacity = sm ? '1' : '0.4';
+  }
 }
 function _edUpdateDrawInfo() {
   const info = $('op-draw-info'); if (!info) return;
@@ -31371,7 +31624,7 @@ const _edHelpContent = {
           eraser: withIco('<b>' + I18n.t('ed_eraserWord') + '</b>', icoEraser),
         }) }
       </div>
-      <div>
+      <div style="margin-bottom:14px">
         <b>3.</b> ${I18n.t('ed_helpDrawP3', {
           ink2: withIco('<b>' + I18n.t('op_inkTool') + '</b>', icoInk),
           pencil2: withIco('<b>' + I18n.t('op_pencilTool') + '</b>', icoPencil),
@@ -31379,6 +31632,13 @@ const _edHelpContent = {
           ink3: withIco('<b>' + I18n.t('op_inkTool') + '</b>', icoInk),
           watercolor2: withIco('<b>' + I18n.t('op_watercolorTool') + '</b>', icoWatercolor),
           dodge: withIco('<b>' + I18n.t('ed_dodgeWord') + '</b>', icoDodge),
+        }) }
+      </div>
+      <div>
+        <b>4.</b> ${I18n.t('ed_helpDrawP4', {
+          smudge: withIco('<b>' + I18n.t('ed_smudgeWord') + '</b>', _edSmudgeIcon(18, true)),
+          watercolor3: withIco('<b>' + I18n.t('op_watercolorTool') + '</b>', icoWatercolor),
+          fill3: withIco('<b>' + I18n.t('ed_fillTool') + '</b>', icoBucket),
         }) }
       </div>
     `;
