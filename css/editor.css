@@ -661,6 +661,16 @@ body.ed-scale-tablet {
 .edb-tool.active { background: rgba(255,255,255,.2); color: #fff; }
 .edb-tool:active  { background: rgba(255,255,255,.3); }
 
+/* v42.05 — Icono del cubo de pintura (botón del panel de dibujo, botón de la barra flotante y sus menús del pincel y del borrador):
+   contorno blanco de 1 px para que se vea sobre los fondos oscuros. Técnica estándar para contornear una imagen con transparencia:
+   cuatro drop-shadow sin desenfoque desplazados 1 px en las cuatro direcciones; cada uno se aplica sobre el resultado del anterior,
+   así que juntos forman un halo completo de 3×3 (diagonales incluidas). Es 1 px CSS fijo, no depende del tamaño del icono. */
+.ed-bucket-ico {
+  image-rendering: pixelated;
+  vertical-align: middle;
+  filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff);
+}
+
 .edb-sep {
   width: calc(16px * var(--edb-scale, 1)); height: 1px;
   background: rgba(255,255,255,.18);
