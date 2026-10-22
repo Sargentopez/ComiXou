@@ -63,6 +63,19 @@ const Router = (() => {
     _render(name, params);
   }
 
+  // v42.07 — como go(), pero SUSTITUYE la entrada actual del historial en vez de añadir otra (history.replaceState). Para
+  // salir de una vista cuya entrada no debe quedarse en la pila (el editor al salir con ◀ hacia Mis obras: si se quedara
+  // debajo, el atrás del sistema volvería a pintarlo sin iniciarlo). Al no crear entrada, tampoco puede dejar una entrada
+  // anterior marcada como «saltable» por la intervención de Chrome contra la manipulación del historial.
+  function replace(name, params = {}) {
+    if (!views[name]) { console.error('Vista no encontrada:', name); return; }
+    if (currentView && views[currentView] && views[currentView].destroy) {
+      views[currentView].destroy();
+    }
+    history.replaceState({ view: name, params }, '', '#' + name + (params.id ? '/' + params.id : ''));
+    _render(name, params);
+  }
+
   function _render(name, params = {}) {
     if (!views[name]) return;
     const def = views[name];
@@ -207,5 +220,5 @@ const Router = (() => {
     _render('home', {});
   }
 
-  return { register, go, start };
+  return { register, go, replace, start };
 })();

@@ -676,9 +676,14 @@ async function _mcSyncCloudDates() {
 
       // Actualizar metadatos siempre (título, género, estado publicación)
       let dirty = false;
-      if (w.title    && w.title    !== local.title)    { local.title    = w.title;    dirty = true; }
-      if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
-      if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
+      // v42.06: si los datos de la obra se cambiaron AQUÍ y aún no se han subido (metaCloudPending, ver
+      // _edApplyProjectMeta en editor.js), lo que hay en la nube es justo lo anterior: no puede pisar lo guardado en este
+      // dispositivo (al volver a «Mis obras» se perdían, en local, el género y el modo de lectura recién cambiados).
+      if (!local.metaCloudPending) {
+        if (w.title    && w.title    !== local.title)    { local.title    = w.title;    dirty = true; }
+        if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
+        if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
+      }
       if (w.published !== undefined && w.published !== local.published) {
         local.published = w.published; dirty = true;
       }
@@ -1813,9 +1818,13 @@ async function _mcCloudLoad() {
         // Siempre actualizar metadatos básicos
         let dirty = false;
         if (existing.userId !== user.id) { existing.userId = user.id; dirty = true; }
-        if (w.title    && w.title    !== existing.title)   { existing.title   = w.title;    dirty = true; }
-        if (w.genre    && w.genre    !== existing.genre)   { existing.genre   = w.genre;    dirty = true; }
-        if (w.nav_mode && w.nav_mode !== existing.navMode) { existing.navMode = w.nav_mode; dirty = true; }
+        // v42.06: datos de la obra cambiados aquí y aún sin subir (metaCloudPending) → no los pisa lo que hay en la nube
+        // (ver el mismo criterio en _mcSyncCloudDates).
+        if (!existing.metaCloudPending) {
+          if (w.title    && w.title    !== existing.title)   { existing.title   = w.title;    dirty = true; }
+          if (w.genre    && w.genre    !== existing.genre)   { existing.genre   = w.genre;    dirty = true; }
+          if (w.nav_mode && w.nav_mode !== existing.navMode) { existing.navMode = w.nav_mode; dirty = true; }
+        }
         existing.published     = w.published ?? existing.published;
         existing.approved      = w.published ?? existing.approved;
         // Sincronizar pendingReview desde columna pending_review de Supabase

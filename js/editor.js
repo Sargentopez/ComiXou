@@ -1303,7 +1303,10 @@ let edProjectId = null;
 // v41.86 — metaPending: obra recién creada cuyos datos (título, género, modo de lectura, hoja final) el usuario aún no
 // ha confirmado. Nace true en my-works.js (_mcCreateBlankWork); el modal «Datos del proyecto» sale en el primer
 // guardado que pide el usuario y, al confirmarlo (o desde «Editar datos de la obra»), pasa a false para siempre.
-let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'', metaPending:false };
+// v42.06 — metaCloudPending: los datos de la obra (título, autor, género, modo de lectura, hoja final) se han cambiado y
+// guardado en ESTE dispositivo, pero aún no se han subido a la nube (la copia de la nube conserva los anteriores). Es lo
+// que hace que ◀ pregunte «¿subir a la nube?» en una obra ya subida, aunque en local no quede nada sin guardar.
+let edProjectMeta = { title:'', author:'', genre:'', navMode:'fixed', social:'', metaPending:false, metaCloudPending:false };
 let edActiveTool = 'select';  // select | draw | eraser | fill | shape | line
 const ED_WORKSPACE_NORMAL  = '#c8d4e8'; // color de siempre de la zona de trabajo
 const ED_WORKSPACE_DRAWING = '#ffffff'; // durante dibujo a mano o vectorial (v40.47)
@@ -5561,6 +5564,14 @@ const _ED_TICK_EXCLUDE_SELECTOR = [
   //     siguen contando como siempre.
   '#tdShell', '#_tdSavePop', '#_tdDiagPanel', '#cxFontSearchModal',
   '#edOptionsPanel[data-mode="biblioteca"]', '#_bib-picker', '#edConfirmModal[data-no-tick]',
+  // v42.06 · «Datos del proyecto» (título, autor, género, modo de lectura, hoja final): solo edita esos campos de edProjectMeta,
+  // que ya tienen su propia marca (_edProjectMetaDirtyLocal, al pulsar «Guardar ✓»). Escribir en sus cajas o pulsar
+  // «Cancelar» no toca ninguna hoja: contarlo hacía que, tras abrir el modal y cancelar, ◀ preguntara «¿Guardar cambios?»
+  // sin haber cambiado nada, y que la siguiente subida a la nube reenviara la hoja activa para nada.
+  // v42.06 · #_edExitCloudMetaDlg — «¿Subir los datos de la obra a la nube?» al salir (_edAskUploadMetaThenLeave): solo
+  // pregunta. Tocar fuera para volver al editor (o cualquiera de sus botones) no modifica ninguna hoja; contarlo hacía que
+  // el siguiente ◀ preguntara «¿Guardar cambios?» sin haber cambiado nada.
+  '#edProjectModal', '#_edExitCloudMetaDlg',
 ].join(', ');
 // Listener global de "cualquier tap/click", con las excepciones de arriba.
 // No comprueba si el gesto se completó o se canceló: basta con haber
@@ -5665,6 +5676,494 @@ function _edIsUntouchedNewWork() {
     if (_b && Array.isArray(_b.folders) && _b.folders.some(f => f && f.items && f.items.length)) return false;
   } catch(_) { return false; }
   return true;
+}
+
+// v42.06 — ¿hay datos de la obra (título, autor, género, modo de lectura, hoja final) guardados SOLO en este dispositivo en
+// una obra que ya existe en la nube? Es lo que no detecta _edHasUnsavedLocalChanges (que mira lo no guardado en local):
+// «Guardar ✓» en «Datos del proyecto» guarda en el dispositivo, pero la nube conserva los datos anteriores hasta la
+// siguiente subida. Una obra que nunca se ha subido (sin supabaseId) no tiene copia en la nube que haya quedado atrás.
+function _edMetaCloudPending() {
+  try {
+    if (!edProjectId || !edProjectMeta || !edProjectMeta.metaCloudPending) return false;
+    const rec = WorkStore.getById(edProjectId);
+    return !!(rec && rec.supabaseId);
+  } catch(_) { return false; }
+}
+// Pregunta, al salir del editor, si se suben a la nube esos datos. «Ahora no» sale (siguen guardados en el dispositivo y el
+// aviso volverá la próxima vez que se salga de la obra); «Guardar en la nube» usa el mismo guardado en la nube del botón
+// ☁️ (edCloudSave) y sale solo si la subida terminó bien: si falló (sin red, sin sesión, conflicto cancelado…) el usuario
+// se queda en el editor con el aviso de siempre. Tocar fuera del cuadro vuelve al editor. onLeave = qué hacer para salir.
+function _edAskUploadMetaThenLeave(onLeave) {
+  // Guardar en la nube SIEMPRE devuelve la obra a borrador (ver _edCloudSaveInner): si ahora está publicada o en revisión,
+  // el aviso lo dice para que nadie la retire de la portada sin querer al pulsar «Guardar en la nube».
+  const _r = WorkStore.getById(edProjectId) || {};
+  const _live = !!(_r.published || _r.approved || _r.pendingReview);
+  const dlg = document.createElement('div');
+  dlg.id = '_edExitCloudMetaDlg';
+  dlg.setAttribute('data-ed-exit-dlg', ''); // v42.07: el atrás del sistema lo cierra (= tocar fuera del cuadro)
+  dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+  dlg.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+      <div style="font-size:1.5rem;margin-bottom:12px">☁️</div>
+      <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_cloudMetaPendingTitle')}</p>
+      <p style="font-size:.88rem;color:#666;margin-bottom:${_live ? '12px' : '24px'}">${I18n.t('ed_cloudMetaPendingMsg')}</p>
+      ${_live ? `<p id="_edExitCloudLiveWarn" style="font-size:.82rem;color:#b9770e;font-weight:600;margin-bottom:24px">${I18n.t('ed_cloudMetaLiveWarn')}</p>` : ''}
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button id="_edExitCloudLater" style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_cloudMetaLaterBtn')}</button>
+        <button id="_edExitCloudNow" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_saveToCloud')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dlg);
+  dlg.addEventListener('click', e => { if (e.target === dlg) dlg.remove(); });
+  edStopCanvasLeak(dlg); // modal de verdad: nada de lo que hay detrás debe reaccionar al toque
+  document.getElementById('_edExitCloudLater').onclick = () => { dlg.remove(); onLeave(); };
+  document.getElementById('_edExitCloudNow').onclick = async () => {
+    dlg.remove();
+    // edCloudSave no devuelve si tuvo éxito: se compara cloudSavedAt antes/después (mismo criterio que «retomar guardado
+    // en nube» tras iniciar sesión, en EditorView_init).
+    const _id = edProjectId;
+    const _before = WorkStore.getById(_id)?.cloudSavedAt || null;
+    try { await edCloudSave(); } catch(_) {}
+    const _after = WorkStore.getById(_id)?.cloudSavedAt || null;
+    if (_after && _after !== _before) onLeave();
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// v42.07 — SALIR DEL EDITOR: botón ◀ de la app y botón/gesto «atrás» del sistema (Android)
+//
+// Alberto: «arregla el atrás en android». Con el botón/gesto atrás del sistema el editor se abandonaba en silencio: el
+// router retrocedía a la vista anterior sin pasar por ninguna pregunta del ◀ («¿Guardar cambios?», «¿Subir los datos de
+// la obra a la nube?») y sin llamar siquiera a EditorView_destroy (lo no guardado solo se salvaba por el autoguardado).
+// Ahora el atrás hace lo mismo que ◀:
+//   · Si hay algo abierto encima (aviso de salida, ventana de datos/ayuda/atajos, vista previa, editor de animaciones…)
+//     lo cierra, igual que tocar fuera/✕, y NO sale.
+//   · Si no, ejecuta el mismo flujo de salida que ◀ (_edExitRequest): con cambios sin guardar pregunta, con datos de la
+//     obra pendientes de subir pregunta, y solo sale cuando todo está resuelto.
+// Cómo se «cancela» un atrás — el REBOTE: cuando el navegador avisa (popstate) ya ha retrocedido a la entrada de debajo, pero
+// la del editor sigue en la pila, «por delante». Para quedarse en el editor se vuelve a ella recorriendo el historial
+// (navigation.traverseTo con la clave de la entrada; sin la API Navigation, history.forward). Es la técnica estándar para
+// bloquear un atrás —react-router y la librería history lo hacen igual: deshacen el salto con history.go—. NO se repone la
+// entrada con history.pushState (lo que hace el Editor de textos): Chrome considera «manipulación del historial» una entrada
+// que crea la página sin ningún toque del usuario y marca la anterior como «saltable» para el atrás del navegador
+// (Chromium, history_manipulation_intervention.md) → el atrás siguiente se la salta y, con poca pila, cierra la app.
+// Recorrer el historial no crea entradas, así que no hay nada que marcar. Mientras dura el rebote (unos ms) las salidas se
+// aplazan (_edLeaveAfterBounce) para no mezclar dos recorridos. Si el rebote no llega (el navegador lo ignora), un
+// temporizador repone la entrada con pushState: red de seguridad (_edBounceTimedOut).
+// Cómo se sale: retrocediendo DE VERDAD (history.back()), tanto con el atrás como con ◀, en vez de empujar otra entrada
+// encima. Antes ◀ hacía Router.go('my-works') y la entrada del editor se quedaba debajo de Mis obras: un atrás del sistema
+// desde Mis obras volvía a pintar el editor, pero SIN iniciarlo (cx_edit_id ya se había consumido, ver EditorView_init):
+// un editor «muerto», sin botones. Con la pila limpia eso ya no puede pasar.
+//   · atrás del sistema → a la vista de la que se venía (modo 'prev').
+//   · ◀ → siempre a Mis obras (modo 'list'): si justo debajo está Mis obras se retrocede a ella; si no (p.ej. se entró desde
+//     Inicio, o no hay nada debajo) la entrada del editor se SUSTITUYE por Mis obras con Router.replace (sin entrada nueva).
+//     Sin la API Navigation no se puede saber qué hay debajo: se retrocede y, si no es Mis obras, se pone encima (Router.go).
+// Si el navegador no retrocede (o lo ignora) un temporizador de seguridad sale a Mis obras con Router.go.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════
+let _edBackLeaving = false;     // salida ya decidida con history.back(): 'prev' (atrás del sistema) | 'list' (◀). El próximo popstate es el nuestro
+let _edExitBusySince = 0;       // != 0 mientras una salida ya decidida está en marcha (guardando…): se ignoran más «atrás»
+const _ED_EXIT_DLG_SEL = '[data-ed-exit-dlg]'; // los avisos de la salida llevan esta marca para poder cerrarlos con «atrás»
+let _edBouncing = false;        // rebote en curso: ya se pidió volver a la entrada del editor, falta que llegue el popstate de vuelta
+let _edBounceTimer = null;      // red de seguridad del rebote (ver _edBounceTimedOut)
+let _edLeaveAfterBounce = null; // { viaBack } — salida pedida mientras duraba el rebote: se ejecuta al estar de vuelta en la entrada del editor
+const _edBounceTimes = [];      // instantes de los últimos rebotes (freno: nunca un ir y venir sin fin)
+let _edBounceTotal = 0, _edBounceFallbacks = 0; // solo para el diagnóstico 🩺
+
+// Registro corto de lo que ha hecho el atrás (lo enseña el diagnóstico 🩺): como mucho 14 líneas.
+function _edBackLog(txt) {
+  try {
+    const l = (window._edBackLogLines = window._edBackLogLines || []);
+    const ce = window.navigation && window.navigation.currentEntry;
+    l.push(new Date().toTimeString().slice(0, 8) + ' ' + txt + ' [' + location.hash + ' #' + (ce ? ce.index : '?') + ']');
+    if (l.length > 14) l.shift();
+  } catch(_) {}
+}
+
+// ¿Hay debajo de la entrada actual otra de la propia app (mismo documento: solo cambia el #)? La API Navigation solo lista
+// entradas del mismo origen; si el navegador no la tiene se mira el tamaño de la pila. Sin ella, history.back() sacaría al
+// usuario de la app o cargaría otra página.
+function _edHasAppEntryBelow() {
+  try {
+    const _nav = window.navigation, _ce = _nav && _nav.currentEntry;
+    if (_ce && typeof _ce.index === 'number') {
+      if (_ce.index <= 0) return false;
+      const _prev = _nav.entries()[_ce.index - 1];
+      if (!_prev || !_prev.url) return false;
+      const _u = new URL(_prev.url);
+      return _u.origin === location.origin && _u.pathname === location.pathname;
+    }
+  } catch(_) {}
+  return history.length > 1;
+}
+
+// ¿La entrada de debajo es la de Mis obras? true / false; null si no se puede saber (sin API Navigation).
+function _edBelowIsMyWorks() {
+  try {
+    const _nav = window.navigation, _ce = _nav && _nav.currentEntry;
+    if (_ce && typeof _ce.index === 'number') {
+      const _prev = _ce.index > 0 ? _nav.entries()[_ce.index - 1] : null;
+      return !!(_prev && _prev.url && new URL(_prev.url).hash === '#my-works');
+    }
+  } catch(_) {}
+  return null;
+}
+
+// ¿Estamos en la entrada del historial del propio editor? Se compara la clave que la API Navigation dio a esa entrada al abrir
+// el editor (_edNavKey); sin esa API, por el estado de la entrada (la vista que guardó el router).
+function _edAtEditorEntry() {
+  try {
+    const _ce = window.navigation && window.navigation.currentEntry;
+    if (_ce && window._edNavKey) return _ce.key === window._edNavKey;
+  } catch(_) {}
+  const _st = history.state;
+  return !!(_st && _st.view === 'editor');
+}
+
+function _edBounceDone() {
+  _edBouncing = false;
+  clearTimeout(_edBounceTimer); _edBounceTimer = null;
+}
+
+// Vuelve a la entrada del editor después de un atrás que no debe sacar de él (ver el comentario de arriba). false = no se
+// intentó porque ya se encadenaron demasiados rebotes en poco tiempo (no puede pasar con normalidad).
+function _edBounceBack() {
+  const _now = Date.now();
+  while (_edBounceTimes.length && _now - _edBounceTimes[0] > 3000) _edBounceTimes.shift();
+  if (_edBounceTimes.length >= 6) return false;
+  _edBounceTimes.push(_now);
+  _edBounceTotal++;
+  _edBouncing = true;
+  clearTimeout(_edBounceTimer);
+  _edBounceTimer = setTimeout(_edBounceTimedOut, 1000);
+  try {
+    const _nav = window.navigation, _key = window._edNavKey;
+    if (_nav && _key && typeof _nav.traverseTo === 'function' && _nav.entries().some(e => e.key === _key)) {
+      const _r = _nav.traverseTo(_key);
+      if (_r) { if (_r.committed) _r.committed.catch(() => {}); if (_r.finished) _r.finished.catch(() => {}); }
+      return true;
+    }
+  } catch(_) {}
+  try { history.forward(); } catch(_) {}
+  return true;
+}
+
+// Estando ya en la entrada de debajo (el rebote no llegó), se sale pintando esa vista en el sitio: sin más recorridos.
+function _edLeaveHere() {
+  _edExitBusySince = 0;
+  _edClearExitDialogs();
+  const _st = history.state;
+  const _name = (_st && _st.view) || 'home';        // como el popstate del router
+  Router.replace(_name === 'editor' ? 'my-works' : _name, (_st && _st.params) || {});
+}
+
+// El rebote no llegó a tiempo (el navegador ignoró la orden): red de seguridad.
+function _edBounceTimedOut() {
+  _edBounceTimer = null;
+  if (!_edBouncing) return;
+  _edBouncing = false;
+  const _pend = _edLeaveAfterBounce; _edLeaveAfterBounce = null;
+  if (!document.getElementById('edBackBtn')) return;                 // el editor ya no está en pantalla
+  if (_edAtEditorEntry()) { if (_pend) _edLeave(_pend.viaBack); return; }
+  _edBackLog('el rebote no llegó');
+  if (_pend) { _edLeaveHere(); return; }                             // ya se había decidido salir
+  // Se queda en el editor: se repone su entrada con pushState (técnica antigua; ver el comentario de arriba).
+  _edBounceFallbacks++;
+  const _he = window._edHistEntry;
+  try { history.pushState(_he ? _he.state : { view: 'editor', params: {} }, '', _he ? _he.url : '#editor'); } catch(_) {}
+  try { window._edNavKey = window.navigation.currentEntry.key; } catch(_) {}
+}
+
+// Quita los avisos de salida que hubiera abiertos (y para el temporizador del aviso «guardado en la nube en curso»): al
+// salir de verdad no deben quedarse flotando sobre la vista siguiente ni disparar otra navegación después.
+function _edClearExitDialogs() {
+  document.querySelectorAll(_ED_EXIT_DLG_SEL).forEach(n => {
+    if (n._edTimer) { clearInterval(n._edTimer); n._edTimer = null; }
+    n.remove();
+  });
+}
+
+// Salida efectiva del editor (ya decidida). viaBack = se pidió con el atrás del sistema (a la vista de la que se venía); si
+// no (◀ de la app), a Mis obras. En los dos casos se retrocede de verdad en el historial (ver el comentario de arriba): el
+// popstate resultante lo atiende _edOnSystemBack, que destruye el editor y deja pintar al router.
+function _edLeave(viaBack) {
+  if (_edBackLeaving) return;                       // ya hay una salida en marcha
+  if (_edBouncing) { _edLeaveAfterBounce = { viaBack }; return; }   // dura un rebote: se sale al estar de vuelta en la entrada del editor
+  _edExitBusySince = 0;
+  _edClearExitDialogs();
+  // Nada debajo, o ◀ y debajo hay otra cosa que Mis obras (p.ej. Inicio): la entrada del editor se SUSTITUYE por Mis obras
+  // (Router.replace) en vez de empujar Mis obras encima y dejar el editor debajo.
+  if (!_edHasAppEntryBelow() || (!viaBack && _edBelowIsMyWorks() === false)) { Router.replace('my-works'); return; }
+  _edBackLeaving = viaBack ? 'prev' : 'list';
+  // Red de seguridad: si el navegador no retrocede (o lo hace a una vista que no sustituye al editor), el editor no puede
+  // quedarse a medias en pantalla → salir a Mis obras por la vía normal (Router.go destruye el editor él mismo).
+  clearTimeout(window._edBackLeaveTimer);
+  const _seq = window._edInitSeq;
+  window._edBackLeaveTimer = setTimeout(() => {
+    if (window._edInitSeq !== _seq) return;         // entretanto se abrió otro editor (EditorView_init lo cuenta): no tocarlo
+    _edBackLeaving = false;
+    if (document.getElementById('edBackBtn')) Router.go('my-works');
+  }, 900);
+  history.back();
+}
+
+// Flujo de salida del editor — el mismo para ◀ (viaBack=false) y para el atrás del sistema (viaBack=true).
+function _edExitRequest(viaBack) {
+  // Terminar modo trayectoria activo antes de salir:
+  // el timer de 120ms podría dispararse después del click y capturar el puntero del canvas.
+  if (_edMotionPathMode) _edEndMotionPath(false);
+  // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
+  if (_edCloudSaving) {
+    const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
+    const dlgCloud = document.createElement('div');
+    dlgCloud.id = '_edCloudSavingDlg';
+    dlgCloud.setAttribute('data-ed-exit-dlg', '');
+    dlgCloud.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+    dlgCloud.innerHTML = `
+      <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+        <div style="font-size:1.8rem;margin-bottom:12px">⚠️</div>
+        <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_cloudSaveInProgress')}</p>
+        <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">${I18n.t('ed_cloudSavingBadge', { n: elapsed })}</p>
+        <p style="font-size:.85rem;color:#666;margin-bottom:24px">${I18n.t('ed_exitBeforeCloudSaveWarn')}</p>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">${I18n.t('ed_exitAnywayBtn')}</button>
+          <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_waitBtn')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dlgCloud);
+    // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos
+    // del lienzo) debe reaccionar al toque mientras se avisa del guardado
+    // en curso — ver edStopCanvasLeak.
+    edStopCanvasLeak(dlgCloud);
+    // Actualizar contador en el diálogo mientras está abierto
+    const _dlgTimer = setInterval(() => {
+      const b = document.getElementById('_edCloudSavingBadge');
+      if (b && _edCloudSaving) {
+        const s = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
+        b.textContent = I18n.t('ed_cloudSavingBadge', { n: s });
+      } else if (!_edCloudSaving) {
+        clearInterval(_dlgTimer);
+        dlgCloud.remove();
+        _edLeave(viaBack);
+      }
+    }, 500);
+    dlgCloud._edTimer = _dlgTimer; // v42.07: para pararlo si el aviso se cierra por otra vía (atrás, salir…)
+    document.getElementById('_edCloudWait').onclick = () => {
+      clearInterval(_dlgTimer);
+      dlgCloud.remove();
+    };
+    document.getElementById('_edCloudExitAnyway').onclick = () => {
+      clearInterval(_dlgTimer);
+      dlgCloud.remove();
+      _edLeave(viaBack);
+    };
+    return;
+  }
+
+  const hasUnsaved = _edHasUnsavedLocalChanges();
+  if (!hasUnsaved) {
+    // Esperar a que biblioteca IDB haya completado antes de salir
+    // v41.86: «Nueva obra» ya no pide nada antes de entrar, así que entrar y salir sin tocar nada dejaría una
+    // «Sin título» vacía en Mis obras cada vez. Si la obra es nueva, sin datos confirmados, sin ningún guardado
+    // ni subida y sin nada en su biblioteca, se retira (se mira DESPUÉS de volcar la biblioteca).
+    const _leave = () => {
+      if (_edIsUntouchedNewWork()) { try { WorkStore.remove(edProjectId); } catch(_) {} }
+      _edLeave(viaBack);
+    };
+    // v42.07: mientras se vuelca la biblioteca la salida ya está decidida → un segundo «atrás» no debe lanzar otra
+    const _go = () => { _edExitBusySince = Date.now(); if (typeof _bibFlush === 'function') _bibFlush().then(_leave); else _leave(); };
+    // v42.06: nada sin guardar en local, pero los datos de la obra (p.ej. el comentario final de la hoja de créditos,
+    // guardado con «Guardar ✓» en «Datos del proyecto») pueden no estar aún en la nube → preguntar antes de salir.
+    if (_edMetaCloudPending()) _edAskUploadMetaThenLeave(_go);
+    else _go();
+    return;
+  }
+
+  // Hay cambios sin guardar — preguntar
+  // v41.86: además de la comparación de fechas (frágil: dependen de dos lecturas del reloj en el mismo milisegundo),
+  // una obra nueva con la marca de datos pendientes y ningún guardado previo también es «nueva».
+  const isNew = !WorkStore.getById(edProjectId)?.updatedAt ||
+                WorkStore.getById(edProjectId)?.updatedAt === WorkStore.getById(edProjectId)?.createdAt ||
+                _edIsNeverSavedNewWork();
+
+  const dlg = document.createElement('div');
+  dlg.id = '_edExitDlg';
+  dlg.setAttribute('data-ed-exit-dlg', '');
+  dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+  dlg.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+      <div style="font-size:1.5rem;margin-bottom:12px">💾</div>
+      <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_saveChangesQuestion')}</p>
+      <p style="font-size:.88rem;color:#666;margin-bottom:24px">${I18n.t('ed_unsavedChangesInWork')}</p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button id="_edExitNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_dontSaveBtn')}</button>
+        <button id="_edExitYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_saveModalTitle')}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dlg);
+
+  // Click fuera del cuadro → cerrar y volver al editor
+  dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
+  // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos del
+  // lienzo) debe reaccionar al toque mientras se pregunta si guardar antes
+  // de salir — ver edStopCanvasLeak.
+  edStopCanvasLeak(dlg);
+
+  document.getElementById('_edExitYes').onclick = () => {
+    dlg.remove();
+    // v41.86: obra nueva sin datos confirmados → antes de guardar sale el modal de datos; si el usuario lo cancela
+    // no se guarda ni se sale (se queda en el editor, con todo como estaba, incluido el autoguardado).
+    _edEnsureProjectData(async (info) => {
+      _edExitBusySince = Date.now(); // v42.07: guardando para salir → un segundo «atrás» no debe abrir otro aviso
+      try {
+        _edAutosaveClear(); // salida controlada → borrar autosave
+        if (!info.saved) await edSaveProject();
+        // Esperar a que biblioteca IDB complete
+        if (typeof _bibFlush === 'function') await _bibFlush();
+        // La versión local es ahora la canónica — limpiar backup de versión de nube
+        if (edProjectId) {
+          const _cSave = WorkStore.getById(edProjectId);
+          if (_cSave && _cSave.localEditorData) {
+            WorkStore.save({ ..._cSave, localEditorData: null });
+          }
+          try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+        }
+        // v42.06: si además hay datos de la obra pendientes de subir a la nube (ver _edMetaCloudPending), se pregunta
+        // ahora, ya con todo guardado en el dispositivo. («No guardar» no pregunta: la subida guardaría de paso en local
+        // lo que el usuario acaba de descartar.)
+        if (_edMetaCloudPending()) { _edExitBusySince = 0; _edAskUploadMetaThenLeave(() => _edLeave(viaBack)); }
+        else _edLeave(viaBack);
+      } finally { _edExitBusySince = 0; }
+    });
+  };
+  document.getElementById('_edExitNo').onclick = async () => {
+    dlg.remove();
+    _edExitBusySince = Date.now(); // v42.07: ver _edExitYes
+    try {
+      // Cancelar timer de huérfanos si está pendiente — la limpieza la hacemos nosotros
+      if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
+      // Limpiar todos los datos temporales ANTES de navegar
+      await _edAutosaveClear(); // borrar autosave (async IDB)
+      if (edProjectId) {
+        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
+        // localEditorData NO se borra aquí: el usuario eligió no guardar los cambios
+        // de esta sesión, pero la versión local previa (backup del cloudNewer) debe
+        // seguir disponible en Proyecto → Recuperar versión del dispositivo.
+        // Solo se borra en _edExitYes (el usuario guardó y la versión local ya no es relevante)
+        // o cuando el usuario usa explícitamente "Recuperar versión local" (dd-recoverlocal).
+      }
+      // Si era obra nueva sin guardado previo, eliminarla
+      if (isNew && edProjectId) {
+        WorkStore.remove(edProjectId);
+        // Borrar OPFS de la obra nueva si existe
+        try {
+          if (navigator.storage?.getDirectory) {
+            const _user = Auth?.currentUser?.();
+            if (_user) {
+              const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+              const _root = await navigator.storage.getDirectory();
+              const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
+              const _uDir = _base ? await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null) : null;
+              if (_uDir) await _uDir.removeEntry(edProjectId + '.json').catch(() => {});
+            }
+          }
+        } catch(_) {}
+      }
+      // NOTA: antes, si la obra no era nueva, aquí se relanzaba edLoadProject(edProjectId)
+      // "para restaurar el último estado guardado" en memoria. Es innecesario — la próxima
+      // vez que se abra el editor (esta obra u otra), EditorView_init resetea edPages/edLayers/
+      // historial/cámara y vuelve a cargar desde disco de todos modos — y provocaba una
+      // recarga completa (OPFS + deserialización + redraw) compitiendo por el hilo principal
+      // justo durante la navegación a "Mis creaciones", que es la causa confirmada de la
+      // lentitud al salir sin guardar. Se elimina la llamada.
+      // Navegar — el detector de huérfanos en my-works se lanzará con delay normal
+      // pero ya no habrá nada que detectar
+      _edLeave(viaBack);
+    } finally { _edExitBusySince = 0; }
+  };
+}
+
+// Cierra lo que haya abierto encima del editor, de arriba abajo y de uno en uno (true = cerró algo). Es lo que el
+// atrás del sistema hace ANTES de plantearse salir del editor: como en cualquier app, atrás cierra primero la ventana.
+function _edBackDismissTop() {
+  const q = id => document.getElementById(id);
+  const isOpen = id => { const m = q(id); return !!(m && m.classList.contains('open')); };
+  // Avisos de la propia salida: el último que haya en pantalla es el de encima. = tocar fuera del cuadro (volver al editor).
+  const _ds = document.querySelectorAll(_ED_EXIT_DLG_SEL);
+  if (_ds.length) {
+    const d = _ds[_ds.length - 1];
+    if (d._edTimer) { clearInterval(d._edTimer); d._edTimer = null; } // el del guardado en la nube en curso lleva temporizador
+    d.remove();
+    return true;
+  }
+  if (isOpen('edConfirmModal'))     { q('edConfirmCancel')?.click(); return true; }
+  if (isOpen('edProjectModal'))     { edCancelProjectModal(); return true; }
+  if (isOpen('edSaveChoiceModal'))  { edCloseSaveChoiceModal(); return true; }
+  if (isOpen('edAnimRangeModal'))   { edCloseAnimRangeModal(); return true; }
+  if (isOpen('edMpBehaviourModal')) { _mpbehClose(); return true; }
+  if (isOpen('gcpInterpModal'))     { q('gcpInterpCancel')?.click(); return true; }
+  if (isOpen('edShortcutsModal'))   { q('edShortcutsModal').classList.remove('open'); return true; }
+  if (isOpen('edHelpRefModal'))     { q('edHelpRefModal').classList.remove('open'); return true; }
+  if (q('_gcpSavePop'))             { q('_gcpSavePop').remove(); return true; }   // «¿guardar la animación?» → seguir en ella
+  if (isOpen('editorViewer'))       { edCloseViewer(); return true; }              // vista previa
+  if (window._gcpActive)            { gcpClose(); return true; }                   // editor de animaciones (pregunta él si hay cambios)
+  if (edMenuOpen)                   { edCloseMenus(); return true; }               // menú desplegable
+  return false;
+}
+
+// Interceptor del atrás del sistema (ver window._edBackInterceptors en router.js). Devuelve true si se encargó del evento.
+function _edOnSystemBack() {
+  // Salida ya decidida (_edLeave): este popstate es el nuestro.
+  if (_edBackLeaving) {
+    const _mode = _edBackLeaving; _edBackLeaving = false;
+    const _st = history.state;
+    if (_mode === 'prev' || (_st && _st.view === 'my-works')) {
+      // El router, al procesar un popstate, pinta la vista de destino pero no destruye la actual (Router.go sí): se hace aquí.
+      try { EditorView_destroy(); } catch(_) {}
+      return false;                                 // que el router pinte la vista que quedó debajo
+    }
+    // ◀ y debajo no hay Mis obras (p.ej. se entró desde Inicio): nos quedamos en esa entrada y se pone Mis obras encima.
+    Router.go('my-works');                          // destruye el editor él mismo
+    return true;
+  }
+  // Rebote en curso: este popstate puede ser la llegada de vuelta a la entrada del editor (el que nosotros provocamos).
+  if (_edBouncing) {
+    if (_edAtEditorEntry()) {
+      _edBounceDone();
+      _edBackLog('de vuelta en la entrada del editor');
+      const _p = _edLeaveAfterBounce; _edLeaveAfterBounce = null;
+      if (_p) _edLeave(_p.viaBack);                 // mientras duraba el rebote se decidió salir
+      return true;
+    }
+    _edBounceDone();                                // otro «atrás» antes de que acabara el rebote: se trata como uno nuevo
+  }
+  // Solo si el editor es la vista que hay en pantalla (el popstate llega antes de que el router cambie de vista).
+  if (!document.getElementById('edBackBtn')) return false;
+  if (_edAtEditorEntry()) return false;             // seguimos en la entrada del editor (p.ej. un «adelante»): nada que hacer
+  _edBackLog('atrás del sistema');
+  // El navegador ya retrocedió a la entrada de debajo: volver a la del editor (ver el comentario de arriba). Se hace ANTES de
+  // lo demás para que cualquier salida que se decida a continuación espere a estar de vuelta.
+  if (!_edBounceBack()) {
+    _edBackLog('demasiados rebotes seguidos: se deja salir');
+    try { EditorView_destroy(); } catch(_) {}
+    return false;                                   // que el router pinte la vista que quedó debajo
+  }
+  // 1) Algo abierto encima → cerrarlo, sin salir.
+  if (_edBackDismissTop()) { _edBackLog('cierra una ventana'); return true; }
+  // 2) Una salida ya decidida está en marcha (guardando…) → ignorar este atrás.
+  if (_edExitBusySince && Date.now() - _edExitBusySince < 20000) { _edBackLog('ignorado: guardando'); return true; }
+  // 3) Lo mismo que ◀.
+  _edBackLog('flujo de salida');
+  _edExitRequest(true);
+  return true;
+}
+
+// Registra (una sola vez) el interceptor del editor principal. unshift = el último en consultarse (router.js recorre la
+// lista de atrás hacia delante): el Editor de textos y demás atienden antes sus propios popstate, incluido el
+// autoprovocado al cerrarse, y a este solo llega el atrás «normal» del editor.
+function _edRegisterBackInterceptor() {
+  if (window._edMainBackInterceptorOn) return;
+  window._edMainBackInterceptorOn = true;
+  (window._edBackInterceptors = window._edBackInterceptors || []).unshift(_edOnSystemBack);
 }
 
 function edPushHistory(force, movedLayer){
@@ -32225,6 +32724,9 @@ async function _edCloudSaveInner() {
     // aplicado) se sube siempre entero a "works" en saveDraft — ver ahí el
     // porqué no depende de _dirtyPageIndices.
     window._edProjectMetaDirtyCloud = false;
+    // v42.06: la nube ya tiene los datos de la obra (título, autor, género, modo de lectura, hoja final): se quita la
+    // marca «pendiente de subir» (ver _edApplyProjectMeta). En el registro local se quita en el updateMeta de más abajo.
+    edProjectMeta.metaCloudPending = false;
     // Borrar autosave explícitamente tras guardado en nube exitoso.
     // edSaveProject ya lo hace, pero en Android el _asDb puede haber fallado
     // por versionchange. Este segundo intento garantiza que no queda autosave espurio
@@ -32270,6 +32772,7 @@ async function _edCloudSaveInner() {
         published: false, approved: false, pendingReview: false,
         cloudSavedAt: new Date().toISOString(),
         cloudSync: _cloudSyncNote,
+        metaCloudPending: false, // v42.06: los datos de la obra ya están en la nube
       });
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
     }
@@ -35588,7 +36091,10 @@ async function edLoadProject(id){
   try { _edBibNoteMirroredSync(id, comic); } catch(_) {}
   // Resetear marcador de guardado — al cargar, el estado es "guardado"
   edHistory=[]; edHistoryIdx=-1; _edSavedHistoryIdx=-1;
-  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||'',metaPending:!!comic.metaPending};
+  // v42.06: metaCloudPending = los datos de la obra (título, autor, género, modo de lectura, hoja final) se guardaron
+  // en ESTE dispositivo pero la nube aún tiene los anteriores (ver _edApplyProjectMeta). Va en el registro local para
+  // que sobreviva a cerrar el editor: al volver a abrir la obra el aviso de «subir a la nube» sigue pendiente.
+  edProjectMeta={title:comic.title||'',author:comic.author||comic.username||'',genre:comic.genre||'',navMode:comic.navMode||'fixed',social:comic.social||'',metaPending:!!comic.metaPending,metaCloudPending:!!comic.metaCloudPending};
 
   // Comprobar si hay autosave temporal pendiente
   const _asSave = await _edAutosaveRead(id);
@@ -37772,6 +38278,7 @@ async function edImportLayers(file) {
 }
 
 function EditorView_destroy(){
+  _edBounceDone(); _edLeaveAfterBounce = null;   // v42.07: un rebote del atrás del sistema pendiente ya no tiene sentido
   if(window._edListeners){
     window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
     window._edListeners = null;
@@ -37897,7 +38404,7 @@ async function edSaveProjectModal(){
         async () => {
           try {
             const _fromId = edProjectId;
-            _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial);
+            _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial, true); // v42.06: true = la obra sobrescrita queda distinta de su copia en la nube
             const _snap = await _edForkToId(_edDup.id);
             // v41.86: el registro «Sin título» de partida (nunca llegó a tener nombre propio) ya no pinta nada una
             // vez que su contenido ha quedado guardado SOBRE la obra existente: se retira, para no dejar en Mis
@@ -37929,7 +38436,16 @@ async function edSaveProjectModal(){
 // Aplica los campos del modal de datos de obra a edProjectMeta y refresca la
 // UI del título — compartido por los tres desenlaces de edSaveProjectModal
 // (sin cambio de título, bifurcar con id nuevo, sobrescribir un id existente).
-function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial) {
+function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _newSocial, _forceCloudPending) {
+  // v42.06 — ¿cambia de verdad algún dato respecto a lo que había? Solo entonces la nube se queda atrás (a diferencia de
+  // las marcas de abajo, que cuentan «ante la duda»: aquí pulsar «Guardar ✓» sin tocar nada no debe provocar un aviso de
+  // subida a la nube al salir). _forceCloudPending: el guardado SOBRE otra obra existente (sobrescribir) siempre deja
+  // la copia de la nube de esa obra distinta de lo que queda en el dispositivo.
+  const _nm = v => String(v == null ? '' : v).trim();
+  const _metaChanged = !!_forceCloudPending ||
+    _nm(edProjectMeta.title)  !== _nm(_newTitle)  || _nm(edProjectMeta.author) !== _nm(_newAuthor) ||
+    _nm(edProjectMeta.genre)  !== _nm(_newGenre)  || (edProjectMeta.navMode || 'fixed') !== (_newNavMode || 'fixed') ||
+    _nm(edProjectMeta.social).slice(0, 300) !== _nm(_newSocial).slice(0, 300);
   edProjectMeta.title   = _newTitle;
   edProjectMeta.author  = _newAuthor;
   edProjectMeta.genre   = _newGenre;
@@ -37950,6 +38466,13 @@ function _edApplyProjectMeta(_newTitle, _newAuthor, _newGenre, _newNavMode, _new
   // se haya llegado a aplicar el modal ya basta para marcarlo.
   window._edProjectMetaDirtyLocal = true;
   window._edProjectMetaDirtyCloud = true;
+  // v42.06 — BUG CORREGIDO (reportado por Alberto: escribió el comentario final en «Editar datos de la obra», pulsó
+  // «Guardar ✓», salió con ◀ y no preguntó nada; la copia de la nube se quedó SIN el comentario). «Guardar ✓» guarda en
+  // el dispositivo (por eso en local no quedaba nada sin guardar y ◀ no avisaba), pero la nube solo se actualiza al
+  // subir la obra, y esa marca se perdía: _edProjectMetaDirtyCloud se pone y se quita pero NO se lee al salir (y arranca
+  // en true al abrir cualquier obra, así que no sirve para preguntar). Esta marca nueva sí viaja al registro local (como
+  // metaPending, en el spread «...edProjectMeta» de _edSaveProjectInner) y la quita la subida a la nube (_edCloudSaveInner).
+  if (_metaChanged) edProjectMeta.metaCloudPending = true;
   const pt=$('edProjectTitle');if(pt)pt.textContent=edProjectMeta.title||I18n.t('noWork');
   _edUpdateTitlePill();
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(_edUpdateTitlePill);
@@ -38274,6 +38797,17 @@ function edConfirm(msg, onOk, okLabel, onCancel, noTick){  // onCancel (opcional
    INIT
    ══════════════════════════════════════════ */
 function EditorView_init(){
+  // v42.07: entrada del historial de este editor: su clave (API Navigation) para rebotar a ella cuando el atrás del sistema
+  // no deba sacar del editor (_edBounceBack), y estado + URL por si hubiera que reponerla (_edBounceTimedOut). El interceptor
+  // del atrás se registra una sola vez.
+  window._edHistEntry = { state: history.state, url: location.href };
+  try { window._edNavKey = (window.navigation && window.navigation.currentEntry) ? window.navigation.currentEntry.key : null; } catch(_) { window._edNavKey = null; }
+  window._edInitSeq = (window._edInitSeq || 0) + 1;  // identifica esta apertura del editor (ver _edLeave)
+  clearTimeout(window._edBackLeaveTimer);            // una salida anterior ya no debe actuar sobre este editor
+  _edBackLeaving = false;
+  _edExitBusySince = 0;                              // un editor nuevo no hereda una salida «en marcha» de otra apertura
+  _edBounceDone(); _edLeaveAfterBounce = null;
+  _edRegisterBackInterceptor();
   _edInitWindowTitlePillObserver();
   // Comprobación de fiabilidad del almacenamiento local — normalmente ya se
   // disparó al entrar en "Mis creaciones", pero también se puede llegar
@@ -38496,161 +39030,8 @@ function EditorView_init(){
   })();
 
   // ── TOPBAR ──
-  $('edBackBtn')?.addEventListener('click', () => {
-    // Terminar modo trayectoria activo antes de salir:
-    // el timer de 120ms podría dispararse después del click y capturar el puntero del canvas.
-    if (_edMotionPathMode) _edEndMotionPath(false);
-    // Si hay guardado en la nube en curso, avisar con diálogo bloqueante
-    if (_edCloudSaving) {
-      const elapsed = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-      const dlgCloud = document.createElement('div');
-      dlgCloud.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
-      dlgCloud.innerHTML = `
-        <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:340px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
-          <div style="font-size:1.8rem;margin-bottom:12px">⚠️</div>
-          <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_cloudSaveInProgress')}</p>
-          <p id="_edCloudSavingBadge" style="font-size:.88rem;color:#e67e22;font-weight:700;margin-bottom:8px">${I18n.t('ed_cloudSavingBadge', { n: elapsed })}</p>
-          <p style="font-size:.85rem;color:#666;margin-bottom:24px">${I18n.t('ed_exitBeforeCloudSaveWarn')}</p>
-          <div style="display:flex;gap:10px;justify-content:center">
-            <button id="_edCloudExitAnyway" style="flex:1;padding:10px;border:1.5px solid #e74c3c;border-radius:10px;background:#fff;color:#e74c3c;font-weight:700;cursor:pointer;font-size:.85rem">${I18n.t('ed_exitAnywayBtn')}</button>
-            <button id="_edCloudWait" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_waitBtn')}</button>
-          </div>
-        </div>`;
-      document.body.appendChild(dlgCloud);
-      // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos
-      // del lienzo) debe reaccionar al toque mientras se avisa del guardado
-      // en curso — ver edStopCanvasLeak.
-      edStopCanvasLeak(dlgCloud);
-      // Actualizar contador en el diálogo mientras está abierto
-      const _dlgTimer = setInterval(() => {
-        const b = document.getElementById('_edCloudSavingBadge');
-        if (b && _edCloudSaving) {
-          const s = Math.floor((Date.now() - _edCloudSavingStart) / 1000);
-          b.textContent = I18n.t('ed_cloudSavingBadge', { n: s });
-        } else if (!_edCloudSaving) {
-          clearInterval(_dlgTimer);
-          dlgCloud.remove();
-          Router.go('my-works');
-        }
-      }, 500);
-      document.getElementById('_edCloudWait').onclick = () => {
-        clearInterval(_dlgTimer);
-        dlgCloud.remove();
-      };
-      document.getElementById('_edCloudExitAnyway').onclick = () => {
-        clearInterval(_dlgTimer);
-        dlgCloud.remove();
-        Router.go('my-works');
-      };
-      return;
-    }
-
-    const hasUnsaved = _edHasUnsavedLocalChanges();
-    if (!hasUnsaved) {
-      // Esperar a que biblioteca IDB haya completado antes de salir
-      // v41.86: «Nueva obra» ya no pide nada antes de entrar, así que entrar y salir sin tocar nada dejaría una
-      // «Sin título» vacía en Mis obras cada vez. Si la obra es nueva, sin datos confirmados, sin ningún guardado
-      // ni subida y sin nada en su biblioteca, se retira (se mira DESPUÉS de volcar la biblioteca).
-      const _leave = () => {
-        if (_edIsUntouchedNewWork()) { try { WorkStore.remove(edProjectId); } catch(_) {} }
-        Router.go('my-works');
-      };
-      if (typeof _bibFlush === 'function') _bibFlush().then(_leave);
-      else _leave();
-      return;
-    }
-
-    // Hay cambios sin guardar — preguntar
-    // v41.86: además de la comparación de fechas (frágil: dependen de dos lecturas del reloj en el mismo milisegundo),
-    // una obra nueva con la marca de datos pendientes y ningún guardado previo también es «nueva».
-    const isNew = !WorkStore.getById(edProjectId)?.updatedAt ||
-                  WorkStore.getById(edProjectId)?.updatedAt === WorkStore.getById(edProjectId)?.createdAt ||
-                  _edIsNeverSavedNewWork();
-
-    const dlg = document.createElement('div');
-    dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center';
-    dlg.innerHTML = `
-      <div style="background:#fff;border-radius:16px;padding:28px 24px;max-width:320px;width:90%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)">
-        <div style="font-size:1.5rem;margin-bottom:12px">💾</div>
-        <p style="font-weight:700;font-size:1rem;margin-bottom:8px">${I18n.t('ed_saveChangesQuestion')}</p>
-        <p style="font-size:.88rem;color:#666;margin-bottom:24px">${I18n.t('ed_unsavedChangesInWork')}</p>
-        <div style="display:flex;gap:10px;justify-content:center">
-          <button id="_edExitNo"  style="flex:1;padding:10px;border:1.5px solid #ddd;border-radius:10px;background:#fff;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_dontSaveBtn')}</button>
-          <button id="_edExitYes" style="flex:1;padding:10px;border:none;border-radius:10px;background:#f5c400;font-weight:700;cursor:pointer;font-size:.9rem">${I18n.t('ed_saveModalTitle')}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(dlg);
-
-    // Click fuera del cuadro → cerrar y volver al editor
-    dlg.addEventListener('click', e => { if(e.target===dlg){ dlg.remove(); } });
-    // Modal de verdad: nada de lo que hay detrás (guías/reglas, objetos del
-    // lienzo) debe reaccionar al toque mientras se pregunta si guardar antes
-    // de salir — ver edStopCanvasLeak.
-    edStopCanvasLeak(dlg);
-
-    document.getElementById('_edExitYes').onclick = () => {
-      dlg.remove();
-      // v41.86: obra nueva sin datos confirmados → antes de guardar sale el modal de datos; si el usuario lo cancela
-      // no se guarda ni se sale (se queda en el editor, con todo como estaba, incluido el autoguardado).
-      _edEnsureProjectData(async (info) => {
-        _edAutosaveClear(); // salida controlada → borrar autosave
-        if (!info.saved) await edSaveProject();
-        // Esperar a que biblioteca IDB complete
-        if (typeof _bibFlush === 'function') await _bibFlush();
-        // La versión local es ahora la canónica — limpiar backup de versión de nube
-        if (edProjectId) {
-          const _cSave = WorkStore.getById(edProjectId);
-          if (_cSave && _cSave.localEditorData) {
-            WorkStore.save({ ..._cSave, localEditorData: null });
-          }
-          try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-        }
-        Router.go('my-works');
-      });
-    };
-    document.getElementById('_edExitNo').onclick = async () => {
-      dlg.remove();
-      // Cancelar timer de huérfanos si está pendiente — la limpieza la hacemos nosotros
-      if (window._mcOrphanTimer) { clearTimeout(window._mcOrphanTimer); window._mcOrphanTimer = null; }
-      // Limpiar todos los datos temporales ANTES de navegar
-      await _edAutosaveClear(); // borrar autosave (async IDB)
-      if (edProjectId) {
-        try { localStorage.removeItem(`cs_biblioteca_local_${edProjectId}`); } catch(_) {}
-        // localEditorData NO se borra aquí: el usuario eligió no guardar los cambios
-        // de esta sesión, pero la versión local previa (backup del cloudNewer) debe
-        // seguir disponible en Proyecto → Recuperar versión del dispositivo.
-        // Solo se borra en _edExitYes (el usuario guardó y la versión local ya no es relevante)
-        // o cuando el usuario usa explícitamente "Recuperar versión local" (dd-recoverlocal).
-      }
-      // Si era obra nueva sin guardado previo, eliminarla
-      if (isNew && edProjectId) {
-        WorkStore.remove(edProjectId);
-        // Borrar OPFS de la obra nueva si existe
-        try {
-          if (navigator.storage?.getDirectory) {
-            const _user = Auth?.currentUser?.();
-            if (_user) {
-              const _uid = String(_user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-              const _root = await navigator.storage.getDirectory();
-              const _base = await _root.getDirectoryHandle('comixou', { create: false }).catch(() => null);
-              const _uDir = _base ? await _base.getDirectoryHandle(_uid, { create: false }).catch(() => null) : null;
-              if (_uDir) await _uDir.removeEntry(edProjectId + '.json').catch(() => {});
-            }
-          }
-        } catch(_) {}
-      }
-      // NOTA: antes, si la obra no era nueva, aquí se relanzaba edLoadProject(edProjectId)
-      // "para restaurar el último estado guardado" en memoria. Es innecesario — la próxima
-      // vez que se abra el editor (esta obra u otra), EditorView_init resetea edPages/edLayers/
-      // historial/cámara y vuelve a cargar desde disco de todos modos — y provocaba una
-      // recarga completa (OPFS + deserialización + redraw) compitiendo por el hilo principal
-      // justo durante la navegación a "Mis creaciones", que es la causa confirmada de la
-      // lentitud al salir sin guardar. Se elimina la llamada.
-      // Navegar — el detector de huérfanos en my-works se lanzará con delay normal
-      // pero ya no habrá nada que detectar
-      Router.go('my-works');
-    };
-  });
+  // v42.07: el flujo de salida vive en _edExitRequest (global), compartido con el atrás del sistema (_edOnSystemBack).
+  $('edBackBtn')?.addEventListener('click', () => _edExitRequest(false));
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
   function _edToggleMultiSel(){
@@ -52135,7 +52516,11 @@ async function _edRunDiag() {
     L('  Nº de páginas: ' + edPages.length);
     L('  edCurrentPage: ' + edCurrentPage);
     L('  Flags estructurales — local: ' + window._edPagesStructureDirtyLocal + ' | nube: ' + window._edPagesStructureDirtyCloud);
-    L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud + ' | datos sin confirmar (metaPending): ' + !!(edProjectMeta && edProjectMeta.metaPending));
+    L('  Flags datos de obra (título/autor/género/créditos) — local: ' + window._edProjectMetaDirtyLocal + ' | nube: ' + window._edProjectMetaDirtyCloud + ' | datos sin confirmar (metaPending): ' + !!(edProjectMeta && edProjectMeta.metaPending) + ' | guardados en el dispositivo pero NO subidos a la nube (metaCloudPending, v42.06 — es lo que hace preguntar al salir): ' + !!(edProjectMeta && edProjectMeta.metaCloudPending) + ' · registro local: ' + !!(WorkStore.getById(edProjectId) || {}).metaCloudPending);
+    // v42.07: pila del historial — el atrás del sistema rebota a la entrada del editor (_edOnSystemBack) y retrocede de verdad al salir
+    L('  Atrás del sistema (v42.07) — entradas de la pila: ' + history.length + ' | índice (API Navigation): ' + ((window.navigation && window.navigation.currentEntry) ? window.navigation.currentEntry.index : 'n/d') + ' | puede retroceder: ' + (window.navigation ? window.navigation.canGoBack : 'n/d') + ' | interceptores: ' + ((window._edBackInterceptors || []).length) + ' | entrada guardada del editor: ' + JSON.stringify(window._edHistEntry || null) + ' | clave de esa entrada: ' + (window._edNavKey || 'n/d') + ' | ¿estamos en ella?: ' + _edAtEditorEntry() + ' | entrada actual: ' + JSON.stringify(history.state));
+    L('  Rebotes del atrás (v42.07) — hechos: ' + _edBounceTotal + ' | por la red de seguridad (pushState): ' + _edBounceFallbacks + ' | en curso: ' + _edBouncing + ' | salida aplazada: ' + JSON.stringify(_edLeaveAfterBounce) + ' | API Navigation: ' + (window.navigation && typeof window.navigation.traverseTo === 'function' ? 'sí' : 'no'));
+    L('  Últimos «atrás» del sistema (hora, qué se hizo, [hash #índice]): ' + ((window._edBackLogLines || []).join('  ‖  ') || '— ninguno desde que se abrió la app'));
     // REGISTRO DE CONTEO (v40.82, ver _edInteractionTick): los últimos toques
     // que SÍ incrementaron el contador de interacción — es decir, los que NO
     // coincidieron con ningún selector de _ED_TICK_EXCLUDE_SELECTOR. Si una
