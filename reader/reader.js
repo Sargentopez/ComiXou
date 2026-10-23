@@ -1480,6 +1480,163 @@ function _rzWheelZoom(e, canvas) {
   return true;
 }
 
+// ── GIRO NATIVO DE LA PANTALLA SEGÚN LA HOJA (solo teléfono) — v42.09 ──────
+// Pedido de Alberto (2026-10-23): en un TELÉFONO (nunca PC ni tablet), cada vez que se ACCEDE a una hoja
+// —avanzando, retrocediendo, por un botón/enlace «ir a hoja», con la barra de hojas o desplazando— el
+// lector comprueba la orientación de la hoja y, si no coincide con la de la pantalla, pide al sistema el giro
+// NATIVO de Android «como si el usuario hubiera girado el dispositivo»; el usuario gira entonces el aparato.
+//
+// Por qué esto NO repite el intento anterior (RR-block, v40.63–v41.28, revertido el 2026-09-30 por Alberto: giraba
+// DOS veces —el giro programado más el nativo— y cada giro sacaba de pantalla completa): aquí NO se gira ni se
+// anima NADA por código. El lector no toca la geometría de la hoja: solo pide el bloqueo y, cuando el sistema
+// cambia el tamaño de la ventana, los manejadores de resize de siempre (RS.resizeFn) vuelven a encajar la hoja,
+// exactamente igual que cuando el usuario gira el teléfono con la mano. Un solo giro, el del sistema.
+//
+// El «bloqueo del giro automático nativo» que pide Alberto ES el propio bloqueo de orientación del estándar
+// (Screen Orientation API, W3C · MDN screen.orientation.lock): mientras dura, el sistema solo admite orientaciones
+// de la familia pedida —al girar el teléfono con la mano hacia ella no hay segundo giro, y si se gira al otro
+// lado de la misma familia, el sistema voltea la pantalla para que siga derecha—. Se pide:
+//   · hoja HORIZONTAL → 'landscape'        (cualquiera de los dos sentidos horizontales, el que dé el sensor)
+//   · hoja VERTICAL   → 'portrait-primary' (la parte de arriba del teléfono es la de arriba de la hoja)
+//
+// Reglas del navegador (investigadas, no supuestas): Chrome para Android solo concede el bloqueo con la página en
+// pantalla completa (Fullscreen API) o instalada como app, y lo SUELTA al salir de pantalla completa (la pantalla se
+// queda en la orientación que tuviera). Por eso: (1) NUNCA se entra ni se sale de pantalla completa desde aquí —cero
+// llamadas a requestFullscreen/exitFullscreen, así que el giro no puede sacar de ella—; (2) si el navegador rechaza el
+// bloqueo (SecurityError: aún sin pantalla completa) no se insiste en bucle: se reintenta al entrar en pantalla completa,
+// al volver a ser visible la página y en la siguiente hoja; (3) la promesa de lock() se resuelve cuando la orientación
+// cambia y una petición posterior cancela la anterior (AbortError): cada respuesta se compara con el nº de petición.
+// En modos scroll se espera a que el dedo se levante y el desplazamiento se asiente (evita girar a mitad de un gesto o
+// vaivenes al cruzar el 50 % entre una hoja vertical y una horizontal). iOS/Safari no implementa lock(): queda inactivo.
+//
+// Registro de lo ocurrido (petición, respuesta, estado de pantalla completa y orientación en cada paso) en el informe
+// del modo ?diag=1 — para ver qué responde un dispositivo real sin suponer nada. Interruptor de emergencia:
+// ?giro=0 lo desactiva en ese dispositivo (queda guardado), ?giro=1 lo reactiva.
+const _RO = {
+  on: false,       // activo (teléfono + API disponible + no desactivado)
+  why: '',         // motivo si está inactivo (informe ?diag=1)
+  off: false,      // el dispositivo respondió NotSupportedError: no insistir
+  idx: -1,         // última hoja para la que se programó la comprobación
+  timer: 0,        // comprobación pendiente
+  type: null,      // bloqueo que el navegador nos tiene concedido ahora ('landscape' | 'portrait-primary') o null
+  seq: 0,          // nº de la última petición; las respuestas de peticiones superadas se ignoran
+  touching: 0,     // dedos apoyados ahora mismo
+  touchAt: 0,      // instante del último evento táctil (un touchend perdido no puede bloquear el giro para siempre)
+  t0: performance.now(),
+  log: [],         // registro para ?diag=1
+  lastSize: '',
+};
+
+function _roWanted() {
+  let q = null;
+  try { q = new URLSearchParams(location.search).get('giro'); } catch (_) {}
+  try {
+    if (q === '0') { localStorage.setItem('cx_rd_norot', '1'); return false; }
+    if (q === '1') { localStorage.removeItem('cx_rd_norot'); return true; }
+    return localStorage.getItem('cx_rd_norot') !== '1';
+  } catch (_) { return q !== '0'; }
+}
+
+function _roFsOn() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+
+function _roLog(m) {
+  const s = _RO.log, o = window.screen && screen.orientation;
+  s.push(((performance.now() - _RO.t0) / 1000).toFixed(1) + 's ' + m + ' [pantalla ' + (o ? o.type + '/' + o.angle : '?') +
+    ' · ventana ' + window.innerWidth + 'x' + window.innerHeight + ' · pantalla completa ' + (_roFsOn() ? 'sí' : 'no') + ']');
+  if (s.length > 60) s.shift();
+}
+
+function _roReport() {
+  const dm = ['fullscreen', 'standalone', 'minimal-ui', 'browser'].find(x => { try { return matchMedia('(display-mode: ' + x + ')').matches; } catch (_) { return false; } }) || '?';
+  const out = ['— giro nativo de la pantalla — ' + (_RO.on ? 'ACTIVO' : 'inactivo: ' + _RO.why) + (_RO.off ? ' (el dispositivo dijo NotSupportedError)' : '') +
+    ' · modo de visualización ' + dm + ' · bloqueo concedido ' + (_RO.type || 'ninguno')];
+  _RO.log.slice(-25).forEach(l => out.push(l));
+  return out.join('\n');
+}
+
+// Familia de orientación de la hoja (por su tamaño real, el mismo que usa el dibujado) y de la pantalla.
+function _roSheetFam(idx) { const d = _panelDims(idx); return d.pw > d.ph ? 'landscape' : 'portrait'; }
+function _roScreenFam() {
+  const t = window.screen && screen.orientation && screen.orientation.type;
+  if (t) return t.indexOf('landscape') === 0 ? 'landscape' : 'portrait';
+  return window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
+}
+
+function _roSchedule(ms, why) {
+  if (!_RO.on || _RO.off) return;
+  clearTimeout(_RO.timer);
+  _RO.timer = setTimeout(() => _roApply(why), ms);
+}
+
+// Se llama desde _render() (punto común de TODA vía de acceso a una hoja: avanzar, retroceder, _rGoToPanel —botones de
+// salto, barra de hojas, «volver a leer»—, el detector de scroll de los modos horizontal/vertical y el arranque). Solo
+// actúa cuando cambia la hoja visible; el resto de llamadas a _render() (texto, fundidos, animaciones) cuestan una comparación.
+function _roOnSheet() {
+  // _pageNavSuppressUpdate: dibujados en segundo plano de OTRAS hojas (modo scroll: _plRenderSlide/_readerGifTick cambian
+  // RS.idx un instante) — no son accesos del lector a esa hoja.
+  if (!_RO.on || _pageNavSuppressUpdate || RS.idx === _RO.idx) return;
+  const first = _RO.idx < 0;
+  _RO.idx = RS.idx;
+  // Arranque: los manejadores de resize del lector se enganchan 300 ms después de abrir (startReader/_startScrollReader);
+  // un giro pedido antes pasaría sin que la hoja se re-encajara.
+  _roSchedule(first ? 500 : (RS.navMode === 'fixed' ? 40 : 220), 'hoja ' + (RS.idx + 1));
+}
+
+function _roApply(why) {
+  _RO.timer = 0;
+  if (!_RO.on || _RO.off) return;
+  if (document.hidden) { _roLog('en segundo plano: se pedirá al volver'); return; }
+  if (_RO.touching > 0 && (performance.now() - _RO.touchAt) < 3000) { _roSchedule(150, why); return; } // no girar a mitad de un gesto
+  const idx = RS.idx;
+  const fam = _roSheetFam(idx);
+  const want = fam === 'landscape' ? 'landscape' : 'portrait-primary';
+  if (_RO.type === want && _roScreenFam() === fam) return; // ya concedido y la pantalla ya está así: nada que pedir
+  const seq = ++_RO.seq;
+  _roLog('PIDE ' + want + ' · hoja ' + (idx + 1) + ' (' + why + ')');
+  let pr;
+  try { pr = screen.orientation.lock(want); } catch (e) { pr = Promise.reject(e); }
+  Promise.resolve(pr).then(() => {
+    if (seq !== _RO.seq) return;
+    _RO.type = want;
+    _roLog('CONCEDIDO ' + want);
+  }, e => {
+    if (seq !== _RO.seq) return; // superada por una petición posterior (AbortError): su respuesta es la que cuenta
+    _RO.type = null;
+    const n = (e && e.name) || String(e);
+    if (n === 'NotSupportedError') _RO.off = true;
+    _roLog('RECHAZADO ' + n + (n === 'SecurityError' ? ' (el navegador exige pantalla completa)' : ''));
+  });
+}
+
+function _roInit() {
+  _RO.on = false;
+  const hasApi = !!(window.screen && screen.orientation && typeof screen.orientation.lock === 'function');
+  if (!IS_MOBILE_PHONE)        _RO.why = 'no es un teléfono (PC o tablet)';
+  else if (RS.isEmbed)         _RO.why = 'lector incrustado (embed)';
+  else if (!hasApi)            _RO.why = 'este navegador no implementa screen.orientation.lock()';
+  else if (!_roWanted())       _RO.why = 'desactivado con ?giro=0';
+  else _RO.why = '';
+  if (_RO.why) return;
+  _RO.on = true;
+  const touch = e => { _RO.touching = e.touches ? e.touches.length : 0; _RO.touchAt = performance.now(); };
+  ['touchstart', 'touchend', 'touchcancel'].forEach(ev => document.addEventListener(ev, touch, { capture: true, passive: true }));
+  // Chrome suelta el bloqueo al salir de pantalla completa (se queda con la orientación que tuviera) y solo vuelve a
+  // concederlo dentro de ella: al cambiar el estado, se olvida lo concedido y, al entrar, se vuelve a pedir.
+  const onFs = () => { _roLog('pantalla completa ' + (_roFsOn() ? 'ACTIVADA' : 'DESACTIVADA')); _RO.type = null; if (_roFsOn()) _roSchedule(0, 'pantalla completa'); };
+  document.addEventListener('fullscreenchange', onFs);
+  document.addEventListener('webkitfullscreenchange', onFs);
+  document.addEventListener('visibilitychange', () => {
+    _roLog(document.hidden ? 'página oculta' : 'página visible');
+    if (!document.hidden) { _RO.type = null; _roSchedule(50, 'visible'); }
+  });
+  window.addEventListener('pageshow', e => { if (e.persisted) { _RO.type = null; _roSchedule(50, 'pageshow'); } });
+  try { screen.orientation.addEventListener('change', () => _roLog('screen.orientation change')); } catch (_) {}
+  window.addEventListener('resize', () => {
+    const sz = window.innerWidth + 'x' + window.innerHeight;
+    if (sz !== _RO.lastSize) { _RO.lastSize = sz; _roLog('resize'); }
+  });
+}
+
 // ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -1533,6 +1690,7 @@ document.addEventListener('DOMContentLoaded', () => {
         _doClose();
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
+  _roInit(); // giro nativo de la pantalla según la hoja (solo teléfono) — ver el bloque «GIRO NATIVO» más arriba
 
   // Si la app estaba en fullscreen, entrar en fullscreen.
   // Intentamos inmediatamente (el tap en "Leer" puede servir como gesto activador
@@ -3403,6 +3561,7 @@ function _frReport() {
   out.push('— ' + I18n.t('reader_diagNow') + ' — ' + head(_FR.rec));
   _FR.rec.samples.slice(-8).forEach(s => out.push(_frFmt(s)));
   if (_PL.nativeErr) out.push('anim. nativas: último motivo de respaldo (UPNG) → ' + _PL.nativeErr);
+  out.push(_roReport()); // v42.09: giro nativo de la pantalla (peticiones, respuestas, pantalla completa)
   const p = _FR.prev;
   if (p && p.samples) {
     const age = Math.round((_FR.rec.start - p.last) / 1000);
@@ -5385,6 +5544,7 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+  _roOnSheet(); // v42.09: acceso a una hoja → comprobar su orientación frente a la de la pantalla (giro nativo, solo teléfono)
   _plSlideFitCtx(RS.ctx, RS.idx); // v41.68: lienzo de slide encogido (hoja lejana, modo scroll) → recupera su tamaño
 
   // Mantener el contador de hoja (botón inferior izquierdo + barra, si está
