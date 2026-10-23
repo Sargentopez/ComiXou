@@ -1847,7 +1847,8 @@ const _vcof = {
 // con la obra: se perdía al recargar y se heredaba entre obras abiertas en la
 // misma sesión (verificado). Ahora se guarda en editorData._palette (mismo
 // patrón que las guías: _rules/_ruleNodes), se restaura al abrir la obra y se
-// reinicia al empezar cada obra. Las casillas 0 y 1 (negro/blanco) son fijas.
+// reinicia al empezar cada obra. Desde v42.08 las 10 muestras son editables, también la 0 y la 1
+// (negro y blanco de fábrica): antes eran fijas y el arcoíris/doble toque sobre ellas solo daba un aviso.
 const ED_DEFAULT_PALETTE = ['#000000','#ffffff','#e63030','#e67e22','#f1c40f','#2ecc71','#3498db','#9b59b6','#e91e8c','#795548'];
 let edColorPalette = ED_DEFAULT_PALETTE.slice();
 let edSelectedPaletteIdx = 0; // índice del dot de paleta actualmente seleccionado
@@ -25534,11 +25535,11 @@ function edCloseOptionsPanel(){
    Muestra overlay HSL con sliders al 100% por defecto
    ══════════════════════════════════════════ */
 // Valida una paleta leída de una obra: 10 colores #rrggbb; lo que falte o no sea
-// válido cae al valor por defecto de esa casilla; 0 y 1 siempre negro/blanco.
+// válido cae al valor por defecto de esa casilla (v42.08: también la 0 y la 1, ya editables, conservan su color).
 function _edPaletteNormalize(arr){
   const out = ED_DEFAULT_PALETTE.slice();
   if (Array.isArray(arr)) {
-    for (let i = 2; i < out.length; i++) {
+    for (let i = 0; i < out.length; i++) {
       if (typeof arr[i] === 'string' && /^#[0-9a-f]{6}$/i.test(arr[i])) out[i] = arr[i].toLowerCase();
     }
   }
@@ -25549,7 +25550,10 @@ function _edPaletteNormalize(arr){
 // obra, como las guías; sin esto un cambio SOLO de muestras no contaría como
 // "cambios sin guardar" (ver _edHasUnsavedLocalChanges) y se perdería al salir.
 function _edSetPaletteColor(idx, hex){
-  if (!(idx >= 2 && idx < edColorPalette.length)) return; // 0 y 1: fijas
+  if (!(idx >= 0 && idx < edColorPalette.length)) return;   // v42.08: todas las casillas son editables (antes 0 y 1 eran fijas)
+  // Sin cambio real no se marca la obra como modificada: abrir el editor sobre una muestra y cancelar (o aceptar sin tocar nada)
+  // reescribe el mismo color, y eso no debe preguntar «¿guardar cambios?» al salir.
+  if (edColorPalette[idx] === hex) return;
   edColorPalette[idx] = hex;
   if (!window._edLoadingSuppressDirty) {
     window._edProjectMetaDirtyLocal = true;
@@ -25666,11 +25670,7 @@ function _edUpdatePaletteDots(){
     d.style.background=edColorPalette[idx];
     d.style.borderColor = edColorPalette[idx] === edDrawColor ? 'var(--black)' : 'var(--gray-300)';
     d.style.borderWidth = edColorPalette[idx] === edDrawColor ? '3px' : '2px';
-    // Slots 0 y 1 son fijos (negro/blanco) — cursor indicativo
-    if(idx <= 1){
-      d.style.cursor='default';
-      d.title = idx===0 ? 'Negro (fijo)' : 'Blanco (fijo)';
-    }
+    d.title = edColorPalette[idx];   // v42.08: sin muestras fijas (antes 0 y 1 llevaban «Negro/Blanco (fijo)» y cursor por defecto)
   });
   // Mantener sincronizado el input nativo oculto del botón arcoíris (PC) con el color
   // actual — si no se sincroniza aquí, al elegir un dot de paleta sin re-render completo
@@ -25800,7 +25800,7 @@ function _edVecWatchSel(){
   });
 }
 // Paleta propia del dibujo vectorial: 2 muestras (negro/blanco) EDITABLES,
-// independientes de la paleta de dibujo a mano (cuyas 2 primeras son fijas).
+// independientes de la paleta de dibujo a mano (10 muestras, todas editables desde v42.08).
 let _edVecPal = ['#000000','#ffffff'];
 try{ const _p=JSON.parse(localStorage.getItem('cx_vec_pal')||'null'); if(Array.isArray(_p)&&_p.length===2&&_p.every(x=>/^#[0-9a-f]{6}$/i.test(x))) _edVecPal=_p; }catch(_){}
 function _edVecSavePal(){ try{ localStorage.setItem('cx_vec_pal', JSON.stringify(_edVecPal)); }catch(_){} }
@@ -25952,6 +25952,9 @@ function _edVecWireColors(pfx, getLayer){
 
 // initialColor: color de partida del picker (por defecto edDrawColor).
 // El botón Cancelar restaura _startColor, no el edDrawColor modificado en tiempo real.
+// v42.08 — igual que la ventana de PC, envía como 3.er argumento si se ACEPTÓ (true = OK, false = Cancelar / tocar fuera). Sin él, cancelar
+// llegaba como «final» y quien edita una muestra le escribía el color de partida: con el color de dibujo fuera de la paleta (p. ej. lápiz
+// sanguina) y una muestra «objetivo» obsoleta, cancelar sustituía esa muestra en silencio. Con el negro y el blanco ya editables, ese caso es el habitual.
 function _edShowColorPicker(onColorChange, initialColor){
   // v41.87 — PC: ventana de color propia y centrada (_edShowColorPickerPC). Táctil: este selector HSL, como siempre.
   if(!window._edIsTouch) return _edShowColorPickerPC(onColorChange, initialColor);
@@ -25996,11 +25999,11 @@ function _edShowColorPicker(onColorChange, initialColor){
   elL.addEventListener('input', update);
   document.getElementById('ecp-ok').addEventListener('click',()=>{
     const hex=_hslToHex(+elH.value,+elS.value,+elL.value);
-    onColorChange(hex, true);
+    onColorChange(hex, true, true);
     overlay.remove();
   });
   document.getElementById('ecp-cancel').addEventListener('click',()=>{
-    onColorChange(_startColor, true);
+    onColorChange(_startColor, true, false);
     overlay.remove();
   });
   // Aplazar un tick: en táctil, tras el pointerup que abre este picker, el
@@ -26012,7 +26015,7 @@ function _edShowColorPicker(onColorChange, initialColor){
   // y solo parecía responder tras mantener pulsado un buen rato (con una
   // pulsación larga el navegador ya no sintetiza ese click posterior).
   setTimeout(() => {
-    overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(_startColor,true); overlay.remove(); } });
+    overlay.addEventListener('click', e=>{ if(e.target===overlay){ onColorChange(_startColor,true,false); overlay.remove(); } });
   }, 0);
   // Detener propagación de todos los eventos para no interferir con el canvas
   overlay.addEventListener('pointerdown', e=>e.stopPropagation(), true);
@@ -26034,7 +26037,7 @@ function _edShowColorPicker(onColorChange, initialColor){
 //   · final=false → cambio en vivo (como mucho una vez por fotograma).
 //   · final=true  → al cerrar: con el color elegido si se acepta (OK / Intro) o con el de partida si se cancela
 //                   (Cancelar / ✕ / Escape / clic fuera). El 3.er argumento (solo esta ventana) dice cuál de los dos
-//                   fue: true = aceptado, false = cancelado; el selector táctil no lo envía (undefined).
+//                   fue: true = aceptado, false = cancelado (desde v42.08 también lo envía el selector táctil).
 // Mientras está abierta se activa window._edEyedropActive (el lienzo se ve a opacidad plena, como con el cuentagotas)
 // y se restaura el valor anterior al cerrarla.
 // ══════════════════════════════════════════════════════════════════════════
@@ -27173,9 +27176,8 @@ function edRenderOptionsPanel(mode){
     // lo que cancela el evento click en Android Chrome.
     $('op-custom-color-btn')?.addEventListener('pointerup', e => {
       e.stopPropagation();
-      if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); return; }
       // v41.87 — táctil: selector HSL propio · PC: ventana de color centrada (antes el input nativo oculto #op-dcolor,
-      // cuyo popup salía en la esquina superior izquierda). En PC, cancelar no toca la muestra (3.er argumento `aceptado`).
+      // cuyo popup salía en la esquina superior izquierda). Cancelar no toca la muestra (3.er argumento `aceptado`; v42.08: también en táctil).
       _edShowColorPicker((hex, final, aceptado)=>{
         _edSetDrawColor(hex);
         if(final && aceptado !== false){ _edSetPaletteColor(edSelectedPaletteIdx, hex); }
@@ -27183,7 +27185,6 @@ function edRenderOptionsPanel(mode){
       });
     });
     $('op-dcolor')?.addEventListener('input',e=>{
-      if(edSelectedPaletteIdx <= 1) return;
       _edSetDrawColor(e.target.value);
       _edSetPaletteColor(edSelectedPaletteIdx, edDrawColor);
       _edUpdatePaletteDots();
@@ -27206,7 +27207,6 @@ function edRenderOptionsPanel(mode){
         edSelectedPaletteIdx = idx;
         _edSetDrawColor(edColorPalette[idx]);
         _edUpdatePaletteDots();
-        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           _edSetDrawColor(hex);
           if (final) { _edSetPaletteColor(idx, hex); }
@@ -27222,7 +27222,6 @@ function edRenderOptionsPanel(mode){
         edSelectedPaletteIdx = idx;
         _edSetDrawColor(edColorPalette[idx]);
         _edUpdatePaletteDots();
-        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           _edSetDrawColor(hex);
           if (final) { _edSetPaletteColor(idx, hex); }
@@ -30655,15 +30654,13 @@ function _edbBuildPalette() {
     btn.addEventListener('pointerup', e => {
       e.stopPropagation();
       if (btn.dataset.custom) {
-        // Slots 0 y 1 son negro/blanco fijos — no editables
-        if(edSelectedPaletteIdx <= 1){ edToast(I18n.t('ed_colorNotEditable')); _edbClosePalette(); return; }
         // Abrir primero el picker y cerrar la paleta DESPUÉS (no antes): así
         // el picker recién creado no puede verse afectado por nada que
         // dispare _edbClosePalette() (y su limpieza del listener de "clic
         // fuera") a mitad de su propia inicialización.
         // v41.87 — _edShowColorPicker elige solo: Android → selector HSL propio; PC → ventana de color centrada (antes
         // un input type=color oculto con el popup nativo en la esquina superior izquierda). En PC, cancelar no toca la
-        // muestra (el 3.er argumento `aceptado` solo lo envía esa ventana; el selector táctil no, y sigue igual).
+        // muestra (el 3.er argumento `aceptado` lo envían tanto esa ventana como, desde v42.08, el selector táctil).
         _edShowColorPicker((hex, commit, aceptado) => {
           _edSetDrawColor(hex);
           if(commit && aceptado !== false){ _edSetPaletteColor(edSelectedPaletteIdx, hex); _edUpdatePaletteDots(); }
@@ -30683,7 +30680,6 @@ function _edbBuildPalette() {
       if (_edbDblTapIdx === idx && _edbDblTapTimer !== null) {
         clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; _edbDblTapIdx = -1;
         _edbClosePalette();
-        if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
         _edShowColorPicker((hex, final) => {
           _edSetDrawColor(hex);
           if (final) { _edSetPaletteColor(idx, hex); }
@@ -30715,7 +30711,6 @@ function _edbBuildPalette() {
       const idx = +btn.dataset.colidx;
       clearTimeout(_edbDblTapTimer); _edbDblTapTimer = null; _edbDblTapIdx = -1;
       _edbClosePalette();
-      if (idx <= 1) { edToast(I18n.t('ed_colorNotEditable')); return; }
       edSelectedPaletteIdx = idx;
       _edSetDrawColor(edColorPalette[idx]);
       _edShowColorPicker((hex, final) => {
@@ -37771,7 +37766,7 @@ function _edStartEyedrop(onPick, onDone, opts) {
       onPick(hex);
     } else {
       _edSetDrawColor(hex);
-      if(edSelectedPaletteIdx > 1) _edSetPaletteColor(edSelectedPaletteIdx, hex);
+      _edSetPaletteColor(edSelectedPaletteIdx, hex);   // v42.08: también el negro y el blanco (antes: solo desde la muestra 2)
       _edUpdatePaletteDots();
       _edbSyncColor();
     }
