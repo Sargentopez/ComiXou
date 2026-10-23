@@ -1358,6 +1358,20 @@ body.ed-scale-tablet {
   pointer-events: all;  /* solo activo cuando el visor está abierto */
 }
 
+/* Aviso del giro nativo de la pantalla (v42.10): arriba y centrado, dentro del visor (el toast general #edToast queda por debajo de él) */
+#viewerRotHint {
+  position: absolute;
+  top: max(env(safe-area-inset-top, 0px), 16px); left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  max-width: calc(100% - 32px);
+  padding: 8px 16px; border-radius: 14px;
+  background: var(--black); color: var(--yellow);
+  font-size: 0.8rem; font-weight: 900; font-family: var(--font-body); text-align: center;
+  opacity: 0; transition: opacity .2s, transform .2s;
+  pointer-events: none; z-index: 430;
+}
+#viewerRotHint.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 #viewerCounter {
   color: rgba(255,255,255,.85);
   font-size: 0.8rem; font-weight: 700; font-family: var(--font-body);

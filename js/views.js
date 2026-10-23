@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.09</footer>
+    <footer class="app-version">v42.10</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -926,6 +926,8 @@ Router.register('editor', {
       </div>
       <!-- Botón ✕ solo táctil: centrado abajo, siempre visible en Android/iOS -->
       <button class="viewer-btn viewer-close-touch" id="viewerCloseMobile">✕</button>
+      <!-- Aviso «toca la pantalla para girarla» del giro nativo (v42.10): el toast general (#edToast) queda por debajo del visor -->
+      <div id="viewerRotHint" aria-live="polite"></div>
     </div>
 
     <!-- MODAL COMPORTAMIENTO DE LA TRAYECTORIA -->

@@ -2794,7 +2794,10 @@ function _tdGetRichAnimLayer(line){
     // presentes en caché, confirmado por el diagnóstico del editor
     // general): basta con volver a llamar _applyFrame con _playing=true
     // para reencadenar su propio temporizador.
-    if(!entry._playing && entry._animReady && entry._animFrames && entry._animFrames.length){
+    if(entry._roWait && !_edRoHolding()){ // v42.10: su arranque se aplazó porque el visor esperaba a que el usuario girase el teléfono (vale para GIF y animaciones)
+      entry._roWait = false; entry._playing = true; entry._fIdx = entry._fIdx || 0; entry._applyFrame(entry._fIdx);
+    }
+    if(!entry._playing && entry._animReady && entry._animFrames && entry._animFrames.length && !_edRoHolding()){ // v42.10: tampoco mientras el visor espera a que el usuario gire el teléfono
       if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer reanuda instancia en caché (estaba parada)', 'key=' + key + ' _fIdx=' + entry._fIdx);
       entry._playing = true;
       entry._fIdx = entry._fIdx || 0;
@@ -2819,6 +2822,7 @@ function _tdGetRichAnimLayer(line){
   // es cierto — _applyFrame(0) sí hace efecto y encadena su propio
   // setTimeout, igual que con cualquier otra capa animada de la app.
   const _startPlaying = () => {
+    if(_edRoHolding()){ entry._roWait = true; return; } // v42.10: la carga acabó durante la espera del giro; al soltarse se redibuja y _tdGetRichAnimLayer la arranca
     if(typeof _tdLogImg==='function') _tdLogImg('_tdGetRichAnimLayer _startPlaying', 'key=' + key + ' _animReady=' + entry._animReady + ' _animFrames.length=' + (entry._animFrames && entry._animFrames.length) + ' _oc=' + !!entry._oc);
     entry._playing = true;
     entry._fIdx = entry._fIdx || 0;
@@ -13988,6 +13992,8 @@ function _edViewerMpTick() {
   // trayectoria y nunca se reactiva al llegar a hojas que sí los tienen.
   const _anyPath = edPages.some(pg => (pg.layers||[]).some(l => l._motionPath && l._motionPath.length >= 2));
   if (!_anyPath) { _edViewerMpRaf = null; return; }
+  // v42.10: espera de animaciones hasta que el usuario gira el teléfono (js/orient-lock.js) — el ticker sigue vivo pero no mueve nada
+  if (_edRo && _edRo.state.hold) { _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick); return; }
 
   const page = edPages[edViewerIdx];
   if (!page) { _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick); return; }
@@ -36494,6 +36500,7 @@ function _edGifSetPlaying(playing) {
 function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
+  if (_edRo) _edRo.init(); // v42.10: giro nativo de la pantalla según la hoja (solo teléfono) — ver «Giro nativo» más arriba; init() vuelve a evaluar teléfono / interruptor en cada apertura
   // BUG CORREGIDO (v38.16 — Alberto: capa CON trayectoria activa, la arrastra,
   // previsualiza sin guardar, al volver al editor aparece en su sitio previo
   // al arrastre). Causa: este reseteo de _pathCurX/_pathCurY (que SÍ recoge
@@ -37108,6 +37115,43 @@ function _vStartBubbleFade(){
   _vFadeRaf = requestAnimationFrame(step);
 }
 
+// ── Giro nativo de la pantalla según la hoja del visor (solo teléfono) — v42.10 ──────────────────
+// Pedido de Alberto (2026-10-23, «está bien que también funcione con el visor interno»): mismo comportamiento que el lector
+// externo (reader/reader.js), con la lógica COMPARTIDA en js/orient-lock.js (ver allí el razonamiento completo, las reglas del
+// navegador y el sensor de giro). Aquí solo se enlazan los ganchos propios del visor interno:
+//   · la LLEGADA a una hoja es _edStartPageAnims (se llama al entrar en cada hoja, en modo fijo y en los dos de scroll);
+//   · la ESPERA de animaciones (hasta que el usuario gira el teléfono) congela _edStartPageAnims y el ticker de trayectorias
+//     (_edViewerMpTick) y, al soltarse, arranca la hoja actual desde el principio;
+//   · al cerrar el visor se suelta el bloqueo (edCloseViewer → _edRo.stop()) para que el editor vuelva a girar libre.
+// Solo teléfono; ?giro=0 lo desactiva en el dispositivo (mismo interruptor que el lector), ?autofs=0 solo la pantalla completa automática.
+let _edRoArriving = false;   // true mientras _edStartPageAnims avisa de la llegada (una espera que acaba ahí la gestiona él mismo)
+const _edRo = (typeof OrientLock !== 'undefined') ? OrientLock.create({
+  name: 'visor',
+  eligible: () => OrientLock.isPhone() ? '' : 'no es un teléfono (PC o tablet)',
+  sheetFamily: idx => { const pg = edPages[idx]; return pg ? ((pg.orientation || edOrientation) === 'vertical' ? 'portrait' : 'landscape') : null; },
+  getIdx: () => edViewerIdx,
+  onHold: on => {
+    if (on) {                                              // la hoja queda en su primer fotograma y sin temporizadores en marcha
+      _edResetPageAnims(edViewerIdx);
+      if (window._tdRichAnimCache) Object.values(window._tdRichAnimCache).forEach(l => { try { if (l._playing) l._roWait = true; l.stopAnim(); } catch (_) {} }); // animaciones dentro de flujos de texto: se reanudan al dibujarse tras la espera (_tdGetRichAnimLayer)
+      return;
+    }
+    if (_edRoArriving) return;                             // acabó al llegar a otra hoja: _edStartPageAnims sigue por su cuenta
+    if (!$('editorViewer')?.classList.contains('open')) return;
+    _edStartPageAnims(edViewerIdx);                        // el usuario ya ha girado el teléfono: todo arranca desde el principio
+    edUpdateViewer();
+  },
+  hint: () => _edRoHint(I18n.t('orient_tapHint')),
+}) : null;
+// Aviso «toca la pantalla para girarla»: dentro del visor (el toast general #edToast queda por debajo de él, que es fixed con z-index 400)
+function _edRoHint(msg) {
+  const el = $('viewerRotHint'); if (!el) return;
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('show'), 4500);
+}
+// ¿El visor está esperando a que el usuario gire el teléfono? (lo consultan las animaciones de los flujos de texto, que arrancan al dibujarse)
+function _edRoHolding() { try { return !!(_edRo && _edRo.state.hold); } catch (_) { return false; } }
+
 // AbortController del visor: elimina TODOS los listeners de una vez al cerrar
 let _viewerAC = null;
 
@@ -37139,6 +37183,15 @@ const _edDeferredLoadPromises = {};
 
 // Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
 function _edStartPageAnims(pageIdx) {
+  // v42.10 — llegada a la hoja visible del visor: giro nativo de la pantalla y espera de animaciones hasta que el usuario gira
+  // el teléfono (solo teléfono; ver el bloque «Giro nativo» más arriba y js/orient-lock.js). Si hay giro pendiente la hoja
+  // queda en su primer fotograma y las animaciones/trayectorias arrancan al soltarse la espera (onHold(false) vuelve aquí).
+  if (_edRo && _edRo.state.on && pageIdx === edViewerIdx) {
+    _edRoArriving = true;
+    try { _edRo.onSheet(pageIdx, { delay: _viewerScrollMode ? 220 : (_edRo.state.idx < 0 ? 450 : 40) }); }
+    finally { _edRoArriving = false; }
+    if (_edRo.state.hold) return;
+  }
   // Garantizar que el ticker de trayectorias está corriendo (puede haberse parado si
   // se abrió el visor en una hoja sin trayectorias).
   _edViewerMpTickStart();
@@ -37440,6 +37493,8 @@ function edInitViewerTap(){
   viewer.addEventListener('mousemove', () => edShowViewerCtrls(), {passive:true, ...sig});
 }
 function edCloseViewer(){
+  if (_edRo) _edRo.stop(); // v42.10: suelta el bloqueo de orientación (el editor vuelve a girar libre) y detiene la espera de animaciones
+  $('viewerRotHint')?.classList.remove('show');
   // BUG CORREGIDO (v38.16 — mismo hilo que edOpenViewer, ver comentario allí):
   // _edViewerMpTickStop() es quien limpia _pathCurX/_pathCurY al cerrar el
   // visor — antes corría DESPUÉS de _edGifSetPlaying(false), así que si esta
