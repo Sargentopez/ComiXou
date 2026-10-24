@@ -48,15 +48,16 @@
    ============================================================ */
 
 // ── Cache de miniaturas en memoria (evita guardar base64 en localStorage) ──
-// Clave: supabaseId de la obra. Valor: dataUrl del thumbnail (solo vive en sesión).
+// Solo vive en sesión. v42.11: las claves llevan prefijo para que la portada LOCAL y la de la NUBE de una misma obra no
+// se pisen (el id local puede ser igual al supabaseId, p. ej. en obras importadas por la sincronización antigua):
+//   'L:' + id local    → portada guardada en este dispositivo (data URL; viene de OPFS, ver WorkStore.getCover)
+//   'C:' + supabaseId  → portada que hay en la nube (URL del Worker; en obras muy antiguas, data URL de la hoja 1)
 const _mcThumbCache = new Map();
 
 const _MC_BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
 const _MC_KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
 
-// Carga el thumbnail de una obra desde Supabase y lo cachea en memoria.
-// Cuando llega, actualiza el div contenedor del DOM si está visible.
 // Verificar que una obra pertenece al usuario autenticado actual
 function _mcOwns(comic) {
   if (!comic) return false;
@@ -68,87 +69,298 @@ function _mcOwns(comic) {
   return comic.userId === _user.id || comic.username === _user.username;
 }
 
-function _mcLoadThumb(supabaseId) {
-  if (_mcThumbCache.has(supabaseId) && _mcThumbCache.get(supabaseId)) return;
-  _mcThumbCache.set(supabaseId, ''); // marca como en progreso
-  const _sess = JSON.parse(localStorage.getItem('cs_session') || 'null');
-  const _tok = _sess?.token || _MC_KEY;
-  const _hdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_tok}` };
-  // cover_url (con el texto horneado, ver edRenderPage(page,withText) en
-  // editor.js) si existe; si la obra es de antes de este cambio y no lo
-  // tiene, respaldo al panel_order=0 (sin texto) de siempre.
-  fetch(`${_MC_BASE}/works?id=eq.${supabaseId}&select=cover_url`, { headers: _hdrs, cache: 'no-store' })
-    .then(r => r.json())
-    .then(rows => {
-      const _cover = rows?.[0]?.cover_url;
-      if (_cover) return _cover;
-      return fetch(`${_MC_BASE}/panels?work_id=eq.${supabaseId}&order=panel_order.asc&limit=1&select=data_url`,
-        { headers: _hdrs, cache: 'no-store' })
-        .then(r => r.json())
-        .then(panelRows => panelRows?.[0]?.data_url || '');
-    })
-    .then(url => {
-      if (!url) return;
-      _mcThumbCache.set(supabaseId, url);
-      // Actualizar contenedor en DOM si existe
-      const div = document.querySelector(`[data-thumb-id="${supabaseId}"]`);
-      if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:contain;display:block">`; }
-    })
-    .catch(() => {});
-}
+/* ── MINIATURAS DE «MIS OBRAS» (v42.11) ───────────────────────────────────────────────────────────────────────────
+   Petición de Alberto: las miniaturas deben verse en TODOS los casos —también si la obra no está subida a la nube— y
+   «Mis obras» debe ponerse al día en CADA acceso (antes solo lo hacía al volver a entrar / pulsar «☁️ Mis obras» otra vez).
+   Causas encontradas (cada una reproducida con un test de gestos reales, ver bench t_mcthumbs4211):
+   · Con el token caducado (PWA abierta más de una hora) la portada de la nube se pedía con el JWT viejo → 401 tragado en
+     silencio → ⏳ para siempre. La sincronización sí renovaba el token, de ahí que en el SEGUNDO acceso ya funcionara.
+   · Cada fila usaba UNA sola fuente (nube o dispositivo, según la fecha) sin respaldo en la otra: con la nube caída, una
+     obra «fantasma» (id de nube que ya no existe) o la portada local vacía no había imagen. Ahora se prueba la fuente
+     «preferida» (la de la versión más reciente) y, si no da imagen, la otra.
+   · Un intento fallido dejaba la fila «en progreso» para siempre (sin reintento) y, sin imagen, el reloj de arena.
+     Ahora: sin imagen en ninguna fuente → 📄 (jamás ⏳ eterno); se reintenta al volver a entrar y en cuanto la nube responde.
+   · Una imagen que el navegador no puede cargar (portada borrada de la nube…) se sustituye por la otra fuente o por 📄.
+   Patrones estándar: stale-while-revalidate (se pinta lo que hay y se actualiza), renovar el token ANTES de una lectura
+   autenticada, tiempo máximo por petición, local primero con respaldo en la nube, reintento en el siguiente acceso. */
+const _mcThumbBusy   = new Set();   // ids locales con una carga de miniatura en curso (una por fila a la vez)
+const _mcThumbDone   = new Set();   // ids cuya carga ya se intentó EN ESTE ACCESO (con o sin imagen): repintar no la repite
+const _mcThumbMiss   = new Set();   // ids sin imagen en NINGUNA fuente en este acceso → se pinta 📄
+const _mcThumbFailed = new Set();   // ids cuya consulta a la nube FALLÓ (red, token…) → se reintentan en cuanto la nube responde
+const _mcThumbBad    = new Set();   // imágenes que el navegador no ha podido cargar: no se vuelven a usar
+const _mcCoverUrls   = new Map();   // supabaseId → cover_url que ya trajo una consulta (sincronización / botón de la nube)
+const _mcLK = id  => 'L:' + id;
+const _mcCK = sid => 'C:' + sid;
+// >0 mientras esta vista guarda metadatos por su cuenta (sincronización con la nube): ese guardado no cambia ninguna
+// portada, así que no debe invalidar las miniaturas (se vería un ⏳ entre medias). Los guardados del editor sí las invalidan.
+let _mcSelfSave = 0;
+function _mcSaveQuiet(rec) { _mcSelfSave++; try { return WorkStore.save(rec); } finally { _mcSelfSave--; } }
+// Acciones de este usuario que la nube aún no ha terminado de procesar. Una sincronización que ya iba en camino trae el estado
+// ANTERIOR de la nube: sin esto, una obra recién «despublicada» o «enviada a revisión» volvía a su estado de antes, y una
+// recién borrada reaparecía en la lista (la nube tarda unos segundos en borrarla entera) hasta el siguiente acceso.
+const _mcPubBusy  = new Set();   // ids locales con publicar / despublicar en curso
+const _mcDeleting = new Set();   // supabaseId de las obras cuyo borrado en la nube está en curso
 
-// Carga el thumbnail de una obra LOCAL desde OPFS y lo cachea en memoria.
-async function _mcLoadLocalThumb(comicId) {
-  if (_mcThumbCache.has(comicId)) return;
-  _mcThumbCache.set(comicId, ''); // marca como en progreso
+// ¿Está caducado este JWT? (con un minuto de margen; si no se puede leer se da por válido)
+function _mcJwtExpired(tok) {
   try {
-    // v41.43: WorkStore.getCover lee un archivito aparte con SOLO la portada
-    // (coverDataUrl con el texto horneado si existe, si no la imagen de la hoja
-    // 1 — la misma regla de antes). Antes aquí se leía y parseaba el archivo
-    // pesado ENTERO de la obra (decenas de MB) para pintar 72×72 px, y se
-    // repetía tras cada guardado (ver _mcOnStoreChange).
-    const url = WorkStore.getCover ? await WorkStore.getCover(comicId) : '';
-    if (!url) return;
-    _mcThumbCache.set(comicId, url);
-    const div = document.querySelector(`[data-local-thumb-id="${comicId}"]`);
-    if (div) { div.innerHTML = `<img src="${url}" alt="" style="width:72px;height:72px;object-fit:contain;display:block">`; }
-  } catch(_e) {}
+    const exp = JSON.parse(atob(String(tok).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp || 0;
+    return exp > 0 && (exp - 60) < Date.now() / 1000;
+  } catch (_e) { return false; }
 }
 
-// Reactivo a WorkStore.save() (evento 'cx:store', ver storage.js) — sin
-// esto la miniatura se quedaba con lo primero que se cacheó en esta sesión:
-// guardar de nuevo (local o nube) no la refrescaba hasta recargar la app
-// entera. Invalida las dos claves posibles (id local y supabaseId, ver
-// buildRow más abajo) y las vuelve a pedir.
-// El evento se dispara ANTES de que termine la escritura async en OPFS
-// (donde vive coverDataUrl) — pequeño margen para no leer justo antes de
-// que se complete.
-// IMPORTANTE: el guardado ocurre con el EDITOR abierto (vista distinta),
-// no con "Mis Creaciones" visible — por eso este listener se registra una
-// sola vez, de forma global, al cargar el script (ver más abajo), y NO
-// depende de si #myWorksList existe en el momento del guardado. Antes
-// estaba atado a MyWorksView_init()/_destroy(), así que en la práctica
-// nunca llegaba a reaccionar a un guardado real (solo a acciones hechas ya
-// estando dentro de Mis Creaciones, que no es cuando se guarda).
+// Cabeceras de lectura con el JWT del autor, RENOVADO antes si ha caducado (la misma renovación compartida que usa
+// SupabaseClient). Si aun así no hay un token válido se usa la clave anónima: PostgREST rechaza (401) cualquier JWT caducado,
+// pero con la anónima sigue sirviendo lo público (las portadas de obras publicadas).
+async function _mcAuthHdrs(extra) {
+  try { if (window._authTryRefresh) await window._authTryRefresh(); } catch (_e) {}
+  let tok = '';
+  try { const s = JSON.parse(localStorage.getItem('cs_session') || 'null'); tok = (s && s.token) || ''; } catch (_e) {}
+  if (!tok || _mcJwtExpired(tok)) tok = _MC_KEY;
+  return Object.assign({ 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + tok }, extra || {});
+}
+
+// GET a PostgREST con tiempo máximo. Devuelve el array JSON, o null si falla (sin red, 401, tiempo agotado…).
+async function _mcRest(path, hdrs, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms || 8000);
+  try {
+    const r = await fetch(`${_MC_BASE}/${path}`, { headers: hdrs, cache: 'no-store', signal: ctl.signal });
+    if (!r.ok) { console.warn('[Mis obras] la nube respondió ' + r.status + ' a ' + path.split('?')[0]); return null; }
+    const j = await r.json();
+    return Array.isArray(j) ? j : null;
+  } catch (_e) { return null; }
+  finally { clearTimeout(timer); }
+}
+
+// URL de una imagen → data URL (null/'' si no se puede). Para guardar en el dispositivo la portada de la nube.
+async function _mcUrlToDataUrl(url) {
+  if (!url) return '';
+  if (String(url).startsWith('data:')) return url;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) return '';
+    const blob = await r.blob();
+    if (!blob || !blob.size || blob.size > 3 * 1024 * 1024 || !/^image\//.test(blob.type || '')) return '';
+    return await new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result || ''));
+      fr.onerror = () => rej(fr.error);
+      fr.readAsDataURL(blob);
+    });
+  } catch (_e) { return ''; }
+  finally { clearTimeout(timer); }
+}
+
+// ¿Hay portada de esta obra guardada en este dispositivo? (flags del índice ligero: la imagen vive en OPFS)
+function _mcHasLocalCover(c) {
+  if (!c) return false;
+  const p0 = c.panels && c.panels[0];
+  return !!((p0 && (p0._hasDataUrl || p0.dataUrl)) || c._hasCoverDataUrl || c.coverDataUrl);
+}
+
+// Fuentes posibles de la miniatura, por orden: ['local'|'cloud', …]. La PRIMERA es la «preferida» = la de la versión más
+// reciente (v38.29): la local si se guardó aquí después de la última subida a la nube —o la obra no está en la nube—; la de
+// la nube si no, o si la sincronización vio allí una versión más nueva (cloudNewer). La otra queda de respaldo.
+function _mcThumbOrder(comic) {
+  const hasCloud = !!comic.supabaseId;
+  const hasLocal = _mcHasLocalCover(comic);
+  const localNewer = !!comic.localSavedAt &&
+    (!comic.cloudSavedAt || new Date(comic.localSavedAt) > new Date(comic.cloudSavedAt));
+  const preferLocal = !hasCloud || (localNewer && !comic.cloudNewer);
+  const out = [];
+  if (preferLocal) { if (hasLocal) out.push('local'); if (hasCloud) out.push('cloud'); }
+  else             { if (hasCloud) out.push('cloud'); if (hasLocal) out.push('local'); }
+  return out;
+}
+
+const _mcSrcKey = (comic, s) => (s === 'cloud' ? _mcCK(comic.supabaseId) : _mcLK(comic.id));
+const _mcCached = k => { const v = _mcThumbCache.get(k); return (v && !_mcThumbBad.has(v)) ? v : ''; };
+
+// ¿Falta cargar la miniatura preferida de esta fila? (no si ya se intentó en este acceso, ni si ya está en la caché)
+function _mcNeedsFill(comic, order) {
+  order = order || _mcThumbOrder(comic);
+  if (!order.length || _mcThumbDone.has(comic.id)) return false;
+  return !_mcCached(_mcSrcKey(comic, order[0]));
+}
+
+// Qué pintar ahora en la fila: src (imagen que ya se tiene, de la fuente preferida o del respaldo), fill (hay que ir a
+// buscar la preferida) y loading (no hay imagen y se está esperando → ⏳; si no se espera nada → 📄).
+function _mcThumbView(comic) {
+  const order = _mcThumbOrder(comic);
+  let src = '';
+  for (const s of order) { src = _mcCached(_mcSrcKey(comic, s)); if (src) break; }
+  if (!src && !comic.cloudOnly) {   // formato antiguo: la imagen de la hoja 1 dentro del propio índice
+    const p0 = comic.panels && comic.panels[0];
+    if (p0 && p0.dataUrl && !_mcThumbBad.has(p0.dataUrl)) src = p0.dataUrl;
+  }
+  const fill = _mcNeedsFill(comic, order);
+  return { src, fill, loading: !src && fill };
+}
+
+function _mcThumbHtml(v, comic) {
+  if (v.src) return `<img src="${v.src.startsWith('data:') ? v.src : escHtml(v.src)}" alt="${escHtml(comic.title || '')}" loading="lazy">`;
+  return v.loading
+    ? `<span style="font-size:1.4rem;color:var(--gray-300)">⏳</span>`
+    : `<span style="font-size:1.8rem">📄</span>`;
+}
+
+// Pone al día la miniatura de UNA fila ya pintada, sin repintar la lista entera.
+function _mcPaintThumb(id) {
+  const row = document.querySelector(`.work-row[data-id="${CSS.escape(id)}"]`);
+  const th = row && row.querySelector('.work-row-thumb');
+  if (!th) return;
+  const comic = WorkStore.getById(id);
+  if (!comic) return;
+  const v = _mcThumbView(comic);
+  const cur = th.querySelector('img');
+  if (v.src) {
+    if (cur && cur.getAttribute('src') === v.src) return;
+    th.innerHTML = _mcThumbHtml(v, comic);
+  } else if (!cur) {
+    th.innerHTML = _mcThumbHtml(v, comic);   // ⏳ → 📄 (o sigue ⏳ si aún se espera algo)
+  }
+}
+
+// Portada guardada en este dispositivo (OPFS). '' si no hay.
+async function _mcFetchLocalCover(comic) {
+  try {
+    // v41.43: WorkStore.getCover lee un archivito aparte con SOLO la portada (coverDataUrl con el texto horneado si existe,
+    // si no la imagen de la hoja 1) en vez de leer y parsear el archivo pesado ENTERO de la obra (decenas de MB).
+    const url = WorkStore.getCover ? await WorkStore.getCover(comic.id) : '';
+    return (url && !_mcThumbBad.has(url)) ? url : '';
+  } catch (_e) { return ''; }
+}
+
+// Portada de la nube. '' = la nube respondió y no hay portada · null = no se pudo preguntar (red, token, tiempo agotado).
+async function _mcFetchCloudCover(comic) {
+  const sid = comic.supabaseId;
+  if (!sid) return '';
+  let url = _mcCoverUrls.get(sid) || '';
+  if (!url) {
+    const hdrs = await _mcAuthHdrs();
+    const q = encodeURIComponent(sid);
+    // cover_url (con el texto horneado, ver edRenderPage(page,withText) en editor.js) si existe; si la obra es de antes de
+    // este cambio y no lo tiene, respaldo al panel_order=0 (sin texto) de siempre.
+    const rows = await _mcRest(`works?id=eq.${q}&select=cover_url`, hdrs);
+    if (!rows) return null;
+    url = (rows[0] && rows[0].cover_url) || '';
+    if (url) _mcCoverUrls.set(sid, url);
+    else if (rows.length) {
+      const p = await _mcRest(`panels?work_id=eq.${q}&order=panel_order.asc&limit=1&select=data_url`, hdrs);
+      if (!p) return null;
+      url = (p[0] && p[0].data_url) || '';
+    }
+  }
+  return (url && !_mcThumbBad.has(url)) ? url : '';
+}
+
+// Carga la miniatura de UNA fila: primero la fuente preferida y, si no da imagen, la otra. Pinta el resultado en el DOM.
+async function _mcFillThumb(id) {
+  if (!id || _mcThumbBusy.has(id)) return;
+  const comic = WorkStore.getById(id);
+  if (!comic) return;
+  const order = _mcThumbOrder(comic);
+  if (!_mcNeedsFill(comic, order)) { _mcPaintThumb(id); return; }
+  _mcThumbBusy.add(id);
+  let failed = false;
+  try {
+    for (const s of order) {
+      const url = s === 'cloud' ? await _mcFetchCloudCover(comic) : await _mcFetchLocalCover(comic);
+      if (url === null) { failed = true; continue; }
+      if (url) { _mcThumbCache.set(_mcSrcKey(comic, s), url); break; }
+    }
+  } catch (_e) { failed = true; }
+  _mcThumbBusy.delete(id);
+  _mcThumbDone.add(id);
+  const cur = WorkStore.getById(id);
+  if (!cur) return;
+  if (failed) _mcThumbFailed.add(id); else _mcThumbFailed.delete(id);
+  if (!_mcThumbView(cur).src) _mcThumbMiss.add(id);
+  _mcPaintThumb(id);
+}
+
+// Nuevo ACCESO a «Mis obras» (entrada desde el menú, atrás del navegador, restauración desde la bfcache…): lo que se «intentó»
+// en el acceso anterior se olvida, así que las miniaturas que no se pudieron cargar entonces (nube caída, token caducado…)
+// se vuelven a pedir. Lo que sí se cargó se conserva en _mcThumbCache y se pinta al instante.
+function _mcNewAccess() {
+  _mcThumbDone.clear(); _mcThumbMiss.clear(); _mcThumbFailed.clear();
+  // Una imagen REMOTA (portada de la nube) que no cargó pudo ser un simple corte de red: se vuelve a intentar en cada acceso en
+  // vez de darla por mala hasta recargar la app (la PWA puede llevar días abierta). Una imagen local (data:) que no se
+  // decodifica no se arregla sola: esa sí se queda descartada. Dentro de un mismo acceso la descartada sigue descartada (sin bucles).
+  Array.from(_mcThumbBad).forEach(u => { if (!/^data:/i.test(u)) _mcThumbBad.delete(u); });
+}
+
+// La nube acaba de responder: las miniaturas que fallaron por falta de red / token se vuelven a intentar.
+function _mcResetFailedThumbs() {
+  const ids = Array.from(_mcThumbFailed);
+  ids.forEach(id => { _mcThumbFailed.delete(id); _mcThumbMiss.delete(id); _mcThumbDone.delete(id); });
+  return ids;
+}
+
+// Observador ÚNICO de la lista: pide la miniatura de cada fila cuando está cerca de la pantalla (carga perezosa).
+let _mcThumbObs = null;
+function _mcObserveThumbs(wrap) {
+  if (_mcThumbObs) { _mcThumbObs.disconnect(); _mcThumbObs = null; }
+  const els = wrap.querySelectorAll('[data-thumb-fill]');
+  if (!els.length) return;
+  if (typeof IntersectionObserver === 'undefined') { els.forEach(el => _mcFillThumb(el.dataset.thumbFill)); return; }
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      obs.unobserve(entry.target);
+      _mcFillThumb(entry.target.dataset.thumbFill);
+    });
+  }, { rootMargin: '200px' });
+  _mcThumbObs = obs;
+  els.forEach(el => obs.observe(el));
+}
+
+// Una <img> de la lista que el navegador no ha podido cargar (el evento error no burbujea: se captura en #mcContent):
+// se descarta esa imagen y se busca la otra fuente; si no hay, 📄.
+function _mcOnThumbError(e) {
+  const img = e.target;
+  if (!img || img.tagName !== 'IMG' || !img.closest) return;
+  const th = img.closest('.work-row-thumb');
+  const row = th && th.closest('.work-row');
+  if (!row) return;
+  const id = row.dataset.id;
+  const bad = img.getAttribute('src') || '';
+  if (bad) _mcThumbBad.add(bad);
+  Array.from(_mcThumbCache).forEach(([k, val]) => { if (val === bad) _mcThumbCache.delete(k); });
+  _mcThumbDone.delete(id); _mcThumbMiss.delete(id);
+  const comic = WorkStore.getById(id);
+  th.innerHTML = '';
+  if (!comic) return;
+  th.innerHTML = _mcThumbHtml(_mcThumbView(comic), comic);
+  _mcFillThumb(id);
+}
+
+// Reactivo a WorkStore.save() (evento 'cx:store', ver storage.js) — sin esto la miniatura se quedaba con lo primero que
+// se cacheó en esta sesión: guardar de nuevo (local o nube) no la refrescaba hasta recargar la app entera. Invalida las dos
+// claves posibles (id local y supabaseId) y las vuelve a pedir.
+// El evento se dispara ANTES de que termine la escritura async en OPFS (donde vive coverDataUrl) — pequeño margen para no
+// leer justo antes de que se complete.
+// IMPORTANTE: el guardado ocurre con el EDITOR abierto (vista distinta), no con "Mis Creaciones" visible — por eso este
+// listener se registra una sola vez, de forma global, al cargar el script (ver más abajo), y NO depende de si #myWorksList
+// existe en el momento del guardado. Antes estaba atado a MyWorksView_init()/_destroy(), así que en la práctica nunca
+// llegaba a reaccionar a un guardado real (solo a acciones hechas ya estando dentro de Mis Creaciones).
 function _mcOnStoreChange(e) {
   if (e?.detail?.type !== 'save') return;
   const id = e?.detail?.id;
-  if (!id) return;
-  _mcThumbCache.delete(id);
+  if (!id || _mcSelfSave) return;
+  _mcThumbCache.delete(_mcLK(id));
   const local0 = WorkStore.getById(id);
-  if (local0 && local0.supabaseId && local0.supabaseId !== id) _mcThumbCache.delete(local0.supabaseId);
-  // v41.43: con el editor abierto (donde ocurre casi todo guardado) la lista de
-  // "Mis obras" ni existe en pantalla — recargar aquí la miniatura era trabajo
-  // tirado (y, antes, una lectura del archivo entero tras cada guardado).
-  // Invalidada la caché (arriba), la lista la vuelve a pedir sola, perezosamente,
-  // cuando se muestre (ver _mcRenderList / _thumbObs). Solo se recarga ahora si
-  // la fila de esta obra está visible.
+  if (local0 && local0.supabaseId) _mcThumbCache.delete(_mcCK(local0.supabaseId));
+  _mcThumbDone.delete(id); _mcThumbMiss.delete(id); _mcThumbFailed.delete(id);
+  // v41.43: con el editor abierto (donde ocurre casi todo guardado) la lista de "Mis obras" ni existe en pantalla —
+  // recargar aquí la miniatura era trabajo tirado. Invalidada la caché (arriba), la lista la vuelve a pedir sola,
+  // perezosamente, cuando se muestre (ver _mcRenderList / _mcObserveThumbs). Solo se recarga ahora si la fila está visible.
   setTimeout(() => {
-    const local = WorkStore.getById(id);
-    const _rowVisible = !!document.querySelector(`.work-row[data-id="${CSS.escape(id)}"]`);
-    if (!_rowVisible) return;
-    _mcLoadLocalThumb(id);
-    if (local && local.supabaseId && local.supabaseId !== id) _mcLoadThumb(local.supabaseId);
+    if (!document.querySelector(`.work-row[data-id="${CSS.escape(id)}"]`)) return;
+    _mcFillThumb(id);
   }, 400);
 }
 window.addEventListener('cx:store', _mcOnStoreChange);
@@ -565,6 +777,7 @@ function _mcCheckStorage() {
 }
 
 function MyWorksView_init() {
+  _mcNewAccess();   // v42.11: cada acceso empieza de cero en lo que se «intentó» (ver _mcNewAccess)
   _mcInitTitlePillObserver();
   // Comprobación de fiabilidad del almacenamiento local (localStorage/OPFS/
   // biblioteca) — definida en editor.js. Se dispara aquí, no al arrancar la
@@ -627,98 +840,156 @@ function MyWorksView_init() {
   window._mcOrphanTimer = setTimeout(_mcCheckOrphanData, 10000);
 }
 
-/* ── SINCRONIZAR FECHAS CON SUPABASE ── */
-async function _mcSyncCloudDates() {
+/* ── SINCRONIZAR CON LA NUBE — en CADA acceso a «Mis obras» ──
+   v42.11 — Petición de Alberto: «Mis obras» debe ponerse al día siempre que se acceda. Antes solo traía las obras nuevas de la
+   nube (y el estado «publicada/aprobada») al pulsar el botón «☁️ Mis obras». Ahora, en cada acceso y en segundo plano:
+   1) obras que este dispositivo ya tiene: título, género, modo de lectura y estado de publicación como en la nube, y marca
+      de «nube más reciente» (lo de siempre, más el estado «aprobada», que solo actualizaba el botón);
+   2) obras de la nube que este dispositivo aún NO tiene: se importan (antes solo si no tenía ninguna);
+   3) las miniaturas que no pudieron cargarse por falta de red se reintentan (la nube acaba de responder).
+   Una sola sincronización a la vez: dos entradas seguidas comparten la misma (no duplican lo importado). */
+let _mcSyncRun = null;
+function _mcSyncCloudDates() {
+  if (_mcSyncRun) return _mcSyncRun;
+  _mcSyncRun = _mcSyncCloudDatesInner().catch(() => {}).finally(() => { _mcSyncRun = null; });
+  return _mcSyncRun;
+}
+
+// Todas las obras del autor en la nube (consulta ligera: metadatos y portada, sin imágenes). null si falla.
+async function _mcFetchAuthorIndex(user) {
+  const hdrs = await _mcAuthHdrs({ 'Range': '0-999' });   // Range: hasta 1000 resultados (límite PostgREST por defecto)
+  return _mcRest(`works?author_id=eq.${encodeURIComponent(user.id)}&order=updated_at.desc` +
+    `&select=id,title,author_name,genre,nav_mode,social,published,pending_review,updated_at,cover_url,panel_count`, hdrs, 10000);
+}
+
+// Registro local de una obra que solo está en la nube (cloudOnly). Sin imágenes: la portada se pide perezosamente.
+let _mcImportSeq = 0;
+function _mcCloudWorkRecord(w, user) {
+  const pub = !!w.published;
+  return {
+    id:           'comic_' + Date.now() + '_' + (_mcImportSeq++).toString(36) + Math.random().toString(36).slice(2, 5),
+    userId:       user.id,
+    username:     user.username,
+    supabaseId:   w.id,
+    title:        w.title       || I18n.t('noWork'),
+    author:       w.author_name || user.username,
+    genre:        w.genre       || '',
+    navMode:      w.nav_mode    || 'fixed',
+    social:       w.social      || '',
+    panels:       [],        // NO persistir base64 en localStorage — la portada se pide perezosamente (_mcFillThumb)
+    panelCount:   w.panel_count || 0,
+    pages:        [],
+    published:    pub,
+    approved:     pub,
+    pendingReview: pub ? false : !!w.pending_review,
+    cloudOnly:    true,
+    createdAt:    w.created_at  || w.updated_at || new Date().toISOString(),   // (la consulta ligera no pide created_at: columnas solo de las ya usadas por la app)
+    updatedAt:    w.updated_at  || new Date().toISOString(),
+  };
+}
+
+async function _mcSyncCloudDatesInner() {
   if (typeof SupabaseClient === 'undefined') return;
   const _mcUser = Auth.currentUser?.();
   if (typeof Auth === 'undefined' || !_mcUser) return;
+  const mine = c => c.userId === _mcUser.id || c.username === _mcUser.username;
 
-  // Si no hay obras locales del usuario, intentar traer las de la nube
-  const locals = WorkStore.getAll().filter(c => c.supabaseId &&
-    (c.userId === _mcUser.id || c.username === _mcUser.username));
-  if (!locals.length) {
+  let changed = false;     // ¿hay que repintar la lista?
+  let cloudOk = false;     // ¿ha respondido la nube?
+  const cloudDates = {};   // supabaseId → updated_at real (aviso de «Sin título» repetido, ver _mcAfterCloudMerge)
+
+  // 1) Obras que este dispositivo ya conoce
+  const locals = WorkStore.getAll().filter(c => c.supabaseId && mine(c));
+  if (locals.length) {
     try {
-      const cloudWorks = await SupabaseClient.fetchWorksByAuthor(_mcUser.id);
-      if(cloudWorks && cloudWorks.length) {
-        for(const w of cloudWorks) {
-          // Guardar como obra cloudOnly (sin editorData local)
-          const existing = WorkStore.getAll().find(c => c.supabaseId === w.id);
-      if(!existing) {
-            // No guardar thumbnail base64 en localStorage — cachearlo en memoria
-            const _wClean = { ...w, userId: _mcUser.id, cloudOnly: true, editorData: null, supabaseId: w.id };
-            if (_wClean.panels && _wClean.panels[0] && _wClean.panels[0].dataUrl) {
-              if (!_mcThumbCache.has(w.id)) _mcThumbCache.set(w.id, _wClean.panels[0].dataUrl);
-              _wClean.panels = [];
-            }
-            WorkStore.save(_wClean);
+      const works = await SupabaseClient.fetchWorksByIds(locals.map(c => c.supabaseId));
+      if (works) cloudOk = true;
+      for (const w of (works || [])) {
+        if (!w || !w.id) continue;
+        cloudDates[w.id] = w.updated_at;
+        if (w.cover_url) _mcCoverUrls.set(w.id, w.cover_url);
+        // La obra se lee AHORA, no la copia de antes de la espera: si entretanto se ha borrado o guardado, ni se resucita
+        // ni se pisa lo nuevo.
+        const local = WorkStore.getAll().find(c => c.supabaseId === w.id && mine(c));
+        if (!local) continue;
+
+        const cloudDate = new Date(w.updated_at || 0);
+        const localDate = new Date(local.updatedAt || 0);
+
+        // Actualizar metadatos siempre (título, género, estado publicación)
+        let dirty = false;
+        // v42.06: si los datos de la obra se cambiaron AQUÍ y aún no se han subido (metaCloudPending, ver
+        // _edApplyProjectMeta en editor.js), lo que hay en la nube es justo lo anterior: no puede pisar lo guardado en este
+        // dispositivo (al volver a «Mis obras» se perdían, en local, el género y el modo de lectura recién cambiados).
+        if (!local.metaCloudPending) {
+          if (w.title    && w.title    !== local.title)    { local.title    = w.title;    dirty = true; }
+          if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
+          if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
+        }
+        if (!_mcPubBusy.has(local.id)) {   // con publicar/despublicar en curso, la nube aún trae el estado anterior
+          if (w.published !== undefined && w.published !== local.published) {
+            local.published = w.published; dirty = true;
           }
+          // v42.11: «aprobada» = publicada en la nube (como ya hacía el botón «☁️ Mis obras»). Sin esto, una obra que se
+          // publicaba/despublicaba desde otro dispositivo (o la aprobaba el administrador) seguía saliendo como «Borrador»
+          // hasta pulsar el botón de la nube.
+          if (w.published !== undefined && !!w.published !== !!local.approved) { local.approved = !!w.published; dirty = true; }
+          // Sincronizar pendingReview desde la nube (ahora hay columna pending_review en Supabase)
+          const _cloudPending = w.published ? false : (w.pending_review || false);
+          if (_cloudPending !== local.pendingReview) { local.pendingReview = _cloudPending; dirty = true; }
         }
-        // v41.86: «Sin título» repetido entre las obras de la nube recién llegadas y las locales de este dispositivo
-        const _cd1 = {}; cloudWorks.forEach(w => { if (w && w.id) _cd1[w.id] = w.updatedAt; });
-        _mcAfterCloudMerge(_mcUser, _cd1);
-        _mcRenderList();
-      }
-    } catch(_) {}
-    return;
-  }
 
-  try {
-    const works = await SupabaseClient.fetchWorksByIds(locals.map(c => c.supabaseId));
-    if (!works || !works.length) return;
-
-    let changed = false;
-    for (const w of works) {
-      const local = locals.find(c => c.supabaseId === w.id);
-      if (!local) continue;
-
-      const cloudDate = new Date(w.updated_at || 0);
-      const localDate = new Date(local.updatedAt || 0);
-
-      // Actualizar metadatos siempre (título, género, estado publicación)
-      let dirty = false;
-      // v42.06: si los datos de la obra se cambiaron AQUÍ y aún no se han subido (metaCloudPending, ver
-      // _edApplyProjectMeta en editor.js), lo que hay en la nube es justo lo anterior: no puede pisar lo guardado en este
-      // dispositivo (al volver a «Mis obras» se perdían, en local, el género y el modo de lectura recién cambiados).
-      if (!local.metaCloudPending) {
-        if (w.title    && w.title    !== local.title)    { local.title    = w.title;    dirty = true; }
-        if (w.genre    && w.genre    !== local.genre)    { local.genre    = w.genre;    dirty = true; }
-        if (w.nav_mode && w.nav_mode !== local.navMode)  { local.navMode  = w.nav_mode; dirty = true; }
-      }
-      if (w.published !== undefined && w.published !== local.published) {
-        local.published = w.published; dirty = true;
-      }
-      // Sincronizar pendingReview desde la nube (ahora hay columna pending_review en Supabase)
-      const _cloudPending = w.published ? false : (w.pending_review || false);
-      if (_cloudPending !== local.pendingReview) { local.pendingReview = _cloudPending; dirty = true; }
-
-      // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
-      // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
-      if (cloudDate > localDate) {
-        local.cloudNewer = true;
-        // Preservar editorData local bajo localEditorData (no sobreescribir nunca)
-        if(local.editorData && !local.localEditorData) {
-          local.localEditorData = local.editorData;
+        // Si la nube es más reciente: marcar cloudNewer pero preservar editorData local
+        // El usuario puede recuperar la versión local desde Proyecto → Recuperar versión del dispositivo
+        if (cloudDate > localDate) {
+          // la miniatura «preferida» pasa a ser la de la nube (ver _mcThumbOrder): se vuelve a pedir en este acceso
+          if (!local.cloudNewer) _mcThumbDone.delete(local.id);
+          local.cloudNewer = true;
+          // Preservar editorData local bajo localEditorData (no sobreescribir nunca)
+          if (local.editorData && !local.localEditorData) {
+            local.localEditorData = local.editorData;
+          }
+          local.editorData = null; // forzar descarga de la versión de nube al editar
+          local.updatedAt  = w.updated_at;
+          dirty = true;
         }
-        local.editorData = null; // forzar descarga de la versión de nube al editar
-        local.updatedAt  = w.updated_at;
-        dirty = true;
-        // Actualizar miniatura con la de la nube (más reciente)
-        if (w.id) {
-          _mcThumbCache.delete(w.id); // invalidar caché para forzar recarga
-          _mcLoadThumb(w.id);
-        }
-      }
 
-      if (dirty) { WorkStore.save(local); changed = true; }
+        if (dirty) { _mcSaveQuiet(local); changed = true; }
+      }
+    } catch (e) {
+      // Silencioso — si no hay red, se usa la versión local
     }
-
-    // v41.86: «Sin título» repetido entre obras de la nube y locales (los títulos acaban de sincronizarse)
-    const _cd2 = {}; works.forEach(w => { if (w && w.id) _cd2[w.id] = w.updated_at; });
-    if (_mcAfterCloudMerge(_mcUser, _cd2)) changed = true;
-    if (changed) _mcRenderList();
-  } catch(e) {
-    // Silencioso — si no hay red, se usa la versión local
   }
+
+  // 2) Obras de la nube que este dispositivo aún NO tiene (creadas o guardadas en otro dispositivo): se importan como
+  //    «solo en la nube». Antes solo se traían si este dispositivo no tenía NINGUNA obra de la nube, o con el botón.
+  try {
+    const rows = await _mcFetchAuthorIndex(_mcUser);
+    if (rows) {
+      cloudOk = true;
+      for (const w of rows) {
+        if (!w || !w.id) continue;
+        cloudDates[w.id] = w.updated_at;
+        if (w.cover_url) _mcCoverUrls.set(w.id, w.cover_url);
+        if (_mcDeleting.has(w.id)) continue;   // se está borrando en la nube: aún sale en el listado, pero no debe volver
+        // Comprobar y guardar SIN ningún await entre medias: atómico frente a otra sincronización o al botón de la nube.
+        if (WorkStore.getAll().some(c => c.supabaseId === w.id)) continue;
+        const rec = _mcCloudWorkRecord(w, _mcUser);
+        rec.id = w.id;   // como la importación al entrar de siempre: el id local de una obra traída de la nube ES su id de la nube
+        _mcSaveQuiet(rec);
+        changed = true;
+      }
+    }
+  } catch (e) {}
+
+  // v41.86: «Sin título» repetido entre obras de la nube y locales (los títulos acaban de sincronizarse)
+  if (cloudOk && _mcAfterCloudMerge(_mcUser, cloudDates)) changed = true;
+
+  if (!cloudOk && !changed) return;
+  // La nube ha respondido: las miniaturas que fallaron por falta de red / token se piden otra vez.
+  const retry = cloudOk ? _mcResetFailedThumbs() : [];
+  if (changed) _mcRenderList();                       // el repintado pide por sí solo lo que falte
+  else retry.forEach(id => _mcFillThumb(id));
 
   // La biblioteca es por proyecto — se sincroniza al abrir/guardar cada proyecto en el editor
 }
@@ -880,19 +1151,10 @@ function _mcRenderList() {
     // actualiza solo cada vez que se entra en Mis Obras — no hace falta
     // ningún paso adicional para cumplir "debe actualizarse cada vez que
     // se acceda a my-works".
-    const _localIsNewer = !!comic.localSavedAt &&
-      (!comic.cloudSavedAt || new Date(comic.localSavedAt) > new Date(comic.cloudSavedAt));
-    const _useLocalThumb = _localIsNewer || !comic.supabaseId;
-
-    // Para obras cloudOnly: usar cache en memoria (no se persiste en localStorage).
-    // Para obras locales: el dataUrl está en OPFS (_hasDataUrl flag), cargarlo lazy.
-    const thumb = (!_useLocalThumb && comic.supabaseId && _mcThumbCache.get(comic.supabaseId))
-      || _mcThumbCache.get(comic.id)
-      || (!comic.cloudOnly && comic.panels && comic.panels[0] ? comic.panels[0].dataUrl : '');
-    const needsCloudThumb = !thumb && !_useLocalThumb && !!comic.supabaseId;
-    const needsLocalThumb = !thumb && _useLocalThumb
-      && comic.panels && comic.panels[0] && comic.panels[0]._hasDataUrl;
-    const needsThumb = needsCloudThumb || needsLocalThumb;
+    // v42.11: la elección «versión más reciente» (local o nube) y el respaldo en la otra fuente viven ahora en
+    // _mcThumbView / _mcThumbOrder / _mcFillThumb (ver «MINIATURAS DE MIS OBRAS»): aquí solo se pinta lo que ya se tiene
+    // (imagen, ⏳ si se va a pedir, 📄 si no hay nada) y se marca la fila para pedirla cuando esté cerca de la pantalla.
+    const _tv = _mcThumbView(comic);
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
     const pubLabel = comic.approved
       ? I18n.t('mc_pubApproved')
@@ -900,13 +1162,8 @@ function _mcRenderList() {
 
     return `
     <div class="work-row" data-id="${comic.id}">
-      <div class="work-row-thumb" ${needsCloudThumb ? `data-thumb-id="${comic.supabaseId}"` : ''} ${needsLocalThumb ? `data-local-thumb-id="${comic.id}"` : ''}>
-        ${thumb
-          ? `<img src="${thumb}" alt="${comic.title}" loading="lazy">`
-          : needsThumb
-            ? `<span style="font-size:1.4rem;color:var(--gray-300)">⏳</span>`
-            : `<span style="font-size:1.8rem">📄</span>`
-        }
+      <div class="work-row-thumb" ${_tv.fill ? `data-thumb-fill="${comic.id}"` : ''}>
+        ${_mcThumbHtml(_tv, comic)}
       </div>
       <div class="work-row-info">
         <div class="work-row-title">${comic.title || I18n.t('noWork')}</div>
@@ -958,21 +1215,22 @@ function _mcRenderList() {
   }
   */
 
-  // Cargar miniaturas lazy — tanto obras cloud (data-thumb-id) como locales (data-local-thumb-id)
-  const _thumbObs = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const cloudId = entry.target.dataset.thumbId;
-        const localId = entry.target.dataset.localThumbId;
-        if (cloudId) { _mcLoadThumb(cloudId); _thumbObs.unobserve(entry.target); }
-        if (localId) { _mcLoadLocalThumb(localId); _thumbObs.unobserve(entry.target); }
-      }
-    });
-  }, { rootMargin: '200px' });
-  wrap.querySelectorAll('[data-thumb-id],[data-local-thumb-id]').forEach(el => _thumbObs.observe(el));
+  // Cargar miniaturas lazy (local y/o nube, con respaldo entre ellas) — ver «MINIATURAS DE MIS OBRAS»
+  _mcObserveThumbs(wrap);
 
-  // Eventos de botones
-  wrap.addEventListener('click', async e => {
+  // Eventos de botones — UN solo manejador por lista (v42.11). _mcRenderList se llama varias veces en cada acceso (al
+  // entrar, tras la sincronización, tras publicar/borrar…) y antes añadía un manejador NUEVO sobre el mismo contenedor en
+  // cada llamada: un toque en ✕, «Enviar a revisión» o «Compartir» ejecutaba la acción tantas veces como repintados
+  // hubiera habido (varios avisos de «¿borrar?» a la vez). Ahora se enlaza una sola vez (el contenedor se crea de nuevo
+  // en cada acceso, ver Router) y el cuerpo es _mcOnListClick.
+  if (!wrap._mcBound) {
+    wrap._mcBound = true;
+    wrap.addEventListener('click', _mcOnListClick);
+    wrap.addEventListener('error', _mcOnThumbError, true);   // el error de una <img> no burbujea: se captura
+  }
+}
+
+async function _mcOnListClick(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const id = btn.dataset.id;
@@ -1055,6 +1313,7 @@ function _mcRenderList() {
       const _doSubmit = async () => {
         if (typeof SupabaseClient !== 'undefined') {
           _mcSubmitOverlayShow();
+          _mcPubBusy.add(id);
           try {
             WorkStore.save({ ...comic, published: false, approved: false, pendingReview: true });
             _mcRenderList();
@@ -1074,6 +1333,8 @@ function _mcRenderList() {
             WorkStore.save({ ...comic, pendingReview: false });
             _mcRenderList();
             _mcToast(I18n.t('mc_errSubmit') + err.message);
+          } finally {
+            _mcPubBusy.delete(id);
           }
         } else {
           _mcToast(I18n.t('mc_sentForReview'));
@@ -1101,8 +1362,10 @@ function _mcRenderList() {
       }
       WorkStore.save({ ...comic, published: false, approved: false, pendingReview: false });
       if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+        _mcPubBusy.add(id);
         SupabaseClient.unpublishWork(comic.id, comic.supabaseId)
-          .catch(err => { _mcToast(I18n.t('mc_errUnpublishCloud') + err.message); });
+          .catch(err => { _mcToast(I18n.t('mc_errUnpublishCloud') + err.message); })
+          .finally(() => { _mcPubBusy.delete(id); });
       }
       // Invalidar cache de portada para que desaparezca del índice
       if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
@@ -1124,9 +1387,11 @@ function _mcRenderList() {
         // Invalidar cache de portada
         if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
         if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
+          _mcDeleting.add(comic.supabaseId);
           SupabaseClient.deleteWork(comic.supabaseId)
             .then(() => _mcToast(I18n.t('mc_deletedOkCheck')))
-            .catch(err => _mcToast(I18n.t('mc_errDeleteCloudPartial') + err.message));
+            .catch(err => _mcToast(I18n.t('mc_errDeleteCloudPartial') + err.message))
+            .finally(() => { _mcDeleting.delete(comic.supabaseId); });
         } else {
           _mcToast(I18n.t('deleteOk'));
         }
@@ -1169,7 +1434,6 @@ function _mcRenderList() {
       }
       if (typeof openShareModal !== 'undefined') openShareModal(comic);
     }
-  });
 }
 
 /* ── ABRIR UNA OBRA PARA EDITAR (v40.49) ──
@@ -1404,6 +1668,10 @@ async function _mcOpenWorkForEdit(id) {
   if (comicToEdit && _needsDownload) {
     if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_downloadingCloud'));
     try {
+      // v42.11: la portada de la nube (con el texto horneado) se baja EN PARALELO a la descarga de la obra y pasa a ser la
+      // portada LOCAL de lo recién descargado (más abajo, en el WorkStore.save). Así «Mis obras» sigue mostrándola aunque
+      // se salga del editor sin guardar o no haya red (antes este guardado dejaba una portada vacía).
+      const _coverP = (_cloudRow && _cloudRow.cover_url) ? _mcUrlToDataUrl(_cloudRow.cover_url) : Promise.resolve('');
       const { work, editorData } = await SupabaseClient.downloadDraftAsEditorData(comicToEdit.supabaseId);
       // Usar window._sbAnimIdbSave (conexión cacheada) para evitar
       // conflictos con otras conexiones abiertas a cxAnims
@@ -1476,8 +1744,10 @@ async function _mcOpenWorkForEdit(id) {
       // comicToEdit.localEditorData (ver la sincronización de más arriba).
       const _keepPalette = comicToEdit.editorData?._palette || comicToEdit.localEditorData?._palette;
       if (_keepPalette && !_edataClean._palette) _edataClean._palette = _keepPalette;
+      const _cloudCoverData = await _coverP;   // data URL de la portada de la nube ('' si no hay o no se pudo bajar)
       await WorkStore.save({
         ...comicToEdit,
+        ...(_cloudCoverData ? { coverDataUrl: _cloudCoverData } : {}),
         cloudOnly: false,
         cloudNewer: false,
         // Preservar editorData local existente en localEditorData ANTES de sobreescribir
@@ -1790,15 +2060,16 @@ async function _mcCloudLoad() {
     // Buscar en Supabase todas las obras donde author_name coincide con este usuario
     const username = encodeURIComponent(user.username || '');
     // Usar JWT del usuario para que RLS permita leer sus borradores (published=false)
-    const _session = JSON.parse(localStorage.getItem('cs_session') || 'null');
-    const _token = _session?.token || _MC_KEY;
-    const _authHdrs = { 'apikey': _MC_KEY, 'Authorization': `Bearer ${_token}`, 'Range': '0-999' };
+    // v42.11: el token se RENUEVA antes si ha caducado (con el JWT viejo la nube respondía 401, que aquí se leía como «no
+    // hay obras en la nube»), y una respuesta que no es correcta se trata como error de conexión.
+    const _authHdrs = await _mcAuthHdrs({ 'Range': '0-999' });
     // Range: 0-999 garantiza hasta 1000 resultados (límite PostgREST por defecto)
-    const works = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
-      { headers: _authHdrs, cache: 'no-store' })
-      .then(r => r.json());
+    const _wr = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
+      { headers: _authHdrs, cache: 'no-store' });
+    if (!_wr.ok) throw new Error('works: ' + _wr.status);
+    const works = await _wr.json();
 
-    if (!works || !works.length) {
+    if (!Array.isArray(works) || !works.length) {
       _mcToast(I18n.t('mc_noCloudWorks'));
       return;
     }
@@ -1806,6 +2077,7 @@ async function _mcCloudLoad() {
     let imported = 0, skipped = 0;
 
     for (const w of works) {
+      if (w && w.cover_url) _mcCoverUrls.set(w.id, w.cover_url);   // v42.11: la portada ya viene en la consulta
       // ¿Ya existe localmente con este supabaseId?
       const existing = WorkStore.getAll().find(c => c.supabaseId === w.id);
       if (existing) {
@@ -1848,7 +2120,7 @@ async function _mcCloudLoad() {
 
         // Migrar thumbnail base64 de localStorage a cache en memoria (libera espacio)
         if (existing.panels && existing.panels[0] && existing.panels[0].dataUrl) {
-          if (!_mcThumbCache.has(w.id)) _mcThumbCache.set(w.id, existing.panels[0].dataUrl);
+          if (!_mcThumbCache.has(_mcLK(existing.id))) _mcThumbCache.set(_mcLK(existing.id), existing.panels[0].dataUrl);
           existing.panels = [];
           dirty = true;
         }
@@ -1857,42 +2129,20 @@ async function _mcCloudLoad() {
         continue;
       }
 
-      // Obra nueva en nube — cachear thumbnail en memoria, NO en localStorage
-      try {
-        const firstPanels = await fetch(
-          `${_MC_BASE}/panels?work_id=eq.${w.id}&order=panel_order.asc&limit=1&select=data_url`,
-          { headers: _authHdrs, cache: 'no-store' }
-        ).then(r => r.json());
-        const thumbDataUrl = firstPanels?.[0]?.data_url || '';
-        if (thumbDataUrl) _mcThumbCache.set(w.id, thumbDataUrl);
-      } catch(e) { /* sin thumbnail */ }
-
-      const localComic = {
-        id:           'comic_' + Date.now() + '_' + Math.random().toString(36).slice(2,6),
-        userId:       user.id,
-        username:     user.username,
-        supabaseId:   w.id,
-        title:        w.title       || I18n.t('noWork'),
-        author:       w.author_name || user.username,
-        genre:        w.genre       || '',
-        navMode:      w.nav_mode    || 'fixed',
-        panels:       [],        // NO persisitir base64 en localStorage — se carga lazy
-        panelCount:   w.panel_count || 0,
-        pages:        [],
-        published:    w.published   ?? false,
-        approved:     w.published   ?? false,
-        pendingReview: false,
-        cloudOnly:    true,
-        createdAt:    w.created_at  || new Date().toISOString(),
-        updatedAt:    w.updated_at  || new Date().toISOString(),
-      };
-      WorkStore.save(localComic);
+      if (_mcDeleting.has(w.id)) continue;   // se está borrando en la nube: aún sale en el listado, pero no debe volver
+      // Obra nueva en nube — SIN imágenes en localStorage: la portada (cover_url, ya cacheado arriba; si la obra es antigua
+      // y no la tiene, la hoja 1) se pide perezosamente al pintar la fila (ver _mcFillThumb). v42.11: ya no se descarga la
+      // hoja 1 entera de cada obra nueva, una a una, antes de poder pintar nada.
+      // Un único registro por obra de la nube: se comprueba y se guarda sin ninguna espera entre medias (ver también
+      // _mcSyncCloudDates, que importa lo mismo en cada acceso).
+      WorkStore.save(_mcCloudWorkRecord(w, user));
       imported++;
     }
 
     // v41.86: «Sin título» repetido entre las obras de la nube y las locales de este dispositivo
     const _cd3 = {}; works.forEach(w => { if (w && w.id) _cd3[w.id] = w.updated_at; });
     _mcAfterCloudMerge(user, _cd3, (imported > 0 || skipped > 0) ? 2400 : 0);
+    _mcResetFailedThumbs();   // la nube responde: lo que no pudo cargarse antes se vuelve a pedir
     _mcRenderList();
     if (imported > 0)      _mcToast(I18n.t(imported > 1 ? 'mc_cloudUpdatedMany' : 'mc_cloudUpdatedOne', { n: imported }));
     else if (skipped > 0)  _mcToast(I18n.t('mc_allUpToDate'));

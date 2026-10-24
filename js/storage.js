@@ -523,8 +523,12 @@ const WorkStore = (() => {
       _lastWrite.set(id, { ok: true, minBytes: json.length });
       // Portada aparte (pequeña) — ver getCover. Misma regla que usaba "Mis obras":
       // coverDataUrl (con texto horneado) y, si no hay, la imagen de la hoja 1.
-      await _opfsWriteCover(dir, id,
-        comic.coverDataUrl || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl) || '');
+      // v42.11: SOLO se reescribe si hay portada nueva. Hay guardados del archivo pesado que no traen imágenes
+      // (editorData sin hojas renderizadas: «Recuperar versión del dispositivo», «Editar» sobre una obra de la nube…)
+      // y antes dejaban aquí una portada VACÍA que pisaba la buena → la obra se quedaba sin miniatura. Sin portada
+      // nueva se conserva la que ya había (si no había ninguna, getCover la reconstruye como siempre).
+      const _newCover = comic.coverDataUrl || (comic.panels && comic.panels[0] && comic.panels[0].dataUrl) || '';
+      if (_newCover) await _opfsWriteCover(dir, id, _newCover);
       return true;
     } catch(e) { _lastWrite.set(id, { ok: false }); console.warn('[OPFS] write error:', e); return false; }
   }

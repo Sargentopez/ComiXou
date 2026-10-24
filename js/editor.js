@@ -33128,8 +33128,12 @@ async function _edSaveProjectInner(_keepOverlay){
     // capas que lo cacheado) — red de seguridad ante cualquier cambio que
     // hubiera podido escapar tanto al contador como a los flags.
     const _counterSnapshot = p._dirtyCountLocal || 0; // capturado YA, antes de decidir nada
+    // v42.11: además la hoja cacheada debe traer su imagen (dataUrl). Si no (obra cuyo archivo local perdió las imágenes de
+    // las hojas —«Recuperar versión del dispositivo», «Editar» sobre una obra recién bajada de la nube—), reutilizarla
+    // la perpetuaba SIN imagen y «Mis obras» se quedaba sin miniatura aunque la hoja 1 estuviera perfecta en el editor:
+    // sin dataUrl se reserializa y se renderiza como el resto (mismo criterio que _canReuseRender, más abajo).
     const _canReuse = !window._edPagesStructureDirtyLocal && !_edPageDirtyLocal(p) &&
-                       p._cachedPanelLocal && p._cachedSerLocal &&
+                       p._cachedPanelLocal && p._cachedPanelLocal.dataUrl && p._cachedSerLocal &&
                        p._cachedSerLocal.layers.length === p.layers.length;
     if (_canReuse) {
       // v40.77: refrescar el estado "sucio para nube" en la caché reutilizada
