@@ -97,6 +97,10 @@ const _HOME_MAX_INITIAL_PAGES = 8;    // tope de seguridad al "rellenar pantalla
 // real del servidor al accederse, nunca una lista que podría estar
 // desactualizada (obra editada/despublicada desde entonces).
 let _homeLoadError      = false;
+// v42.15 — al volver la conexión (ver _homeOnBackOnline):
+let _homeInitialRunning = 0;       // nº de bucles de reintentos de la carga inicial en marcha (ver _homeStartInitialLoad)
+let _homeRetryWake      = null;    // despierta la espera entre dos reintentos de ese bucle (la red acaba de volver: no hace falta esperar más)
+let _homeBackOnlineWait = false;   // volvió la red con una carga en curso (pudo salir sin red): al terminar se decide qué hacer
 
 // Tiempo máximo que se espera CADA página individual antes de darla por
 // fallida (ver _homeLoadNextPage). Generoso a propósito: una página puede
@@ -244,6 +248,39 @@ function _homeStopRefresh() {
   }
 }
 
+/* ── VUELVE LA CONEXIÓN con «Publicados» en pantalla (v42.15) ──
+   Petición de Alberto (junto con «Mis obras», ver _mcOnBackOnline en my-works.js): si la red se corta y vuelve con «Publicados» en
+   pantalla, debe ponerse al día sola. Antes, un fallo de carga (aviso ⚠️ «no se han podido cargar las obras», el «Reintentar»
+   de cargar más, miniaturas rotas) esperaba a que la persona tocara algo, o al siguiente refresco de 5 minutos.
+   Patrón estándar «revalidar al reconectar» (SWR revalidateOnReconnect, React Query refetchOnReconnect): al evento online del
+   navegador se vuelve a pedir lo que hay en pantalla. Aquí, según el estado:
+   · carga inicial en curso con reintentos (ver _homeStartInitialLoad): se le adelanta la espera en vez de lanzar otra;
+   · hay una petición en camino (pudo salir sin red): se espera a que termine y entonces se decide (_homeBackOnlineWait);
+   · sin obras por un fallo de carga (⚠️): se vuelve a cargar con la misma carga con reintentos de la entrada (backoff, por si
+     el evento online llega antes de que la red sea utilizable);
+   · lista ya cargada pero vieja (más de _HOME_REFRESH_MS) y sin recorrer: se renueva, como el refresco periódico;
+   · si falló «cargar más»: se reintenta solo, como el botón «Reintentar»;
+   · y las miniaturas que se quedaron rotas se vuelven a pedir (cxReloadBrokenImages, utils.js).
+   Una lista al día y sin fallos no se toca (nada de parpadeos ni saltos de scroll por un microcorte). Los filtros activos se
+   respetan (la carga usa activeFilter). El listener es global y se registra UNA vez, como el de «Mis obras»; solo actúa con
+   «Publicados» en pantalla (existe #worksGrid). */
+function _homeOnBackOnline() {
+  const grid = document.getElementById('worksGrid');
+  if (!grid) return;
+  if (!_homeFacets) _homeLoadFacets();   // el menú de Filtros se quedó sin géneros/autores
+  if (_homeInitialRunning > 0) { if (_homeRetryWake) _homeRetryWake(); return; }
+  if (_homeLoadingMore) { _homeBackOnlineWait = true; return; }
+  _homeBackOnlineWait = false;
+  if (_homeWorks.length === 0) {
+    if (_homeLoadError) _homeStartInitialLoad();
+    return;
+  }
+  if (Date.now() - _homeLastFetch > _HOME_REFRESH_MS && _homeWorks.length <= _HOME_PAGE_SIZE) { _homeStartInitialLoad(); return; }
+  if (_homeMoreError) { _homeHasMore = true; _homeMoreError = false; _homeLoadNextPage(); }
+  cxReloadBrokenImages(grid);
+}
+window.addEventListener('online', _homeOnBackOnline);
+
 // Universo completo de géneros/autores publicados (ligera: sin miniaturas,
 // sin paginar) para el menú de Filtros — ver fetchPublishedFacets en
 // supabase-client.js. Deliberadamente aparte de las obras paginadas: el
@@ -320,15 +357,23 @@ async function _homeStartLoading(signalSplash = true) {
 async function _homeStartInitialLoad() {
   const _startedAt = Date.now();
   let _attempt = 0;
-  while (true) {
-    await _homeStartLoading(false);
-    if (_homeWorks.length > 0 || !_homeLoadError) break; // éxito, o de verdad no hay obras — no es un fallo que reintentar
-    const _elapsed = Date.now() - _startedAt;
-    const _confirmedOffline = navigator.onLine === false;
-    if (_elapsed >= _HOME_INITIAL_RETRY_BUDGET_MS || _confirmedOffline) break;
-    const _wait = _HOME_RETRY_BACKOFF_MS[Math.min(_attempt, _HOME_RETRY_BACKOFF_MS.length - 1)];
-    await new Promise(r => setTimeout(r, _wait));
-    _attempt++;
+  _homeInitialRunning++;   // v42.15: ver _homeOnBackOnline
+  try {
+    while (true) {
+      await _homeStartLoading(false);
+      if (_homeWorks.length > 0 || !_homeLoadError) break; // éxito, o de verdad no hay obras — no es un fallo que reintentar
+      const _elapsed = Date.now() - _startedAt;
+      const _confirmedOffline = navigator.onLine === false;
+      if (_elapsed >= _HOME_INITIAL_RETRY_BUDGET_MS || _confirmedOffline) break;
+      const _wait = _HOME_RETRY_BACKOFF_MS[Math.min(_attempt, _HOME_RETRY_BACKOFF_MS.length - 1)];
+      // v42.15: la espera se acorta si vuelve la conexión (evento online, ver _homeOnBackOnline)
+      await new Promise(r => { const t = setTimeout(r, _wait); _homeRetryWake = () => { clearTimeout(t); r(); }; });
+      _homeRetryWake = null;
+      _attempt++;
+    }
+  } finally {
+    _homeInitialRunning--;
+    _homeRetryWake = null;
   }
   if (typeof window._cxSplashReady === 'function') window._cxSplashReady();
 }
@@ -477,6 +522,9 @@ async function _homeLoadNextPage() {
     return false;
   } finally {
     _homeLoadingMore = false;
+    // v42.15: volvió la red mientras esta petición estaba en camino (pudo salir sin red): ahora que ha terminado —con
+    // éxito o con fallo— se decide qué hacer. Se difiere un turno para que quien la esperaba termine de actualizar el estado.
+    if (_homeBackOnlineWait) { _homeBackOnlineWait = false; setTimeout(_homeOnBackOnline, 0); }
   }
 }
 

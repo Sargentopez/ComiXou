@@ -1117,6 +1117,23 @@ function cxIsoMs(v) {
   return isNaN(t) ? 0 : t;
 }
 
+/* Vuelve a pedir las imágenes de un contenedor que el navegador no pudo cargar (v42.15). Ocurre cuando se corta la red con la
+   lista ya pintada (o al repintarla sin red, p. ej. al volver a mostrar un lote descargado de memoria): la <img> se queda rota
+   y, aunque vuelva la conexión, el navegador no la reintenta por su cuenta. Asignar de nuevo el mismo src hace una petición
+   nueva (comprobado en Chromium). Solo toca las que YA terminaron y quedaron rotas (complete + naturalWidth 0): las que aún
+   cargan, las que cargaron bien y las data: se dejan como están. Devuelve cuántas se reintentan.
+   Compartida por home.js («Publicados») y admin.js (pestañas), al volver la conexión. */
+function cxReloadBrokenImages(root) {
+  if (!root || !root.querySelectorAll) return 0;
+  let n = 0;
+  root.querySelectorAll('img').forEach(img => {
+    const s = img.getAttribute('src');
+    if (!s || /^data:/i.test(s) || !img.complete || img.naturalWidth > 0) return;
+    img.src = s; n++;
+  });
+  return n;
+}
+
 /* Longitud mínima de contraseña (v40.53). La documentación de Supabase desaconseja menos de 8.
    Solo se exige al REGISTRARSE y al CAMBIAR/RESTABLECER la contraseña — NUNCA al iniciar sesión:
    quien ya tiene una de 6 o 7 caracteres debe poder seguir entrando. Si se cambia este número hay

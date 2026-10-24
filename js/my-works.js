@@ -847,13 +847,96 @@ function MyWorksView_init() {
       de «nube más reciente» (lo de siempre, más el estado «aprobada», que solo actualizaba el botón);
    2) obras de la nube que este dispositivo aún NO tiene: se importan (antes solo si no tenía ninguna);
    3) las miniaturas que no pudieron cargarse por falta de red se reintentan (la nube acaba de responder).
-   Una sola sincronización a la vez: dos entradas seguidas comparten la misma (no duplican lo importado). */
+   Una sola sincronización a la vez: dos entradas seguidas comparten la misma (no duplican lo importado).
+   v42.15: la promesa devuelta se resuelve con true si la nube respondió (o no había nada que hacer) y con false si no pudo
+   consultarse (sin red, token, tiempo agotado…), para que quien llama pueda reintentar (ver _mcOnBackOnline). Con again=true,
+   si ya había una en camino se repite otra al terminar: la que iba en camino pudo salir cuando aún no había red, y compartir su
+   resultado dejaría la lista sin poner al día. */
 let _mcSyncRun = null;
-function _mcSyncCloudDates() {
-  if (_mcSyncRun) return _mcSyncRun;
-  _mcSyncRun = _mcSyncCloudDatesInner().catch(() => {}).finally(() => { _mcSyncRun = null; });
+let _mcSyncAgain = false;   // v42.15: se pidió otra puesta al día mientras una iba en camino
+let _mcLastSyncAt = 0;      // v42.12: cuándo empezó la última puesta al día (por una entrada o por un regreso a la app)
+function _mcSyncCloudDates(again) {
+  _mcLastSyncAt = Date.now();
+  if (_mcSyncRun) { if (again) _mcSyncAgain = true; return _mcSyncRun; }
+  _mcSyncRun = _mcSyncCloudDatesInner().catch(() => false).then(reached => {
+    _mcSyncRun = null;
+    if (_mcSyncAgain) { _mcSyncAgain = false; return _mcSyncCloudDates(); }   // se resuelve con el resultado de la repetición
+    return reached;
+  });
   return _mcSyncRun;
 }
+
+/* ── VOLVER A LA APP con «Mis obras» en pantalla (v42.12) ──
+   Petición de Alberto (siguiente paso de v42.11): la lista ya se pone al día en cada ENTRADA a «Mis obras»; ahora también cuando
+   se vuelve a la app con la lista ya en pantalla —cambiar de app y regresar, bloquear y desbloquear la pantalla, volver a la
+   pestaña—. La PWA puede quedarse horas en segundo plano con la lista pintada, y entretanto la nube cambia (otro dispositivo),
+   el token caduca o vuelve la red.
+   Patrón estándar «revalidar al recuperar el foco» (SWR revalidateOnFocus, React Query refetchOnWindowFocus): se escucha
+   visibilitychange —el cambio de app en un móvil lo dispara, ver Page Lifecycle de Chrome— y focus (ordenadores). En Android
+   llegan los dos a la vez, así que entre dos puestas al día pasan al menos 5 s (el mismo focusThrottleInterval por defecto de SWR).
+   El tiempo se mide con Date.now() (reloj de pared) y no con performance.now(): el reloj monótono no avanza con el móvil
+   dormido y tras horas de pantalla apagada parecería que la lista acaba de ponerse al día.
+   Solo actúa con «Mis obras» en pantalla (existe #mcContent). Los listeners son globales y se registran UNA vez al cargar el
+   script, como el de cx:store (arriba): los atados a init/destroy de la vista no son fiables porque el botón atrás del
+   navegador cambia de vista sin llamar a destroy.
+   Es un acceso nuevo (ver _mcNewAccess): lo que no pudo cargarse antes se vuelve a pedir, sin repintar la lista; después la
+   sincronización repinta solo si la nube trajo algo distinto. */
+const _MC_RETURN_MIN_MS = 5000;
+// Un acceso nuevo con la lista ya en pantalla (v42.15: compartido por «volver a la app» y «volvió la conexión»). Devuelve la
+// promesa de la puesta al día (true/false, ver _mcSyncCloudDates), o null si «Mis obras» no está en pantalla.
+function _mcRefreshView(again) {
+  const wrap = document.getElementById('mcContent');
+  if (!wrap) return null;
+  _mcNewAccess();
+  // las filas que ahora necesitan su miniatura (sin imagen en la caché, o la descartada) se piden como en una entrada
+  wrap.querySelectorAll('.work-row').forEach(row => {
+    const c = WorkStore.getById(row.dataset.id);
+    const th = row.querySelector('.work-row-thumb');
+    if (c && th && _mcNeedsFill(c)) th.setAttribute('data-thumb-fill', c.id);
+  });
+  _mcObserveThumbs(wrap);
+  return _mcSyncCloudDates(again);
+}
+function _mcOnReturnToApp() {
+  if (document.visibilityState !== 'visible') return;
+  if (!document.getElementById('mcContent')) return;
+  const since = Date.now() - _mcLastSyncAt;
+  if (since >= 0 && since < _MC_RETURN_MIN_MS) return;   // (un reloj cambiado hacia atrás cuenta como «hace mucho»)
+  _mcRefreshView();
+}
+document.addEventListener('visibilitychange', _mcOnReturnToApp);
+window.addEventListener('focus', _mcOnReturnToApp);
+
+/* ── VUELVE LA CONEXIÓN con «Mis obras» en pantalla (v42.15) ──
+   Petición de Alberto (siguiente paso de v42.14): si la red se corta y vuelve con la lista en pantalla, debe ponerse al día sola.
+   Antes solo lo hacía al entrar o al volver a la app: sin salir de la pantalla, las obras nuevas de la nube, los cambios de
+   título o de estado y las miniaturas que fallaron por la falta de red no aparecían hasta tocar algo.
+   Patrón estándar «revalidar al reconectar» (SWR revalidateOnReconnect, React Query refetchOnReconnect: ambos escuchan el
+   evento online del navegador y vuelven a pedir lo que hay en pantalla). Es una reconexión, no un regreso al foco, así que NO
+   aplica el mínimo de 5 s entre puestas al día (_MC_RETURN_MIN_MS): una puesta al día que acaba de fallar por falta de red no puede
+   impedir la de la reconexión. Y si había una en camino —pudo salir sin red— se repite al terminar (again).
+   El evento online puede llegar antes de que la red sea realmente utilizable (DNS, portal cautivo, cambio wifi↔datos): si la
+   nube sigue sin responder se reintenta con espera creciente (2, 5 y 10 s; el mismo backoff que usan los SDK de AWS o Google
+   Cloud), siempre que el navegador siga dando la red por buena. Cada «online» u «offline» nuevo anula los reintentos anteriores. */
+const _MC_ONLINE_RETRY_MS = [2000, 5000, 10000];
+let _mcOnlineTimer = null;
+let _mcOnlineGen = 0;   // cada evento online/offline invalida los reintentos pendientes del anterior
+function _mcBackOnlineRun(n, gen) {
+  clearTimeout(_mcOnlineTimer); _mcOnlineTimer = null;
+  const run = _mcRefreshView(true);
+  if (!run) return;   // «Mis obras» ya no está en pantalla
+  run.then(reached => {
+    if (gen !== _mcOnlineGen || reached !== false || n >= _MC_ONLINE_RETRY_MS.length) return;
+    _mcOnlineTimer = setTimeout(() => {
+      _mcOnlineTimer = null;
+      if (gen === _mcOnlineGen && navigator.onLine !== false) _mcBackOnlineRun(n + 1, gen);
+    }, _MC_ONLINE_RETRY_MS[n]);
+  });
+}
+function _mcOnBackOnline() { _mcBackOnlineRun(0, ++_mcOnlineGen); }
+function _mcOnWentOffline() { _mcOnlineGen++; clearTimeout(_mcOnlineTimer); _mcOnlineTimer = null; }
+window.addEventListener('online', _mcOnBackOnline);
+window.addEventListener('offline', _mcOnWentOffline);
 
 // Todas las obras del autor en la nube (consulta ligera: metadatos y portada, sin imágenes). null si falla.
 async function _mcFetchAuthorIndex(user) {
@@ -888,10 +971,12 @@ function _mcCloudWorkRecord(w, user) {
   };
 }
 
+// Devuelve true si la nube respondió (o no había nada que consultar: sin sesión), y false SOLO si no pudo consultarse (sin red,
+// token rechazado, tiempo agotado…). v42.15: así quien llama sabe si merece la pena reintentar (ver _mcOnBackOnline).
 async function _mcSyncCloudDatesInner() {
-  if (typeof SupabaseClient === 'undefined') return;
+  if (typeof SupabaseClient === 'undefined') return true;
   const _mcUser = Auth.currentUser?.();
-  if (typeof Auth === 'undefined' || !_mcUser) return;
+  if (typeof Auth === 'undefined' || !_mcUser) return true;
   const mine = c => c.userId === _mcUser.id || c.username === _mcUser.username;
 
   let changed = false;     // ¿hay que repintar la lista?
@@ -985,13 +1070,14 @@ async function _mcSyncCloudDatesInner() {
   // v41.86: «Sin título» repetido entre obras de la nube y locales (los títulos acaban de sincronizarse)
   if (cloudOk && _mcAfterCloudMerge(_mcUser, cloudDates)) changed = true;
 
-  if (!cloudOk && !changed) return;
+  if (!cloudOk && !changed) return false;
   // La nube ha respondido: las miniaturas que fallaron por falta de red / token se piden otra vez.
   const retry = cloudOk ? _mcResetFailedThumbs() : [];
   if (changed) _mcRenderList();                       // el repintado pide por sí solo lo que falte
   else retry.forEach(id => _mcFillThumb(id));
 
   // La biblioteca es por proyecto — se sincroniza al abrir/guardar cada proyecto en el editor
+  return cloudOk;
 }
 
 /* ── RENDERIZAR LISTA ── */

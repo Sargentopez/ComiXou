@@ -811,10 +811,14 @@ body.ed-scale-tablet {
   will-change: transform;  /* capa de compositing — reduce latencia en Android */
   /* Sin borde/sombra — el lienzo se dibuja dentro del canvas via JS */
 }
-#editorCanvas.tool-draw          { cursor: none; }
-#editorCanvas.tool-eraser        { cursor: none; }
+/* v42.14 — el cursor NATIVO ya no se oculta por la herramienta (antes: cursor:none en draw/eraser/watercolor aunque el círculo
+   propio estuviera oculto o parado en otro sitio → «desaparece el cursor» con un modal abierto). Ahora el nativo es una cruz y
+   solo se oculta mientras el círculo propio (#edBrushCursor) está visible: JS pone .cx-ownCursor en #editorCanvasWrap
+   (MutationObserver sobre el círculo, ver _edBrushCursorInit en editor.js). Un cursor inline (zoom-rect, cuentagotas) sigue ganando. */
+#editorCanvas.tool-draw          { cursor: crosshair; }
+#editorCanvas.tool-eraser        { cursor: crosshair; }
 #editorCanvas.tool-fill          { cursor: crosshair; }
-#editorCanvas.tool-fill.tool-watercolor { cursor: none; }
+#editorCanvasWrap.cx-ownCursor #editorCanvas { cursor: none; }
 
 
 /* ══════════════════════════════

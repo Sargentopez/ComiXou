@@ -13878,8 +13878,9 @@ function _edLayerPathRotDeg(la) {
 // animaciones, posición/giro de los objetos con trayectoria, invisibilidades… Esos valores NO se escriben nunca en
 // las capas (viven en un Map capa→estado que calcula EdAnimCtl.evaluate) y solo los lee el dibujo mientras
 // _edAnimCtlRender está en true, es decir, SOLO dentro del compositor del editor (_edRenderFrame y el repintado de
-// la capa arrastrada en edRedraw). Miniaturas, exportación, autoguardado, deshacer, copiar, visor y lector pintan con
-// las capas tal cual → siguen viendo siempre el fotograma inicial.
+// la capa arrastrada en edRedraw) y —desde v42.13— dentro de «Descargar hoja actual» (edExportPagePNG: PNG/JPG en el
+// instante del reloj, igual que el canvas). Miniaturas, «Descargar selección», autoguardado, deshacer, copiar, visor y
+// lector pintan con las capas tal cual → siguen viendo siempre el fotograma inicial.
 let _edAnimCtlRender = false;   // true solo mientras el compositor del editor pinta con el estado del reloj
 let _edAnimCtlStates = null;    // Map<capa, { idx, fade, px, py, rot, oc }> de la evaluación en curso
 function _edAnimCtlBegin() {
@@ -17775,7 +17776,9 @@ function edOnMove(e){
     return;
   }
   // Cursor personalizado en PC para herramientas de dibujo (hover sin gesto activo)
-  if(e.pointerType !== 'touch' && !_cof.on &&
+  // v42.14: mismas exclusiones que _edBrushCursorWanted() (rect. de zoom y cuentagotas llevan su cruz nativa, sin círculo encima);
+  // el seguimiento principal del círculo ya no depende de este bloque (ver _edBrushCursorTrack).
+  if(e.pointerType !== 'touch' && !_cof.on && !_edZoomRectActive && !window._edEyedropActive &&
      ['draw','eraser','fill'].includes(edActiveTool)){
     // Ocultar cursor circular si el puntero está sobre el panel, no sobre el canvas
     const _overPanel = !!document.elementFromPoint(e.clientX, e.clientY)?.closest('#edOptionsPanel');
@@ -18777,6 +18780,7 @@ function edOnEnd(e){
       edCamera.z = _newZ;
     }
     edRedraw();
+    _edBrushCursorSync(); // v42.14: terminado el rect. de zoom, el círculo vuelve ya bajo el puntero (sin esperar a moverlo)
     return;
   }
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
@@ -23722,6 +23726,93 @@ function edMoveBrush(e){
 }
 
 /* ══════════════════════════════════════════
+   CURSOR PROPIO EN PC — seguimiento independiente + cursor nativo coherente (v42.14)
+   ──────────────────────────────────────────
+   Bug (Alberto): «en ocasiones, creando o editando dibujos a mano con la barra flotante en PC, desaparece el cursor al estar abierto
+   algún modal de la barra». Causas reproducidas (prueba ed_t_cursor4214.js):
+   · El cursor NATIVO se ocultaba por CSS según la HERRAMIENTA (cursor:none en pincel/goma/acuarela), pero el círculo propio solo se
+     movía desde edOnMove, DESPUÉS de sus filtros (puntero fantasma ratón+lápiz, modo zoom-rect...). Si un filtro descartaba el
+     movimiento, el círculo se quedaba congelado en otro sitio y el nativo seguía oculto → ningún cursor. Ejemplo real: el botón 🔍
+     (y otros controles que se tragan el pointerup) dejaban huérfano _edActiveNonTouchPointerId; con un lápiz/tableta (otro id) edOnMove
+     descartaba todos sus movimientos mientras el popup seguía abierto.
+   · Con el puntero QUIETO, al cerrarse un modal/popup o plegarse el panel cambia lo que hay debajo sin ningún pointermove: círculo
+     oculto + nativo «none» → sin cursor hasta mover el ratón.
+   Solución (patrón estándar: el seguidor del cursor no depende de la máquina de estados de la herramienta):
+   1) _edBrushCursorTrack: listener en CAPTURA sobre document (pointermove + pointerover; ningún stopPropagation de un modal lo evita)
+      que coloca el círculo bajo el puntero o lo oculta. pointerover cubre el «puntero quieto» (Chrome lo emite cuando cambia lo
+      que hay bajo un puntero parado, aunque no haya pointermove).
+   2) El cursor nativo del lienzo solo se oculta (CSS: #editorCanvasWrap.cx-ownCursor) mientras el círculo está visible
+      (MutationObserver sobre su style, ver _edBrushCursorInit) → nunca pueden faltar los dos a la vez, pase lo que pase.
+   ══════════════════════════════════════════ */
+let _edPtrLast = null;      // última posición conocida de un puntero NO táctil {x,y}
+let _edPtrLastType = '';    // tipo del último puntero visto (cualquiera): si fue táctil no se coloca el círculo con una posición antigua
+
+// ¿Corresponde mostrar el círculo con el estado actual de la herramienta? (sin mirar dónde está el puntero)
+function _edBrushCursorWanted(){
+  if(window._gcpActive || !edCanvas) return false;
+  if(!['draw','eraser','fill'].includes(edActiveTool)) return false;
+  if(typeof _cof !== 'undefined' && _cof.on) return false;                    // cursor desplazado: tiene el suyo
+  if(edActiveTool === 'fill' && !_edDodgeBurnActive &&
+     (typeof edFillBrushType === 'undefined' || edFillBrushType !== 'watercolor')) return false;   // bote normal: cruz nativa
+  if(_edZoomRectActive || window._edEyedropActive) return false;              // cruz nativa inline (rect. de zoom / cuentagotas)
+  return true;
+}
+
+function _edBrushCursorTrack(e){
+  _edPtrLastType = e.pointerType;
+  if(e.pointerType === 'touch') return;
+  _edPtrLast = { x: e.clientX, y: e.clientY };
+  const cur = document.getElementById('edBrushCursor'); if(!cur) return;
+  if(e.target === edCanvas && _edBrushCursorWanted()) edMoveBrush(e);
+  else if(cur.style.display && cur.style.display !== 'none') cur.style.display = 'none';
+}
+
+// Recoloca el círculo con la ÚLTIMA posición conocida del puntero (al entrar en dibujo, al soltar la barra arrastrada, al terminar el
+// rectángulo de zoom...). Si el puntero no está sobre el lienzo (o no hay posición fiable) lo oculta: el cursor nativo queda visible.
+function _edBrushCursorSync(){
+  const cur = document.getElementById('edBrushCursor'); if(!cur) return;
+  if(_edPtrLast && _edPtrLastType !== 'touch' && _edBrushCursorWanted() &&
+     document.elementFromPoint(_edPtrLast.x, _edPtrLast.y) === edCanvas){
+    edMoveBrush({ target: edCanvas, clientX: _edPtrLast.x, clientY: _edPtrLast.y, pointerType: _edPtrLastType || 'mouse' });
+  } else if(cur.style.display && cur.style.display !== 'none'){
+    cur.style.display = 'none';
+  }
+}
+
+// Acopla cursor nativo ⇔ círculo: .cx-ownCursor en #editorCanvasWrap exactamente mientras el círculo tiene display visible.
+// Es un observador (no una llamada en cada sitio que muestra/oculta el círculo) para que sea cierto por construcción: hoy hay ~20
+// sitios que tocan style.display del círculo, y mañana puede haber más.
+function _edBrushCursorInit(){
+  if(window._edCurObs){ window._edCurObs.disconnect(); window._edCurObs = null; }
+  const cur = document.getElementById('edBrushCursor'), wrap = document.getElementById('editorCanvasWrap');
+  if(!cur || !wrap || typeof MutationObserver === 'undefined') return;
+  const sync = () => { const d = cur.style.display; wrap.classList.toggle('cx-ownCursor', !!d && d !== 'none'); };
+  window._edCurObs = new MutationObserver(sync);
+  window._edCurObs.observe(cur, { attributes: true, attributeFilter: ['style'] });
+  sync();
+  // Y al cambiar de herramienta (todas pasan por la clase del lienzo: tool-draw / tool-eraser / tool-fill [tool-watercolor] / ''), el
+  // círculo se recoloca o se oculta YA según la herramienta nueva, con el puntero quieto (p.ej. pincel → bote: ya no queda el círculo viejo).
+  if(window._edClsObs){ window._edClsObs.disconnect(); window._edClsObs = null; }
+  if(edCanvas){
+    window._edClsObs = new MutationObserver(() => _edBrushCursorSync());
+    window._edClsObs.observe(edCanvas, { attributes: true, attributeFilter: ['class'] });
+  }
+}
+
+// Anti-fantasma (ratón+lápiz): edOnStart fija _edActiveNonTouchPointerId con CUALQUIER pointerdown no táctil — también sobre controles de
+// la barra o modales — y solo lo limpia edOnEnd. Si el control se traga el pointerup (stopPropagation: botón 🔍, etc.) edOnEnd no lo ve y
+// el id quedaba huérfano. Este listener en CAPTURA ve todos los pointerup: si termina el puntero registrado y, una vez despachado el
+// evento, edOnEnd no lo ha limpiado, se limpia aquí (misma marca de tiempo → nunca pisa un registro nuevo).
+function _edGhostUpSweep(e){
+  if(e.pointerType === 'touch') return;
+  const id = e.pointerId, ts = _edActiveNonTouchPointerTs;
+  if(_edActiveNonTouchPointerId !== id) return;
+  setTimeout(() => {
+    if(_edActiveNonTouchPointerId === id && _edActiveNonTouchPointerTs === ts) _edActiveNonTouchPointerId = null;
+  }, 0);
+}
+
+/* ══════════════════════════════════════════
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
@@ -28298,7 +28389,7 @@ function edRenderOptionsPanel(mode){
       const dl=edLayers[edSelectedIdx]; if(!dl||dl.type!=='draw') return;
       edActiveTool='draw';
       edCanvas.className='tool-draw';
-      const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      _edBrushCursorSync(); // v42.14: círculo bajo el puntero si está sobre el lienzo (antes: 'block' a ciegas, en una posición vieja)
       _edDrawInitHistory();
       _edPropsOverlayHide();
       _edDrawLockUI();
@@ -28331,7 +28422,7 @@ function edRenderOptionsPanel(mode){
       edSelectedIdx=-1;
       edActiveTool='draw';
       edCanvas.className='tool-draw';
-      const cur=$('edBrushCursor');if(cur)cur.style.display='block';
+      _edBrushCursorSync(); // v42.14 (ver arriba)
       _edDrawInitHistory();
       _edDrawLockUI();
       edRenderOptionsPanel('draw');
@@ -29676,6 +29767,9 @@ function _edSnapToRules(la) {
    ══════════════════════════════════════════ */
 let _edZoomPrevTool = 'draw'; // herramienta previa para restaurar tras zoom
 let _edZoomRectActive = false; // true cuando el usuario arrastra el rect de zoom
+// v42.14 — NUNCA estaban declaradas (solo se asignaban): leerlas en edOnMove con el modo 🔍+ activo y antes del primer pointerdown
+// lanzaba ReferenceError en CADA movimiento del ratón (edOnMove se abortaba antes de llegar a nada más).
+let _edZoomRectStart = null, _edZoomRectCur = null;
 
 function _edZoomPick(anchorEl) {
   const _old = document.getElementById('_edZoomPickOverlay');
@@ -29953,7 +30047,7 @@ function edInitDrawBar() {
     // Pequeño delay para que el click bloqueado no se propague tras soltar
     setTimeout(() => { _edbDragLocked = false; }, 50);
     if (['draw','eraser'].includes(edActiveTool)) {
-      const cur = $('edBrushCursor'); if (cur) cur.style.display = 'block';
+      _edBrushCursorSync(); // v42.14: antes 'block' a ciegas (el círculo reaparecía en la posición ANTERIOR al arrastre)
     }
   }
 
@@ -38337,6 +38431,8 @@ function EditorView_destroy(){
     window._edListeners.forEach(([el,evt,fn,opts])=>el.removeEventListener(evt,fn,opts));
     window._edListeners = null;
   }
+  if(window._edCurObs){ window._edCurObs.disconnect(); window._edCurObs = null; } // v42.14: acoplamiento cursor nativo ⇔ círculo
+  if(window._edClsObs){ window._edClsObs.disconnect(); window._edClsObs = null; }
   if(window._edWheelFn){
     window.removeEventListener('wheel', window._edWheelFn);
     window._edWheelFn = null;
@@ -39050,8 +39146,15 @@ function EditorView_init(){
     // ninguna condición de salida temprana — cualquier tap/click cuenta,
     // sea sobre el canvas, un panel, un botón o un diálogo.
     [document, 'pointerdown',  _edInteractionTick, {capture:true}],
+    // v42.14 — cursor propio en PC: seguimiento independiente de edOnMove (ver «CURSOR PROPIO EN PC» junto a edMoveBrush) y barrido
+    // del id de puntero huérfano. Ambos en CAPTURA: ningún stopPropagation de un modal/control puede impedirlos.
+    [document, 'pointermove',  _edBrushCursorTrack, {capture:true, passive:true}],
+    [document, 'pointerover',  _edBrushCursorTrack, {capture:true, passive:true}],
+    [document, 'pointerup',    _edGhostUpSweep,     {capture:true, passive:true}],
+    [document, 'pointercancel',_edGhostUpSweep,     {capture:true, passive:true}],
   ];
   window._edListeners.forEach(([el, evt, fn, opts]) => el.addEventListener(evt, fn, opts));
+  _edBrushCursorInit(); // v42.14: cursor nativo oculto ⇔ círculo propio visible
   // Ocultar cursor circular al salir del canvas (PC)
   if(edCanvas){
     edCanvas.addEventListener('pointerleave', e => {
@@ -39334,7 +39437,7 @@ function EditorView_init(){
     edPushHistory();
     edActiveTool='draw';
     edCanvas.className='tool-draw';
-    if($('edBrushCursor'))$('edBrushCursor').style.display='block';
+    _edBrushCursorSync(); // v42.14 (ver arriba)
     _edDrawInitHistory();
     _edDrawLockUI();
     edRenderOptionsPanel('draw');edCloseMenus();
@@ -41276,34 +41379,42 @@ async function edExportPagePNG(format){
   const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
-  // Mismo orden que edRedraw: imagen → fill → stroke → draw → shape/line → textos al final
-  edLayers.forEach(l => {
-    if(!l) return;
-    if(l.hidden) return;                               // capa oculta: no exportar
-    if(l.type==='text' || l.type==='bubble') return;  // textos al final
-    if(l.type === 'image' || l.type === 'gif'){
-      l.draw(offCtx, off);
-    } else if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
-      offCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
-    } else if(l.type === 'draw'){
-      offCtx.globalAlpha = l.opacity ?? 1;  // Bug fix: respeta opacidad del draw
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
-    } else if(l.type === 'stroke'){
-      offCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
-    } else if(l.type === 'shape' || l.type === 'line'){
-      offCtx.globalAlpha = l.opacity ?? 1;
-      l.draw(offCtx);
-      offCtx.globalAlpha = 1;
-    }
-  });
-  offCtx.globalAlpha = _textGroupAlpha;
-  _textLayers.forEach(l => l.draw(offCtx, off));
-  offCtx.globalAlpha = 1;
+  // v42.13 — con «Ver control de animaciones» activo la hoja se descarga en el MISMO instante que marca el reloj
+  // (fotograma de las animaciones, posición/giro de los objetos con trayectoria, invisibilidades…), igual que el
+  // canvas. Es el mismo estado puro del reloj que lee el compositor del editor: nunca se escribe en las capas, y la
+  // bandera se baja en el finally aunque un dibujo falle. Con el control apagado _edAnimCtlBegin() devuelve false
+  // y todo sale como siempre (fotograma inicial).
+  const _acOn = _edAnimCtlBegin();
+  try {
+    // Mismo orden que edRedraw: imagen → fill → stroke → draw → shape/line → textos al final
+    edLayers.forEach(l => {
+      if(!l) return;
+      if(l.hidden) return;                               // capa oculta: no exportar
+      if(l.type==='text' || l.type==='bubble') return;  // textos al final
+      if(l.type === 'image' || l.type === 'gif'){
+        l.draw(offCtx, off);
+      } else if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
+        offCtx.globalAlpha = l.opacity ?? 1;
+        l.draw(offCtx);
+        offCtx.globalAlpha = 1;
+      } else if(l.type === 'draw'){
+        offCtx.globalAlpha = l.opacity ?? 1;  // Bug fix: respeta opacidad del draw
+        l.draw(offCtx);
+        offCtx.globalAlpha = 1;
+      } else if(l.type === 'stroke'){
+        offCtx.globalAlpha = l.opacity ?? 1;
+        l.draw(offCtx);
+        offCtx.globalAlpha = 1;
+      } else if(l.type === 'shape' || l.type === 'line'){
+        offCtx.globalAlpha = l.opacity ?? 1;
+        l.draw(offCtx);
+        offCtx.globalAlpha = 1;
+      }
+    });
+    offCtx.globalAlpha = _textGroupAlpha;
+    _textLayers.forEach(l => l.draw(offCtx, off));
+    offCtx.globalAlpha = 1;
+  } finally { _edAnimCtlEnd(_acOn); }
 
   // Descargar
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';

@@ -1,6 +1,6 @@
 /* Comxow/COMXOW, creada por A. Gavina Costero  2026, contacto@comxow.com */
 /* ============================================================
-   editor-animctl.js — «Ver control de animaciones» del editor (v41.60, tiempo por hoja v41.61, oculto al dibujar v41.62)
+   editor-animctl.js — «Ver control de animaciones» del editor (v41.60, tiempo por hoja v41.61, oculto al dibujar v41.62, descarga de hoja v42.13)
 
    Qué es
    ──────
@@ -42,7 +42,9 @@
    NADA de esto toca las capas ni se guarda: el resultado vive en un Map capa→estado que solo lee el
    dibujo del canvas del editor mientras _edRenderFrame (y el arrastre de una capa) pintan — ver
    _edAnimCtlBegin/_edAnimCtlEnd y los helpers _edCurX/_edCurY/_edPathCurX/_edACS en editor.js.
-   Miniaturas, exportación, autoguardado, deshacer, copiar/pegar, visor y lector no pasan por ahí:
+   v42.13 — «Descargar hoja actual» (PNG/JPG, edExportPagePNG) SÍ pasa por ahí: con el control activo la hoja se
+   descarga en el instante que marca su reloj, exactamente lo que se ve en el canvas (sin control, fotograma inicial).
+   Miniaturas, «Descargar selección», autoguardado, deshacer, copiar/pegar, visor y lector no pasan por ahí:
    siguen viendo SIEMPRE el estado real (fotograma inicial). Los fotogramas se pintan en un lienzo
    propio por capa (nunca en el _oc real) y la botonera es DOM fuera del canvas.
 

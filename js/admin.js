@@ -91,11 +91,27 @@ function renderTab(tab) {
   const panel = document.getElementById(`tab${capitalize(tab)}`);
   panel.classList.remove('hidden');
   panel.innerHTML = '';
+  delete panel.dataset.loadFailed;   // v42.15: la carga de esta pestaña empieza de nuevo (ver _adminOnBackOnline)
   if (tab === 'pending')   renderPending(panel);
   if (tab === 'published') renderPublished(panel);
   if (tab === 'all')       renderAll(panel);
   if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
 }
+
+/* v42.15 — al volver la conexión (evento online) con el panel de administración en pantalla: la pestaña que se quedó en «No se
+   pudo cargar…» (Pendientes, Publicadas o Autores) se pide de nuevo, y en una pestaña que sí cargó se reintentan las miniaturas
+   que quedaron rotas. Mismo patrón «revalidar al reconectar» que «Mis obras» y «Publicados» (ver _mcOnBackOnline en my-works.js).
+   Listener global, registrado una vez; solo actúa con las pestañas de administración en pantalla. */
+function _adminOnBackOnline() {
+  const tabs = document.querySelector('.admin-tabs');
+  if (!tabs) return;
+  const active = tabs.querySelector('.admin-tab.active');
+  const panel = active && document.getElementById(`tab${capitalize(active.dataset.tab)}`);
+  if (!panel) return;
+  if (panel.dataset.loadFailed) renderTab(active.dataset.tab);
+  else cxReloadBrokenImages(panel);
+}
+window.addEventListener('online', _adminOnBackOnline);
 
 // ── PENDIENTES ──
 async function renderPending(panel) {
@@ -107,6 +123,7 @@ async function renderPending(panel) {
     comics.forEach(c => panel.appendChild(buildAdminRow(c, 'pending')));
   } catch(e) {
     panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_errLoadPending')}</p>`;
+    panel.dataset.loadFailed = '1';
     console.error(e);
   }
 }
@@ -121,6 +138,7 @@ async function renderPublished(panel) {
     comics.forEach(c => panel.appendChild(buildAdminRow(c, 'published')));
   } catch(e) {
     panel.innerHTML = `<p class="admin-empty">${I18n.t('admin_errLoadPublished')}</p>`;
+    panel.dataset.loadFailed = '1';
     console.error(e);
   }
 }
@@ -141,7 +159,7 @@ async function renderUsers(panel) {
     // clave anon sola) — necesario desde que authors_select_public se
     // restringió a "tu propia fila o admin" (auditoría RLS).
     list = await SupabaseClient.fetchAllUsers();
-  } catch (_) {}
+  } catch (_) { panel.dataset.loadFailed = '1'; }   // v42.15: la lista vacía de abajo puede ser un fallo de carga, no «no hay autores»
 
   panel.innerHTML = '';
   if (!list.length) { panel.innerHTML = `<p class="admin-empty">${I18n.t('noUsers')}</p>`; return; }
