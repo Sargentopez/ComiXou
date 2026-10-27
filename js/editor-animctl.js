@@ -50,6 +50,13 @@
 
    La selección y los tiradores siguen en la posición base del objeto (como la vista previa de
    trayectorias): el reloj es una vista, no cambia dónde "vive" cada objeto.
+   v42.20 — Lo que SÍ sigue a lo que se ve es el TOQUE: la selección por píxel (clic, toque, clic derecho, Mayús+clic) se resuelve
+   sobre la hoja tal como está pintada en el instante del reloj. _edPickAt (editor.js) lleva el punto tocado al sistema base de
+   cada capa deshaciendo la traslación y el giro con que la pinta su draw() (_edPickToBase, con el mismo estado px/py/rot que
+   devuelve statesFor) y lee el alfa de imagen/GIF del fotograma mostrado (oc). La caja de selección y los tiradores no cambian.
+   v42.21 — «Animación → Ejecutar una sola vez» (_motionAnimOnce, modal Comportamiento de la trayectoria): en modo sincronizado la
+   animación cuenta sus ciclos de forma acumulada y se queda en su último fotograma mientras la trayectoria sigue (AnimClock.mpSyncFrame
+   con animOnce + AnimClock.onceWarpRawT para las pausas T). Reflejado aquí en syncState y evaluate, igual que en el visor y el lector.
    ============================================================ */
 
 const EdAnimCtl = (() => {
@@ -198,7 +205,8 @@ const EdAnimCtl = (() => {
         }
         const rawT = totalMs > 0 ? e / totalMs : 0;
         idx = AnimClock.mpSyncFrame(rawT, G.cycles, P.n, !!P.stopAtEnd, P.R, pathEnd, !!P.circ,
-                                    AnimClock.layerCumTimeMs(l, P.n), l._gcpFrameHolds);
+                                    AnimClock.layerCumTimeMs(l, P.n), l._gcpFrameHolds,
+                                    !!l._motionAnimOnce);   // v42.21: «Animación → Ejecutar una sola vez»
       }
     }
     return { idx, fade, e, totalMs };
@@ -259,7 +267,7 @@ const EdAnimCtl = (() => {
         const cycleDurMs = (AnimClock.getCycleDurationMs(l)) || l._motionCyclesDur || 0;
         const cycles = l._motionCycles || 0;
         const isSync = cycleDurMs > 0 && cycles > 0;
-        let rawT, freezeFn = null;
+        let rawT, freezeFn = null, onceWarped = false;
         if (isSync) {
           const G = { cycleDurMs, cycles };
           const a = syncState(l, P, G, t);
@@ -267,7 +275,14 @@ const EdAnimCtl = (() => {
           rawT = a.totalMs > 0 ? a.e / a.totalMs : 0;
           if (P) {
             const cumTime = AnimClock.layerCumTimeMs(l, P.n), holds = l._gcpFrameHolds, nF = P.n;
-            freezeFn = f => AnimClock.applyHoldFreeze(cumTime, nF, holds, cycles, f);
+            if (l._motionAnimOnce) {
+              // v42.21 — «Animación → Ejecutar una sola vez»: las pausas T se aplican en el dominio del tiempo hasta que la
+              // animación termina (y no después), igual que _edViewerMpTick: ver AnimClock.onceWarpRawT. Sin congelado propio.
+              rawT = AnimClock.onceWarpRawT(rawT, cycles, cumTime, nF, holds, !!P.stopAtEnd, P.R);
+              onceWarped = true;
+            } else {
+              freezeFn = f => AnimClock.applyHoldFreeze(cumTime, nF, holds, cycles, f);
+            }
           }
         } else {
           let pe;
@@ -285,7 +300,7 @@ const EdAnimCtl = (() => {
           const totalPx = AnimClock.pathArcLengthPx(l._motionPath, closed, pw, ph);
           rawT = (pe / 1000) * (l._motionSpeed || 100) / totalPx;
         }
-        const phase = AnimClock.pathPhaseAt(rawT, l._motionPathEnd || 'restart', l._motionPathAccel || 'none', isSync, freezeFn);
+        const phase = AnimClock.pathPhaseAt(rawT, l._motionPathEnd || 'restart', l._motionPathAccel || 'none', isSync && !onceWarped, freezeFn);
         const rel = AnimClock.pathPositionAt(l._motionPath, closed, phase.relT, pw, ph);
         const ang = l._motionPathOrient ? AnimClock.pathOrientDelta(l._motionPath, closed, phase.relT, pw, ph) : null;
         if (rel) owners.push({ l, i, rel, ang });

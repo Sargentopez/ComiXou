@@ -665,6 +665,10 @@ const TRANSLATIONS = {
     gcp_pathTimer:          "Temporizador",
     gcp_pathTimerHint:      "Tiempo desde que se accede a la hoja hasta que empieza la trayectoria",
     gcp_pathTimerTitle:     "Espera antes de iniciar la trayectoria (segundos)",
+    gcp_pathAnimation:      "Animación",
+    gcp_pathAnimLoop:       "Ejecutar continuamente",
+    gcp_pathAnimOnce:       "Ejecutar una sola vez",
+    gcp_pathAnimHint:       "Con «una sola vez» la animación se reproduce una vez y se queda en su último fotograma; la trayectoria sigue ejecutándose",
     gcp_saveBehavior:       "Guardar ✓",
 
     // Editor general — modales proyecto/guardado/atajos/ayuda/camara (Trozo D)
@@ -1866,6 +1870,10 @@ const TRANSLATIONS = {
     gcp_pathTimer:          "Timer",
     gcp_pathTimerHint:      "Time from entering the page until the path starts playing",
     gcp_pathTimerTitle:     "Wait before the path starts (seconds)",
+    gcp_pathAnimation:      "Animation",
+    gcp_pathAnimLoop:       "Run continuously",
+    gcp_pathAnimOnce:       "Run only once",
+    gcp_pathAnimHint:       "With “only once” the animation plays once and stays on its last frame; the path keeps running",
     gcp_saveBehavior:       "Save ✓",
 
     // General editor — project/save/shortcuts/help/camera modals (Chunk D)

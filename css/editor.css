@@ -1419,6 +1419,23 @@ body.ed-scale-tablet {
   box-shadow: inset 4px 0 0 var(--black);
   font-weight: 900;
 }
+/* «Animación» de la trayectoria (v42.21) — dos casillas excluyentes (Ejecutar continuamente / Ejecutar una sola vez) con el
+   aspecto de las opciones del acordeón: la marcada se resalta igual que .mpbeh-opt.active. */
+.mpbeh-check {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--white); border-bottom: 1.5px solid var(--gray-100);
+  padding: 13px 22px; font-family: var(--font-body); font-size: .88rem; font-weight: 700;
+  color: var(--gray-700); cursor: pointer; text-align: left; user-select: none;
+  -webkit-tap-highlight-color: transparent; transition: background .1s;
+}
+.mpbeh-check:active { background: var(--gray-100); }
+.mpbeh-check input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--black); cursor: pointer; }
+.mpbeh-check.active {
+  background: var(--yellow); color: var(--black);
+  box-shadow: inset 4px 0 0 var(--black);
+  font-weight: 900;
+}
+.mpbeh-timer-hint.mpbeh-anim-hint { padding: 10px 18px 14px; }
 /* Temporizador de la trayectoria — mismo aspecto que el de animaciones (GCP):
    deslizador 0–60 s con burbuja + campo numérico subrayado (décimas al teclear). */
 .mpbeh-timer-hint {

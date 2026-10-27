@@ -296,8 +296,11 @@ const AnimClock = (() => {
   //   pathEnd   : comportamiento del path ('stop'|'restart'|'rewind')
   //   cumTime, holds: tiempo acumulado y pausas por frame — si se omiten, se
   //   asume velocidad uniforme.
-  function mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
+  //   animOnce  : v42.21 — «Animación → Ejecutar una sola vez» (_motionAnimOnce): la
+  //   animación NO se reinicia con cada vuelta del recorrido, ver mpOnceFrame.
+  function mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds, animOnce) {
     if (totalF < 1 || cycles <= 0) return 0;
+    if (animOnce) return mpOnceFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, circularEnd, cumTime, holds);
     // En stop mode con repeticiones finitas, el path recorre repeatCnt veces (una por repetición).
     // _stopLimit indica hasta dónde puede llegar rawT antes de que todo se detenga.
     const _stopLimit = (pathEnd === 'stop' && repeatCnt > 1) ? repeatCnt : 1;
@@ -348,6 +351,48 @@ const AnimClock = (() => {
       return _done ? (circularEnd ? 0 : totalF - 1) : Math.floor(animProgress) % totalF;
     }
     return Math.floor(animProgress) % totalF;
+  }
+
+  // ── v42.21 — «Animación → Ejecutar una sola vez» (campo _motionAnimOnce de la capa) ──────────────────────────
+  // Pedido de Alberto: una animación con trayectoria en modo sincronizado (ciclos «×») estaba ATADA al recorrido —
+  // «Reiniciar» la volvía a empezar en cada vuelta (rawT % 1) y «Rebobinar» la reproducía hacia atrás al volver — así
+  // que una animación de 1 repetición con una trayectoria en bucle infinito se reiniciaba una y otra vez. Con la opción
+  // «Ejecutar una sola vez» (la otra, «Ejecutar continuamente», es el comportamiento de siempre y la predeterminada) la
+  // animación se DESATA de las vueltas: cuenta sus ciclos de forma ACUMULADA desde que arranca (A = rawT × ciclos por
+  // recorrido: sin envolver, sin rebotar y sin recortar, sea cual sea el «Al final de la trayectoria»), se reproduce una
+  // vez y se queda en su ÚLTIMO fotograma mientras la trayectoria sigue ejecutándose como siempre.
+  //   animOnceCap = ciclos de animación que se reproducen en total antes de quedarse:
+  //     · «detener al final»      → 1 pasada
+  //     · repeticiones finitas R  → R (las mismas que ya valían en el modo continuo)
+  //     · repeticiones infinitas  → los ciclos de UN recorrido (el «×» de la trayectoria): «una sola vez» = una sola
+  //       pasada del recorrido con su animación
+  function animOnceCap(cycles, stopAtEnd, repeatCnt) {
+    return stopAtEnd ? 1 : (repeatCnt > 0 ? repeatCnt : cycles);
+  }
+  function mpOnceFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, circularEnd, cumTime, holds) {
+    const A   = Math.max(0, rawT) * cycles;                         // ciclos de animación transcurridos (acumulados)
+    const cap = animOnceCap(cycles, stopAtEnd, repeatCnt);
+    // Terminada: último fotograma, o el primero si la animación acaba en «fin circular» (solo con repeticiones finitas,
+    // igual que en el modo continuo: ver animParams en editor-animctl.js).
+    if (A >= cap) return (circularEnd && repeatCnt > 0 && !stopAtEnd) ? 0 : totalF - 1;
+    const cycleIdx = Math.floor(A), frac = A - cycleIdx;
+    const totalMs  = cumTime ? cumTime[totalF] : 0;
+    const fi = (cumTime && totalMs > 0)
+      ? frameProgressAt(cumTime, totalF, frac * totalMs, holds)     // respeta las pausas por fotograma (T)
+      : frac * totalF;
+    return Math.min(Math.floor(fi), totalF - 1);
+  }
+  // Progreso CRUDO del recorrido (rawT) con las pausas por fotograma (T) de la animación aplicadas en el DOMINIO DEL
+  // TIEMPO: mientras la animación está en una pausa el recorrido se queda quieto (también en el tramo de vuelta de
+  // «Rebobinar», porque la animación va siempre hacia delante). En cuanto la animación termina, el recorrido ya no
+  // vuelve a congelarse. El congelado es la identidad en cada frontera de ciclo, así que soltarlo (en un ciclo entero:
+  // por eso el redondeo hacia arriba de una cuenta fraccionaria) no produce ningún salto. Con la opción activada se
+  // pasa este valor a pathPhaseAt SIN función de congelado propia (isSyncPth = false): el congelado ya está dentro.
+  function onceWarpRawT(rawT, cycles, cumTime, totalF, holds, stopAtEnd, repeatCnt) {
+    if (!(rawT > 0) || !cumTime || !(cycles > 0)) return rawT;
+    const limit = Math.ceil(animOnceCap(cycles, stopAtEnd, repeatCnt) - 1e-9) / cycles;
+    if (rawT >= limit) return rawT;
+    return applyHoldFreeze(cumTime, totalF, holds, cycles, rawT);
   }
 
   // ── Fase de la trayectoria (stop/rewind/restart) → parámetro t con easing ──────
@@ -475,7 +520,7 @@ const AnimClock = (() => {
   return {
     bezierSampleClosed, pinOrigin, pathPositionAt, pathTangentDeg, pathOrientDelta, pathArcLengthPx,
     easeT, layerCumTimeMs, getCycleDurationMs, layerTotalFrames, frameProgressAt,
-    applyHoldFreeze, mpSyncFrame, pathPhaseAt, applyPathOffset
+    applyHoldFreeze, mpSyncFrame, animOnceCap, onceWarpRawT, pathPhaseAt, applyPathOffset
   };
 })();
 

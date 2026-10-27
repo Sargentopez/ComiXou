@@ -3112,6 +3112,7 @@ function _plNavLearned(panel) {
 // ('fwd' | 'back'), que decide qué textos secuenciales quedan revelados cuando la hoja termine de cargar.
 function _plOnArrive(idx, dir) {
   RS._arrDir = dir || 'fwd';
+  _rdPosArrive(idx); // v42.17: apunta la hoja para retomar la lectura (ver «RETOMAR LA LECTURA»)
   if (_PL.arrIdx !== idx) { _PL.arrIdx = idx; _PL.arrivedAt = performance.now(); }
   const p = RS.panels[idx];
   _plGateChanged(); // v41.78: las contiguas de la nueva hoja actual pueden no estar listas (gestos y barra de carga)
@@ -3490,17 +3491,119 @@ function _frDiagClose() {
   try { localStorage.removeItem('cx_rd_diag'); } catch (_) {}
 }
 
-// Arranque común de loadWork/loadDraft/copia offline: la hoja 1 «ya» (y logo/icono de créditos), con la
-// barra de progreso de la pantalla de carga. RS.panels ya está montado (esqueletos + créditos).
+// ══════════════════════════════════════════════════════════════════════════
+// RETOMAR LA LECTURA (v42.17)
+//
+// Alberto: «que se guarde en el dispositivo la última hoja leída con el reproductor, de modo que al volver a acceder, se
+// acceda directamente a esta hoja. En caso de que la obra haya sido leída completamente, el acceso será a la primera hoja».
+// Es el comportamiento habitual de los lectores: pdf.js guarda en localStorage la última página de cada documento y la
+// recupera al reabrirlo; los lectores de libros y de cómics retoman la última página leída y, terminada la obra, vuelven a
+// empezar por el principio. Registro propio y mínimo (no se ha copiado código de nadie).
+//
+//  · Dónde: localStorage del propio dispositivo (síncrono, así que no se pierde aunque Android cierre la pestaña justo
+//    después de pasar de hoja; no se envía nada a ningún sitio). Una clave por obra, cx_rd_pos_<id de la obra>, con
+//    { i: índice de la hoja, p: id de la hoja, t: instante }. El id permite seguir en LA MISMA hoja si el autor añade o
+//    reordena hojas después; si esa hoja ya no existe se usa el índice. Al crear una clave nueva se podan las más antiguas
+//    por encima de _RDPOS_MAX obras, para que el almacenamiento no crezca sin límite.
+//  · Cuándo se guarda: en cada llegada a una hoja. _plOnArrive es el único punto por el que pasan los tres modos de
+//    navegación (fijo, horizontal y vertical) y todas las vías (avanzar, retroceder, saltar, barra de hojas, scroll).
+//  · Obra leída: se llega LEYENDO (de una hoja a la siguiente) a la última hoja o a los créditos. Entonces se borra el
+//    registro y la próxima vez se abre por la hoja 1. Tampoco se guarda la hoja 1 (es la de siempre). Un salto directo al
+//    final con la barra de hojas (mirar cómo acaba) no cuenta como haberla leído: al volver a otra hoja se guarda esa.
+//    Una vez leída, repasar hacia atrás las últimas hojas no la «desleer»: sigue contando como leída hasta que se vuelve
+//    a avanzar leyendo (p. ej. «Volver a leer» y pasar a la hoja 2).
+//  · Cómo se abre: _plBoot/_plBootOffline calculan la hoja de inicio ANTES de cargar (RS._startIdx y RS.idx) y
+//    _plBootFirst trae esa hoja la primera; startReader/_startScrollReader abren el lector en ella. La ventana de memoria
+//    y el cargador (_plCursor) ya trabajan alrededor de RS.idx, así que quedan centrados en ella como si se hubiera
+//    llegado navegando.
+// ══════════════════════════════════════════════════════════════════════════
+const _RDPOS_PFX = 'cx_rd_pos_', _RDPOS_MAX = 200;
+
+function _rdPosKey() { return RS._workId ? _RDPOS_PFX + RS._workId : null; }
+function _rdPosGet(key) {
+  try {
+    const o = JSON.parse(localStorage.getItem(key));
+    return (o && typeof o === 'object') ? o : null;
+  } catch (_) { return null; }
+}
+function _rdPosDrop(key) { if (!key) return; try { localStorage.removeItem(key); } catch (_) {} }
+function _rdPosPut(key, idx) {
+  const p = RS.panels[idx];
+  try {
+    const isNew = localStorage.getItem(key) === null;
+    localStorage.setItem(key, JSON.stringify({ i: idx, p: (p && p.id) || null, t: Date.now() }));
+    if (isNew) _rdPosPrune();
+  } catch (_) {} // sin almacenamiento (modo privado, cuota…): el lector funciona igual, solo que sin recordar la hoja
+}
+function _rdPosPrune() {
+  const all = [];
+  for (let k = 0; k < localStorage.length; k++) {
+    const name = localStorage.key(k);
+    if (name && name.indexOf(_RDPOS_PFX) === 0) { const o = _rdPosGet(name); all.push({ name, t: (o && +o.t) || 0 }); }
+  }
+  if (all.length <= _RDPOS_MAX) return;
+  all.sort((a, b) => a.t - b.t);
+  for (let k = 0; k < all.length - _RDPOS_MAX; k++) _rdPosDrop(all[k].name);
+}
+
+// Hoja por la que abrir la obra: la guardada (por id de hoja y, si no, por índice) si queda entre la 2.ª y la penúltima;
+// si no (sin registro, obra leída, hoja fuera de rango porque la obra ha cambiado) la 1.ª. Deja listo el seguimiento.
+// RS.panels ya lleva la hoja de créditos al final (_plAddCredits).
+function _rdPosInit() {
+  const key = _rdPosKey();
+  const n = RS.panels.filter(p => !p.isCredits).length;
+  let start = 0;
+  const rec = key ? _rdPosGet(key) : null;
+  if (rec) {
+    let k = -1;
+    if (rec.p) k = RS.panels.findIndex(p => !p.isCredits && p.id === rec.p);
+    if (k < 0 && Number.isInteger(rec.i)) k = rec.i;
+    if (k > 0 && k < n - 1) start = k;
+    else _rdPosDrop(key);                       // registro que ya no sirve (la obra ha cambiado): fuera
+  }
+  RS._rdPos = { key, n, prev: start, done: false };
+  RS._startIdx = start;
+  RS.idx = start;
+  return start;
+}
+
+// Llegada a la hoja idx (la llama _plOnArrive). Ver el bloque de arriba.
+function _rdPosArrive(idx) {
+  const st = RS._rdPos;
+  if (!st || !st.key) return;
+  const prev = st.prev; st.prev = idx;
+  if (idx >= st.n - 1) {                        // última hoja o créditos
+    if (idx === prev + 1) st.done = true;       // llegó leyendo, desde la anterior: obra leída
+    _rdPosDrop(st.key);
+    return;
+  }
+  if (st.done && idx <= prev) { _rdPosDrop(st.key); return; } // obra ya leída: repasar hacia atrás no la deshace
+  if (idx > prev) st.done = false;              // vuelve a avanzar leyendo: nueva lectura
+  if (idx === 0) _rdPosDrop(st.key);
+  else _rdPosPut(st.key, idx);
+}
+
+// Arranque común de loadWork/loadDraft/copia offline: la hoja de inicio «ya» (la 1 o la guardada, ver «RETOMAR LA LECTURA»;
+// y logo/icono de créditos), con la barra de progreso de la pantalla de carga. RS.panels ya está montado (esqueletos + créditos).
 async function _plBootFirst() {
   RS._arrDir = 'fwd';
   setLoadingMsg(I18n.t('reader_preparingImages'));
   setLoadingProgress(15, '');
-  const first = RS.panels.find(p => !p.isCredits);
-  await Promise.all([
-    _plPreloadBrand(),
-    first ? _plLoadNow(first, st => setLoadingProgress(st === 'fetched' ? 55 : 90, '')) : Promise.resolve(),
-  ]);
+  const onStage = st => setLoadingProgress(st === 'fetched' ? 55 : 90, '');
+  const brand = _plPreloadBrand();
+  let first = RS.panels[RS._startIdx || 0];
+  if (!first || first.isCredits) first = RS.panels.find(p => !p.isCredits);
+  try {
+    await Promise.all([brand, first ? _plLoadNow(first, onStage) : Promise.resolve()]);
+  } catch (e) {
+    // La hoja guardada no se ha podido traer (datos dañados…): la obra no puede quedarse sin abrir por eso — se olvida el
+    // registro y se abre por la hoja 1. Si falla la propia hoja 1 es un fallo de la obra o de la red, como siempre.
+    if (!(RS._startIdx > 0)) throw e;
+    _rdPosDrop(RS._rdPos && RS._rdPos.key);
+    RS._startIdx = 0; RS.idx = 0; if (RS._rdPos) RS._rdPos.prev = 0;
+    first = RS.panels.find(p => !p.isCredits);
+    await Promise.all([brand, first ? _plLoadNow(first, onStage) : Promise.resolve()]);
+  }
   setLoadingProgress(100, '');
 }
 // Obra de la red: esqueletos de todas las hojas a partir de la lista de la tabla panels.
@@ -3510,9 +3613,10 @@ async function _plBoot(panelRows, sbFetch) {
   RS.panels = panelRows.map(_plSkeleton);
   RS._sourcePanels = new Array(RS.panels.length).fill(null); // se va rellenando hoja a hoja (ver _plParse)
   _plAddCredits();
+  _rdPosInit(); // v42.17: hoja por la que se abre (la guardada o la 1)
   await _plBootFirst();
 }
-// Copia offline / archivo standalone: los datos ya están en memoria; solo falta prepararlos (hoja 1 ya,
+// Copia offline / archivo standalone: los datos ya están en memoria; solo falta prepararlos (hoja de inicio ya,
 // el resto en segundo plano, igual que desde la red).
 async function _plBootOffline(snapshotPanels) {
   RS.images = [];
@@ -3520,6 +3624,7 @@ async function _plBootOffline(snapshotPanels) {
   RS._sourcePanels = snapshotPanels; // copia limpia: _plSkeletonFromData clona las capas, esta no se toca
   RS._srcResident = true;            // v41.68: los datos de todas las hojas ya están aquí — al soltar una hoja se vuelve a clonar de esta copia (ver _plEvict)
   _plAddCredits();
+  _rdPosInit(); // v42.17: hoja por la que se abre (la guardada o la 1)
   await _plBootFirst();
 }
 
@@ -3865,8 +3970,9 @@ function _rFrameProgressAt(cumTime, totalF, tMs, holds) {
 function _rApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
   return AnimClock.applyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01);
 }
-function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
-  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds);
+// v42.21: animOnce = «Animación → Ejecutar una sola vez» (_motionAnimOnce), ver AnimClock.mpOnceFrame.
+function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds, animOnce) {
+  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds, animOnce);
 }
 
 // ── Trayectoria de animación (motion path) — velocidad por ciclos o px/s ────
@@ -3922,7 +4028,8 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
             layer._gcpRepeatCount || 0,
             layer._motionPathEnd || 'restart',
             layer._gcpCircularEnd || false,
-            _mpCumTime, layer._gcpFrameHolds
+            _mpCumTime, layer._gcpFrameHolds,
+            !!layer._motionAnimOnce   // v42.21: «Animación → Ejecutar una sola vez»
           );
           if (layer._gifReady && layer._gifFrames && layer._gifOc && _mpSyncF !== layer._gifIdx) {
             layer._gifIdx = _mpSyncF;
@@ -3971,7 +4078,13 @@ function _rMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circ
           // recorrido SIEMPRE se detiene tras una sola vuelta completa
           // (rawT>=1) en modo 'stop', sea cual sea el nº de repeticiones de
           // la animación (dos contadores independientes).
-          const _mpPhase = AnimClock.pathPhaseAt(_mpRawT, _mpEndB, _mpAcl, _isSyncMR, _rFreeze);
+          // v42.21 — «Animación → Ejecutar una sola vez»: las pausas T se aplican en el dominio del tiempo hasta que la
+          // animación termina (ver AnimClock.onceWarpRawT); el resto del recorrido no cambia.
+          const _rOnce   = _isSyncMR && !!layer._motionAnimOnce && !!_mpCumTime;
+          const _mpPathRaw = _rOnce
+            ? AnimClock.onceWarpRawT(_mpRawT, layer._motionCycles, _mpCumTime, _mpTF, layer._gcpFrameHolds, !!layer._gcpStopAtEnd, layer._gcpRepeatCount || 0)
+            : _mpRawT;
+          const _mpPhase = AnimClock.pathPhaseAt(_mpPathRaw, _mpEndB, _mpAcl, _isSyncMR && !_rOnce, _rFreeze);
           const _mpRelT = _mpPhase.relT;
           const _mpPos  = _pathPositionAt(layer._motionPath, _mpClosed, _mpRelT, _mpPw, _mpPh);
           if (_mpPhase.justStopped) {
@@ -4165,11 +4278,12 @@ function startReader() {
   try { if (window.AnimNative) AnimNative.setLate(() => { RS._animDirty = true; _ensureGifLoop(); }); } catch (_) {}
 
   // Arrancar loop de animación GIF si hay alguno en las hojas ya cargadas — con la carga progresiva
-  // (v41.52) en este punto solo está lista la hoja 1; las hojas que se cargan después arrancan el
-  // reloj por su cuenta si traen animaciones (_plOnReady → _ensureGifLoop).
+  // (v41.52) en este punto solo está lista la hoja de inicio (la 1 o, v42.17, la guardada: RS._startIdx); las hojas
+  // que se cargan después arrancan el reloj por su cuenta si traen animaciones (_plOnReady → _ensureGifLoop).
+  const _s0 = RS._startIdx || 0;
   const _hasGifs = RS.panels.some(p => _plHasAnimated(p));
   if (_hasGifs) {
-    _resetPanelAnims(0); // inicializar animaciones del primer panel
+    _resetPanelAnims(_s0); // inicializar animaciones de la hoja de inicio
     _ensureGifLoop();
   }
 
@@ -4182,11 +4296,11 @@ function startReader() {
   // ── Modo fixed (original) ──
   RS.canvas = document.getElementById('readerCanvas');
   RS.ctx    = RS.canvas.getContext('2d');
-  RS.idx    = 0;
-  RS.textStep = _initTextStep(0);
+  RS.idx    = _s0;
+  RS.textStep = _initTextStep(_s0);
 
   _resizeCanvas();
-  // v41.52: la hoja 1 ya está lista y con sus fuentes cargadas (_plLoadNow) — primer dibujado directo.
+  // v41.52: la hoja de inicio ya está lista y con sus fuentes cargadas (_plLoadNow) — primer dibujado directo.
   // Las fuentes de cada hoja posterior se cargan al prepararla, antes de pasar a «lista».
   _render();
   _showControls();
@@ -4231,9 +4345,11 @@ function _startScrollReader() {
 
   // ── Construir slides: uno por panel ──
   const _canvases = [];
-  // v41.68: solo las hojas cercanas a la primera tienen su lienzo a tamaño real; el resto nace encogido (ver _plSlideShrink)
+  // v41.68: solo las hojas cercanas a la de inicio tienen su lienzo a tamaño real; el resto nace encogido (ver _plSlideShrink)
+  // v42.17: la hoja de inicio es la guardada (RS._startIdx, ver «RETOMAR LA LECTURA») o, si no hay, la 1 (= el comportamiento de siempre)
+  const _s0 = RS._startIdx || 0;
   const _L0 = _plWinActive() ? _plLimits() : null;
-  const _full0 = pi => !_L0 || pi <= _L0.ahead + 1;
+  const _full0 = pi => !_L0 || (pi <= _s0 + _L0.ahead + 1 && pi >= _s0 - _L0.behind - 1);
 
   RS.panels.forEach((panel, pi) => {
     const { pw, ph } = _panelDims(pi);
@@ -4285,7 +4401,7 @@ function _startScrollReader() {
   RS.scrollOverlay = overlay;
 
   // ── Estado ──
-  RS.idx        = 0;
+  RS.idx        = _s0;
   RS.textStep   = 0;
   _updateContainerTouchAction();
 
@@ -4313,20 +4429,26 @@ function _startScrollReader() {
   RS._scroll = { activate: _activateCanvas, updateOverlay: _updateOverlay };
 
   // ── Render inicial ──
-  // v41.52: la hoja 1 ya está lista (startReader solo se llama con ella cargada, fuentes incluidas).
+  // v41.52: la hoja de inicio ya está lista (startReader solo se llama con ella cargada, fuentes incluidas).
   // Las demás hojas enseñan «Cargando hoja N…» (y la hoja de créditos se pinta ya) hasta que el
   // planificador de carga las va trayendo; al quedar lista, cada una se pinta sola (_plOnReady).
   // Antes se dibujaban aquí TODAS las hojas, tras esperar a las fuentes de toda la obra.
-  RS.panels.forEach((panel, pi) => { if (pi !== 0 && _full0(pi)) _plRenderSlide(pi, 0); });
-  // Panel 0 con el primer texto visible (igual que el visor del editor)
-  RS.idx      = 0;
-  RS.textStep = _initTextStep(0);
-  _activateCanvas(0);
+  RS.panels.forEach((panel, pi) => { if (pi !== _s0 && _full0(pi)) _plRenderSlide(pi, 0); });
+  // Hoja de inicio con el primer texto visible (igual que el visor del editor)
+  RS.idx      = _s0;
+  RS.textStep = _initTextStep(_s0);
+  _activateCanvas(_s0);
   _render();
   _updateOverlay();
-  // Forzar posición inicial al panel 0
-  container.scrollLeft = 0;
-  container.scrollTop  = 0;
+  // Forzar posición inicial a la hoja de inicio (v42.17: con la hoja guardada ya no es siempre la 0). Mismo gesto que
+  // _rGoToPanel: scrollTo con behavior:'instant', porque .scroll-h/.scroll-v llevan scroll-behavior:smooth en el CSS y
+  // asignar scrollLeft/scrollTop animaría el recorrido desde la hoja 1 pasando por todas las intermedias (cada una se
+  // procesaría como una llegada y movería la hoja actual). Su evento de scroll cae en la hoja de _prevSI (= _s0), así
+  // que no se procesa como una llegada.
+  {
+    const _sz0 = isH ? container.clientWidth : container.clientHeight;
+    container.scrollTo({ left: isH ? _s0 * _sz0 : 0, top: isH ? 0 : _s0 * _sz0, behavior: 'instant' });
+  }
   _positionBtns();
 
   // ── Swipe en el overlay ──
@@ -4481,7 +4603,7 @@ function _startScrollReader() {
   }
 
   // ── Scroll nativo: detectar llegada a nuevo panel ──
-  let _prevSI = 0, _scrollRaf = null, _gateSettleT = 0;
+  let _prevSI = _s0, _scrollRaf = null, _gateSettleT = 0;
   // v41.78 — red de seguridad del bloqueo de paso: si un gesto que el bloqueo no ve venir (barra de desplazamiento, PgDn nativo…) deja la
   // vista a medio camino hacia una hoja que se está cargando, 350 ms después de que pare el scroll se devuelve a la hoja actual.
   function _gateSettle() {

@@ -1925,8 +1925,24 @@ let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 // En Android (táctil) reducir el historial a 5 para limitar el consumo de RAM.
 // Cada snapshot serializa los dataUrls de todos los fills/strokes → 10 snapshots
-// pueden acumular 10-20 MB en el heap. En PC mantenemos 10 para mejor UX.
-const ED_MAX_HISTORY = (navigator.maxTouchPoints > 0) ? 5 : 10;
+// pueden acumular 10-20 MB en el heap.
+// v42.18 — PASOS DE DESHACER EN PC (Alberto: «considera aumentar el número de pasos que pueden guardarse en PC, ya que en este
+// dispositivo no hay tantos problemas de memoria»). Referencias del sector: Photoshop 50 estados por defecto, Illustrator 100,
+// Krita 30, GIMP límite por memoria. Aquí: táctil (móvil y tableta Android/iOS) se queda en 5; PC hasta 50
+// pasos, pero cada paso es el JSON completo de la hoja (los bitmaps van en base64) y una hoja con mucho dibujo pesa decenas de MB,
+// así que además hay un PRESUPUESTO de memoria: al apuntar un paso se descartan los más antiguos mientras el total supere
+// ED_HISTORY_BUDGET caracteres (≈ 1 byte por carácter: JSON/base64 son ASCII), conservando siempre al menos ED_MIN_HISTORY pasos
+// (lo que ya había antes en PC). Ver _edTrimHistory.
+// «Táctil» = el MISMO criterio que window._edIsTouch (init del editor): con pantalla táctil Y puntero PRINCIPAL no fino. Un portátil con
+// pantalla táctil y ratón/trackpad también da maxTouchPoints>0, pero su puntero principal es fino y tiene memoria de sobra: cuenta como PC
+// (el propio código ya descartó «maxTouchPoints>0 ⇒ móvil» como antipatrón; ver _tdIsTouchPrimary y _edFilePickerSupported).
+const ED_IS_TOUCH_DEVICE = (function(){
+  try{ return navigator.maxTouchPoints > 0 && !window.matchMedia('(pointer:fine)').matches; }
+  catch(_e){ return navigator.maxTouchPoints > 0; }
+})();
+const ED_MAX_HISTORY    = ED_IS_TOUCH_DEVICE ? 5 : 50;
+const ED_MIN_HISTORY    = ED_IS_TOUCH_DEVICE ? 5 : 10;
+const ED_HISTORY_BUDGET = ED_IS_TOUCH_DEVICE ? 0 : 200e6; // 0 = sin presupuesto (el tope de 5 pasos ya limita la memoria)
 let edViewerTextStep = 0;  // nº de textos revelados en modo secuencial
 // ── Multi-selección ──
 let edMultiSel = [];        // índices seleccionados
@@ -2572,11 +2588,14 @@ class ImageLayer extends BaseLayer {
     if (typeof edRedraw === 'function') requestAnimationFrame(() => edRedraw());
   }
 
-  contains(px, py) {
+  // v42.20 — frameOc (opcional): lienzo del fotograma que se está MOSTRANDO en «Ver control de animaciones» (ver _edPickAt). Con él el alfa se
+  // lee de ese fotograma y no del póster (fotograma 0), que puede tener otra silueta. Sin él, todo igual que siempre.
+  contains(px, py, frameOc) {
     // 1. Comprobar bbox primero (rápido)
     if (!super.contains(px, py)) return false;
     // 2. Hit-test por alpha de píxel real — ignora zonas transparentes
-    if (!this.img || !this.img.complete || this.img.naturalWidth === 0) return true;
+    const _fo = (frameOc && frameOc.width > 0 && frameOc.height > 0) ? frameOc : null;
+    if (!_fo && (!this.img || !this.img.complete || this.img.naturalWidth === 0)) return true;
     try {
       const pw = edPageW(), ph = edPageH();
       // Transformar punto al espacio local de la imagen (con rotación)
@@ -2585,16 +2604,17 @@ class ImageLayer extends BaseLayer {
       const lx = dx * Math.cos(-rot) - dy * Math.sin(-rot);
       const ly = dx * Math.sin(-rot) + dy * Math.cos(-rot);
       const iw = this.width * pw, ih = this.height * ph;
-      // Convertir a coordenadas de píxel en la imagen original
-      const imgX = (lx / iw + 0.5) * this.img.naturalWidth;
-      const imgY = (ly / ih + 0.5) * this.img.naturalHeight;
-      if (imgX < 0 || imgY < 0 || imgX >= this.img.naturalWidth || imgY >= this.img.naturalHeight) return false;
+      // Convertir a coordenadas de píxel en la imagen original (o en el fotograma mostrado)
+      const _sw = _fo ? _fo.width : this.img.naturalWidth, _sh = _fo ? _fo.height : this.img.naturalHeight;
+      const imgX = (lx / iw + 0.5) * _sw;
+      const imgY = (ly / ih + 0.5) * _sh;
+      if (imgX < 0 || imgY < 0 || imgX >= _sw || imgY >= _sh) return false;
       // Leer alpha con canvas 1×1
       const _oc = ImageLayer._alphaCanvas || (ImageLayer._alphaCanvas = document.createElement('canvas'));
       _oc.width = 1; _oc.height = 1;
       const _octx = _oc.getContext('2d');
       _octx.clearRect(0, 0, 1, 1);
-      _octx.drawImage(this.img, -imgX, -imgY);
+      _octx.drawImage(_fo || this.img, -imgX, -imgY);
       return _octx.getImageData(0, 0, 1, 1).data[3] > 10;
     } catch(e) {
       return true; // fallback: si falla (CORS), usar bbox
@@ -2689,13 +2709,14 @@ class GifLayer extends BaseLayer {
     ctx.drawImage((_gAcs && _gAcs.oc) || this._oc, -w/2, -h/2, w, h);
     ctx.restore();
   }
-  contains(px, py) {
+  // v42.20 — frameOc (opcional): fotograma mostrado en «Ver control de animaciones» (ver _edPickAt); sin él, el fotograma actual (_oc) de siempre.
+  contains(px, py, frameOc) {
     // 1. Caja primero (rápido)
     if (!super.contains(px, py)) return false;
     // 2. v41.79 — hit por alpha del fotograma actual, igual que ImageLayer: las zonas transparentes del GIF no cuentan
     //    (antes bastaba con la caja → un GIF con fondo transparente se llevaba el clic sobre píxeles pintados de capas inferiores).
     //    Sin fotograma listo, o si el navegador no deja leer el píxel, se vuelve a la caja.
-    const oc = this._oc;
+    const oc = (frameOc && frameOc.width > 0 && frameOc.height > 0) ? frameOc : this._oc;
     if (!this._ready || !oc || !oc.width || !oc.height) return true;
     try {
       const pw = edPageW(), ph = edPageH();
@@ -4957,7 +4978,7 @@ function _edLayersSnapshot(movedLayer){
       return l._cachedSnapFragment; // capa no tocada por este arrastre — reutilizar tal cual
     }
     const _fragment = _edSnapLayerFragment(l);
-    if (_cacheableType && _fragment) l._cachedSnapFragment = _fragment; // refrescar caché
+    if (_cacheableType && _fragment) { l._cachedSnapFragment = _fragment; if (l._histBmp) l._histBmp = null; } // refrescar caché (v42.18: la caché pasa a ser la referencia del bitmap, ver _edLiveStrokeFor)
     return _fragment;
   }));
 }
@@ -5009,6 +5030,7 @@ function _edSnapLayerFragment(l){
         _motionPathEnd: l._motionPathEnd||undefined,
         _motionPathAccel: l._motionPathAccel||undefined,
         _motionPathDelay: l._motionPathDelay||undefined,
+        _motionAnimOnce: l._motionAnimOnce||undefined,
         _motionPathOrient: l._motionPathOrient||false,
         _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
         _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -5030,6 +5052,7 @@ function _edSnapLayerFragment(l){
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
       _motionPathDelay: l._motionPathDelay||undefined,
+      _motionAnimOnce: l._motionAnimOnce||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -5046,6 +5069,7 @@ function _edSnapLayerFragment(l){
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
       _motionPathDelay: l._motionPathDelay||undefined,
+      _motionAnimOnce: l._motionAnimOnce||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -5064,6 +5088,7 @@ function _edSnapLayerFragment(l){
       _motionPathEnd: l._motionPathEnd||undefined,
       _motionPathAccel: l._motionPathAccel||undefined,
       _motionPathDelay: l._motionPathDelay||undefined,
+      _motionAnimOnce: l._motionAnimOnce||undefined,
       _motionPathOrient: l._motionPathOrient||false,
       _motionCycles: l._motionCycles != null ? l._motionCycles : undefined,
       _motionCyclesDur: l._motionCyclesDur != null ? l._motionCyclesDur : undefined };
@@ -5141,6 +5166,7 @@ function _edSnapLayerFragment(l){
     if(l._motionPathEnd)   o._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) o._motionPathAccel = l._motionPathAccel;
     if(l._motionPathDelay) o._motionPathDelay = l._motionPathDelay;
+    if(l._motionAnimOnce) o._motionAnimOnce = true;
     if(l._motionPathOrient) o._motionPathOrient = true;
     // BUG CORREGIDO (reportado por Alberto: "el número de ciclos en las
     // trayectorias se sigue perdiendo"). _motionCycles/_motionCyclesDur eran
@@ -6248,10 +6274,30 @@ function edPushHistory(force, movedLayer){
   edHistory.push({ pageIdx: edCurrentPage, layersJSON,
     groupRot: edMultiGroupRot,
     multiSel: edMultiSel.length ? [...edMultiSel] : [] });
-  if(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
+  _edTrimHistory(); // v42.18: tope de pasos + presupuesto de memoria (PC)
   edHistoryIdx = edHistory.length - 1;
   _edMarkPageDirty(edCurrentPage);
   edUpdateUndoRedoBtns();
+}
+
+// v42.18 — Recorta el historial general tras apuntar un paso: primero por número de pasos (ED_MAX_HISTORY) y, en PC, también por
+// memoria (ED_HISTORY_BUDGET): se descartan los pasos más antiguos mientras el total supere el presupuesto, pero siempre quedan los
+// ED_MIN_HISTORY más recientes (el último apuntado incluido). Con ED_HISTORY_BUDGET=0 (táctil) solo cuenta el número de pasos.
+function _edTrimHistory(){
+  while(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
+  if(ED_HISTORY_BUDGET > 0){
+    let used = _edHistoryChars();
+    while(used > ED_HISTORY_BUDGET && edHistory.length > ED_MIN_HISTORY){
+      used -= (edHistory[0].layersJSON ? edHistory[0].layersJSON.length : 0);
+      edHistory.shift();
+    }
+  }
+}
+// Caracteres que ocupan ahora los pasos del historial general (≈ bytes: JSON/base64 son ASCII). También lo muestra el 🩺.
+function _edHistoryChars(){
+  let n = 0;
+  for(const h of edHistory) n += (h && h.layersJSON) ? h.layersJSON.length : 0;
+  return n;
 }
 
 // edUndo/edRedo NUNCA pueden hacer que se cambie de página: edLoadPage()
@@ -6286,6 +6332,28 @@ function edApplyHistory(snapshot){
   _edMarkPageDirty(snapshot.pageIdx);
   const raw = JSON.parse(snapshot.layersJSON);
   const imgPromises = [];
+  // v42.18 — HISTORIAL (Alberto: «no ha sido capaz de deshacer un borrado de varios objetos vectoriales que habían sido rasterizados»).
+  // Los trazos (mapas de bits: dibujos a mano y vectoriales rasterizados) se reconstruyen desde el snapshot, y para evitar el parpadeo
+  // se reaprovecha el lienzo YA pintado de la capa viva. Antes se elegía esa capa por POSICIÓN (mismo índice y mismo tamaño): tras borrar
+  // un objeto los índices se desplazan, y dos trazos del mismo tamaño —lo normal al rasterizar formas iguales— intercambiaban sus
+  // imágenes al deshacer/rehacer (y llegaban a compartir el mismo lienzo); con el mismo índice y tamaño, deshacer un «reflejar» tampoco
+  // devolvía los píxeles. Ahora la capa viva se busca por IDENTIDAD (_uid), solo se reutiliza si su bitmap es EXACTAMENTE el del paso al que
+  // se vuelve (la misma imagen que apuntó su snapshot) y cada lienzo vivo se cede como máximo una vez; si no, se reconstruye desde el dataUrl.
+  const _liveList = (edPages[snapshot.pageIdx] && edPages[snapshot.pageIdx].layers) || [];
+  const _liveStrokeByUid = new Map();
+  for(const _lv of _liveList) if(_lv && _lv.type === 'stroke' && _lv._uid && !_liveStrokeByUid.has(_lv._uid)) _liveStrokeByUid.set(_lv._uid, _lv);
+  const _liveStrokeUsed = new Set();
+  const _edLiveStrokeFor = (o, rawIdx, bw, bh) => {
+    let c = null;
+    if(o._uid) c = _liveStrokeByUid.get(o._uid) || null;
+    else { const _x = _liveList[rawIdx]; if(_x && _x.type === 'stroke' && !_x._uid) c = _x; } // trazo antiguo sin _uid: el que ocupa su mismo lugar
+    if(!c || _liveStrokeUsed.has(c)) return null;
+    if(c._canvasUnloaded || !c._canvas || c._canvas.width !== bw || c._canvas.height !== bh) return null;
+    const _key = c._cachedSnapFragment ? c._cachedSnapFragment.dataUrl : c._histBmp; // bitmap que la capa tenía en el último snapshot / restauración
+    if(!o.dataUrl || !_key || _key !== o.dataUrl) return null;
+    _liveStrokeUsed.add(c);
+    return c;
+  };
   edLayers = raw.map(o => {
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
@@ -6338,14 +6406,9 @@ function edApplyHistory(snapshot){
       // redimensionó; sin ellas (snapshots sin esos campos) se usa la de pantalla como siempre.
       { const _bw = (o.cw > 0) ? o.cw : Math.max(1, Math.round(_lsw * _pw));
         const _bh = (o.ch > 0) ? o.ch : Math.max(1, Math.round(_lsh * _ph));
-        // Buscar canvas vivo en la misma posición del array de la página actual
-        // (mismo índice y tipo stroke) para reusar sin comparar dataUrl (costoso).
-        const _curPage = edPages[snapshot.pageIdx];
-        const _rawIdx = raw.indexOf(o);
-        const _liveAtIdx = (_curPage?.layers||[])[_rawIdx];
-        const _liveSrc = (_liveAtIdx && _liveAtIdx.type === 'stroke' &&
-          _liveAtIdx._canvas && _liveAtIdx._canvas.width === _bw &&
-          _liveAtIdx._canvas.height === _bh) ? _liveAtIdx : null;
+        // v42.18: capa viva por IDENTIDAD (_uid) y con el MISMO bitmap que el del snapshot (antes: «la que ocupa el mismo índice y
+        // mide lo mismo», que con objetos del mismo tamaño intercambiaba imágenes — ver _edLiveStrokeFor arriba).
+        const _liveSrc = _edLiveStrokeFor(o, raw.indexOf(o), _bw, _bh);
         l = new StrokeLayer(document.createElement('canvas'), _pw, _ph);
         l.x = _lsx; l.y = _lsy; l.width = _lsw; l.height = _lsh;
         if(_liveSrc) {
@@ -6376,8 +6439,9 @@ function edApplyHistory(snapshot){
       if(o._fillLayerId) l._fillLayerId=o._fillLayerId;
       if(o._pencilLayerId) l._pencilLayerId=o._pencilLayerId;
       if(o._watercolorLayerId) l._watercolorLayerId=o._watercolorLayerId;
+      l._histBmp = o.dataUrl || null; // v42.18: bitmap de este paso (para el siguiente deshacer/rehacer; ver _edLiveStrokeFor)
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;if(o._motionAnimOnce)l._motionAnimOnce=true;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionAnimOnce;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'shape') {
@@ -6391,7 +6455,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;if(o._motionAnimOnce)l._motionAnimOnce=true;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionAnimOnce;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'line') {
@@ -6412,7 +6476,7 @@ function edApplyHistory(snapshot){
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
       // Restaurar trayectoria de animación
-      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
+      if(o._motionPath){l._motionPath=o._motionPath;l._motionPathClosed=o._motionPathClosed||false;l._motionSpeed=o._motionSpeed;l._motionPathEnd=o._motionPathEnd;l._motionPathAccel=o._motionPathAccel;l._motionPathDelay=o._motionPathDelay;if(o._motionAnimOnce)l._motionAnimOnce=true;l._motionPathOrient=o._motionPathOrient||false;} else{delete l._motionPath;delete l._motionPathClosed;delete l._motionSpeed;delete l._motionPathEnd;delete l._motionPathAccel; delete l._motionPathDelay;delete l._motionAnimOnce;delete l._motionPathOrient;delete l._pathCurX;delete l._pathCurY;delete l._pathCurRotDeg;delete l._pathStartTime;delete l._pathStopped;}
       return l;
     }
     else if(o.type === 'fill') {
@@ -13084,6 +13148,29 @@ function edMirrorSelected(){
   edToast(I18n.t('ed_objectMirrored'));
 }
 
+// v42.18 — Borrado MÚLTIPLE (tecla Supr y «Eliminar selección»): quita los objetos de `mainIdxs` (índices en page.layers) JUNTO CON sus capas
+// vinculadas —relleno, lápiz y acuarela de un dibujo o de un vectorial rasterizado: _drawLayerId === _uid (o _fillLayerId) del trazo—,
+// igual que hace edDeleteSelected con un objeto suelto. Va por IDENTIDAD de capa, no por posición: antes, Supr quitaba primero las capas
+// vinculadas y luego recalculaba los índices contra el mismo array ya modificado (borraba OTRAS capas y dejaba los trazos), y «Eliminar
+// selección» no quitaba las vinculadas (quedaban rellenos huérfanos). Compacta page.layers EN SITIO (misma referencia que edLayers).
+// Devuelve cuántas capas se han quitado.
+function _edRemoveLayersWithCompanions(page, mainIdxs){
+  const L = page.layers;
+  const del = new Set(), uids = new Set();
+  for(const i of mainIdxs){
+    const m = L[i]; if(!m) continue;
+    del.add(m);
+    const u = m._uid || m._fillLayerId; if(u) uids.add(u);
+  }
+  if(uids.size) for(const l of L){
+    if(l && (l.type==='fill' || l.type==='pencil' || l.type==='watercolor') && uids.has(l._drawLayerId)) del.add(l);
+  }
+  let w = 0;
+  for(let r = 0; r < L.length; r++){ if(!del.has(L[r])) L[w++] = L[r]; }
+  L.length = w;
+  return del.size;
+}
+
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast(I18n.t('ed_selectAnObject'));return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
@@ -13979,8 +14066,9 @@ function _edApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
 // v38.06: delega en AnimClock — ver js/anim-clock.js (misma función usada por el
 // visor interno, el editor de trayectorias y el lector externo — ver el comentario
 // extenso en el propio AnimClock.mpSyncFrame para el porqué de cada rama).
-function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds) {
-  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds);
+// v42.21: animOnce = «Animación → Ejecutar una sola vez» (_motionAnimOnce), ver AnimClock.mpOnceFrame.
+function _edMpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds, animOnce) {
+  return AnimClock.mpSyncFrame(rawT, cycles, totalF, stopAtEnd, repeatCnt, pathEnd, circularEnd, cumTime, holds, animOnce);
 }
 
 // ── Ticker RAF del motion path — solo activo durante la previsualización ────────
@@ -14049,7 +14137,8 @@ function _edViewerMpTick() {
           l._gcpRepeatCount || 0,
           l._motionPathEnd || 'restart',
           l._gcpCircularEnd || false,
-          _mpCumTime, l._gcpFrameHolds
+          _mpCumTime, l._gcpFrameHolds,
+          !!l._motionAnimOnce   // v42.21: «Animación → Ejecutar una sola vez»
         );
         // BUG CORREGIDO (reportado por Alberto: animación con repeticiones
         // finitas + "desaparecer al final" + trayectoria en modo "Detener" —
@@ -14128,7 +14217,14 @@ function _edViewerMpTick() {
     // tras una sola vuelta completa (rawT>=1) en modo 'stop', sea cual sea el nº
     // de repeticiones de la animación (bug corregido en v37.100 — no volver a
     // atarlo a l._gcpRepeatCount, ver el comentario en AnimClock.pathPhaseAt).
-    const _phase = AnimClock.pathPhaseAt(_rawT, _mpEnd, _mpAccel, _isSyncPth, _freeze);
+    // v42.21 — «Animación → Ejecutar una sola vez»: las pausas T de la animación se aplican en el dominio del tiempo
+    // (el recorrido se queda quieto mientras la animación está en una pausa) hasta que la animación termina, y dejan de
+    // aplicarse después — ver AnimClock.onceWarpRawT. El resto del recorrido (vueltas, rebobinado, fin, aceleración) no cambia.
+    const _vOnce   = _isSyncPth && !!l._motionAnimOnce && !!_mpCumTime;
+    const _pathRaw = _vOnce
+      ? AnimClock.onceWarpRawT(_rawT, _vCycles, _mpCumTime, _mpTotalF, l._gcpFrameHolds, !!l._gcpStopAtEnd, l._gcpRepeatCount || 0)
+      : _rawT;
+    const _phase = AnimClock.pathPhaseAt(_pathRaw, _mpEnd, _mpAccel, _isSyncPth && !_vOnce, _freeze);
     const relT = _phase.relT;
     const rel  = _edPathPositionAt(l._motionPath, l._motionPathClosed || false, relT, _vpw, _vph);
     if (_phase.justStopped) {
@@ -14223,7 +14319,8 @@ function _edMpPreviewTick() {
         la._gcpRepeatCount || 0,
         la._motionPathEnd || 'restart',
         la._gcpCircularEnd || false,
-        _pCumTime, la._gcpFrameHolds
+        _pCumTime, la._gcpFrameHolds,
+        !!la._motionAnimOnce   // v42.21: «Animación → Ejecutar una sola vez»
       );
       // Mismo arreglo que _edViewerMpTick (ver comentario extenso ahí,
       // sección "BUG CORREGIDO"): cancelar SIEMPRE el temporizador propio de
@@ -14267,7 +14364,12 @@ function _edMpPreviewTick() {
   // diferencia real de este contexto (previsualización de UN objeto mientras se
   // edita su trayectoria) es que aquí "justStopped" para directamente el RAF —
   // no hace falta programar un temporizador de reinicio, el botón ▶ ya lo hace.
-  const _phase = AnimClock.pathPhaseAt(_rawT, _end, _acc, _pIsSync, _pFreeze);
+  // v42.21 — «Animación → Ejecutar una sola vez»: ver el comentario en _edViewerMpTick (AnimClock.onceWarpRawT).
+  const _pOnce   = _pIsSync && !!la._motionAnimOnce && !!_pCumTime;
+  const _pathRaw = _pOnce
+    ? AnimClock.onceWarpRawT(_rawT, _edMotionPathCycles, _pCumTime, _pTotalF, la._gcpFrameHolds, !!la._gcpStopAtEnd, la._gcpRepeatCount || 0)
+    : _rawT;
+  const _phase = AnimClock.pathPhaseAt(_pathRaw, _end, _acc, _pIsSync && !_pOnce, _pFreeze);
   const relT = _phase.relT;
   const rel  = _edPathPositionAt(_edMotionPathPts, _edMotionPathClosed, relT, _pw, _ph);
   const _done = _phase.justStopped;
@@ -14369,6 +14471,7 @@ function _edCarryMotionPath(src, dst) {
   if (src._motionPathEnd)        dst._motionPathEnd   = src._motionPathEnd;
   if (src._motionPathAccel)      dst._motionPathAccel = src._motionPathAccel;
   if (src._motionPathDelay)      dst._motionPathDelay = src._motionPathDelay;
+  if (src._motionAnimOnce)       dst._motionAnimOnce  = true;
   if (src._motionPathOrient)     dst._motionPathOrient = src._motionPathOrient;
   return dst;
 }
@@ -14688,6 +14791,23 @@ function _edMpTimerAvailable(la) {
   if (la.groupId) return !_edGroupMemberIdxs(la.groupId).some(i => _edMpIsAnim(edLayers[i]));
   return true;
 }
+// v42.21 — ¿Se ofrece «Animación» (Ejecutar continuamente / Ejecutar una sola vez) en el modal? Sí cuando el objeto de la
+// trayectoria es una animación o forma parte de un grupo que contiene alguna (la animación del grupo lleva también la
+// trayectoria). Es justo el complementario del Temporizador (_edMpTimerAvailable): uno u otro, nunca los dos.
+function _edMpAnimAvailable(la) {
+  if (!la) return false;
+  if (_edMpIsAnim(la)) return true;
+  if (la.groupId) return _edGroupMemberIdxs(la.groupId).some(i => _edMpIsAnim(edLayers[i]));
+  return false;
+}
+// Valor pendiente de «Animación → Ejecutar una sola vez» (_motionAnimOnce) mientras el modal está abierto; solo se
+// vuelca a la capa al pulsar "Guardar". Dos casillas excluyentes: siempre hay exactamente una marcada.
+let _mpbehAnimOnce = false;
+function _mpbehAnimSync() {
+  const lo = document.getElementById('mpbeh-anim-loop'), on = document.getElementById('mpbeh-anim-once');
+  if (lo) { lo.checked = !_mpbehAnimOnce; const lb = lo.closest('label'); if (lb) lb.classList.toggle('active', !_mpbehAnimOnce); }
+  if (on) { on.checked = _mpbehAnimOnce;  const lb = on.closest('label'); if (lb) lb.classList.toggle('active', _mpbehAnimOnce); }
+}
 // Valor pendiente (segundos) del Temporizador mientras el modal está abierto;
 // solo se vuelca a la capa al pulsar "Guardar".
 let _mpbehTimerVal = 0;
@@ -14724,7 +14844,7 @@ function _edEndMotionPath(save) {
         if (_cDurNow > 0) la._motionCyclesDur = _cDurNow;
       } else {
         delete la._motionPath; delete la._motionPathClosed; delete la._motionSpeed;
-        delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel; delete la._motionPathDelay;
+        delete la._motionCycles; delete la._motionPathEnd; delete la._motionPathAccel; delete la._motionPathDelay; delete la._motionAnimOnce;
         delete la._motionPathOrient; delete la._pathCurRotDeg;
         delete la._pathCurX; delete la._pathCurY; delete la._pathStartTime; delete la._pathStopped;
       }
@@ -14743,6 +14863,7 @@ function _edEndMotionPath(save) {
             if (la._motionPathEnd)    _m._motionPathEnd    = la._motionPathEnd;    else delete _m._motionPathEnd;
             if (la._motionPathAccel)  _m._motionPathAccel  = la._motionPathAccel;  else delete _m._motionPathAccel;
             if (la._motionPathDelay)  _m._motionPathDelay  = la._motionPathDelay;  else delete _m._motionPathDelay;
+            if (la._motionAnimOnce)    _m._motionAnimOnce   = true;                   else delete _m._motionAnimOnce;
             if (la._motionPathOrient) _m._motionPathOrient = la._motionPathOrient; else delete _m._motionPathOrient;
             // _motionCycles/_motionCyclesDur: si la (el objeto cuya trayectoria se
             // acaba de editar) es una animación sincronizada por ciclos, el resto
@@ -14754,7 +14875,7 @@ function _edEndMotionPath(save) {
             if (la._motionCyclesDur) _m._motionCyclesDur = la._motionCyclesDur; else delete _m._motionCyclesDur;
           } else {
             delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed;
-            delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay;
+            delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay; delete _m._motionAnimOnce;
             delete _m._motionPathOrient; delete _m._pathCurRotDeg;
             delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
           }
@@ -15304,7 +15425,43 @@ function _edCurrentPageHydrating() {
 // Opciones: layers (def. edLayers) · visible(l) → visibilidad propia (def.: !l.hidden; el editor de animaciones usa _gcpVisible) ·
 //           skipLocked (saltar los bloqueados) · only (índices permitidos).
 // Devuelve el índice de la capa (el del dibujo dueño si el píxel es de un relleno/lápiz/acuarela vinculado) o -1.
+//
+// v42.20 — CON «VER CONTROL DE ANIMACIONES» SE ACIERTA SOBRE LO QUE SE VE (Alberto: «la selección por píxel debe funcionar aunque se esté
+// usando el control de animaciones; si tocas una animación que se ha movido en cualquier tiempo distinto del inicio, no se selecciona,
+// es como si siguiera en el mismo sitio que en tiempo 0»). Con el control activo el canvas pinta la hoja en el instante t del reloj
+// (objetos movidos por su trayectoria, girados, con su fotograma) pero las capas guardan SIEMPRE su estado base (ver _edAnimCtlBegin), y
+// el contains() de cada clase compara el punto con esa geometría base. Solución estándar —transformada inversa del puntero al espacio
+// local del objeto, como Fabric.js / Konva / PixiJS—: el punto tocado, que está en el espacio de lo que se VE, se lleva al espacio base
+// de cada capa deshaciendo la traslación (y el giro de orientación) con que la pinta su draw() (_edPickToBase, mismas fórmulas, mismo
+// estado px/py/rot de EdAnimCtl) y se evalúa con su contains() de siempre —con todos sus márgenes—; en imagen y GIF el alfa se lee,
+// además, del fotograma mostrado (st.oc) y no del póster. Sin control activo, o en una capa que no se mueve, el punto no se toca: se
+// comporta exactamente igual que antes. La caja de selección y los tiradores siguen en la posición base (diseño de v41.60).
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
+// Estado del reloj de animaciones para el selector (Map capa→{idx,fade,px,py,rot,oc}) o null si no aplica: control inactivo, visor,
+// vista previa de trayectoria o edición de trayectoria (mismos guardas que _edAnimCtlBegin, que es quien pinta con ese estado).
+function _edPickAnimStates() {
+  if (typeof EdAnimCtl === 'undefined' || !EdAnimCtl.isActive()) return null;
+  if (_edViewerMode || _edMpPreviewActive || _edMotionPathMode) return null;
+  try { return EdAnimCtl.statesFor(edPages[edCurrentPage]) || null; } catch (_e) { return null; }
+}
+// Punto (nx,ny) —fracciones de hoja, tal como se VE en el instante del reloj— llevado al sistema BASE de la capa l (el de su contains()).
+// st = estado de l en el reloj. null = no hay que moverlo (la capa se ve donde está).
+function _edPickToBase(l, nx, ny, st) {
+  if (!l || !st || st.px == null) return null;                 // sin trayectoria (solo fotogramas): se ve en su sitio
+  const pw = edPageW(), ph = edPageH(), t = l.type;
+  // Dibujo a mano y su relleno de lienzo completo: solo se TRASLADAN (DrawLayer.draw / FillLayer.draw con _isWorkspaceCanvas)
+  if (t === 'draw' || (l._isWorkspaceCanvas && (t === 'fill' || t === 'pencil' || t === 'watercolor'))) {
+    return { x: nx - (st.px - (l.x || 0.5)), y: ny - (st.py - (l.y || 0.5)) };
+  }
+  // Resto de capas: centro en (px,py) y giro rotation + st.rot alrededor de él (el bocadillo no gira: BubbleLayer.draw no rota)
+  let dx = (nx - st.px) * pw, dy = (ny - st.py) * ph;
+  const r = (t === 'bubble') ? 0 : (st.rot || 0);
+  if (r) {
+    const a = -r * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+    const tx = dx * ca - dy * sa; dy = dx * sa + dy * ca; dx = tx;
+  }
+  return { x: l.x + dx / pw, y: l.y + dy / ph };
+}
 function _edPickAt(nx, ny, o){
   o = o || {};
   const L = o.layers || edLayers;
@@ -15319,30 +15476,40 @@ function _edPickAt(nx, ny, o){
     const oi = L.findIndex(dl => dl._drawLayerId === undefined && dl._uid === sl._drawLayerId);
     return oi >= 0 ? oi : L.findIndex(dl => dl._fillLayerId === sl._drawLayerId);
   };
+  // v42.20 — estado del reloj de animaciones (solo el editor general: el editor de animaciones pasa sus propias capas en o.layers)
+  const acs = o.layers ? null : _edPickAnimStates();
+  // contains() de la capa sobre el punto tal como se VE. exact = modo exacto de dibujo/trazo (a mano); en imagen/GIF el 3.er argumento
+  // es el lienzo del fotograma mostrado.
+  const hit = (l, exact) => {
+    let x = nx, y = ny, oc = null;
+    const st = acs && acs.get(l);
+    if(st){ const q = _edPickToBase(l, nx, ny, st); if(q){ x = q.x; y = q.y; } oc = st.oc || null; }
+    return l.contains(x, y, (l.type === 'image' || l.type === 'gif') ? oc : exact);
+  };
   // 0. Textos y bocadillos (siempre encima)
   for(let i = L.length - 1; i >= 0; i--){
     const l = L[i];
-    if((l && (l.type === 'text' || l.type === 'bubble')) && usable(l) && allowed(i) && l.contains(nx, ny)) return i;
+    if((l && (l.type === 'text' || l.type === 'bubble')) && usable(l) && allowed(i) && hit(l)) return i;
   }
   // 1. Pasada exacta
   for(let i = L.length - 1; i >= 0; i--){
     const l = L[i];
     if(!usable(l) || l.type === 'text' || l.type === 'bubble') continue;
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
-      if(!l.contains(nx, ny)) continue;
+      if(!hit(l)) continue;
       const oi = ownerOf(l);
       if(oi >= 0 && allowed(oi) && usable(L[oi])) return oi;
       continue;
     }
     if(!allowed(i)) continue;
-    if((l.type === 'draw' || l.type === 'stroke') ? l.contains(nx, ny, true) : l.contains(nx, ny)) return i;
+    if((l.type === 'draw' || l.type === 'stroke') ? hit(l, true) : hit(l)) return i;
   }
   // 2. Ayuda: solo dibujos a mano, solo si nada tiene píxeles bajo el punto
   for(let i = L.length - 1; i >= 0; i--){
     const l = L[i];
     if(!usable(l) || !allowed(i)) continue;
     if(l.type !== 'draw' && l.type !== 'stroke') continue;
-    if(l.contains(nx, ny, false)) return i;
+    if(hit(l, false)) return i;
   }
   return -1;
 }
@@ -17286,6 +17453,7 @@ function edOnStart(e){
   if(found < 0 && _isTouch){
     const _p4Tol = 28 / (edCamera.z * Math.min(edPageW(), edPageH()));
     const _p4Pw = edPageW(), _p4Ph = edPageH();
+    const _p4Acs = _edPickAnimStates();   // v42.20: con «Ver control de animaciones», la caja ampliada sigue al objeto tal como se VE
     for(let i = edLayers.length - 1; i >= 0; i--){
       const l = edLayers[i];
       if(l.hidden) continue;
@@ -17293,7 +17461,8 @@ function edOnStart(e){
       const _noFill = !_edVecHasPaintedFill(l);   // v41.84: contorno abierto con color de relleno = sin relleno
       if(!_noFill) continue; // con relleno ya se detecta bien en pasada 1
       const _p4Rot = (l.rotation || 0) * Math.PI / 180;
-      const _p4Dx = (c.nx - l.x) * _p4Pw, _p4Dy = (c.ny - l.y) * _p4Ph;
+      const _p4Q = _p4Acs ? _edPickToBase(l, c.nx, c.ny, _p4Acs.get(l)) : null;   // punto tocado en el sistema base del objeto
+      const _p4Dx = ((_p4Q ? _p4Q.x : c.nx) - l.x) * _p4Pw, _p4Dy = ((_p4Q ? _p4Q.y : c.ny) - l.y) * _p4Ph;
       const _p4Lx = (_p4Dx * Math.cos(-_p4Rot) - _p4Dy * Math.sin(-_p4Rot)) / _p4Pw;
       const _p4Ly = (_p4Dx * Math.sin(-_p4Rot) + _p4Dy * Math.cos(-_p4Rot)) / _p4Ph;
       if(Math.abs(_p4Lx) <= l.width/2 + _p4Tol && Math.abs(_p4Ly) <= l.height/2 + _p4Tol){
@@ -19377,6 +19546,7 @@ function _vsSerLayer(l) {
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
     if (l._motionPathDelay) _s._motionPathDelay = l._motionPathDelay;
+    if (l._motionAnimOnce) _s._motionAnimOnce = true;
     if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
@@ -19403,6 +19573,7 @@ function _vsSerLayer(l) {
     if (l._motionPathEnd)   _s._motionPathEnd   = l._motionPathEnd;
     if (l._motionPathAccel) _s._motionPathAccel = l._motionPathAccel;
     if (l._motionPathDelay) _s._motionPathDelay = l._motionPathDelay;
+    if (l._motionAnimOnce) _s._motionAnimOnce = true;
     if (l._motionPathOrient) _s._motionPathOrient = true;
     if (l._motionCycles != null) _s._motionCycles = l._motionCycles;
     if (l._motionCyclesDur) _s._motionCyclesDur = l._motionCyclesDur;
@@ -27597,7 +27768,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click',()=>{
       const _pla=edLayers[edSelectedIdx]; if(!_pla) return;
-      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
+      edPushHistory(); delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionAnimOnce; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edRenderOptionsPanel('text-props');
     });
     $('pp-path-speed')?.addEventListener('input',(ev)=>{
@@ -27918,7 +28089,7 @@ function edRenderOptionsPanel(mode){
         edPushHistory();
         _idxsGrp.forEach(i => {
           const _m = edLayers[i]; if (!_m) return;
-          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay; delete _m._motionPathOrient; delete _m._pathCurRotDeg; delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
+          delete _m._motionPath; delete _m._motionPathClosed; delete _m._motionSpeed; delete _m._motionCycles; delete _m._motionPathEnd; delete _m._motionPathAccel; delete _m._motionPathDelay; delete _m._motionAnimOnce; delete _m._motionPathOrient; delete _m._pathCurRotDeg; delete _m._pathCurX; delete _m._pathCurY; delete _m._pathStartTime; delete _m._pathStopped;
         });
         edRenderOptionsPanel('props');
       });
@@ -28374,7 +28545,7 @@ function edRenderOptionsPanel(mode){
     });
     $('pp-del-path')?.addEventListener('click', () => {
       const _pla = edLayers[edSelectedIdx]; if (!_pla) return;
-      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
+      delete _pla._motionPath; delete _pla._motionPathClosed; delete _pla._motionSpeed; delete _pla._motionCycles; delete _pla._motionPathEnd; delete _pla._motionPathAccel; delete _pla._motionPathDelay; delete _pla._motionAnimOnce; delete _pla._motionPathOrient; delete _pla._pathCurRotDeg; delete _pla._pathCurX; delete _pla._pathCurY; delete _pla._pathStartTime; delete _pla._pathStopped;
       edPushHistory();
       edRenderOptionsPanel('props');
     });
@@ -29429,8 +29600,9 @@ function edInitSelectMenu(){
     edConfirm(I18n.t(_n === 1 ? 'ed_confirmDeleteObjSingular' : 'ed_confirmDeleteObjPlural', { n: _n }), ()=>{
       edPushHistory();
       const page = edPages[edCurrentPage]; if(!page) return;
-      const _toDelete = [...edMultiSel].sort((a,b)=>b-a);
-      _toDelete.forEach(i=>{ page.layers.splice(i,1); });
+      // v42.18: también las capas vinculadas (relleno/lápiz/acuarela) de los dibujos y vectoriales rasterizados seleccionados; antes
+      // solo se quitaban los objetos marcados y esas capas quedaban huérfanas en la hoja.
+      _edRemoveLayersWithCompanions(page, edMultiSel);
       edLayers = page.layers;
       _msClear();
       edSelectedIdx = -1;
@@ -33540,11 +33712,18 @@ async function _edSaveProjectInner(_keepOverlay){
     // marcadas sucias (o sin flag, que se trata igual) — el próximo intento
     // las volverá a serializar en vez de dar por bueno un guardado que falló.
   }
-  // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
-  const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
-    ? edHistory[_saveHistoryIdx] : (edHistory.length > 0 ? edHistory[edHistoryIdx] : null);
-  edHistory = _snapToKeep ? [_snapToKeep] : [];
-  edHistoryIdx = edHistory.length - 1;
+  // v42.19 — Alberto: «haz que en PC se conserven» los pasos de deshacer al guardar con 💾. Antes se compactaba SIEMPRE el historial a un solo
+  // paso (ahorro de memoria pensado para Android). Ahora solo en táctil (ED_IS_TOUCH_DEVICE: móvil/tableta); en PC el historial queda tal cual
+  // —el tope de pasos y el presupuesto de memoria de _edTrimHistory ya lo acotan—. Deshacer más allá del punto guardado no necesita nada
+  // especial: edApplyHistory vuelve a marcar la hoja como modificada (_edMarkPageDirty) y el siguiente guardado la reserializa. La detección de
+  // «cambios sin guardar» es por hoja (_edHasUnsavedLocalChanges), no depende del historial.
+  if (ED_IS_TOUCH_DEVICE) {
+    // Compactar historial usando el idx capturado al inicio (evita race condition con undo async)
+    const _snapToKeep = (_saveHistoryIdx >= 0 && _saveHistoryIdx < edHistory.length)
+      ? edHistory[_saveHistoryIdx] : (edHistory.length > 0 ? edHistory[edHistoryIdx] : null);
+    edHistory = _snapToKeep ? [_snapToKeep] : [];
+    edHistoryIdx = edHistory.length - 1;
+  }
   _edSavedHistoryIdx = edHistoryIdx;
   // Limpiar autosave — awaitar para garantizar que se borra antes de retornar
   await _edAutosaveClear(edProjectId);
@@ -34168,6 +34347,163 @@ function _edRenderLayerToWorkspace(la){
   return wc;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.16 — «⊕ Unir» DIBUJOS A MANO: la unión conserva EXACTAMENTE el aspecto de los dibujos apilados.
+   Alberto: «si uno dos dibujos con sus cuatro capas, el aspecto visual no debe cambiar […] la tinta o cualquier
+   otra capa que tape a cualquier otra capa del otro dibujo debe seguir viéndose, eliminando lo que hubiera debajo,
+   de modo que la unión una solo las partes visibles de las cuatro capas de los dos dibujos».
+   El dibujo unido tiene UNA capa de cada tipo, siempre en el orden relleno → acuarela → lápiz → tinta (invariante
+   del grupo). Antes se fundían todos los rellenos entre sí, todas las acuarelas entre sí…, de modo que la tinta del
+   dibujo de abajo acababa POR ENCIMA del relleno del dibujo de arriba aunque este la tapara.
+   Ahora, sobre el orden Z real de las capas de origen (de abajo arriba):
+     · pareja «invertida» = una capa que estaba POR DEBAJO de otra y cuyo tipo, en la unión, quedará POR ENCIMA
+       (p. ej. la tinta del 1.º bajo el relleno del 2.º). Solo estas parejas cambian de relación; el resto del apilado
+       (mismo tipo, o tipos que ya estaban en el orden final) lo conserva la propia composición.
+     · en cada píxel con una pareja invertida solapada, se calcula la CONTRIBUCIÓN VISIBLE de cada capa de origen
+       (su color por el producto de (1 − alfa) de todo lo que había encima, es decir, lo que de verdad llega a
+       la vista) y se reparte por tipo: V[tipo] = Σ contribuciones. Luego, de arriba abajo, cada capa resultante es
+       V[tipo] / (1 − alfa de las capas resultantes que quedan por encima): así lo tapado desaparece de la capa
+       que quedaba debajo, y si lo que tapaba era translúcido (acuarela, lápiz, opacidad < 100 %) la capa tapadora
+       compensa lo que ya no atenúa la de encima. Con tapa opaca es simplemente «borrar lo de debajo»; con tapa
+       parcial el resultado sigue siendo exactamente el mismo (± redondeo de 8 bits) que el del apilado original.
+     · fuera de esos píxeles no se toca nada: la capa resultante es la composición normal de las de origen.
+   Las capas ocultas (👁) no se ven, así que no forman parte de la unión (antes se fundían y pasaban a verse).
+   Fórmula = composición «over» estándar (Porter & Duff, 1984) en alfa premultiplicado.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+const _ED_HAND_SLOT = { fill: 0, watercolor: 1, pencil: 2, stroke: 3, draw: 3 };
+
+// Capas de origen de los dibujos a mano a unir (cada tinta con su relleno/acuarela/lápiz vinculados por _uid),
+// en su orden Z REAL (de abajo arriba). Las ocultas se descartan. → [{ l, t:0..3, op, z }]
+function _edHandSources(mains){
+  const out = [], seen = new Set();
+  for(const la of mains){
+    if(!la) continue;
+    const uid = la._uid || la._fillLayerId;
+    const parts = [];
+    if(uid) for(const t of ['fill', 'watercolor', 'pencil']){
+      const sl = edLayers.find(l => l.type === t && l._drawLayerId === uid);
+      if(sl && sl._canvas) parts.push(sl);
+    }
+    parts.push(la);
+    for(const l of parts){
+      if(seen.has(l)) continue;
+      seen.add(l);
+      if(l.hidden) continue;
+      out.push({ l, t: _ED_HAND_SLOT[l.type], op: l.opacity ?? 1, z: edLayers.indexOf(l) });
+    }
+  }
+  out.sort((a, b) => a.z - b.z);
+  return out;
+}
+
+// Caja (en px del lienzo de trabajo) que contiene seguro lo que pinta la capa: la de su bitmap girado y escalado,
+// con 2 px de margen. Los lienzos de trabajo completos (DrawLayer, capas en edición) ocupan todo el lienzo.
+function _edLayerAabb(l){
+  const W = ED_CANVAS_W, H = ED_CANVAS_H;
+  if(l.type === 'draw' || l._isWorkspaceCanvas || !l._canvas) return { x0: 0, y0: 0, x1: W, y1: H };
+  const pw = edPageW(), ph = edPageH();
+  const w = (l.width || 0) * pw, h = (l.height || 0) * ph;
+  const cx = edMarginX() + (l.x || 0) * pw, cy = edMarginY() + (l.y || 0) * ph;
+  const r = (l.rotation || 0) * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));
+  const hw = (w * c + h * s) / 2 + 2, hh = (w * s + h * c) / 2 + 2;
+  return { x0: Math.max(0, Math.floor(cx - hw)), y0: Math.max(0, Math.floor(cy - hh)),
+           x1: Math.min(W, Math.ceil(cx + hw)),  y1: Math.min(H, Math.ceil(cy + hh)) };
+}
+
+// Corrige, sobre los 4 lienzos ya fundidos por tipo (ctxs), los píxeles donde una pareja invertida se solapa (ver arriba).
+function _edHandFixInversions(src, ctxs){
+  const M = src.length;
+  if(M < 2) return;
+  const boxes = src.map(s => _edLayerAabb(s.l));
+  // Región donde alguna pareja invertida (i debajo de j, pero tipo(i) > tipo(j)) puede solaparse
+  let rx0 = Infinity, ry0 = Infinity, rx1 = -Infinity, ry1 = -Infinity;
+  for(let i = 0; i < M; i++) for(let j = i + 1; j < M; j++){
+    if(src[i].t <= src[j].t) continue;
+    const a = boxes[i], b = boxes[j];
+    const x0 = Math.max(a.x0, b.x0), y0 = Math.max(a.y0, b.y0), x1 = Math.min(a.x1, b.x1), y1 = Math.min(a.y1, b.y1);
+    if(x1 <= x0 || y1 <= y0) continue;
+    if(x0 < rx0) rx0 = x0; if(y0 < ry0) ry0 = y0; if(x1 > rx1) rx1 = x1; if(y1 > ry1) ry1 = y1;
+  }
+  if(!(rx1 > rx0 && ry1 > ry0)) return;                       // nada se solapa en orden invertido: la composición normal ya es exacta
+  const RW = rx1 - rx0, RH = ry1 - ry0;
+  const BH = Math.max(8, Math.min(RH, Math.floor(600000 / RW))); // bandas de ~0,6 Mpx: memoria acotada también con dibujos enormes
+  const scr = document.createElement('canvas'); scr.width = RW; scr.height = BH;
+  const sx = scr.getContext('2d', { willReadFrequently: true });
+  const EPS = 0.5 / 255;                                       // por debajo de esto, lo de arriba lo tapa por completo
+  const Va = new Float32Array(4), Vr = new Float32Array(4), Vg = new Float32Array(4), Vb = new Float32Array(4);
+  const D = new Array(M);
+  for(let by = ry0; by < ry1; by += BH){
+    const bh = Math.min(BH, ry1 - by);
+    let any = false;
+    for(let k = 0; k < M; k++){
+      const b = boxes[k];
+      if(b.y1 <= by || b.y0 >= by + bh || b.x1 <= rx0 || b.x0 >= rx1){ D[k] = null; continue; }
+      sx.setTransform(1, 0, 0, 1, 0, 0); sx.clearRect(0, 0, RW, BH);
+      sx.save(); sx.setTransform(1, 0, 0, 1, -rx0, -by); sx.globalAlpha = src[k].op; src[k].l.draw(sx); sx.restore();
+      D[k] = sx.getImageData(0, 0, RW, bh).data; any = true;
+    }
+    if(!any) continue;
+    const NI = ctxs.map(c => c.getImageData(rx0, by, RW, bh)), ND = NI.map(im => im.data);
+    let changed = false;
+    for(let p = 0, n = RW * bh; p < n; p++){
+      const o = p << 2;
+      // ¿Este píxel tiene una pareja invertida con alfa en las dos capas?
+      let maxT = -1, inv = false;
+      for(let k = 0; k < M; k++){
+        const d = D[k]; if(d === null || d[o + 3] === 0) continue;
+        const t = src[k].t;
+        if(t < maxT){ inv = true; break; }
+        if(t > maxT) maxT = t;
+      }
+      if(!inv) continue;
+      // Contribución visible de cada capa de origen (de arriba abajo), repartida por tipo
+      Va.fill(0); Vr.fill(0); Vg.fill(0); Vb.fill(0);
+      let tr = 1;
+      for(let k = M - 1; k >= 0; k--){
+        const d = D[k]; if(d === null) continue;
+        const a8 = d[o + 3]; if(a8 === 0) continue;
+        const a = a8 / 255, w = a * tr, t = src[k].t, wc = w / 255;
+        Va[t] += w; Vr[t] += d[o] * wc; Vg[t] += d[o + 1] * wc; Vb[t] += d[o + 2] * wc;
+        tr *= 1 - a;
+      }
+      // Capas resultantes, de arriba abajo: contribución visible / transparencia acumulada de lo que queda encima
+      let U = 1;
+      for(let t = 3; t >= 0; t--){
+        const q = ND[t];
+        let a, r, g, b;
+        if(U > EPS){ a = Va[t] / U; r = Vr[t] / U; g = Vg[t] / U; b = Vb[t] / U; }
+        else { a = q[o + 3] / 255; r = q[o] / 255 * a; g = q[o + 1] / 255 * a; b = q[o + 2] / 255 * a; } // tapado del todo: no se ve, se deja como estaba
+        if(a > 1) a = 1;
+        const aq = Math.round(a * 255);
+        if(aq <= 0){ q[o] = q[o + 1] = q[o + 2] = q[o + 3] = 0; continue; }
+        const af = aq / 255;
+        q[o + 3] = aq;
+        q[o]     = Math.min(255, Math.round(r / af * 255));
+        q[o + 1] = Math.min(255, Math.round(g / af * 255));
+        q[o + 2] = Math.min(255, Math.round(b / af * 255));
+        U *= 1 - af;
+      }
+      changed = true;
+    }
+    if(changed) for(let t = 0; t < 4; t++) ctxs[t].putImageData(NI[t], rx0, by);
+  }
+}
+
+// Funde los dibujos a mano seleccionados en 4 lienzos del tamaño del lienzo de trabajo (relleno, acuarela, lápiz, tinta)
+// con SOLO las partes visibles de cada capa de origen. → { fill, watercolor, pencil, stroke }
+function _edHandMergeSlots(mains){
+  const W = ED_CANVAS_W, H = ED_CANVAS_H;
+  const src = _edHandSources(mains);
+  const cvs = [0, 1, 2, 3].map(() => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; });
+  const ctxs = cvs.map(c => c.getContext('2d', { willReadFrequently: true }));
+  // 1) cada tipo con sus capas de origen, en su orden Z real
+  for(const s of src){ const cx = ctxs[s.t]; cx.save(); cx.globalAlpha = s.op; s.l.draw(cx); cx.restore(); }
+  // 2) lo que en el apilado original tapaba a otra capa que en la unión queda encima
+  try { _edHandFixInversions(src, ctxs); }
+  catch(e){ console.warn('[Unir] no se pudo conservar el orden de solape entre los dibujos:', e); }
+  return { fill: cvs[0], watercolor: cvs[1], pencil: cvs[2], stroke: cvs[3] };
+}
+
 /* ── Une los objetos seleccionados en uno solo ── */
 function edMergeSelected(){
   const mtype = _edMergeableTypes();
@@ -34362,37 +34698,28 @@ function edMergeSelected(){
     // _edApplyCropDraw (únicos otros puntos del código que reconstruyen este
     // grupo de 4 capas), reutilizado aquí en vez de inventar un mecanismo
     // nuevo: orden fill → watercolor → pencil → stroke.
-    const W = ED_CANVAS_W, H = ED_CANVAS_H;
-    const _mkCanvas = () => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; };
-    const fillCanvas = _mkCanvas(), wcCanvas = _mkCanvas(), pencilCanvas = _mkCanvas(), strokeCanvas = _mkCanvas();
-    const fillCtx = fillCanvas.getContext('2d'), wcCtx = wcCanvas.getContext('2d'),
-          pencilCtx = pencilCanvas.getContext('2d'), strokeCtx = strokeCanvas.getContext('2d');
+    // v42.16 — la fusión por tipo respeta el orden de solape REAL entre los dibujos (ver _edHandMergeSlots):
+    // la unión conserva solo las partes visibles de las capas de origen y el aspecto no cambia.
+    const _hm = _edHandMergeSlots(layers);
+    const fillCanvas = _hm.fill, wcCanvas = _hm.watercolor, pencilCanvas = _hm.pencil, strokeCanvas = _hm.stroke;
 
-    for(const la of layers){
-      const _uid = la._uid || la._fillLayerId;
-      // Fill de esta capa
-      const _fl = _uid ? edLayers.find(l => l.type === 'fill' && l._drawLayerId === _uid) : null;
-      if(_fl && _fl._canvas){
-        fillCtx.save(); fillCtx.globalAlpha = _fl.opacity ?? 1;
-        _fl.draw(fillCtx); fillCtx.restore();
-      }
-      // Watercolor de esta capa
-      const _wl = _uid ? edLayers.find(l => l.type === 'watercolor' && l._drawLayerId === _uid) : null;
-      if(_wl && _wl._canvas){
-        wcCtx.save(); wcCtx.globalAlpha = _wl.opacity ?? 1;
-        _wl.draw(wcCtx); wcCtx.restore();
-      }
-      // Pencil de esta capa
-      const _pl = _uid ? edLayers.find(l => l.type === 'pencil' && l._drawLayerId === _uid) : null;
-      if(_pl && _pl._canvas){
-        pencilCtx.save(); pencilCtx.globalAlpha = _pl.opacity ?? 1;
-        _pl.draw(pencilCtx); pencilCtx.restore();
-      }
-      // Stroke/draw de esta capa
-      strokeCtx.save(); strokeCtx.globalAlpha = la.opacity ?? 1;
-      la.draw(strokeCtx); strokeCtx.restore();
+    // Bbox unión de las 4 capas combinadas — mismo criterio que
+    // _edFreezeDrawLayer: las 4 capas resultantes comparten una única
+    // posición/tamaño para quedar perfectamente registradas entre sí
+    // (moverán/rotarán juntas como un solo objeto).
+    const _bbFill   = StrokeLayer._boundingBox(fillCanvas);
+    const _bbWc     = StrokeLayer._boundingBox(wcCanvas);
+    const _bbPencil = StrokeLayer._boundingBox(pencilCanvas);
+    const _bbStroke = StrokeLayer._boundingBox(strokeCanvas);
+    const _bbs = [_bbFill, _bbWc, _bbPencil, _bbStroke].filter(Boolean);
+    if(_bbs.length === 0){
+      // Defensivo: ningún tipo tenía contenido real (no debería ocurrir si
+      // _edMergeableTypes ya exigió objetos válidos; v42.16: o todo estaba oculto)
+      // — no crear nada vacío ni tocar las capas (antes ya se habían quitado las
+      // sub-capas en este punto).
+      _finishMerge(null);
+      return;
     }
-
     // Eliminar sub-capas vinculadas (fill, pencil, watercolor) de edLayers —
     // su contenido ya quedó compositado por tipo arriba.
     for(const la of layers){
@@ -34407,22 +34734,6 @@ function edMergeSelected(){
           }
         }
       }
-    }
-
-    // Bbox unión de las 4 capas combinadas — mismo criterio que
-    // _edFreezeDrawLayer: las 4 capas resultantes comparten una única
-    // posición/tamaño para quedar perfectamente registradas entre sí
-    // (moverán/rotarán juntas como un solo objeto).
-    const _bbFill   = StrokeLayer._boundingBox(fillCanvas);
-    const _bbWc     = StrokeLayer._boundingBox(wcCanvas);
-    const _bbPencil = StrokeLayer._boundingBox(pencilCanvas);
-    const _bbStroke = StrokeLayer._boundingBox(strokeCanvas);
-    const _bbs = [_bbFill, _bbWc, _bbPencil, _bbStroke].filter(Boolean);
-    if(_bbs.length === 0){
-      // Defensivo: ningún tipo tenía contenido real (no debería ocurrir si
-      // _edMergeableTypes ya exigió objetos válidos) — no crear nada vacío.
-      _finishMerge(null);
-      return;
     }
     let _uX0=Infinity, _uY0=Infinity, _uX1=-Infinity, _uY1=-Infinity;
     for(const _b of _bbs){
@@ -34603,6 +34914,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)   _g._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _g._motionPathAccel = l._motionPathAccel;
     if(l._motionPathDelay) _g._motionPathDelay = l._motionPathDelay;
+    if(l._motionAnimOnce)_g._motionAnimOnce=true;
     if(l._motionPathOrient) _g._motionPathOrient = true;
     if(l._motionCycles!=null) _g._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _g._motionCyclesDur=l._motionCyclesDur;
@@ -34670,6 +34982,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)   _r._motionPathEnd   = l._motionPathEnd;
     if(l._motionPathAccel) _r._motionPathAccel = l._motionPathAccel;
     if(l._motionPathDelay) _r._motionPathDelay = l._motionPathDelay;
+    if(l._motionAnimOnce)_r._motionAnimOnce=true;
     if(l._motionPathOrient) _r._motionPathOrient = true;
     if(l._motionCycles!=null) _r._motionCycles=l._motionCycles;
     if(l._motionCyclesDur) _r._motionCyclesDur=l._motionCyclesDur;
@@ -34698,6 +35011,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)  _o._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel;
     if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay;
+    if(l._motionAnimOnce)_o._motionAnimOnce=true;
     if(l._motionPathOrient)_o._motionPathOrient=true;
     if(l._motionCycles!=null)_o._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur;
@@ -34778,6 +35092,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)  _bobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_bobj._motionPathAccel=l._motionPathAccel;
     if(l._motionPathDelay)_bobj._motionPathDelay=l._motionPathDelay;
+    if(l._motionAnimOnce)_bobj._motionAnimOnce=true;
     if(l._motionPathOrient)_bobj._motionPathOrient=true;
     if(l._motionCycles!=null)_bobj._motionCycles=l._motionCycles;
     if(l._motionCyclesDur)_bobj._motionCyclesDur=l._motionCyclesDur;
@@ -34794,10 +35109,10 @@ function edSerLayer(l, skipCompress){
     if(l.opacity !== undefined) _po.opacity=l.opacity;
     return _po;
   }
-  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+  if(l.type==='draw'){const _o={type:'draw', dataUrl:l.toDataUrl()}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l.name)_o.name=l.name; if(l.opacity!==undefined)_o.opacity=l.opacity; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionAnimOnce)_o._motionAnimOnce=true; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='stroke'){const _o={type:'stroke', dataUrl:l.toDataUrl(),
     x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0, opacity:l.opacity,
-    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
+    color:l.color||'#000000', lineWidth:l.lineWidth??3}; if(l.groupId)_o.groupId=l.groupId; if(l.locked)_o.locked=true; if(l.hidden)_o.hidden=true; if(l._uid)_o._uid=l._uid; if(l._fillLayerId)_o._fillLayerId=l._fillLayerId; if(l._pencilLayerId)_o._pencilLayerId=l._pencilLayerId; if(l._watercolorLayerId)_o._watercolorLayerId=l._watercolorLayerId; if(l.name)_o.name=l.name; if(l._motionPath&&l._motionPath.length>=2)_o._motionPath=_edCopyMotionPathPts(l._motionPath); if(l._motionPathClosed)_o._motionPathClosed=true; if(l._motionSpeed!=null)_o._motionSpeed=l._motionSpeed; if(l._motionPathEnd)_o._motionPathEnd=l._motionPathEnd; if(l._motionPathAccel)_o._motionPathAccel=l._motionPathAccel; if(l._motionPathDelay)_o._motionPathDelay=l._motionPathDelay; if(l._motionAnimOnce)_o._motionAnimOnce=true; if(l._motionPathOrient)_o._motionPathOrient=true; if(l._motionCycles!=null)_o._motionCycles=l._motionCycles; if(l._motionCyclesDur)_o._motionCyclesDur=l._motionCyclesDur; return _o;}
   if(l.type==='shape'){
     const _sobj={type:'shape', shape:l.shape, x:l.x, y:l.y,
       width:l.width, height:l.height, rotation:l.rotation||0,
@@ -34836,6 +35151,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)  _sobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_sobj._motionPathAccel=l._motionPathAccel;
     if(l._motionPathDelay)_sobj._motionPathDelay=l._motionPathDelay;
+    if(l._motionAnimOnce)_sobj._motionAnimOnce=true;
     if(l._motionPathOrient)_sobj._motionPathOrient=true;
     return _sobj;
   }
@@ -34887,6 +35203,7 @@ function edSerLayer(l, skipCompress){
     if(l._motionPathEnd)  _lobj._motionPathEnd  =l._motionPathEnd;
     if(l._motionPathAccel)_lobj._motionPathAccel=l._motionPathAccel;
     if(l._motionPathDelay)_lobj._motionPathDelay=l._motionPathDelay;
+    if(l._motionAnimOnce)_lobj._motionAnimOnce=true;
     if(l._motionPathOrient)_lobj._motionPathOrient=true;
     return _lobj;
   }
@@ -35014,6 +35331,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)       dl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     dl._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)     dl._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)     dl._motionAnimOnce  = true;
     if(d._motionPathOrient)    dl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      dl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         dl._motionCyclesDur  = d._motionCyclesDur;
@@ -35049,6 +35367,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)       sl._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)     sl._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)     sl._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)     sl._motionAnimOnce  = true;
     if(d._motionPathOrient)    sl._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)      sl._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)         sl._motionCyclesDur  = d._motionCyclesDur;
@@ -35070,6 +35389,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)       l._motionAnimOnce  = true;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -35099,6 +35419,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)       l._motionAnimOnce  = true;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -35144,6 +35465,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)         l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)       l._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)       l._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)       l._motionAnimOnce  = true;
     if(d._motionPathOrient)      l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)        l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)           l._motionCyclesDur  = d._motionCyclesDur;
@@ -35185,6 +35507,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d._motionPathEnd)          l._motionPathEnd    = d._motionPathEnd;
     if(d._motionPathAccel)        l._motionPathAccel  = d._motionPathAccel;
     if(d._motionPathDelay)        l._motionPathDelay  = d._motionPathDelay;
+    if(d._motionAnimOnce)        l._motionAnimOnce  = true;
     if(d._motionPathOrient)       l._motionPathOrient = d._motionPathOrient;
     if(d._motionCycles!=null)         l._motionCycles     = d._motionCycles;
     if(d._motionCyclesDur)            l._motionCyclesDur  = d._motionCyclesDur;
@@ -39727,6 +40050,16 @@ function EditorView_init(){
     }
     _mpbehTimerVal = Math.max(0, +(_mla?._motionPathDelay) || 0);
     _mpbehTimerSync();
+    // Animación (v42.21): solo para animaciones o grupos que contienen una (ver _edMpAnimAvailable). Por defecto
+    // «Ejecutar continuamente» (campo ausente); el modal precarga lo guardado en la capa.
+    const _aniSec = $('mpbeh-anim-section');
+    if (_aniSec) {
+      const _aniOk = _edMpAnimAvailable(_mla);
+      _aniSec.style.display = _aniOk ? '' : 'none';
+      if (!_aniOk) _aniSec.classList.remove('open');
+    }
+    _mpbehAnimOnce = !!(_mla && _mla._motionAnimOnce);
+    _mpbehAnimSync();
     _modal.classList.add('open');
   });
 
@@ -39759,6 +40092,10 @@ function EditorView_init(){
         const _tmrOn  = _edMpTimerAvailable(_mbLa);
         const _tmrSec = _mpbehTimerVal > 0 ? _mpbehTimerVal : 0;
         if (_tmrOn) { if (_tmrSec > 0) _mbLa._motionPathDelay = _tmrSec; else delete _mbLa._motionPathDelay; }
+        // Animación (v42.21): «Ejecutar una sola vez» = _motionAnimOnce true; «continuamente» (como siempre) = campo
+        // ausente. Si la sección no se ofrece (objeto que no es animación ni grupo con una) no se toca el valor existente.
+        const _aniOn = _edMpAnimAvailable(_mbLa);
+        if (_aniOn) { if (_mpbehAnimOnce) _mbLa._motionAnimOnce = true; else delete _mbLa._motionAnimOnce; }
         if (_mbLa.groupId) {
           _edGroupMemberIdxs(_mbLa.groupId).forEach(i => {
             const _gm = edLayers[i];
@@ -39767,6 +40104,7 @@ function EditorView_init(){
               _gm._motionPathOrient = _orientVal;
               if (!_orientVal) delete _gm._pathCurRotDeg;
               if (_tmrOn) { if (_tmrSec > 0) _gm._motionPathDelay = _tmrSec; else delete _gm._motionPathDelay; }
+              if (_aniOn) { if (_mpbehAnimOnce) _gm._motionAnimOnce = true; else delete _gm._motionAnimOnce; }
             }
           });
         }
@@ -39815,6 +40153,18 @@ function EditorView_init(){
       document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
       if (!_isOpen) _sec.classList.add('open');
     });
+
+    // Toggle sección "Animación" (v42.21)
+    $('mpbeh-anim-toggle')?.addEventListener('click', () => {
+      const _sec = $('mpbeh-anim-toggle').closest('.mpbeh-section');
+      const _isOpen = _sec.classList.contains('open');
+      document.querySelectorAll('#edMpBehaviourModal .mpbeh-section').forEach(s => s.classList.remove('open'));
+      if (!_isOpen) _sec.classList.add('open');
+    });
+    // «Animación»: dos casillas excluyentes — «Ejecutar continuamente» (predeterminada, como funciona hoy) y «Ejecutar
+    // una sola vez». Tocar la que ya está marcada la deja marcada (nunca quedan las dos vacías): _mpbehAnimSync reescribe ambas.
+    $('mpbeh-anim-loop')?.addEventListener('change', () => { _mpbehAnimOnce = false; _mpbehAnimSync(); });
+    $('mpbeh-anim-once')?.addEventListener('change', () => { _mpbehAnimOnce = true;  _mpbehAnimSync(); });
 
     // Temporizador: slider 0–60 s (paso 0,5) + campo numérico (décimas al teclear;
     // el número escrito manda aunque supere el tope del slider) — mismo criterio
@@ -40604,25 +40954,11 @@ function EditorView_init(){
       if(edActiveTool==='multiselect' && edMultiSel.length){
         e.preventDefault();
         const page=edPages[edCurrentPage]; if(!page) return;
-        // Guardar estado actual (con objetos) antes de borrar
-        // Usamos el mismo patrón que edDeleteSelected
-        const toDelete=[...edMultiSel].sort((a,b)=>b-a);
-        // Eliminar también las sub-capas vinculadas (fill/pencil/watercolor) — BUG FIX:
-        // antes solo se borraba 'fill', dejando huérfanas 'pencil'/'watercolor' (mismo
-        // patrón que el bug ya corregido en "Eliminar grupo" del panel de propiedades).
-        toDelete.forEach(i=>{
-          const _ld=page.layers[i];
-          const _ldUid = _ld?._uid || _ld?._fillLayerId;
-          if(_ldUid){
-            for (const _t of ['fill','pencil','watercolor']) {
-              const _fdi=page.layers.findIndex(l=>l.type===_t&&l._drawLayerId===_ldUid);
-              if(_fdi>=0) page.layers.splice(_fdi,1);
-            }
-          }
-        });
-        // Recalcular índices tras eliminar FillLayers
-        const toDelete2=[...edMultiSel.map(i=>page.layers.indexOf(edLayers[i])).filter(i=>i>=0)].sort((a,b)=>b-a);
-        toDelete2.forEach(i=>{ page.layers.splice(i,1); });
+        // Eliminar los objetos seleccionados Y sus sub-capas vinculadas (fill/pencil/watercolor).
+        // v42.18: antes se quitaban primero las vinculadas y luego se recalculaban los índices contra el MISMO array ya modificado
+        // (edLayers === page.layers), con lo que se borraban otras capas —y los trazos seleccionados se quedaban— cuando había
+        // objetos rasterizados. Ahora un solo paso por identidad de capa (ver _edRemoveLayersWithCompanions).
+        _edRemoveLayersWithCompanions(page, edMultiSel);
         edLayers=page.layers;
         _edDeactivateMultiSel();
         edSelectedIdx=-1;
@@ -53486,7 +53822,7 @@ async function _edRunDiag() {
   L('\n── Historial ──');
   // v41.90 — con la sesión vectorial abierta (panel recta/forma o barra flotante) los cambios se apuntan en el historial LOCAL
   // (_vsHistory); sin sesión, en el global. Un _vsHistory sin panel ni barra es un resto huérfano y se limpia solo.
-  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' (máx ' + ED_MAX_HISTORY + ') | historial vectorial local: ' + _vsHistory.length + ' (índice ' + _vsHistIdx + ') · sesión vectorial abierta=' + (typeof _edVecSessionOpen === 'function' ? _edVecSessionOpen() : '?') + ' · _edShapeHistory=' + (typeof _edShapeHistory !== 'undefined' ? _edShapeHistory.length : '?'));
+  L('edHistoryIdx=' + edHistoryIdx + ' total=' + edHistory.length + ' (máx ' + ED_MAX_HISTORY + ', mín ' + ED_MIN_HISTORY + ', presupuesto ' + (ED_HISTORY_BUDGET ? Math.round(ED_HISTORY_BUDGET / 1e6) + ' MB' : 'sin') + ', en uso ' + (_edHistoryChars() / 1e6).toFixed(1) + ' MB; dispositivo ' + (ED_IS_TOUCH_DEVICE ? 'táctil' : 'PC') + ', maxTouchPoints=' + navigator.maxTouchPoints + ', puntero fino=' + (window.matchMedia('(pointer:fine)').matches ? 'sí' : 'no') + ') | historial vectorial local: ' + _vsHistory.length + ' (índice ' + _vsHistIdx + ') · sesión vectorial abierta=' + (typeof _edVecSessionOpen === 'function' ? _edVecSessionOpen() : '?') + ' · _edShapeHistory=' + (typeof _edShapeHistory !== 'undefined' ? _edShapeHistory.length : '?'));
   L('edIsDragging=' + edIsDragging + ' _edMoved=' + window._edMoved + ' edSelectedIdx=' + edSelectedIdx);
   edHistory.forEach((h, hi) => {
     try {

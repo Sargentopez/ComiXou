@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.15</footer>
+    <footer class="app-version">v42.21</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -975,6 +975,22 @@ Router.register('editor', {
             <div class="mpbeh-options" id="mpbeh-orient-options">
               <button class="mpbeh-opt" data-mpbeh-orient="fixed" id="mpbeh-orient-fixed" data-i18n="gcp_fixedOrientation">🧭 Fija</button>
               <button class="mpbeh-opt" data-mpbeh-orient="path"  id="mpbeh-orient-path" data-i18n="gcp_rotateAlongPath">🔄 Girar según trayectoria</button>
+            </div>
+          </div>
+
+          <!-- Sección: Animación (v42.21) — solo cuando el objeto de la trayectoria es una animación (o el grupo
+               contiene una): dos casillas excluyentes. «Ejecutar continuamente» = como siempre (predeterminada);
+               «Ejecutar una sola vez» = la animación se reproduce una vez, se queda en su último fotograma y la
+               trayectoria sigue ejecutándose. El JS la muestra/oculta al abrir el modal (_edMpAnimAvailable). -->
+          <div class="mpbeh-section" id="mpbeh-anim-section" style="margin-top:10px;display:none">
+            <button class="mpbeh-header" id="mpbeh-anim-toggle">
+              <span class="mpbeh-header-label" data-i18n="gcp_pathAnimation">Animación</span>
+              <span class="mpbeh-arrow">▾</span>
+            </button>
+            <div class="mpbeh-options" id="mpbeh-anim-options">
+              <label class="mpbeh-check active"><input type="checkbox" id="mpbeh-anim-loop" checked><span data-i18n="gcp_pathAnimLoop">Ejecutar continuamente</span></label>
+              <label class="mpbeh-check"><input type="checkbox" id="mpbeh-anim-once"><span data-i18n="gcp_pathAnimOnce">Ejecutar una sola vez</span></label>
+              <div class="mpbeh-timer-hint mpbeh-anim-hint" data-i18n="gcp_pathAnimHint">Con «una sola vez» la animación se reproduce una vez y se queda en su último fotograma; la trayectoria sigue ejecutándose</div>
             </div>
           </div>
 
