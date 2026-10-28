@@ -19638,6 +19638,11 @@ function _vsSnapshot() {
 function _vsPush() {
   const snap = _vsSnapshot();
   if (!snap) return;
+  // v42.23 — un apunte que no cambia nada respecto al paso actual (tocar un nodo solo para seleccionarlo, soltar un arrastre sin haber
+  // movido nada…) NO es un paso de deshacer. Antes añadía una instantánea idéntica: el primer deshacer «no hacía nada» y, encima, el
+  // apunte descartaba los pasos de rehacer que hubiese por delante.
+  const _cur = _vsHistory[_vsHistIdx];
+  if (_cur && _vsSnapKey(_cur) === _vsSnapKey(snap)) { _edShapeUpdateUndoRedoBtns(); return; }
   // Descartar futuros si estamos en medio del historial
   _vsHistory = _vsHistory.slice(0, _vsHistIdx + 1);
   _vsHistory.push(snap);
@@ -19701,14 +19706,16 @@ function _vsApply(snap) {
   let anchor = null;
   (snap.order || []).forEach(m => {
     if (m.keep) { if (present.has(m.keep)) anchor = m.keep; return; }
-    if (m.vec === undefined) return;
-    const l = restored[m.vec];
+    // v42.23 — el trazo en construcción ({line:true}) vuelve a SU profundidad, como un objeto más. Antes se apilaba siempre al final:
+    // al deshacer el cierre de un polígono (o un vértice) con un texto, un bocadillo o un dibujo encima, el polígono saltaba por
+    // encima de ellos y, al terminarlo, se quedaba ahí.
+    const l = m.line ? _edLineLayer : (m.vec === undefined ? null : restored[m.vec]);
     if (!l) return;
     const after = lastAfter.get(anchor) || anchor;
     out.splice(after ? out.indexOf(after) + 1 : 0, 0, l);
     lastAfter.set(anchor, l);
   });
-  if (_edLineLayer) out.push(_edLineLayer);
+  if (_edLineLayer && !out.includes(_edLineLayer)) out.push(_edLineLayer);   // (instantánea sin su anclaje: al final, como siempre)
   page.layers = out;
   edLayers = page.layers;
 
@@ -19724,6 +19731,10 @@ function _vsApply(snap) {
 // pero sus nodos desaparecían solos y había que volver a pulsar NODOS. NODOS es un MODO elegido por el usuario: se conserva.
 function _vsRerender() {
   const _keepNodes = _edCurveModeActive();
+  // v42.23 — un polígono/recta en construcción que REVIVE con deshacer/rehacer solo se puede continuar con la herramienta de
+  // polígono/recta (el tipo, polígono o recta, se conserva en _edLineType): si entre medias se había cambiado de herramienta (p. ej.
+  // a rectángulo), se vuelve a ella; si no, el trazo recuperado quedaría «fantasma» y los toques empezarían otro objeto.
+  if (_edLineLayer && edActiveTool !== 'line') { edActiveTool = 'line'; if (edCanvas) edCanvas.className = 'tool-line'; }
   _edActivateLineTool(false, true);
   window._edCurveVertIdx = -1; // el vértice «activo» de antes puede haber desaparecido con el deshacer/rehacer
   const _pl = $('edOptionsPanel');
@@ -25054,7 +25065,7 @@ function _edActivateLineTool(isNew, isCreating) {
       edLayers.forEach(l => { if(l._fusionId === _okFusId) delete l._fusionId; });
     }
     _edLineFusionId = null;
-    _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
+    _edVecCommitSession(); // v42.23: apunta el «después» en el historial general (limpiando antes _vs*) y une los objetos creados en la sesión
     edCloseOptionsPanel();
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edShapeBarHide(); _edDrawUnlockUI();
@@ -25119,19 +25130,17 @@ function _edFinishLine(keepTool) {
     // La fusión se hace manualmente con el botón "Fusionar" del panel.
     _edLineFusionId = null;
     delete finished._fusionId;
+    // v42.23 — DESHACER. Terminar un objeto (polígono que se cierra, recta que llega a su 2.º punto, «Cerrar objeto», cambio de herramienta)
+    // es un paso MÁS del historial local de la sesión (_vsPush, dentro de _edShapePushHistory) y NADA más. Antes, además, aquí se vaciaba
+    // el historial local (_vsClear + historial nuevo de un único estado) y se apuntaba un paso en el historial GENERAL por cada polígono
+    // o recta: tras cerrar uno, el ↩ quedaba desactivado y no se podía retroceder más allá de ese objeto (Alberto: «arregla el deshacer,
+    // para que pueda retroceder la creación de polígonos o rectas»), la sesión pasaba a «nueva» (_vsIsNew) aunque no lo fuese, y un
+    // deshacer del editor general borraba polígonos de uno en uno por detrás de la sesión abierta. Rectángulos y elipses ya solo
+    // apuntaban en el local; ahora los cuatro tipos se comportan igual: el historial GENERAL recibe solo el «antes» (al entrar) y el
+    // «después» (al pulsar OK), y _vsPreSessionLayers no se toca (Fusionar sigue sabiendo qué objetos existían antes de la sesión).
     _edShapePushHistory();
-    // Comprometer la línea al historial global: _vsClear desbloquea edPushHistory,
-    // luego guardamos el estado "línea creada" antes de reabrir el panel.
-    // CRÍTICO: guardar _vsPreSessionLayers antes de _vsClear() para que Fusionar
-    // siga sabiendo qué objetos existían antes de esta sesión vectorial.
-    const _finishPreSession = new Set(_vsPreSessionLayers);
-    _vsClear();
-    edPushHistory();
-    // Restaurar contexto de sesión: _vsPreSessionLayers intacto, nueva historia vacía
-    // lista para el siguiente objeto de la misma sesión.
-    _vsPreSessionLayers = _finishPreSession;
-    _vsHistory = [_vsSnapshot()];
-    _vsHistIdx = 0;
+    // (_vsClear() apagaba además el cursor COF vectorial al terminar cada objeto: se conserva ese comportamiento)
+    if (typeof _vcofSetOn === 'function' && typeof _vcof !== 'undefined' && _vcof && _vcof.on) _vcofSetOn(false);
     edRedraw();
     if(!keepTool){ _edLineType='select'; edActiveTool='select'; edCanvas.className=''; }
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
@@ -32475,22 +32484,28 @@ const _edHelpContent = {
         <b>1.</b> ${I18n.t('ed_helpVectorP0')}
       </div>
       <div style="margin-bottom:14px">
-        <b>2.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
+        <b>2.</b> ${I18n.t('ed_helpVectorPU')}
       </div>
       <div style="margin-bottom:14px">
-        <b>3.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
+        <b>3.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>4.</b> ${I18n.t('ed_helpVectorP3')}
+        <b>4.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>5.</b> ${I18n.t('ed_helpVectorP4')}
+        <b>5.</b> ${I18n.t('ed_helpVectorP3')}
       </div>
       <div style="margin-bottom:14px">
-        <b>6.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
+        <b>6.</b> ${I18n.t('ed_helpVectorP4')}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>7.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>8.</b> ${I18n.t('ed_helpVectorPJ')}
       </div>
       <div>
-        <b>7.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
+        <b>9.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
       </div>
     `;
     })()
@@ -34553,6 +34568,211 @@ function _edHandMergeSlots(mains){
   return { fill: cvs[0], watercolor: cvs[1], pencil: cvs[2], stroke: cvs[3] };
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.23 — Construye el objeto «unido» ⊕ a partir de una lista de vectoriales (de ABAJO a ARRIBA en el apilado).
+   Es EXACTAMENTE lo que hacía la rama «vector» de edMergeSelected (herramienta ⊕ Unir), extraído tal cual para que la unión
+   automática al pulsar OK en una sesión de dibujo vectorial (_edVecJoinApply) produzca el mismo objeto que la herramienta Unir.
+   No toca el apilado ni el historial: solo devuelve el LineLayer nuevo (grouped=true + un estilo por contorno).
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+function _edBuildUnitedVector(layers){
+  const newLL = new LineLayer();
+  const first = layers[0];
+  newLL.color     = first.color     || '#000000';
+  newLL.lineWidth = first.lineWidth || 3;
+  newLL.opacity   = first.opacity   ?? 1;
+  const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
+  newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
+  const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
+
+  // Trabajar en píxeles workspace para respetar rotación y escala X/Y distintas.
+  // Los puntos locales están en normalizado (aprox 0-1) con pw/ph distintos.
+  const pw = edPageW(), ph = edPageH();
+  const mx = edMarginX(), my = edMarginY();
+
+  // Transforma un vector local (dx,dy) en normalizado al espacio px rotado del layer
+  function _rotPx(dx, dy, cos, sin) {
+    const lpx = dx * pw, lpy = dy * ph;
+    return { x: lpx * cos - lpy * sin, y: lpx * sin + lpy * cos };
+  }
+
+  // Devuelve array de contornos en px absolutos.
+  // Cada punto preserva: x, y (px), cp1, cp2 (px, opcionales), curve, cornerRadius (de cornerRadii)
+  function _layerToPixelContours(la) {
+    const contours = [];
+    if(la.type === 'line') {
+      const cx = mx + la.x * pw;
+      const cy = my + la.y * ph;
+      const rot = (la.rotation || 0) * Math.PI / 180;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const cr = la.cornerRadii || {};
+      let cur = [];
+      for(let _pi = 0; _pi < la.points.length; _pi++) {
+        const p = la.points[_pi];
+        if(p === null) {
+          if(cur.length) { contours.push(cur); cur = []; }
+        } else {
+          const rp = _rotPx(p.x, p.y, cos, sin);
+          const np = { x: cx + rp.x, y: cy + rp.y };
+          if(p.curve !== undefined) np.curve = p.curve;
+          if(p.cp1) { const c1 = _rotPx(p.cp1.x, p.cp1.y, cos, sin); np.cp1 = { x: cx + c1.x, y: cy + c1.y }; }
+          if(p.cp2) { const c2 = _rotPx(p.cp2.x, p.cp2.y, cos, sin); np.cp2 = { x: cx + c2.x, y: cy + c2.y }; }
+          // cornerRadii indexado por posición en la.points (incluyendo nulls)
+          if(cr[_pi]) np._cr = cr[_pi];
+          cur.push(np);
+        }
+      }
+      if(cur.length) contours.push(cur);
+    } else {
+      // ShapeLayer → polígono en px, preservando cornerRadii si los tiene
+      const cx = mx + la.x * pw;
+      const cy = my + la.y * ph;
+      const rot = (la.rotation || 0) * Math.PI / 180;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const pts = [];
+      if(la.shape === 'ellipse') {
+        const n = 48, rw = la.width * pw / 2, rh = la.height * ph / 2;
+        for(let i = 0; i < n; i++) {
+          const ang = (i / n) * Math.PI * 2;
+          const lpx = Math.cos(ang) * rw, lpy = Math.sin(ang) * rh;
+          pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
+        }
+      } else {
+        // rect: 4 esquinas TL, TR, BR, BL — mismo orden que cornerRadii [0,1,2,3]
+        const hw = la.width * pw / 2, hh = la.height * ph / 2;
+        const _shCr = Array.isArray(la.cornerRadii) ? la.cornerRadii : [0,0,0,0];
+        let _shIdx = 0;
+        for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
+          const pt = { x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos };
+          if(_shCr[_shIdx]) pt._cr = _shCr[_shIdx];
+          _shIdx++;
+          pts.push(pt);
+        }
+      }
+      contours.push(pts);
+    }
+    return contours;
+  }
+
+  // Recoger todos los contornos en px, con sus estilos individuales
+  const allContoursPx = [];
+  const allContourStyles = []; // estilo por contorno
+  for(const la of layers) {
+    const _cs = _layerToPixelContours(la);
+    const _style = {
+      fillColor: la.fillColor || 'none',
+      color:     la.color     || '#000000',
+      lineWidth: la.lineWidth ?? 3,
+      closed:    la.type === 'shape' || (la.type === 'line' && !!la.closed)
+    };
+    for(const c of _cs) {
+      allContoursPx.push(c);
+      allContourStyles.push(_style);
+    }
+  }
+
+  // Centro del bbox en px
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const c of allContoursPx) for(const p of c) {
+    if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+    if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+  }
+  const cxPx = (minX + maxX) / 2;
+  const cyPx = (minY + maxY) / 2;
+  newLL.x = (cxPx - mx) / pw;
+  newLL.y = (cyPx - my) / ph;
+  newLL.rotation = 0; // absorbida en los puntos
+  newLL.cornerRadii = {};
+
+  for(let ci = 0; ci < allContoursPx.length; ci++) {
+    if(ci > 0) { newLL.points.push(null); } // el null ocupa índice en points
+    for(const p of allContoursPx[ci]) {
+      const np = { x: (p.x - cxPx) / pw, y: (p.y - cyPx) / ph };
+      if(p.curve !== undefined) np.curve = p.curve;
+      if(p.cp1) np.cp1 = { x: (p.cp1.x - cxPx) / pw, y: (p.cp1.y - cyPx) / ph };
+      if(p.cp2) np.cp2 = { x: (p.cp2.x - cxPx) / pw, y: (p.cp2.y - cyPx) / ph };
+      // cornerRadii se indexa por posición en points INCLUYENDO nulls
+      if(p._cr) newLL.cornerRadii[newLL.points.length] = p._cr;
+      newLL.points.push(np);
+    }
+  }
+  newLL.closed = _allClosed;
+  newLL.grouped = true; // agrupado sin fusión booleana
+  newLL.groupedStyles = allContourStyles; // estilos individuales por contorno
+  newLL._updateBbox();
+  return newLL;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.23 — UNIR AL PULSAR OK (sesión de dibujo vectorial).
+   Alberto: «cuando se creen varios objetos, al hacer OK, se inserten unidos, como si se hubiera usado la herramienta de unir».
+   Al pulsar OK (botón del panel, de la barra flotante o Intro) los objetos CREADOS en la sesión se sustituyen por UN solo objeto
+   unido ⊕ —el mismo que fabrica la herramienta Unir (_edBuildUnitedVector)—, en la posición del más alto de ellos.
+     · Solo se unen sesiones de CREACIÓN (empezaron sin objetos propios): editar un objeto existente, o un ⊕ disuelto, no une nada.
+     · Solo se unen los objetos que se pueden unir sin perder nada ni cambiar su aspecto (_edVecJoinable); el resto se queda como estaba.
+     · Los vectoriales previos a la sesión nunca se tocan.
+     · En el historial general quedan DOS pasos —«objetos creados» y «objetos unidos»—, como si se hubiese usado Unir justo después
+       del OK: un solo deshacer del editor general vuelve a separarlos.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+// ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el degradado, el
+// nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo; da UNA sola opacidad al resultado y trata cada
+// contorno de un objeto fusionado ☯ (con huecos) como un objeto independiente, con lo que los huecos se rellenarían.
+function _edVecJoinable(l){
+  if(!l || (l.type !== 'line' && l.type !== 'shape')) return false;
+  if(l.hidden || l.locked || l.groupId || l.name || l._buttonAction) return false;
+  if(l._motionPath && l._motionPath.length) return false;
+  if(_edGradValid(l.fillGradient)) return false;
+  if(l.type === 'line'){
+    if(l.grouped || (l.subPaths && l.subPaths.length)) return false;   // ya unido ⊕ / con huecos
+    const pts = l.points || [];
+    if(pts.length < 2 || pts.includes(null)) return false;             // vacío, o varios contornos (fusionado ☯)
+  }
+  return true;
+}
+
+// Objetos que se unirán al pulsar OK (de abajo a arriba), o null si no hay nada que unir. Hay que llamarla ANTES de _vsClear():
+// necesita saber qué vectoriales son de la sesión y cómo empezó esta.
+function _edVecJoinPick(){
+  const h0 = _vsHistory[0];
+  if(!h0 || (h0.vecLayers && h0.vecLayers.length) || h0.lineLayer) return null;    // la sesión empezó con un objeto en edición
+  const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l));
+  if(cands.length < 2) return null;
+  // Unir da UNA sola opacidad al objeto resultante: se unen los de la opacidad más repetida (a igualdad, la del objeto más bajo);
+  // los demás conservan la suya.
+  const opOf = l => Math.round((l.opacity == null ? 1 : l.opacity) * 1000) / 1000;
+  const groups = new Map();
+  cands.forEach(l => { const k = opOf(l); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(l); });
+  let best = null;
+  groups.forEach(g => { if(!best || g.length > best.length) best = g; });
+  return best && best.length >= 2 ? best : null;
+}
+
+// Sustituye `layers` (de abajo a arriba) por su objeto unido, en la posición del más alto, y apunta el paso en el historial general.
+function _edVecJoinApply(layers){
+  const united = _edBuildUnitedVector(layers);
+  const idxs = layers.map(l => edLayers.indexOf(l)).filter(i => i >= 0).sort((a, b) => a - b);
+  if(!united || idxs.length < 2) return;
+  let insertAt = idxs[idxs.length - 1];
+  for(let i = idxs.length - 1; i >= 0; i--){
+    const ri = idxs[i];
+    edLayers.splice(ri, 1);
+    if(ri < insertAt) insertAt--;
+  }
+  insertAt = Math.min(insertAt, edLayers.length);
+  edLayers.splice(insertAt, 0, united);
+  edPages[edCurrentPage].layers = edLayers;
+  edSelectedIdx = insertAt;
+  edPushHistory();
+  edRedraw();
+  edToast(I18n.t('ed_objectsUnited'));
+}
+
+// Cierra la sesión vectorial con OK: apunta el «después» (objetos creados) en el historial general y, si procede, los une (v42.23).
+function _edVecCommitSession(){
+  const join = _edVecJoinPick();                          // antes de _vsClear(): necesita la sesión viva
+  _edShapeClearHistory(); _vsClear(); edPushHistory();    // limpiar _vs* antes para que edPushHistory no quede bloqueado
+  if(join) _edVecJoinApply(join);
+}
+
 /* ── Une los objetos seleccionados en uno solo ── */
 function edMergeSelected(){
   const mtype = _edMergeableTypes();
@@ -34602,131 +34822,7 @@ function edMergeSelected(){
   }
 
   if(mtype === 'vector'){
-    const newLL = new LineLayer();
-    const first = layers[0];
-    newLL.color     = first.color     || '#000000';
-    newLL.lineWidth = first.lineWidth || 3;
-    newLL.opacity   = first.opacity   ?? 1;
-    const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
-    newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
-    const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
-
-    // Trabajar en píxeles workspace para respetar rotación y escala X/Y distintas.
-    // Los puntos locales están en normalizado (aprox 0-1) con pw/ph distintos.
-    const pw = edPageW(), ph = edPageH();
-    const mx = edMarginX(), my = edMarginY();
-
-    // Transforma un vector local (dx,dy) en normalizado al espacio px rotado del layer
-    function _rotPx(dx, dy, cos, sin) {
-      const lpx = dx * pw, lpy = dy * ph;
-      return { x: lpx * cos - lpy * sin, y: lpx * sin + lpy * cos };
-    }
-
-    // Devuelve array de contornos en px absolutos.
-    // Cada punto preserva: x, y (px), cp1, cp2 (px, opcionales), curve, cornerRadius (de cornerRadii)
-    function _layerToPixelContours(la) {
-      const contours = [];
-      if(la.type === 'line') {
-        const cx = mx + la.x * pw;
-        const cy = my + la.y * ph;
-        const rot = (la.rotation || 0) * Math.PI / 180;
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        const cr = la.cornerRadii || {};
-        let cur = [];
-        for(let _pi = 0; _pi < la.points.length; _pi++) {
-          const p = la.points[_pi];
-          if(p === null) {
-            if(cur.length) { contours.push(cur); cur = []; }
-          } else {
-            const rp = _rotPx(p.x, p.y, cos, sin);
-            const np = { x: cx + rp.x, y: cy + rp.y };
-            if(p.curve !== undefined) np.curve = p.curve;
-            if(p.cp1) { const c1 = _rotPx(p.cp1.x, p.cp1.y, cos, sin); np.cp1 = { x: cx + c1.x, y: cy + c1.y }; }
-            if(p.cp2) { const c2 = _rotPx(p.cp2.x, p.cp2.y, cos, sin); np.cp2 = { x: cx + c2.x, y: cy + c2.y }; }
-            // cornerRadii indexado por posición en la.points (incluyendo nulls)
-            if(cr[_pi]) np._cr = cr[_pi];
-            cur.push(np);
-          }
-        }
-        if(cur.length) contours.push(cur);
-      } else {
-        // ShapeLayer → polígono en px, preservando cornerRadii si los tiene
-        const cx = mx + la.x * pw;
-        const cy = my + la.y * ph;
-        const rot = (la.rotation || 0) * Math.PI / 180;
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        const pts = [];
-        if(la.shape === 'ellipse') {
-          const n = 48, rw = la.width * pw / 2, rh = la.height * ph / 2;
-          for(let i = 0; i < n; i++) {
-            const ang = (i / n) * Math.PI * 2;
-            const lpx = Math.cos(ang) * rw, lpy = Math.sin(ang) * rh;
-            pts.push({ x: cx + lpx*cos - lpy*sin, y: cy + lpx*sin + lpy*cos });
-          }
-        } else {
-          // rect: 4 esquinas TL, TR, BR, BL — mismo orden que cornerRadii [0,1,2,3]
-          const hw = la.width * pw / 2, hh = la.height * ph / 2;
-          const _shCr = Array.isArray(la.cornerRadii) ? la.cornerRadii : [0,0,0,0];
-          let _shIdx = 0;
-          for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
-            const pt = { x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos };
-            if(_shCr[_shIdx]) pt._cr = _shCr[_shIdx];
-            _shIdx++;
-            pts.push(pt);
-          }
-        }
-        contours.push(pts);
-      }
-      return contours;
-    }
-
-    // Recoger todos los contornos en px, con sus estilos individuales
-    const allContoursPx = [];
-    const allContourStyles = []; // estilo por contorno
-    for(const la of layers) {
-      const _cs = _layerToPixelContours(la);
-      const _style = {
-        fillColor: la.fillColor || 'none',
-        color:     la.color     || '#000000',
-        lineWidth: la.lineWidth ?? 3,
-        closed:    la.type === 'shape' || (la.type === 'line' && !!la.closed)
-      };
-      for(const c of _cs) {
-        allContoursPx.push(c);
-        allContourStyles.push(_style);
-      }
-    }
-
-    // Centro del bbox en px
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for(const c of allContoursPx) for(const p of c) {
-      if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
-      if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
-    }
-    const cxPx = (minX + maxX) / 2;
-    const cyPx = (minY + maxY) / 2;
-    newLL.x = (cxPx - mx) / pw;
-    newLL.y = (cyPx - my) / ph;
-    newLL.rotation = 0; // absorbida en los puntos
-    newLL.cornerRadii = {};
-
-    for(let ci = 0; ci < allContoursPx.length; ci++) {
-      if(ci > 0) { newLL.points.push(null); } // el null ocupa índice en points
-      for(const p of allContoursPx[ci]) {
-        const np = { x: (p.x - cxPx) / pw, y: (p.y - cyPx) / ph };
-        if(p.curve !== undefined) np.curve = p.curve;
-        if(p.cp1) np.cp1 = { x: (p.cp1.x - cxPx) / pw, y: (p.cp1.y - cyPx) / ph };
-        if(p.cp2) np.cp2 = { x: (p.cp2.x - cxPx) / pw, y: (p.cp2.y - cyPx) / ph };
-        // cornerRadii se indexa por posición en points INCLUYENDO nulls
-        if(p._cr) newLL.cornerRadii[newLL.points.length] = p._cr;
-        newLL.points.push(np);
-      }
-    }
-    newLL.closed = _allClosed;
-    newLL.grouped = true; // agrupado sin fusión booleana
-    newLL.groupedStyles = allContourStyles; // estilos individuales por contorno
-    newLL._updateBbox();
-    _finishMerge(newLL);
+    _finishMerge(_edBuildUnitedVector(layers));
     return;
   }
 
@@ -39987,7 +40083,7 @@ function EditorView_init(){
     // herramienta polígono: si se había cambiado a rectángulo/elipse quedaba «vivo» y, ya fuera de la edición, bloqueaba toda selección.
     if(_edLineLayer) _edFinishLine();
     _edVecResetNewStyle();               // v41.84: el estilo del próximo objeto vuelve a su valor de partida
-    _edShapeClearHistory(); _vsClear(); edPushHistory(); // limpiar _vs* antes para que edPushHistory no quede bloqueado
+    _edVecCommitSession();               // v42.23: apunta el «después» (limpiando antes _vs*) y une los objetos creados en la sesión
     edCloseOptionsPanel();               // v41.85: primero el panel (le quita «plegado»)…
     edShapeBarHide(true);                // …y la barra se oculta SIEMPRE (con el panel plegado, edShapeBarHide() sin force no hacía nada)
     window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false;
