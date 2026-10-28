@@ -13248,7 +13248,10 @@ function edCoords(e){
 // "usando el selector": debe verse y comportarse como el selector general.
 function _edVectorSelectorActive(){
   const _mode = $('edOptionsPanel')?.dataset.mode;
-  if(_mode === 'line')  return _edLineType  === 'select';
+  // v42.22: con rectángulo/elipse/recta/polígono ACTIVOS no se está usando el selector aunque _edLineType haya quedado en 'select' de
+  // antes (p. ej. tras pulsar la flecha y volver a elegir rectángulo en el panel): como la herramienta ya no salta a selección al
+  // crear, ese resto desfasado dejaba los tiradores visibles y el pellizco escalando el objeto con la herramienta de crear activa.
+  if(_mode === 'line')  return _edLineType  === 'select' && edActiveTool !== 'shape' && edActiveTool !== 'line';
   if(_mode === 'shape') return _edShapeType === 'select';
   // Panel fuera del modo línea/forma (p.ej. 'props', o cerrado): selector general.
   return true;
@@ -16292,6 +16295,9 @@ function edOnStart(e){
     }
     // Cancelar el timer de añadir nodo si el segundo dedo llega antes de que expire
     clearTimeout(window._edLineTouchTimer);
+    // v42.22: con rectángulo/elipse activo (la herramienta ya no se pierde tras crear) el primer dedo abre una previsualización; si llega
+    // el 2.º (zoom/desplazamiento) no era un trazo: se descarta sin dejar ninguna forma minúscula y se devuelve la selección anterior.
+    if(_edShapePreview){ _edShapeCancelPreview(); edRedraw(); }
     // Cancelar timer de recorte si había uno pendiente
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar drag de nodo de recorte si estaba activo
@@ -16813,13 +16819,15 @@ function edOnStart(e){
   if(edActiveTool==='shape'){
     if(tgt !== edCanvas) return;
     // Deseleccionar cualquier shape existente antes de crear una nueva
+    // (v42.22: se recuerda cuál era por si el gesto se descarta —toque suelto o 2.º dedo— y entonces se le devuelve la selección)
+    const _shPrevSel = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     edSelectedIdx = -1;
     const c=edCoords(e);
-    _edShapeStart = {x:c.nx, y:c.ny};
+    _edShapeStart = {x:c.nx, y:c.ny, touch:e.pointerType==='touch', prevSel:_shPrevSel};
     _edShapePreview = new ShapeLayer(_edShapeType, c.nx, c.ny, 0.01, 0.01);
     _edShapePreview.color     = edDrawColor || '#000000';
     _edShapePreview.fillColor = _edVecNewStyle.fillColor; // v41.84: 'none' salvo que se haya elegido relleno para los nuevos
-    _edShapePreview.lineWidth = edDrawSize || 2;
+    _edShapePreview.lineWidth = _edVecLineW();
     _edInsertLayerAbove(_edShapePreview);
     edRedraw();
     return;
@@ -19287,7 +19295,14 @@ function edOnEnd(e){
 
   // Sin gesto activo → ignorar el resto
   const gestureActive2 = edIsDragging||edIsResizing||edIsTailDragging||edPainting||edPinching||edIsRotating||!!edRubberBand||!!_edShapeStart||(_cof.on&&(_cof._dragging||_cof._pendingStart||_cof._strokeStarted));
-  if(!gestureActive2){ clearTimeout(window._edLongPress); window._edLongPressReady=false; return; }
+  if(!gestureActive2){
+    clearTimeout(window._edLongPress); window._edLongPressReady=false;
+    // v42.22: último dedo de un pellizco sin ningún otro gesto en pie (p. ej. con rectángulo/elipse activo, cuyo 2.º dedo descarta la
+    // previsualización y deja _edShapeStart a null): este return saltaba el reseteo de _edPinchHappened de más abajo y, quedando el flag
+    // a true, edOnMove ignoraba el siguiente dedo → «la herramienta no responde» hasta el siguiente pellizco. Se limpia aquí (sin dedos).
+    if(_edPinchHappened && (!window._edActivePointers || window._edActivePointers.size === 0)) _edPinchHappened = false;
+    return;
+  }
   if(edPinching && (!window._edActivePointers || window._edActivePointers.size < 2)){
     edPinchEnd();
     return;
@@ -19305,11 +19320,14 @@ function edOnEnd(e){
   }
   // ── SHAPE: al soltar, convertir a LineLayer y fusionar inmediatamente ──
   if(edActiveTool==='shape' && _edShapeStart && _edShapePreview){
+    // v42.22: la herramienta sigue activa tras crear, así que un TOQUE suelto (sin arrastre) no debe dejar una forma minúscula
+    // (Illustrator, Inkscape y Affinity tampoco crean nada con un clic sin arrastrar): se descarta y se devuelve la selección anterior.
+    if(_edShapeIsTap()){ _edShapeCancelPreview(); edRedraw(); return; }
     _edShapePreview.width  = Math.max(_edShapePreview.width,  0.02);
     _edShapePreview.height = Math.max(_edShapePreview.height, 0.02);
     _edShapePreview.color     = edDrawColor || '#000000';
     _edShapePreview.fillColor = _edVecNewStyle.fillColor; // v41.84: 'none' salvo que se haya elegido relleno para los nuevos
-    _edShapePreview.lineWidth = edDrawSize  || 3;
+    _edShapePreview.lineWidth = _edVecLineW();
     // Convertir siempre a LineLayer (rect=4pts con nodos, ellipse=32pts)
     const _ll = _edShapeToLineLayer(_edShapePreview);
     _edLineFusionId = null;
@@ -19331,7 +19349,11 @@ function edOnEnd(e){
     // por eso Deshacer no estaba disponible justo después de crear el
     // objeto (bug confirmado por Alberto).
     edPushHistory();
-    _edLineType = 'select'; edActiveTool = 'select'; edCanvas.className = '';
+    // v42.22 (petición de Alberto): la herramienta NO pasa a selección tras crear el objeto. Sigue siendo rectángulo/elipse (como en
+    // Illustrator, Inkscape o Affinity), así que el siguiente arrastre crea otro enseguida; para editar el que acaba de crear (mover,
+    // redimensionar, nodos) se elige la herramienta selección cuando se quiera. El objeto recién creado queda seleccionado: el panel
+    // y la barra actúan sobre él (y su grosor/color pasan a ser los del siguiente, ver _edVecApplyColor y el grosor del panel/barra).
+    edCanvas.className = 'tool-shape';
     edRedraw();
     _edActivateLineTool(false, true); // true = objeto recién creado
     // Actualizar botón Fusionar de la barra flotante tras crear una forma cerrada
@@ -22393,7 +22415,7 @@ function _edLineAddPoint(nx, ny, isTouch=false){
     // fusionar. v41.84: el POLÍGONO nace ya con el relleno elegido para los objetos nuevos (si lo hay) y se verá
     // al cerrarlo; la recta (segmento) nunca lleva relleno al nacer.
     _edLineLayer.fillColor = (_edLineType === 'draw') ? _edVecNewStyle.fillColor : 'none';
-    _edLineLayer.lineWidth = edDrawSize || 2;
+    _edLineLayer.lineWidth = _edVecLineW();
     _edLineLayer.x = nx; _edLineLayer.y = ny;
     _edLineLayer.points.push({x:0, y:0}); // primer punto en local = (0,0)
     _edInsertLayerAbove(_edLineLayer);
@@ -22405,23 +22427,15 @@ function _edLineAddPoint(nx, ny, isTouch=false){
     const _closeR = isTouch ? 44 : 15; // radio de cierre ampliado en táctil
     if(_edLineLayer.points.length>=3 && Math.sqrt(dx*dx+dy*dy)*edCamera.z<_closeR){
       _edLineLayer.closed=true;
-      _edFinishLine();
-      // Al cerrar un polígono → modo selección para editar vértices
-      if(!edMinimized){
-        _edLineType='select'; edActiveTool='select'; edCanvas.className='';
-        // T6: recrear el panel completo para reflejar modo selección correctamente
-        // (incluye botón ╱ listo para crear polígono fusionable)
-        // Solo si el panel ya estaba abierto en modo line; NO abrir si veníamos de la barra flotante
-        const _panelOpen2 = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
-        const _shapeBarWasOpen = $('edShapeBar')?.classList.contains('visible');
-        if(_panelOpen2 && !_shapeBarWasOpen) _edActivateLineTool(false, true); // true=isCreating: no reiniciar _vsPreSessionLayers
-      }
+      // v42.22: al cerrar un polígono la herramienta SIGUE siendo «polígono» (antes saltaba a selección y había que volver a elegirla):
+      // el siguiente toque en el lienzo empieza otro polígono nuevo. _edFinishLine ya deja el panel al día (objeto cerrado seleccionado).
+      _edFinishLine(true);
       return;
     }
     _edLineLayer.addAbsPoint(nx, ny);
-    // Modo segmento: confirmar automáticamente al llegar a 2 puntos
+    // Modo segmento: confirmar automáticamente al llegar a 2 puntos (v42.22: y seguir con la herramienta «recta» para la siguiente)
     if(_edLineType === 'segment' && _edLineLayer.points.length >= 2){
-      _edFinishLine();
+      _edFinishLine(true);
       return;
     }
   }
@@ -24836,9 +24850,10 @@ function _edActivateLineTool(isNew, isCreating) {
     l.closed=true;
     if(_edLineLayer){
       // Línea en construcción: _edLineLayer aún activo → finalizar correctamente.
-      // _edFinishLine() limpia _edLineLayer, pasa a edActiveTool='select' y re-renderiza el panel.
-      // Sin esto, doble-tap en NODOS sigue llamando a _edLineAddPoint en vez de insertar nodo.
-      _edFinishLine();
+      // _edFinishLine() limpia _edLineLayer y re-renderiza el panel (sin ello _edLineAddPoint seguiría viendo el polígono «en construcción»).
+      // v42.22: con la herramienta polígono/recta activa se queda en ella (el siguiente toque empieza otro objeto), como al cerrarlo con
+      // el primer vértice; antes saltaba a selección.
+      _edFinishLine(edActiveTool==='line');
     } else {
       // Reedición de línea ya finalizada: solo marcar cerrada y refrescar.
       _edShapePushHistory(); edRedraw(); _edActivateLineTool(false, true);
@@ -25090,7 +25105,10 @@ function _edApplyFillToClosedLayers() {
   // No-op: la independencia de objetos es prioritaria sobre la aplicación automática de relleno.
 }
 
-function _edFinishLine() {
+// keepTool (v42.22): true cuando el objeto se remata con la propia herramienta (polígono que se cierra, recta que llega a su 2.º punto,
+// botón «Cerrar objeto»): la herramienta SIGUE activa y el siguiente toque empieza un objeto nuevo, sin pasar por selección.
+// Sin él (OK, otra herramienta, selección…) se queda en selección como siempre; quien llama fija entonces la herramienta que toque.
+function _edFinishLine(keepTool) {
   if (_edLineLayer && _edLineLayer.points.length >= 2) {
     _edLineLayer._updateBbox();
     const finished = _edLineLayer;
@@ -25115,7 +25133,7 @@ function _edFinishLine() {
     _vsHistory = [_vsSnapshot()];
     _vsHistIdx = 0;
     edRedraw();
-    _edLineType='select'; edActiveTool='select'; edCanvas.className='';
+    if(!keepTool){ _edLineType='select'; edActiveTool='select'; edCanvas.className=''; }
     const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
     const _shapeBarActive = $('edShapeBar')?.classList.contains('visible');
     // Al finalizar un objeto, siempre continuar la sesión (isCreating=true) para preservar
@@ -26036,6 +26054,26 @@ const _edVecNewStyle = {
 };
 // Vuelve el estilo del próximo objeto a su valor de partida (al entrar en dibujo vectorial y al salir de él).
 function _edVecResetNewStyle(){ _edVecNewFillOn = false; _edVecNewFillHex = '#ffffff'; _edVecColorTarget = 'line'; }
+// v42.22 — Grosor de línea con el que nace el siguiente objeto vectorial. El 0 («sin contorno») es un valor válido: antes
+// `edDrawSize || 2` (y `|| 3` al soltar la forma) lo convertía en 2–3 px y el grosor elegido por el usuario no se respetaba.
+function _edVecLineW(){ return (Number.isFinite(edDrawSize) && edDrawSize >= 0) ? edDrawSize : 2; }
+// v42.22 — Rectángulo/elipse: la herramienta sigue activa tras crear un objeto (para encadenar varios), así que el gesto que empieza
+// con ella debe poder descartarse sin dejar rastro. «Toque suelto» = la previsualización apenas se ha movido desde donde empezó
+// (< 5 px con ratón/lápiz, < 10 px con dedo): el estándar de la industria (Illustrator, Inkscape, Affinity) es no crear forma alguna.
+function _edShapeIsTap(){
+  if(!_edShapeStart || !_edShapePreview) return false;
+  // el centro de la previsualización queda a mitad de camino entre el punto de partida y el actual: extensión = 2 × distancia al centro
+  const dx = 2 * Math.abs(_edShapePreview.x - _edShapeStart.x) * edPageW() * edCamera.z;
+  const dy = 2 * Math.abs(_edShapePreview.y - _edShapeStart.y) * edPageH() * edCamera.z;
+  return Math.max(dx, dy) < (_edShapeStart.touch ? 10 : 5);
+}
+// Descarta la previsualización de rectángulo/elipse en curso (toque suelto, 2.º dedo…) y devuelve la selección que había antes de empezar.
+function _edShapeCancelPreview(){
+  const _prev = _edShapeStart ? _edShapeStart.prevSel : null;
+  if(_edShapePreview){ const _i = edLayers.indexOf(_edShapePreview); if(_i >= 0) edLayers.splice(_i, 1); }
+  _edShapePreview = null; _edShapeStart = null; _edPendingShape = null;
+  edSelectedIdx = _prev ? edLayers.indexOf(_prev) : -1;
+}
 // Objeto vectorial sobre el que actúan las muestras: el que se está construyendo o el seleccionado.
 function _edVecSelObj(){
   if(_edLineLayer) return _edLineLayer;
@@ -26123,6 +26161,10 @@ function _edVecApplyColor(pfx, la, hex){
     la.fillColor=hex; delete la.fillGradient; la._lastFillColor=hex; edDrawFillColor=hex;
   } else {
     la.color=hex;
+    // v42.22 — el color de línea que elige el usuario es también el de los SIGUIENTES objetos (mismo criterio que Illustrator, Inkscape
+    // o Affinity: «último estilo usado»), con o sin objeto seleccionado y cambie de herramienta vectorial las veces que cambie, hasta el OK.
+    // (Sin objeto, `la` es _edVecNewStyle y su accesor ya escribe edDrawColor; con objeto real hay que escribirlo aquí.)
+    edDrawColor = hex;
   }
   _edVecRefreshColorUI(pfx, la);   // también marca la casilla de relleno
   edRedraw();
@@ -30629,7 +30671,9 @@ function edInitDrawBar() {
       // bajan de 1).
       const v = Math.max(0, Math.min(20, parseInt(e.target.value) || 0));
       e.target.value = v;
-      const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+      // v42.22: el grosor que fija el usuario es también el de los SIGUIENTES objetos (con o sin objeto seleccionado), como en el panel
+      edDrawSize = v;
+      const l = _edVecSelObj();
       if(l){
         l.lineWidth = v; edRedraw();
         // Sincronizar el panel de propiedades si está abierto (mismo efecto
@@ -30658,7 +30702,8 @@ function edInitDrawBar() {
     const pop=$('edb-size-pop');
     const v = parseInt(e.target.value) || 0;
     if(pop?._esbMode){
-      const l = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
+      edDrawSize = v;   // v42.22: ídem (también el deslizador de la barra fija el grosor de los siguientes)
+      const l = _edVecSelObj();
       if(l){
         l.lineWidth = v; edRedraw();
         const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
@@ -31275,8 +31320,9 @@ function _edbOpenSizePop(btn, opts) {
   _edbCloseAllPopovers();
   if (isVec) {
     pop._esbMode = true;
-    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-    const sz = la?.lineWidth ?? 3;
+    // v42.22: sin objeto seleccionado muestra el grosor con el que nacerá el siguiente (antes, un 3 fijo que ni siquiera era el real)
+    const la = _edVecSelObj();
+    const sz = la?.lineWidth ?? _edVecLineW();
     const num = $('edb-size-num'); if(num){ num.min=0; num.max=20; num.value=sz; }
     const sl  = $('edb-size-slider'); if(sl){ sl.min=0; sl.max=20; sl.value=sz; }
   } else {
@@ -31343,12 +31389,12 @@ function _edbSyncSizePreview() {
     // Barra vectorial: previsualizar el grosor y color REALES del objeto
     // shape/line seleccionado (mismo panel que el lápiz, pedido por Alberto
     // para que "funcione igual" — incluido el 0px, que aquí sí es válido).
-    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
-    const sz = la?.lineWidth ?? 3;
+    const la = _edVecSelObj();   // v42.22: sin objeto, el grosor y el color con los que nacerá el siguiente
+    const sz = la?.lineWidth ?? _edVecLineW();
     const d = Math.max(4, Math.min(80, Math.round(sz * _dz)));
     prev.style.width  = d+'px';
     prev.style.height = d+'px';
-    prev.style.background = la?.color || '#000000';
+    prev.style.background = la?.color || edDrawColor || '#000000';
     prev.style.border = 'none';
     prev.style.boxShadow = '0 0 0 1.5px rgba(255,255,255,0.25)';
     return;
@@ -32426,22 +32472,25 @@ const _edHelpContent = {
     const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
     return `
       <div style="margin-bottom:14px">
-        <b>1.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
+        <b>1.</b> ${I18n.t('ed_helpVectorP0')}
       </div>
       <div style="margin-bottom:14px">
-        <b>2.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
+        <b>2.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>3.</b> ${I18n.t('ed_helpVectorP3')}
+        <b>3.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>4.</b> ${I18n.t('ed_helpVectorP4')}
+        <b>4.</b> ${I18n.t('ed_helpVectorP3')}
       </div>
       <div style="margin-bottom:14px">
-        <b>5.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
+        <b>5.</b> ${I18n.t('ed_helpVectorP4')}
+      </div>
+      <div style="margin-bottom:14px">
+        <b>6.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
       </div>
       <div>
-        <b>6.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
+        <b>7.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
       </div>
     `;
     })()
@@ -39786,7 +39835,9 @@ function EditorView_init(){
     // (no al cambiar de sub-herramienta dentro de una sesión ya activa) —
     // petición de Alberto: se puede cambiar durante la sesión, pero no debe
     // recordarse de una sesión a la siguiente (igual que en dibujo a mano).
-    if (!_esbContSession) edDrawSize = 2;
+    // v42.22: el color de línea sigue la misma regla —lo que el usuario fija durante la sesión (grosor y color) se conserva al cambiar
+    // de herramienta vectorial hasta el OK, y la sesión siguiente vuelve a partir de 2 px y negro— (en dibujo a mano ya era así).
+    if (!_esbContSession) { edDrawSize = 2; edDrawColor = '#000000'; }
     if(shapeType) {
       _edShapeType = shapeType;
       edActiveTool = 'shape';
