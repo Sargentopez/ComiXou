@@ -7142,6 +7142,9 @@ function _edUpdateSelectMenu(){
   // Copiar necesita exactamente lo mismo que Deseleccionar: que haya algo
   // seleccionado (objeto único o multiselección) — mismo criterio _canDesel.
   if(_btnCopy) _btnCopy.setAttribute('style', _canDesel  ? '' : _dis);
+  // v42.24 — Duplicar, igual que Copiar: basta con que haya algo seleccionado (objeto único, grupo o multiselección).
+  const _btnDup = $('_sel-dup');
+  if(_btnDup) _btnDup.setAttribute('style', _canDesel ? '' : _dis);
   const _btnDl = $('dd-exportselbtn');
   if(_btnDl)  _btnDl .setAttribute('style', _canDesel  ? '' : _dis);
   if(_btnGroup) _btnGroup.setAttribute('style', _hasSel ? '' : _dis);
@@ -12227,6 +12230,121 @@ function edDuplicateSelected(){
   edSelectedIdx = insertAt + toInsert.length - 1; // apuntar al StrokeLayer
   edPushHistory(); edRedraw();
   edToast(I18n.t('ed_objectDuplicated'));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.24 — DUPLICAR UNA MULTISELECCIÓN (Alberto: «una multiselección debe poder duplicarse con Ctrl+D y, en táctil, desde el menú de
+   “Selección”»). Hasta ahora Ctrl+D solo duplicaba un objeto suelto o UN grupo entero: con varios objetos sueltos seleccionados (cuadro de
+   selección, «Seleccionar todo», varios grupos a la vez) no hacía nada, y el menú Selección ▾ no ofrecía duplicar.
+   Es el criterio estándar de la industria (Figma, Sketch, Inkscape, Illustrator): TODA la selección se copia de una vez, las copias
+   conservan su disposición relativa y su orden de apilado, quedan algo desplazadas respecto a los originales y pasan a ser la selección
+   (así se mueven enseguida). Mismo desplazamiento (0,03) y misma colocación que al duplicar un grupo (_edDuplicateGroup): UN bloque justo
+   encima del objeto más alto de la selección.
+     · Cada objeto lleva sus capas vinculadas (relleno / acuarela / lápiz) con identificadores NUEVOS: nada se comparte con el original.
+     · Cada grupo de la selección da lugar a UN grupo nuevo con sus copias (los grupos siguen siendo una unidad).
+     · Un solo «antes» y un solo «después» en el historial: un deshacer quita todas las copias a la vez.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+function _edDuplicateMulti(){
+  if(window._gcpActive) return false;   // el editor de animaciones (GCP) tiene su propio «duplicar»
+  const page = edPages[edCurrentPage]; if(!page) return false;
+  // Objetos de nivel superior (nunca relleno/lápiz/acuarela sueltos: viajan con su trazo), de abajo a arriba en el apilado
+  const idxs = [...new Set(edMultiSel)].filter(i => {
+    const l = edLayers[i];
+    return l && l.type !== 'fill' && l.type !== 'pencil' && l.type !== 'watercolor';
+  }).sort((a, b) => a - b);
+  if(!idxs.length) return false;
+
+  edPushHistory();                      // «antes»: no arrastrar ningún cambio pendiente sin registrar
+
+  // Identificadores NUEVOS en cada duplicado (misma técnica que _edApplyClipboardEnvelope)
+  const uidMap = new Map(), groupMap = new Map();
+  const newUidFor   = old => { if(!uidMap.has(old))   uidMap.set(old,   _edGenUid());     return uidMap.get(old); };
+  const newGroupFor = old => { if(!groupMap.has(old)) groupMap.set(old, _edNewGroupId()); return groupMap.get(old); };
+  const DX = 0.03, DY = 0.03;
+
+  const copies   = [];                  // en el orden de inserción: por objeto, relleno → acuarela → lápiz → trazo
+  const topLevel = [];                  // las copias de los objetos de nivel superior = la nueva selección
+  let maxIdx = -1;                      // el índice más alto entre los originales Y sus capas vinculadas
+  const _clone = src => {
+    const ser = edSerLayer(src, true); if(!ser) return null;
+    const c = edDeserLayer(ser, edOrientation); if(!c) return null;
+    _edCloneLayerAnimData(c);           // independizar los datos de animación del original (ver edDeserLayer)
+    _edCloneLayerAnimStorage(c);
+    delete c._fusionId;
+    if(c.groupId) c.groupId = newGroupFor(c.groupId);
+    c.x = (c.x || 0) + DX; c.y = (c.y || 0) + DY;   // NO tocar c.points: LineLayer usa x/y como origen (ver edDuplicateSelected)
+    if(c._gcpRefX != null) c._gcpRefX += DX;
+    if(c._gcpRefY != null) c._gcpRefY += DY;
+    return c;
+  };
+  idxs.forEach(i => {
+    const la = edLayers[i];
+    if(i > maxIdx) maxIdx = i;
+    const _uid = la._uid || la._fillLayerId;
+    if(_uid){
+      ['fill', 'watercolor', 'pencil'].forEach(t => {
+        const si = edLayers.findIndex(l => l.type === t && l._drawLayerId === _uid);
+        if(si < 0) return;
+        if(si > maxIdx) maxIdx = si;
+        const sc = _clone(edLayers[si]); if(!sc) return;
+        const nu = newUidFor(_uid);
+        sc._drawLayerId = nu;
+        sc._uid = (t === 'fill' ? 'fl_' : (t === 'pencil' ? 'pencil_' : 'wc_')) + nu;
+        copies.push(sc);
+      });
+    }
+    const c = _clone(la); if(!c) return;
+    if(_uid){
+      const nu = newUidFor(_uid);
+      if(c._uid)               c._uid               = nu;
+      if(c._fillLayerId)       c._fillLayerId       = nu;
+      if(c._pencilLayerId)     c._pencilLayerId     = nu;
+      if(c._watercolorLayerId) c._watercolorLayerId = nu;
+    }
+    copies.push(c); topLevel.push(c);
+  });
+  if(!topLevel.length) return false;
+
+  // Un bloque justo encima del objeto más alto (sus capas vinculadas pueden estar más arriba que él: ver _edDuplicateGroup)
+  edLayers.splice(Math.min(maxIdx + 1, edLayers.length), 0, ...copies);
+  page.layers = edLayers;
+
+  // La selección pasa a ser las copias (igual que al pegar): una sola → selección normal; varias → multiselección
+  if(topLevel.length === 1){
+    edSelectedIdx = edLayers.indexOf(topLevel[0]);
+    _msClear();
+    edActiveTool = 'select'; edCanvas.className = '';
+  } else {
+    edMultiSel = topLevel.map(l => edLayers.indexOf(l)).filter(i => i >= 0);
+    edSelectedIdx = -1;
+    edMultiGroupRot = 0;
+    edActiveTool = 'multiselect'; edCanvas.className = 'tool-multiselect';
+    _msRecalcBbox();
+  }
+  edCloseOptionsPanel();
+  edPushHistory(); edRedraw();          // «después»
+  edToast(I18n.t(topLevel.length === 1 ? 'ed_objectDuplicated' : 'ed_objectsDuplicated', { n: topLevel.length }));
+  return true;
+}
+
+// v42.24 — «Duplicar» la selección actual, sea cual sea: un objeto suelto, un grupo completo o una multiselección. Lo usan Ctrl+D y el
+// botón ⧉ del menú Selección ▾ (el único camino en táctil, sin teclado), así que se comportan siempre igual.
+// (Un grupo YA EXISTENTE seleccionado con UN solo toque usa edMultiSel + herramienta 'multiselect', no edSelectedIdx; con su panel abierto
+// —doble toque— edSelectedIdx apunta a uno de sus miembros: en ambos casos se duplica el grupo entero.)
+function edDuplicateSelection(){
+  if(window._gcpActive) return;         // el editor de animaciones (GCP) duplica con _gcpDuplicateSelected
+  if(edActiveTool === 'multiselect' && edMultiSel.length){
+    const _msGid = edLayers[edMultiSel[0]]?.groupId;
+    const _msAllSameGroup = _msGid && edMultiSel.every(i => edLayers[i]?.groupId === _msGid);
+    if(_msAllSameGroup) _edDuplicateGroup(_msGid);   // un grupo concreto: el grupo entero, como siempre
+    else _edDuplicateMulti();                        // v42.24: varios objetos sueltos / varios grupos / mezcla
+    return;
+  }
+  if(edSelectedIdx >= 0){
+    const _selLa = edLayers[edSelectedIdx];
+    if(_selLa && _selLa.groupId) _edDuplicateGroup(_selLa.groupId);
+    else edDuplicateSelected();
+  }
 }
 
 /* ── Portapapeles de objetos: Copiar (Ctrl+C / botón "📋 Copiar" del menú
@@ -19789,6 +19907,13 @@ function _vsRedo() {
 
 let _vsPreSessionLayers = new Set(); // referencias a layers vectoriales previos a la sesión
 let _vsIsNew = true; // true=creando objeto nuevo, false=editando objeto existente
+// v42.25 — EDITAR UN OBJETO UNIDO ⊕. Para editarlo, sus contornos se disuelven en objetos sueltos (cada uno se selecciona, se mueve y se edita por
+// separado: ver pp-edit-line / _edDissolveJoined) y el ⊕ original sale de la hoja. Mientras dura esa sesión, este marcador guarda ese ⊕ INTACTO:
+//   · OK → los objetos de la sesión vuelven a unirse en UN ⊕ con los datos del original (nombre, botón-acción, trayectoria…); si no se tocó nada,
+//     vuelve el propio ⊕ original, sin recalcular nada (_edVecCommitSession).
+//   · Esc / cerrar sin OK → vuelve el ⊕ original, no sus partes sueltas (edCloseOptionsPanel).
+// null fuera de ese caso; _vsClear() lo vacía, como al resto del estado de la sesión.
+let _vsUnion = null;   // { src: LineLayer ⊕ original }
 
 function _vsInit(isNew) {
   const page = edPages[edCurrentPage];
@@ -19824,6 +19949,7 @@ function _vsClear() {
   if(typeof _vcofSetOn === 'function' && _vcof && _vcof.on) _vcofSetOn(false);
   _vsHistory = []; _vsHistIdx = -1;
   _vsIsNew = true;
+  _vsUnion = null;   // v42.25
   _vsPreSessionLayers = new Set();
   _edShapeUpdateUndoRedoBtns();
 }
@@ -25803,6 +25929,8 @@ function edCloseOptionsPanel(){
           // Restaurar al estado antes de la sesión
           if(typeof _vsApply === 'function') _vsApply(_vsHistory[0]);
         }
+        // v42.25: si la sesión era la edición de un ⊕ (sus contornos estaban sueltos), cancelar devuelve el ⊕ ORIGINAL, no sus partes sueltas
+        if(_vsUnion && _vsHistory.length > 0) _edVecUnionPutBack(_vsUnion, edLayers.filter(l => _vsIsSession(l)));
         _vsClear();
         // v41.90: el historial LEGADO de nodos (_edShapeHistory) se quedaba con los pasos de la sesión descartada (y crecía en cada
         // Escape); el resto de salidas (OK, borrar, deshacer todo) ya lo vaciaban junto con _vsClear().
@@ -28739,6 +28867,11 @@ function edRenderOptionsPanel(mode){
             edLayers.filter(l => (l.type === 'line' || l.type === 'shape') && !_subSet.has(l))
           );
           _vsHistory = [_vsSnapshot()]; _vsHistIdx = 0;
+          // v42.25 — la unión se MANTIENE: se recuerda el ⊕ original (ya fuera de la hoja) para volver a unir los contornos al hacer OK, o para
+          // devolverlo intacto con Esc (Alberto: «al volver a editar objetos vectoriales unidos y hacer ok se desunen, debe mantenerse»).
+          // Y es la edición de un objeto EXISTENTE (no una creación): ↩ no cuenta el estado inicial como un paso ni cierra el panel (_vsCanUndo).
+          _vsUnion = { src: _lla };
+          _vsIsNew = false;
 
           // Abrir panel manteniendo _vsPreSessionLayers (isCreating=true)
           _edActivateLineTool(false, true);
@@ -29594,7 +29727,7 @@ function _edRuleToggleSync() {
 
 function edInitSelectMenu(){
   $('_sel-all')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     const _all = [];
     edLayers.forEach((la, i)=>{
       if(la && !la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor') _all.push(i);
@@ -29614,7 +29747,7 @@ function edInitSelectMenu(){
     }
   });
   $('_sel-none')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     if(edActiveTool==='multiselect' && edMultiSel.length > 0){
       _edDeactivateMultiSel();
     } else if(edSelectedIdx >= 0){
@@ -29626,27 +29759,32 @@ function edInitSelectMenu(){
     }
   });
   $('_sel-copy')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edCopySelectionToClipboard();
   });
+  // v42.24 — ⧉ Duplicar: lo mismo que Ctrl+D (objeto, grupo o multiselección), para táctil, que no tiene teclado.
+  $('_sel-dup')?.addEventListener('click', ()=>{
+    edCloseMenus();   // cierra el desplegable Y restablece edMenuOpen (si no, el siguiente toque en «Selección ▾» no lo reabriría)
+    edDuplicateSelection();
+  });
   $('_sel-group')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edGroupSelected();
   });
   $('_sel-ungroup')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edUngroupSelected();
   });
   $('_sel-merge')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edMergeSelected();
   });
   $('_sel-bib-save')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edBibGuardar();
   });
   $('_sel-delete')?.addEventListener('click', ()=>{
-    document.querySelectorAll('.ed-dropdown').forEach(d=>d.classList.remove('open'));
+    edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     const _n = edMultiSel.length;
     edConfirm(I18n.t(_n === 1 ? 'ed_confirmDeleteObjSingular' : 'ed_confirmDeleteObjPlural', { n: _n }), ()=>{
       edPushHistory();
@@ -34707,19 +34845,22 @@ function _edBuildUnitedVector(layers){
    Alberto: «cuando se creen varios objetos, al hacer OK, se inserten unidos, como si se hubiera usado la herramienta de unir».
    Al pulsar OK (botón del panel, de la barra flotante o Intro) los objetos CREADOS en la sesión se sustituyen por UN solo objeto
    unido ⊕ —el mismo que fabrica la herramienta Unir (_edBuildUnitedVector)—, en la posición del más alto de ellos.
-     · Solo se unen sesiones de CREACIÓN (empezaron sin objetos propios): editar un objeto existente, o un ⊕ disuelto, no une nada.
+     · Solo se unen sesiones de CREACIÓN (empezaron sin objetos propios): editar un objeto existente no une nada. Excepción (v42.25): la edición
+       de un objeto YA UNIDO ⊕ —sus contornos se disuelven para editarlos— vuelve a unir todo al OK (ver _vsUnion).
      · Solo se unen los objetos que se pueden unir sin perder nada ni cambiar su aspecto (_edVecJoinable); el resto se queda como estaba.
      · Los vectoriales previos a la sesión nunca se tocan.
      · En el historial general quedan DOS pasos —«objetos creados» y «objetos unidos»—, como si se hubiese usado Unir justo después
-       del OK: un solo deshacer del editor general vuelve a separarlos.
+       del OK: un solo deshacer del editor general vuelve a separarlos. (Al re-editar un ⊕ es UN solo paso: «⊕ antes» → «⊕ después».)
    ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 // ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el degradado, el
 // nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo; da UNA sola opacidad al resultado y trata cada
 // contorno de un objeto fusionado ☯ (con huecos) como un objeto independiente, con lo que los huecos se rellenarían.
-function _edVecJoinable(l){
+// v42.25: `uni` = marcador de la edición de un ⊕ (_vsUnion). Sus contornos sueltos llevan una COPIA de la trayectoria del ⊕ (así lo deja
+// _edDissolveJoined) y esa trayectoria se restituye al volver a unirlos, así que no impide la unión.
+function _edVecJoinable(l, uni){
   if(!l || (l.type !== 'line' && l.type !== 'shape')) return false;
   if(l.hidden || l.locked || l.groupId || l.name || l._buttonAction) return false;
-  if(l._motionPath && l._motionPath.length) return false;
+  if(l._motionPath && l._motionPath.length && !(uni && uni.src && uni.src._motionPath && uni.src._motionPath.length)) return false;
   if(_edGradValid(l.fillGradient)) return false;
   if(l.type === 'line'){
     if(l.grouped || (l.subPaths && l.subPaths.length)) return false;   // ya unido ⊕ / con huecos
@@ -34731,10 +34872,11 @@ function _edVecJoinable(l){
 
 // Objetos que se unirán al pulsar OK (de abajo a arriba), o null si no hay nada que unir. Hay que llamarla ANTES de _vsClear():
 // necesita saber qué vectoriales son de la sesión y cómo empezó esta.
-function _edVecJoinPick(){
+function _edVecJoinPick(uni){
   const h0 = _vsHistory[0];
-  if(!h0 || (h0.vecLayers && h0.vecLayers.length) || h0.lineLayer) return null;    // la sesión empezó con un objeto en edición
-  const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l));
+  if(!h0) return null;
+  if(!uni && ((h0.vecLayers && h0.vecLayers.length) || h0.lineLayer)) return null;   // la sesión empezó con un objeto en edición (v42.25: salvo la de un ⊕ disuelto)
+  const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l, uni));
   if(cands.length < 2) return null;
   // Unir da UNA sola opacidad al objeto resultante: se unen los de la opacidad más repetida (a igualdad, la del objeto más bajo);
   // los demás conservan la suya.
@@ -34743,14 +34885,17 @@ function _edVecJoinPick(){
   cands.forEach(l => { const k = opOf(l); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(l); });
   let best = null;
   groups.forEach(g => { if(!best || g.length > best.length) best = g; });
+  // v42.25: al re-editar un ⊕ manda la opacidad del ⊕ original (la de sus contornos), no la del objeto nuevo que se haya añadido
+  if(uni && uni.src){ const g0 = groups.get(opOf(uni.src)); if(g0 && g0.length >= 2) best = g0; }
   return best && best.length >= 2 ? best : null;
 }
 
 // Sustituye `layers` (de abajo a arriba) por su objeto unido, en la posición del más alto, y apunta el paso en el historial general.
-function _edVecJoinApply(layers){
+function _edVecJoinApply(layers, uni){
   const united = _edBuildUnitedVector(layers);
   const idxs = layers.map(l => edLayers.indexOf(l)).filter(i => i >= 0).sort((a, b) => a - b);
   if(!united || idxs.length < 2) return;
+  if(uni) _edVecUnionRestoreMeta(united, uni.src);   // v42.25: re-edición de un ⊕ → el nuevo ⊕ sigue siendo «el mismo objeto»
   let insertAt = idxs[idxs.length - 1];
   for(let i = idxs.length - 1; i >= 0; i--){
     const ri = idxs[i];
@@ -34766,11 +34911,45 @@ function _edVecJoinApply(layers){
   edToast(I18n.t('ed_objectsUnited'));
 }
 
+// v42.25 — el ⊕ re-editado conserva lo que tenía como OBJETO (no como dibujo): nombre, botón-acción, grupo, bloqueo/visibilidad y trayectoria.
+// (Los contornos sueltos solo arrastran la trayectoria: ver _edDissolveJoined.)
+function _edVecUnionRestoreMeta(dst, src){
+  if(!dst || !src) return;
+  if(src.name) dst.name = src.name;
+  if(src._buttonAction) dst._buttonAction = Object.assign({}, src._buttonAction);
+  if(src.groupId) dst.groupId = src.groupId;
+  if(src.locked) dst.locked = true;
+  if(src.hidden) dst.hidden = true;
+  _edCarryMotionPath(src, dst);
+}
+
+// v42.25 — devuelve a la hoja el ⊕ ORIGINAL en lugar de los objetos de la sesión `sess` (los contornos sueltos), en el sitio del más bajo
+// (donde estaba el ⊕). Hay que llamarla ANTES de _vsClear(): `sess` se calcula con _vsIsSession, que necesita _vsPreSessionLayers.
+function _edVecUnionPutBack(uni, sess){
+  const page = edPages[edCurrentPage];
+  if(!page || !uni || !uni.src) return false;
+  const set = new Set(sess || []);
+  let at = edLayers.findIndex(l => set.has(l));
+  const out = edLayers.filter(l => !set.has(l));
+  at = at < 0 ? out.length : Math.min(at, out.length);
+  out.splice(at, 0, uni.src);
+  page.layers = out; edLayers = page.layers;
+  edSelectedIdx = at;
+  return true;
+}
+
 // Cierra la sesión vectorial con OK: apunta el «después» (objetos creados) en el historial general y, si procede, los une (v42.23).
+// v42.25 — si la sesión era la edición de un ⊕ (_vsUnion): sin cambios vuelve el ⊕ original tal cual; con cambios, todo lo de la sesión se une de
+// nuevo en UN ⊕ y el historial general recibe UN solo paso («⊕ antes» → «⊕ después»), sin el intermedio con los contornos sueltos.
 function _edVecCommitSession(){
-  const join = _edVecJoinPick();                          // antes de _vsClear(): necesita la sesión viva
-  _edShapeClearHistory(); _vsClear(); edPushHistory();    // limpiar _vs* antes para que edPushHistory no quede bloqueado
-  if(join) _edVecJoinApply(join);
+  const uni = _vsUnion;                                   // antes de _vsClear()
+  const join = _edVecJoinPick(uni);                       // antes de _vsClear(): necesita la sesión viva
+  const sess = uni ? edLayers.filter(l => _vsIsSession(l)) : null;
+  const unchanged = !!(uni && _vsHistory[0] && _vsSnapKey(_vsHistory[0]) === _vsSnapKey(_vsSnapshot()));
+  _edShapeClearHistory(); _vsClear();                     // limpiar _vs* antes para que edPushHistory no quede bloqueado
+  if(uni && unchanged && _edVecUnionPutBack(uni, sess)){ edPushHistory(); edRedraw(); return; }
+  if(!(uni && join)) edPushHistory();
+  if(join) _edVecJoinApply(join, uni);
 }
 
 /* ── Une los objetos seleccionados en uno solo ── */
@@ -40795,7 +40974,7 @@ function EditorView_init(){
       const _activeType = document.activeElement?.type;
       const isDuplicateFromPanelInput = ctrl && e.key.toLowerCase() === 'd'
         && tag === 'input' && (_activeType === 'number' || _activeType === 'range')
-        && edSelectedIdx >= 0;
+        && (edSelectedIdx >= 0 || (edActiveTool === 'multiselect' && edMultiSel.length > 0));   // v42.24: también con una multiselección
       if(!((isDrawTool && isUndoRedo) || isDuplicateFromPanelInput)) return;
     }
     // Enter: cerrar panel de opciones abierto (OK)
@@ -40879,21 +41058,9 @@ function EditorView_init(){
       // de seleccionar un grupo: un solo toque, sin abrir su panel, y pulsar
       // Ctrl+D directamente. Mismo patrón de dos ramas que ya usa la tecla
       // Delete un poco más abajo en este mismo archivo.
-      if(edActiveTool === 'multiselect' && edMultiSel.length){
-        const _msGid = edLayers[edMultiSel[0]]?.groupId;
-        const _msAllSameGroup = _msGid && edMultiSel.every(i => edLayers[i]?.groupId === _msGid);
-        if(_msAllSameGroup) _edDuplicateGroup(_msGid);
-        // Multiselección sin groupId común (rubber-band de objetos sueltos):
-        // sin cambios — fuera del alcance de este bug.
-        return;
-      }
-      if(edSelectedIdx >= 0){
-        const _selLa = edLayers[edSelectedIdx];
-        // El mismo grupo, pero con su panel YA abierto (doble toque):
-        // edSelectedIdx apunta a uno de sus miembros.
-        if(_selLa && _selLa.groupId) _edDuplicateGroup(_selLa.groupId);
-        else edDuplicateSelected();
-      }
+      // v42.24 — el despacho (grupo / multiselección / objeto suelto) vive ahora en edDuplicateSelection(), compartido con el botón ⧉ del
+      // menú Selección ▾ (el camino táctil). Una multiselección de objetos sueltos YA NO se ignora: se duplica entera (_edDuplicateMulti).
+      edDuplicateSelection();
       return;
     }
     // Ctrl+] / Ctrl+Shift+↑  subir capa   | Ctrl+Alt+] / Ctrl+Shift+Alt+↑  al frente

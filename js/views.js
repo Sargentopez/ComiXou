@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.23</footer>
+    <footer class="app-version">v42.25</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -486,6 +486,7 @@ Router.register('editor', {
               <button class="ed-dropdown-item" id="_sel-none" data-i18n="ed_selectNone">Deseleccionar todo</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-copy" data-i18n="ed_copy">📋 Copiar</button>
+              <button class="ed-dropdown-item" id="_sel-dup" data-i18n="op_duplicateBtn">⧉ Duplicar</button>
               <div class="ed-dropdown-sep"></div>
               <div class="ed-dropdown-submenu" id="dd-export-sel-wrap">
                 <button class="ed-dropdown-item ed-has-submenu" id="dd-exportselbtn" data-i18n="ed_downloadSelection">⬇ Descargar selección ▸</button>
