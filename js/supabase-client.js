@@ -2768,5 +2768,55 @@ continue;
     return r.json();
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
+
+  // ── v42.29 — Copia de seguridad del administrador ─────────────────────────────────────────────────────────────────────────
+  // Llama a la función SQL public.admin_backup(op, arg) (ver sql/v42_29_backup_admin_1_funcion.sql). Solo la cuenta «admin» pasa la puerta de
+  // esa función (la comprobación está en la base de datos, no aquí); cualquier otra recibe 403. PostgREST entrega el texto que
+  // devuelve la función como una cadena JSON: aquí se desenvuelve y se devuelve el texto tal cual. Los errores llevan `.code`:
+  //   quota (402, egress superado) · auth (401) · forbidden (403) · missing (404: falta ejecutar el SQL) · server (429/5xx: se reintenta)
+  //   network / timeout (sin conexión o demasiado lento: se reintenta) · aborted (cancelado a mano) · bad (otro error 4xx)
+  async function adminBackupRpc(op, arg, opts) {
+    opts = opts || {};
+    const sig = opts.signal;
+    const mk = (code, msg, status) => Object.assign(new Error(msg || code), { code, status });
+    async function unaVez() {
+      if (sig && sig.aborted) throw mk('aborted', 'cancelado');
+      await _ensureFreshToken();
+      const ctrl = new AbortController();
+      let vencio = false;
+      const timer = setTimeout(() => { vencio = true; ctrl.abort(); }, opts.timeoutMs || 120000);
+      const alCancelar = () => ctrl.abort();
+      if (sig) sig.addEventListener('abort', alCancelar, { once: true });
+      let res, txt;
+      try {
+        res = await fetch(`${BASE}/rpc/admin_backup`, { method: 'POST', headers: _hdrsUser(), body: JSON.stringify({ op, arg: arg || {} }), signal: ctrl.signal, cache: 'no-store' });
+        txt = await _sbResText(res);          // anota los bytes en el libro de egress
+      } catch (e) {
+        if (sig && sig.aborted) throw mk('aborted', 'cancelado');
+        throw mk(vencio ? 'timeout' : 'network', (e && e.message) || 'sin conexión');
+      } finally { clearTimeout(timer); if (sig) sig.removeEventListener('abort', alCancelar); }
+      if (res.ok) {
+        try { const v = JSON.parse(txt); return typeof v === 'string' ? v : txt; } catch (_) { return txt; }
+      }
+      let msg = '';
+      try { const j = JSON.parse(txt); msg = (j && (j.message || j.hint)) || ''; } catch (_) { msg = String(txt || '').slice(0, 200); }
+      const st = res.status;
+      if (st === 402) throw mk('quota', msg, st);
+      if (st === 401) throw mk('auth', msg, st);
+      if (st === 403) throw mk('forbidden', msg, st);
+      if (st === 404) throw mk('missing', msg, st);
+      if (st === 408 || st === 429 || st >= 500) throw mk('server', msg || ('HTTP ' + st), st);
+      throw mk('bad', msg || ('HTTP ' + st), st);
+    }
+    try { return await unaVez(); }
+    catch (e) {
+      if (e && e.code === 'auth' && !(sig && sig.aborted)) {      // token caducado entre dos páginas: se renueva y se prueba una vez más
+        if (window._authTryRefresh) { try { await window._authTryRefresh(); } catch (_) {} }
+        return await unaVez();
+      }
+      throw e;
+    }
+  }
+
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog, adminBackupRpc };
 })();

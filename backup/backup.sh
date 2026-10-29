@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================================================================
-# backup.sh — copia de seguridad de la base de datos de Comxow (Supabase) a un bucket PRIVADO de Cloudflare R2   (v42.27)
+# backup.sh — copia de seguridad de la base de datos de Comxow (Supabase) a un bucket PRIVADO de Cloudflare R2   (v42.28)
 #
 # Qué guarda (todo en UN archivo .tar, cifrado si hay contraseña):
 #   · public.dump  — todo el esquema «public»: tablas con sus datos, índices, políticas RLS, funciones, disparadores y permisos
@@ -19,7 +19,10 @@
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BACKUP_BUCKET   (obligatorias salvo BACKUP_LOCAL_DIR)
 #   BACKUP_PASSPHRASE    (recomendada) contraseña con la que se cifra la copia (GnuPG simétrico, AES-256). Sin ella la copia va SIN cifrar.
 #   BACKUP_KEEP          nº de copias que se conservan en el bucket (por defecto 8; mínimo 2)
-#   BACKUP_PREFIX        carpeta dentro del bucket (por defecto «db/»)
+#   R2_BACKUP_MAX_GB     tope de ocupación de TODO el bucket de copias, en GB (por defecto 4; admite decimales, «2.5» o «2,5»). Si el bucket ya lo alcanza, o la copia
+#                        nueva lo haría pasar, el guion se detiene (en rojo) antes de pedir nada a Supabase / antes de subir nada. Cloudflare no corta al pasar los
+#                        10 GB gratuitos de la cuenta: empieza a cobrar. Este tope es el freno de las copias (no vigila el bucket de la app, comxow-storage).
+#   BACKUP_PREFIX       carpeta dentro del bucket (por defecto «db/»)
 #   BACKUP_LOCAL_DIR     si se define, la copia queda en esa carpeta y NO se sube nada (pruebas / copia manual)
 #   R2_JURISDICTION      «eu» si el bucket se creó con jurisdicción de la Unión Europea (su dirección S3 es <cuenta>.eu.r2.cloudflarestorage.com);
 #                        «standard» si no. Si no se indica, el guion prueba las dos y usa la que responda (ver lib-r2.sh).
@@ -47,10 +50,20 @@ else
   warn() { printf 'AVISO: %s\n' "$*" >&2; }
   die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 fi
+fmt_gb() { awk -v b="$1" 'BEGIN { printf "%.3f", b / 1000000000 }' | tr . ,; }   # bytes → «0,914» (GB decimales, como mide Cloudflare)
 
 [ -n "${SUPABASE_DB_URL:-}" ] || die "Falta SUPABASE_DB_URL (la URI del «Session pooler» de Supabase, con la contraseña de la base de datos)."
 case "$KEEP" in ''|*[!0-9]*) die "BACKUP_KEEP debe ser un número (es «$KEEP»).";; esac
 [ "$KEEP" -ge 2 ] || KEEP=2
+
+# Tope de ocupación del bucket de copias (GB decimales, como factura Cloudflare: 1 GB = 10^9 bytes). La cuota gratuita de R2 son 10 GB-mes por CUENTA (se reparte
+# con comxow-storage, el bucket de la app) y al pasarla Cloudflare NO corta nada: empieza a cobrar. Este tope es el freno de las copias (ver §0 y §5b).
+MAX_GB="${R2_BACKUP_MAX_GB:-4}"; MAX_GB="${MAX_GB//,/.}"
+MAX_BYTES=0; USED_BEFORE=""; USED_AFTER=""; WARN_PCT=70      # a partir del 70 % del tope, aviso amarillo en la ejecución
+if [ -z "$LOCAL_DIR" ]; then
+  [[ "$MAX_GB" =~ ^[0-9]+([.][0-9]+)?$ ]] && MAX_BYTES="$(awk -v g="$MAX_GB" 'BEGIN { printf "%.0f", g * 1000000000 }')"
+  [ "$MAX_BYTES" -ge 1000000 ] || die "R2_BACKUP_MAX_GB debe ser un número de GB mayor que 0 (admite decimales: 4 o 2.5); ahora vale «${R2_BACKUP_MAX_GB:-}»."
+fi
 
 for b in "$PG_DUMP" "$PG_RESTORE" "$PSQL" tar gzip; do command -v "$b" >/dev/null || die "No se encuentra «$b»."; done
 [ -z "${BACKUP_PASSPHRASE:-}" ] || command -v gpg >/dev/null || die "No se encuentra «gpg», necesario para cifrar."
@@ -70,6 +83,15 @@ if [ -z "$LOCAL_DIR" ]; then
   printf 'ok' | s3 s3 cp - "s3://$B/$PROBE" --only-show-errors 2>"$W/r2.err" || { cat "$W/r2.err" >&2; die "El token de R2 no puede ESCRIBIR en el bucket «$B» (hace falta el permiso «Object Read & Write» sobre ese bucket)."; }
   s3 s3 rm "s3://$B/$PROBE" --only-show-errors || true
   log "Destino R2 listo (bucket «$B»)."
+  # Freno de tamaño (1/2): si el bucket YA está en el tope, se para aquí, antes de pedir nada a Supabase (cada copia gasta egress).
+  # Si no se puede medir se avisa y se sigue: quedarse sin copia por un fallo del listado sería peor que pasarse unos céntimos.
+  if USED_BEFORE="$(r2_used_bytes)"; then
+    log "Ocupación del bucket «$B»: $(fmt_gb "$USED_BEFORE") GB de ${MAX_GB/./,} GB de tope ($(( USED_BEFORE * 100 / MAX_BYTES )) %)."
+    [ "$USED_BEFORE" -lt "$MAX_BYTES" ] || die "El bucket de copias «$B» ya ocupa $(fmt_gb "$USED_BEFORE") GB y el tope es ${MAX_GB/./,} GB (variable R2_BACKUP_MAX_GB): no se hace la copia, para no llenar el almacenamiento gratuito de Cloudflare (10 GB por cuenta; al pasarlos, Cloudflare cobra, no corta). Borra a mano copias antiguas en Cloudflare (R2 → «$B» → carpeta «$PREFIX») o sube el tope en GitHub (Settings → Secrets and variables → Actions → Variables). Guía: backup/LEEME_BACKUP.md §7."
+  else
+    USED_BEFORE=""
+    warn "No se pudo medir lo que ocupa el bucket «$B»: la copia sigue SIN comprobar el tope de ${MAX_GB/./,} GB."
+  fi
 fi
 
 # ── 1. Conexión (con reintentos: el «pooler» a veces tarda) ──────────────────────────────────────────────────────────────────
@@ -168,6 +190,12 @@ fi
 OUTNAME="$(basename "$OUTFILE")"; OUTSIZE=$(stat -c %s "$OUTFILE")
 log "Paquete: $OUTNAME ($(( (OUTSIZE + 524288) / 1048576 )) MB)"
 
+# ── 5b. Freno de tamaño (2/2): ¿con esta copia el bucket pasaría del tope? Se comprueba ANTES de subir (se cuenta el pico: copias actuales + la nueva);
+#        si pasaría, no se sube nada ni se borra ninguna copia. ──────────────────────────────────────────────────────────────────────────────────────
+if [ -z "$LOCAL_DIR" ] && [ -n "$USED_BEFORE" ] && [ $(( USED_BEFORE + OUTSIZE )) -gt "$MAX_BYTES" ]; then
+  die "Con esta copia (+$(fmt_gb "$OUTSIZE") GB) el bucket «$B» pasaría de $(fmt_gb "$USED_BEFORE") GB a $(fmt_gb $(( USED_BEFORE + OUTSIZE ))) GB, por encima del tope de ${MAX_GB/./,} GB (variable R2_BACKUP_MAX_GB). No se ha subido nada ni se ha borrado ninguna copia. Borra a mano copias antiguas en Cloudflare (R2 → «$B» → carpeta «$PREFIX») o sube el tope en GitHub (Settings → Secrets and variables → Actions → Variables). Guía: backup/LEEME_BACKUP.md §7."
+fi
+
 # ── 6a. Destino local (pruebas / copia manual) ───────────────────────────────────────────────────────────────────────────────
 if [ -n "$LOCAL_DIR" ]; then
   mkdir -p "$LOCAL_DIR"; cp "$OUTFILE" "$LOCAL_DIR/$OUTNAME"; cp "$W/meta.json" "$LOCAL_DIR/$NAME.meta.json"
@@ -194,6 +222,14 @@ else
       s3 s3 rm "s3://$B/${k%.tar*}.meta.json" --only-show-errors || true
     done
   fi
+
+  # Ocupación final (ya sin las copias antiguas): se muestra y, a partir del 70 % del tope, se avisa en amarillo con tiempo para actuar
+  USED_AFTER="$(r2_used_bytes)" || USED_AFTER=""
+  if [ -n "$USED_AFTER" ]; then
+    PCT_AFTER=$(( USED_AFTER * 100 / MAX_BYTES ))
+    log "Ocupación del bucket tras la copia: $(fmt_gb "$USED_AFTER") GB de ${MAX_GB/./,} GB ($PCT_AFTER %)."
+    [ "$PCT_AFTER" -lt "$WARN_PCT" ] || warn "El bucket de copias está al $PCT_AFTER % de su tope ($(fmt_gb "$USED_AFTER") de ${MAX_GB/./,} GB). Al alcanzarlo, las copias se detendrán: borra las más antiguas, baja BACKUP_KEEP o sube R2_BACKUP_MAX_GB (guía §7)."
+  fi
 fi
 
 DT=$(( $(date +%s) - T0 ))
@@ -206,6 +242,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "| Archivo | \`$OUTNAME\` ($(( (OUTSIZE + 524288) / 1048576 )) MB) |"
     echo "| Cifrada | $([ -n "${BACKUP_PASSPHRASE:-}" ] && echo sí || echo '**NO**') |"
     echo "| Servidor | PostgreSQL $SMAJ |"
+    [ -z "$USED_AFTER" ] || echo "| Bucket de copias | $(fmt_gb "$USED_AFTER") GB de ${MAX_GB/./,} GB de tope ($PCT_AFTER %) |"
     echo "| Duración | ${DT} s |"
   } >> "$GITHUB_STEP_SUMMARY"
 fi

@@ -1,4 +1,9 @@
-# Copia de seguridad de la base de datos de Comxow  (v42.27)
+# Copia de seguridad de la base de datos de Comxow  (v42.28)
+
+> **Estado (v42.29): la copia semanal automática de esta guía está PAUSADA** (el flujo solo se ejecuta si lo lanzas a mano). De momento la
+> copia se hace **a mano, con el botón de la pestaña «Copia» del panel de administración** (solo la cuenta `admin`): guía en
+> [`LEEME_COPIA_ADMIN.md`](LEEME_COPIA_ADMIN.md). Esta guía queda como opción para más adelante: para reactivarla, configura los secretos del §3
+> y quita las `#` de las líneas `schedule`/`cron` de `.github/workflows/backup.yml`.
 
 Una copia automática, cifrada y **comprobada** de la base de datos de Supabase (obras, hojas, capas, biblioteca, autores y usuarios),
 guardada fuera de Supabase, en un bucket **privado** de Cloudflare R2. **No cuesta nada** y no necesita ningún plan de pago de Supabase.
@@ -7,9 +12,9 @@ guardada fuera de Supabase, en un bucket **privado** de Cloudflare R2. **No cues
 
 Cada domingo (03:17 UTC) y cuando tú quieras, un flujo de GitHub Actions:
 
-1. comprueba que puede escribir en el bucket de R2 (**antes** de pedir nada a Supabase, para no gastar cuota si algo está mal configurado);
+1. comprueba que puede escribir en el bucket de R2 y que el bucket **no ha llegado a su tope de tamaño** (**antes** de pedir nada a Supabase, para no gastar cuota si algo está mal configurado);
 2. se conecta a Supabase, vuelca el esquema `public` entero y los usuarios (`auth.users` y `auth.identities`);
-3. lo empaqueta (con el guion para restaurarlo dentro), lo **cifra con tu contraseña** (GnuPG, AES-256) y lo sube a R2;
+3. lo empaqueta (con el guion para restaurarlo dentro), lo **cifra con tu contraseña** (GnuPG, AES-256) y lo sube a R2 (si con la copia nueva el bucket pasara de su tope, **no sube nada**: ver §7);
 4. conserva las 8 copias más recientes y borra las más antiguas;
 5. **restaura la copia que acaba de subir en una base de datos temporal** (en la máquina de GitHub, sin tocar Supabase) y comprueba que
    cada tabla tiene las mismas filas. Si la restauración fallase, el flujo sale en rojo y GitHub te manda un correo.
@@ -25,7 +30,7 @@ semana de cambios (además, la biblioteca local de la app guarda lo que editas e
 | Pieza | Coste |
 |---|---|
 | GitHub Actions | 0 €: el repositorio es público (minutos ilimitados). |
-| Cloudflare R2 | 0 €: 10 GB gratis al mes; 8 copias ocupan menos de 1 GB. Descargar de R2 no cobra salida. |
+| Cloudflare R2 | 0 €: 10 GB gratis al mes **por cuenta** (los comparte con `comxow-storage`, el bucket de la app); 8 copias ocupan menos de 1 GB. Descargar de R2 no cobra salida. **Al pasar el límite gratuito Cloudflare no corta nada: empieza a cobrar** (≈ 0,015 $ por GB-mes de más). Por eso el flujo lleva un **freno propio**: se detiene solo si el bucket de copias llega a 4 GB (§7). |
 | Supabase | 0 €, pero **cada copia gasta egress**: pg_dump lee toda la base por la conexión (≈ el tamaño de los datos sin comprimir, **unos 0,15 GB con el tamaño actual**). Semanal ≈ 0,6 GB/mes (≈ 12 % de los 5 GB gratuitos). Si andas justo de cuota, cambia a mensual (≈ 0,15 GB/mes, ver §7). La comprobación de restauración y las restauraciones de emergencia **no** gastan egress de Supabase. |
 
 ## 3. Puesta en marcha (una sola vez, ≈ 15 minutos, todo desde el navegador)
@@ -66,7 +71,7 @@ Repositorio → **Settings** → **Secrets and variables** → **Actions** → *
 | `BACKUP_PASSPHRASE` | la frase de cifrado del §3.3 |
 
 (Opcional, en la pestaña **Variables**: `R2_JURISDICTION` = `eu` si quieres fijarlo —si no, el guion prueba solo y encuentra la dirección correcta—,
-y `BACKUP_KEEP` = nº de copias que se conservan, 8 por defecto.)
+`BACKUP_KEEP` = nº de copias que se conservan, 8 por defecto, y `R2_BACKUP_MAX_GB` = tope de tamaño del bucket de copias, 4 por defecto —ver §7—.)
 
 Sube al repositorio, como siempre, el contenido del ZIP: trae `backup/` (los guiones y esta guía) y `.github/workflows/` (`backup.yml` y `restore.yml`).
 Si tu forma de subir no incluye carpetas que empiezan por punto, hay copias idénticas en `backup/workflows/`: en GitHub pulsa **Add file → Create new file**,
@@ -131,6 +136,11 @@ pg_restore --data-only --no-owner -t works -f works.sql public.dump    # los dat
 | «Falta el secreto …» | no está creado en GitHub | créalo (§3.4); el nombre es exacto |
 | «No se pudo acceder al bucket … de R2» | Account ID, claves o nombre del bucket mal, o el token no incluye ese bucket | revisa §3.1; si cambias la jurisdicción, fija la variable `R2_JURISDICTION` |
 | «El token de R2 no puede ESCRIBIR…» | token creado como *Object Read only* | crea otro con **Object Read & Write** |
+| «El bucket de copias … ya ocupa … y el tope es …» | el bucket llegó a su tope de tamaño (`R2_BACKUP_MAX_GB`, 4 GB por defecto): el flujo se detiene **antes** de tocar Supabase | en Cloudflare → R2 → `comxow-backups` → carpeta `db/` borra a mano las copias más antiguas (con su `.meta.json`), o sube el tope (§7). Bajar `BACKUP_KEEP` no basta: la limpieza solo se hace tras una copia correcta |
+| «Con esta copia … pasaría de … GB a … GB» | la copia nueva haría pasar el bucket de su tope; no se ha subido nada ni se ha borrado ninguna copia | igual que la fila anterior |
+| «R2_BACKUP_MAX_GB debe ser un número de GB…» | la variable tiene un valor no válido | escribe solo el número (`4`, `2.5` o `2,5`), sin unidades |
+| Aviso amarillo «El bucket de copias está al … % de su tope» | la ocupación pasó del 70 % | todavía hay margen; actúa antes de que llegue al tope (§7) |
+| Aviso «No se pudo medir lo que ocupa el bucket» | falló el listado de R2; la copia se hizo igualmente, sin comprobar el tope | si se repite, revisa que el token sea **Object Read & Write** |
 | «No se pudo conectar a la base de datos» | URI mal copiada, contraseña errónea, se usó «Direct connection», proyecto pausado o restringido por cuota | vuelve a copiar la URI del **Session pooler** (§3.2); si pone «Tenant or user not found», el usuario o la región de la URI no son los del proyecto |
 | «pg_dump … más antiguo que el servidor» | no se instaló el cliente correcto | vuelve a lanzar; si persiste, pásame el registro |
 | «No se pudo descifrar la copia» / `Bad session key` | frase de cifrado distinta de la usada al crear esa copia | usa la frase que había entonces (si la cambias, apunta desde qué fecha) |
@@ -141,6 +151,14 @@ pg_restore --data-only --no-owner -t works -f works.sql public.dump    # los dat
 
 * **Frecuencia**: edita la línea `cron:` de `.github/workflows/backup.yml` (UTC). `'17 3 * * 0'` = domingos; `'17 3 1,15 * *'` = días 1 y 15; `'17 3 1 * *'` = día 1 de cada mes.
 * **Cuántas copias**: variable `BACKUP_KEEP` (mínimo 2).
+* **Tope de tamaño del bucket de copias**: variable `R2_BACKUP_MAX_GB` (en GB, 4 por defecto; admite decimales). Se mide **todo** el bucket, en cualquier carpeta. El flujo se detiene en rojo,
+  antes de pedir nada a Supabase, si el bucket ya lo ha alcanzado, y antes de subir si la copia nueva lo hiciera pasar (se cuenta el pico: las copias actuales más la nueva). A partir del 70 %
+  sale un aviso amarillo, y la tabla final de cada ejecución enseña la ocupación. Con 8 copias de ≈ 0,1 GB estás en torno al 20 %. Si el tope se queda corto porque crece la base de datos,
+  súbelo (recuerda que los 10 GB gratuitos son de toda la cuenta de Cloudflare) o baja `BACKUP_KEEP`.
+  **Es el freno de las copias; no vigila `comxow-storage`**, el bucket de la app (su ocupación se ve en Cloudflare → R2 → Overview).
+* **Aviso de gasto en Cloudflare**: Cloudflare no manda ningún aviso por pasar el límite gratuito; solo hay alertas por gasto. Las alertas de presupuesto (Manage Account → Billing → Billable Usage → *Create budget alert*) solo mandan
+  un correo cuando el gasto del periodo llega al importe que pongas y, según Cloudflare, «no pausan ni limitan el uso». Una de 20 $ equivale a pasarte de más de 1 TB de almacenamiento: conviene
+  bajarla a 1–2 $, para que el correo llegue en cuanto empiece a cobrarse algo.
 * **Copia a mano cuando quieras**: Actions → «Copia de seguridad…» → Run workflow (útil antes de un cambio grande).
 * **Cambiar la frase de cifrado**: cambia el secreto `BACKUP_PASSPHRASE`; las copias antiguas siguen necesitando la frase antigua.
 * **Rotar el token de R2**: crea uno nuevo, cambia los dos secretos `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` y borra el viejo en Cloudflare.
@@ -160,5 +178,5 @@ pg_restore --data-only --no-owner -t works -f works.sql public.dump    # los dat
 | `restore.sh` | restaura una copia en un Postgres/Supabase vacío (viaja dentro de cada copia) |
 | `download.sh` | lista o descarga copias del bucket |
 | `install-pg-client.sh` | instala en GitHub el PostgreSQL de la misma versión que Supabase (repositorio oficial de PostgreSQL) |
-| `lib-r2.sh` | funciones comunes para hablar con R2 |
+| `lib-r2.sh` | funciones comunes para hablar con R2 (listar copias, medir lo que ocupa el bucket) |
 | `workflows/` | copias de los flujos de `.github/workflows/` (por si hay que crearlos a mano) |

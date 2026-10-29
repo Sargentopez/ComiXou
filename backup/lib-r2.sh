@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib-r2.sh — acceso al bucket PRIVADO de copias en Cloudflare R2 (lo usan backup.sh y download.sh; no se ejecuta solo)   (v42.27)
+# lib-r2.sh — acceso al bucket PRIVADO de copias en Cloudflare R2 (lo usan backup.sh y download.sh; no se ejecuta solo)   (v42.28)
 #
 # Variables: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BACKUP_BUCKET
 #            R2_JURISDICTION («eu», «standard» o vacío = probar las dos) · R2_ENDPOINT (sustituye a la dirección S3; pruebas)
@@ -38,6 +38,17 @@ r2_init() {
 }
 
 s3() { aws "$@" --endpoint-url "$EP"; }
+
+# Bytes que ocupa TODO el bucket (cualquier carpeta): es lo que cuenta para la cuota gratuita de R2 (10 GB-mes por cuenta).
+# Imprime el número; si no se pudo medir no imprime nada y devuelve 1 (el llamador decide). Cuesta una petición de listado (Clase A) por cada 1000 objetos.
+# Se lee la línea «Total Size» del resumen de «aws s3 ls» (que pagina solo y no falla con el bucket vacío) en vez de sumar a mano con --query.
+r2_used_bytes() {
+  local out n
+  out="$(s3 s3 ls "s3://$B" --recursive --summarize 2>/dev/null)" || return 1
+  n="$(printf '%s\n' "$out" | awk '/^[[:space:]]*Total Size:/ { print $3 }' | tail -n 1)"
+  case "$n" in ''|*[!0-9]*) return 1;; esac
+  printf '%s\n' "$n"
+}
 
 # Claves de copias del bucket (una por línea, ordenadas de la más antigua a la más reciente: los nombres llevan la fecha en UTC)
 r2_list_backups() {

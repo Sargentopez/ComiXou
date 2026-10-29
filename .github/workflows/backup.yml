@@ -1,6 +1,6 @@
 name: Copia de seguridad de la base de datos
 
-# Cada domingo (y cuando se pulse «Run workflow») copia la base de datos de Supabase a un bucket PRIVADO de Cloudflare R2,
+# (Semanal automática PAUSADA desde la v42.29: ver más abajo.) Cada domingo —si se reactiva— y cuando se pulse «Run workflow», copia la base de datos de Supabase a un bucket PRIVADO de Cloudflare R2,
 # cifrada con contraseña, y comprueba que esa copia se puede restaurar de verdad (en una base temporal del propio ejecutor).
 # No usa nada de pago: Actions es gratis en repositorios públicos y R2 tiene 10 GB gratis.
 # Puesta en marcha y restauración: backup/LEEME_BACKUP.md
@@ -10,8 +10,11 @@ name: Copia de seguridad de la base de datos
 #   '17 3 1,15 * *'   los días 1 y 15 de cada mes
 #   '17 3 1 * *'      el día 1 de cada mes
 on:
-  schedule:
-    - cron: '17 3 * * 0'
+  # PAUSADA desde la v42.29: de momento no se hace copia semanal automática (basta con la manual de la pestaña «Copia» del panel de
+  # administración; ver backup/LEEME_COPIA_ADMIN.md). Solo se ejecuta si pulsas «Run workflow». Para reactivar la semanal, quita las
+  # dos «#» de las líneas «schedule» y «cron» (y configura antes los secretos de backup/LEEME_BACKUP.md §3, o fallará y te avisará por correo).
+  # schedule:
+  #   - cron: '17 3 * * 0'
   workflow_dispatch:
 
 permissions:
@@ -63,6 +66,7 @@ jobs:
           R2_JURISDICTION: ${{ vars.R2_JURISDICTION }}
           BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
           BACKUP_KEEP: ${{ vars.BACKUP_KEEP }}
+          R2_BACKUP_MAX_GB: ${{ vars.R2_BACKUP_MAX_GB }}
           BACKUP_COPY_DIR: ${{ runner.temp }}/copia
         run: bash backup/backup.sh
 

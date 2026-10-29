@@ -72,8 +72,33 @@ function _adminViewStart() {
   const hdr = document.getElementById('siteHeader');
   const tabs = document.querySelector('.admin-tabs');
   if (hdr && tabs) tabs.style.top = hdr.getBoundingClientRect().height + 'px';
+  _adminBackupTab();
   renderTab('pending');
   setupTabs();
+}
+
+/* v42.29 — Pestaña «Copia» (copia de seguridad de toda la base de datos): SOLO para la cuenta principal «admin». Otros administradores
+   (p. ej. Tutor) no la ven. Es una comodidad de la pantalla: la barrera real está en la función SQL public.admin_backup, que rechaza
+   a cualquier otra cuenta aunque alguien llamara a la API a mano (ver sql/v42_29_backup_admin_1_funcion.sql y js/admin-backup.js). */
+function _adminBackupTab() {
+  try {
+    const u = Auth.currentUser();
+    if (!Auth.isAdmin() || !u || u.username !== 'admin' || typeof AdminBackup === 'undefined') return;
+    const tabs = document.querySelector('.admin-tabs');
+    if (!tabs || tabs.querySelector('[data-tab="backup"]')) return;
+    const sep = document.createElement('div');
+    sep.className = 'admin-tab-sep';
+    const btn = document.createElement('button');
+    btn.className = 'admin-tab';
+    btn.dataset.tab = 'backup';
+    btn.dataset.i18n = 'adminBkTab';
+    btn.textContent = I18n.t('adminBkTab');
+    tabs.append(sep, btn);
+    const panel = document.createElement('div');
+    panel.className = 'admin-panel hidden';
+    panel.id = 'tabBackup';
+    tabs.parentNode.appendChild(panel);
+  } catch (e) { console.warn('[admin] pestaña de copia', e); }
 }
 
 function setupTabs() {
@@ -96,6 +121,7 @@ function renderTab(tab) {
   if (tab === 'published') renderPublished(panel);
   if (tab === 'all')       renderAll(panel);
   if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
+  if (tab === 'backup' && typeof AdminBackup !== 'undefined') AdminBackup.render(panel);   // v42.29
 }
 
 /* v42.15 — al volver la conexión (evento online) con el panel de administración en pantalla: la pestaña que se quedó en «No se
