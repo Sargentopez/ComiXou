@@ -1860,6 +1860,10 @@ async function _offlineDelete(workId) {
 // antes de nada se fuerza (sin pausas por interacción) a tener TODAS —
 // una copia para leer sin conexión con hojas a medias no serviría de nada.
 // Si alguna no se puede traer, no se genera la copia (el llamador avisa).
+//
+// v42.27: las hojas salen de la caché de la lectura (ver «CACHÉ DE SESIÓN DEL LECTOR»): con la obra ya completa en ella la
+// descarga no pide NADA a Supabase; si falta alguna hoja, solo se piden esas (y quedan guardadas para seguir leyendo). El GIF
+// de una capa también sale de la caché si ya se bajó al leer (_animDownload: caché primero, red después).
 async function _buildOfflineSnapshot() {
   if (!RS._sourcePanels) return null;
   // v41.68: las copias limpias de las hojas que no están en memoria se bajan y parsean aquí, sin decodificar (ver _plCollectSources).
@@ -1869,16 +1873,8 @@ async function _buildOfflineSnapshot() {
     const layers = await Promise.all((panel.layers || []).map(async layer => {
       if (layer.type === 'gif' && layer._gifUrl) {
         try {
-          const r = await fetch(layer._gifUrl, { cache: 'no-store' });
-          if (r.ok) {
-            const blob = await r.blob();
-            layer._gifUrl = await new Promise(res => {
-              const fr = new FileReader();
-              fr.onload  = e => res(e.target.result);
-              fr.onerror = () => res(layer._gifUrl); // si falla, dejar la URL original
-              fr.readAsDataURL(blob);
-            });
-          }
+          const d = await _animDownload(layer._gifUrl);
+          if (d) layer._gifUrl = d;   // si falla (sin red, 404), se deja la URL original
         } catch(_) {} // sin red para este GIF concreto: se queda con la URL — se reintentará en la próxima descarga
       }
       return layer;
@@ -1937,12 +1933,73 @@ async function _startFromOfflineSnapshot(snapshot, opts) {
 // panel_layers → render fiel por capas (imagen, draw, stroke, bubble, text)
 // panel_texts  → lógica sequential (text_order, text_mode, contador)
 
+// ── Libro de egress (v42.27) ──
+// Misma anotación que EgressLedger (js/supabase-client.js): mismo localStorage 'cx_egress_v1', mismo formato { d: { día: { origen:
+// { tipo: [peticiones, bytes] } } } }, origen 'rd' (lector). Cada lectura que baja datos de la nube lo apunta y «Mis obras» lo enseña.
+// Se agrupa y se mezcla con lo guardado al escribir (dos pestañas no se pisan).
+const _EG = { pend: {}, timer: 0 };
+function _egKind(url) {
+  const u = String(url || '');
+  const m = u.match(/supabase\.co\/rest\/v1\/([a-z_]+(?:\/[a-z_]+)?)/i);
+  if (m) return m[1].toLowerCase();
+  if (/supabase\.co\/storage\//i.test(u)) return 'storage';
+  if (/supabase\.co\/auth\//i.test(u)) return 'auth';
+  if (/supabase\.co/i.test(u)) return 'supabase';
+  if (/workers\.dev|r2\.dev|cloudflarestorage/i.test(u)) return 'r2';
+  return 'otros';
+}
+function _egFlush() {
+  clearTimeout(_EG.timer); _EG.timer = 0;
+  const p = _EG.pend; _EG.pend = {};
+  if (!Object.keys(p).length) return;
+  try {
+    let o = null;
+    try { o = JSON.parse(localStorage.getItem('cx_egress_v1') || 'null'); } catch (_) {}
+    if (!o || typeof o !== 'object' || !o.d || typeof o.d !== 'object') o = { d: {} };
+    for (const day in p) {
+      const dst = o.d[day] || (o.d[day] = {});
+      for (const src in p[day]) {
+        const s = dst[src] || (dst[src] = {});
+        for (const k in p[day][src]) { const a = s[k] || (s[k] = [0, 0]); a[0] += p[day][src][k][0]; a[1] += p[day][src][k][1]; }
+      }
+    }
+    const keep = Object.keys(o.d).sort().slice(-21);
+    for (const day in o.d) if (keep.indexOf(day) < 0) delete o.d[day];
+    localStorage.setItem('cx_egress_v1', JSON.stringify(o));
+  } catch (_) {}
+}
+function _egNote(url, bytes) {
+  try {
+    const b = +bytes; if (!(b >= 0)) return;
+    const d = new Date(), day = d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
+    const k = _egKind(url);
+    const a = ((_EG.pend[day] || (_EG.pend[day] = {})).rd || (_EG.pend[day].rd = {}))[k] || (_EG.pend[day].rd[k] = [0, 0]);
+    a[0]++; a[1] += b;
+    if (!_EG.timer) _EG.timer = setTimeout(_egFlush, 4000);
+  } catch (_) {}
+}
+window.addEventListener('pagehide', _egFlush);
+document.addEventListener('visibilitychange', () => { if (document.hidden) _egFlush(); });
+
 // ── Descompresión gzip de layer_data (CompressionStream W3C nativo) ──
 const _CZ_PFX = 'gz:';
 
 // Descarga frames PNG desde bucket 'anims'
 async function _animDownload(animUrl, onProg) {
   if (!animUrl) return null;
+  // v42.27 — caché de sesión (ver «CACHÉ DE SESIÓN DEL LECTOR»): una animación ya bajada en esta lectura no se vuelve a pedir
+  // al volver a una hoja soltada de memoria. Solo URLs de red: una data: URL (copia offline) ya está aquí entera y su texto no
+  // vale de clave.
+  const cacheable = /^https?:/i.test(animUrl);
+  if (cacheable) {
+    const hit = await _ssGetAnim(animUrl);
+    if (hit) { try { if (onProg) onProg(hit.length, hit.length); } catch (_) {} return hit; }
+  }
+  const dataUrl = await _animFetchDataUrl(animUrl, onProg);
+  if (dataUrl && cacheable) _ssPutAnim(animUrl, dataUrl);
+  return dataUrl;
+}
+async function _animFetchDataUrl(animUrl, onProg) {
   // cache:'no-store' — el lector se comparte por enlace y lo puede abrir
   // cualquiera; si el navegador sirviera una copia cacheada de una
   // animación ya editada, quien lea la obra vería la versión antigua.
@@ -1964,6 +2021,7 @@ async function _animDownload(animUrl, onProg) {
   } else {
     blob = await r.blob();
   }
+  if (/^https?:/i.test(animUrl)) _egNote(animUrl, blob.size); // v42.27: libro de egress (R2 se apunta aparte: no es de Supabase)
   return new Promise(res => {
     const fr = new FileReader();
     fr.onload  = e => res(e.target.result);
@@ -2076,13 +2134,218 @@ const _PL = {
   allWaiters: [],
   keep: null,         // v41.68 — índices de hoja que pueden estar en memoria (ventana, ver _plKeepSet); null = sin límite
   scanBusy: false,    // v41.68 — escaneo de botones «ir a hoja» de una hoja fuera de la ventana en curso (ver _plStartScan)
-  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, native: 0, nativeFail: 0, gated: 0, paused: {} },
+  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, native: 0, nativeFail: 0, gated: 0, paused: {}, netRows: 0, navPre: 0 },
   nativeErr:  '',     // v41.78 — último motivo por el que AnimNative recurrió a UPNG (diagnóstico)
 };
 // Interruptores de la ventana de memoria (v41.68), solo para pruebas y diagnóstico:
 //   ?rdwin=all → sin ventana (el comportamiento de antes de v41.68: todas las hojas acaban en memoria)
 //   ?rdahead=N · ?rdbehind=N · ?rdmem=MB → hojas por delante / por detrás / tope de memoria estimada
 const _PL_QS = (function () { try { return new URLSearchParams(location.search); } catch (_) { return new URLSearchParams(''); } })();
+
+// ══════════════════════════════════════════════════════════════════════════
+// CACHÉ DE SESIÓN DEL LECTOR (v42.27)
+//
+// Alberto: «en la lectura se borran y descargan continuamente hojas, deberían descargarse una sola vez y permanecer cacheadas
+// y borrarse en el momento de abandonarse la obra, ya que la obra debe verse siempre actualizada». La ventana de memoria
+// (v41.68) suelta las hojas que quedan lejos de la actual para que Android no mate la página, y hasta ahora, al volver a una
+// hoja soltada, se pedía TODO otra vez a la nube (y las animaciones a R2); además el escaneo de botones «ir a hoja» bajaba el
+// layer_data de cada hoja lejana solo para tirarlo y volver a bajarlo al llegar a ella. En el plan Free de Supabase eso es
+// egress (la cuota que se agotó el 28-oct-2026) y en un móvil con mala cobertura, esperas.
+//
+// AHORA lo que se baja en esta lectura se guarda en el propio dispositivo —en IndexedDB, que va a disco y no ocupa memoria
+// de la página (lo que cuenta en un móvil de gama baja)— y, cuando el lector vuelve a pedir esa hoja, se lee de ahí en
+// milisegundos, sin red. Son las MISMAS filas que se bajaron, así que lo que se enseña no cambia: solo no se repite la petición.
+//  · Una base de datos por lectura (cxrs-<id al azar>). Al abandonar la obra (pagehide) se borra entera con un deleteDatabase.
+//    Una lectura nueva empieza siempre vacía: la obra se baja de nuevo de la nube, así que se ve tal como está ahora. Dentro
+//    de una misma lectura, una hoja guardada hace más de _SS_MAX_AGE_MS se vuelve a pedir.
+//  · Si el navegador cierra la página sin avisar (Android mata procesos), la base queda huérfana y la borra la siguiente
+//    página de la app (lector o inicio) al arrancar. «Viva» = su página mantiene un Web Lock con el nombre de la base (el
+//    navegador lo suelta solo cuando la página desaparece, también si la matan); sin Web Locks, un registro en localStorage
+//    con la hora de la última actividad (se da por muerta a las 6 h sin tocarlo).
+//  · Sin IndexedDB (modo privado de algún navegador, cuota llena…): copia en memoria con tope y, pasado el tope, se descarta
+//    lo más antiguo. Es la única vía en la que la caché ocupa memoria de la página, y está acotada.
+//  · ?rdsess=0 la desactiva (el comportamiento de antes) · ?rdsess=ram fuerza la vía en memoria (pruebas / diagnóstico).
+// Es la caché «de sesión» de los visores de documentos (pdf.js conserva las páginas ya procesadas mientras el documento está
+// abierto) con el patrón cache-first; no se ha copiado código de nadie.
+// ══════════════════════════════════════════════════════════════════════════
+const _SS_MAX_AGE_MS = 3 * 3600e3;   // una hoja guardada hace más de esto se vuelve a pedir (lecturas larguísimas)
+const _SS_REG_KEY    = 'cx_rs_reg';  // { id de sesión: hora de la última actividad } — solo para navegadores sin Web Locks
+const _SS_DEAD_MS    = 6 * 3600e3;   // sin Web Locks: una sesión sin actividad desde hace tanto se da por muerta
+const _SS = {
+  on: true, ramOnly: false, started: false, disposed: false, sid: '',
+  dbP: null, db: null, mode: '',                 // mode: '' (sin abrir) | 'disk' | 'ram'
+  haveR: new Set(), haveA: new Set(),            // lo que se sabe guardado (así lo que no está ni toca el disco)
+  ram: new Map(), ramBytes: 0, ramMax: 0,        // vía en memoria (acotada): clave 'r|<id hoja>' / 'a|<url>' → { v, n }
+  inflight: new Map(),                           // id de hoja → petición de filas en curso (la comparten escaneo y planificador)
+  st: { hitR: 0, missR: 0, putR: 0, bytesR: 0, hitA: 0, putA: 0, bytesA: 0, ramEv: 0, err: '' },
+};
+
+function _ssRegRead() { try { const o = JSON.parse(localStorage.getItem(_SS_REG_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; } catch (_) { return {}; } }
+function _ssRegWrite(o) { try { localStorage.setItem(_SS_REG_KEY, JSON.stringify(o)); } catch (_) {} }
+function _ssRegTouch() { if (_SS.disposed || !_SS.sid) return; const o = _ssRegRead(); o[_SS.sid] = Date.now(); _ssRegWrite(o); }
+function _ssRegDrop(sid) { const o = _ssRegRead(); if (sid in o) { delete o[sid]; _ssRegWrite(o); } }
+
+// Arranque perezoso (la primera vez que hay algo que guardar): id de la lectura, Web Lock de «sigo viva», limpieza de
+// restos de lecturas muertas y borrado al irse. Devuelve false si la caché está desactivada.
+function _ssStart() {
+  if (_SS.started) return _SS.on && !_SS.disposed;
+  _SS.started = true;
+  const q = _PL_QS.get('rdsess');
+  if (q === '0') { _SS.on = false; return false; }
+  if (q === 'ram') _SS.ramOnly = true;
+  try {
+    const a = new Uint8Array(8); crypto.getRandomValues(a);
+    _SS.sid = Array.prototype.map.call(a, b => (b < 16 ? '0' : '') + b.toString(16)).join('');
+  } catch (_) { _SS.sid = Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+  const dm = Number(navigator.deviceMemory) || 0;
+  _SS.ramMax = (dm ? Math.max(12, Math.min(64, dm * 12)) : 32) * 1048576;
+  try { if (navigator.locks && navigator.locks.request) navigator.locks.request('cxrs-' + _SS.sid, () => new Promise(() => {})).catch(() => {}); } catch (_) {}
+  _ssRegTouch();
+  setInterval(_ssRegTouch, 60000);
+  window.addEventListener('pagehide', e => { if (!e.persisted) _ssDispose(); });
+  setTimeout(_ssPurgeStale, 3000);
+  return true;
+}
+
+// Borra las bases de lecturas que ya no existen (la página murió sin avisar). No toca la propia ni las que siguen vivas.
+async function _ssPurgeStale() {
+  try {
+    if (typeof indexedDB === 'undefined') return;
+    const names = new Set(), reg = _ssRegRead();
+    if (indexedDB.databases) { const l = await indexedDB.databases(); (l || []).forEach(d => { if (d && /^cxrs-/.test(d.name || '')) names.add(d.name); }); }
+    Object.keys(reg).forEach(s => names.add('cxrs-' + s));
+    names.delete('cxrs-' + _SS.sid);
+    if (!names.size) return;
+    let held = null;
+    try { if (navigator.locks && navigator.locks.query) { const s = await navigator.locks.query(); held = new Set(((s && s.held) || []).map(x => x.name)); } } catch (_) {}
+    const now = Date.now();
+    names.forEach(n => {
+      const sid = n.slice(5);
+      const alive = held ? held.has(n) : (now - (reg[sid] || 0) < _SS_DEAD_MS);
+      if (alive) return;
+      try { indexedDB.deleteDatabase(n); } catch (_) {}
+      _ssRegDrop(sid);
+    });
+  } catch (_) {}
+}
+
+// El lector abandona la obra: fuera TODO lo guardado de esta lectura.
+function _ssDispose() {
+  if (!_SS.started || _SS.disposed) return;
+  _SS.disposed = true;
+  _SS.ram.clear(); _SS.ramBytes = 0; _SS.haveR.clear(); _SS.haveA.clear(); _SS.inflight.clear();
+  try { if (_SS.db) { _SS.db.close(); _SS.db = null; } } catch (_) {}
+  try { if (_SS.sid) indexedDB.deleteDatabase('cxrs-' + _SS.sid); } catch (_) {}
+  _ssRegDrop(_SS.sid);
+}
+
+function _ssOpen() {
+  if (_SS.dbP) return _SS.dbP;
+  _SS.dbP = new Promise(resolve => {
+    const ram = why => { _SS.mode = 'ram'; if (why) _SS.st.err = String(why).slice(0, 80); resolve(null); };
+    try {
+      if (_SS.ramOnly || typeof indexedDB === 'undefined') return ram('');
+      const req = indexedDB.open('cxrs-' + _SS.sid, 1);
+      req.onupgradeneeded = e => { const db = e.target.result; db.createObjectStore('r'); db.createObjectStore('a'); };
+      req.onsuccess = e => {
+        const db = e.target.result;
+        db.onversionchange = () => { try { db.close(); } catch (_) {} if (_SS.db === db) _SS.db = null; };   // otra página la borra (deleteDatabase): se aparta
+        _SS.db = db; _SS.mode = 'disk'; resolve(db);
+      };
+      req.onerror = req.onblocked = () => ram(req.error && req.error.name);
+    } catch (e) { ram(e && e.name); }
+  });
+  return _SS.dbP;
+}
+
+// ¿Cuánto pesa lo que se guarda? (para el tope de la vía en memoria y las estadísticas): el texto de las capas manda.
+function _ssSizeRows(rec) {
+  let n = 64;
+  for (const r of (rec.layerRows || [])) n += (r.layer_data ? r.layer_data.length : 0) + 240;
+  for (const t of (rec.texts || [])) n += 200 + (t && t.text ? String(t.text).length : 0);
+  if (typeof rec.dataUrl === 'string') n += rec.dataUrl.length;
+  return n;
+}
+function _ssForget(k) { (k.charAt(0) === 'r' ? _SS.haveR : _SS.haveA).delete(k.slice(2)); }
+function _ssRamPut(k, v, n) {
+  const old = _SS.ram.get(k);
+  if (old) { _SS.ramBytes -= old.n; _SS.ram.delete(k); }
+  if (n > _SS.ramMax) { _ssForget(k); return; }          // más grande que todo el tope: no se guarda (se pedirá de nuevo si hace falta)
+  _SS.ram.set(k, { v, n }); _SS.ramBytes += n;
+  while (_SS.ramBytes > _SS.ramMax && _SS.ram.size) {
+    const first = _SS.ram.keys().next().value, e = _SS.ram.get(first);
+    _SS.ram.delete(first); _SS.ramBytes -= e.n; _SS.st.ramEv++; _ssForget(first);
+  }
+}
+function _ssRamGet(k) {
+  const e = _SS.ram.get(k); if (!e) return undefined;
+  _SS.ram.delete(k); _SS.ram.set(k, e);                  // el más reciente, al final
+  return e.v;
+}
+// Escribe en disco (sin esperar: nadie depende de que termine) y, si falla —cuota, almacenamiento bloqueado—, lo deja en la vía en memoria.
+function _ssWrite(store, key, val, n) {
+  const k = store + '|' + key;
+  _ssOpen().then(db => {
+    if (_SS.disposed) return;
+    if (!db) { _ssRamPut(k, val, n); return; }
+    let failed = false;
+    const fail = e => { if (failed) return; failed = true; _SS.st.err = String((e && e.name) || e || 'error').slice(0, 80); if (!_SS.disposed) _ssRamPut(k, val, n); };
+    try {
+      const tx = db.transaction(store, 'readwrite');
+      tx.objectStore(store).put(val, key);
+      tx.onerror = () => fail(tx.error);
+      tx.onabort = () => fail(tx.error);
+    } catch (e) { fail(e); }
+  });
+}
+function _ssRead(store, key) {
+  return _ssOpen().then(db => new Promise(resolve => {
+    if (!db || _SS.disposed) return resolve(undefined);
+    try {
+      const rq = db.transaction(store, 'readonly').objectStore(store).get(key);
+      rq.onsuccess = () => resolve(rq.result);
+      rq.onerror = () => resolve(undefined);
+    } catch (_) { resolve(undefined); }
+  }));
+}
+
+// Filas de una hoja guardadas en esta lectura → { layerRows, texts, dataUrl? } o null.
+async function _ssGetRows(id) {
+  if (!_SS.on || _SS.disposed || !_SS.haveR.has(id)) { _SS.st.missR++; return null; }
+  let v = _ssRamGet('r|' + id);
+  if (v === undefined) v = await _ssRead('r', id);
+  if (v && typeof v === 'object' && Array.isArray(v.layerRows) && (Date.now() - (v.t || 0)) < _SS_MAX_AGE_MS) {
+    _SS.st.hitR++;
+    return { layerRows: v.layerRows, texts: v.texts || [], dataUrl: v.dataUrl };
+  }
+  _SS.haveR.delete(id); _SS.st.missR++;
+  return null;
+}
+function _ssPutRows(id, rec) {
+  if (!_ssStart() || _SS.disposed) return;
+  // Copia ligera ahora mismo (las cadenas grandes se comparten): la escritura real espera a que la base esté abierta y, entretanto,
+  // quien llamó puede seguir decorando sus filas.
+  const val = { t: Date.now(), layerRows: rec.layerRows.map(x => Object.assign({}, x)), texts: (rec.texts || []).map(x => Object.assign({}, x)) };
+  if (rec.dataUrl !== undefined) val.dataUrl = rec.dataUrl;
+  const n = _ssSizeRows(val);
+  _SS.haveR.add(id); _SS.st.putR++; _SS.st.bytesR += n;
+  _ssWrite('r', id, val, n);
+}
+// Animaciones (data URL) bajadas de R2 en esta lectura.
+async function _ssGetAnim(url) {
+  if (!_SS.on || _SS.disposed || !_SS.haveA.has(url)) return null;
+  let v = _ssRamGet('a|' + url);
+  if (v === undefined) v = await _ssRead('a', url);
+  if (v && typeof v.d === 'string' && (Date.now() - (v.t || 0)) < _SS_MAX_AGE_MS) { _SS.st.hitA++; return v.d; }
+  _SS.haveA.delete(url);
+  return null;
+}
+function _ssPutAnim(url, dataUrl) {
+  if (!_ssStart() || _SS.disposed) return;
+  _SS.haveA.add(url); _SS.st.putA++; _SS.st.bytesA += dataUrl.length;
+  _ssWrite('a', url, { t: Date.now(), d: dataUrl }, dataUrl.length);
+}
+
 // Descarga ya hecha (data URL) del GIF de una capa — se baja en el carril de RED y se decodifica en el de CPU.
 const _plGifDl = new WeakMap();
 
@@ -2146,9 +2409,22 @@ function _plNavOf(layers) {
   return { btn, targets };
 }
 
+// v42.27 — resumen de navegación precalculado (columna panels.nav, la deja el editor al guardar la hoja): { btn, targets }
+// con la forma exacta de _plNavOf. Si no está (obra guardada antes de v42.27, columna aún sin crear en la base, o hoja
+// modificada por otro cliente: un disparador de la base la pone a NULL) devuelve null y la hoja se escanea como siempre.
+function _plNavFromRow(n) {
+  if (!n || typeof n !== 'object' || typeof n.btn !== 'boolean' || !Array.isArray(n.targets)) return null;
+  const t = [];
+  for (const v of n.targets) { if (!Number.isInteger(v)) return null; if (t.indexOf(v) < 0) t.push(v); }
+  if (!n.btn && t.length) return null;   // incoherente: se prefiere escanear
+  return { btn: n.btn, targets: t };
+}
 // Hoja «esqueleto» a partir de la fila de la tabla panels (aún sin capas ni textos).
 function _plSkeleton(row) {
-  return Object.assign({}, row, { layers: [], texts: [], layerImgs: [], _row: row, _raw: null, _st: 'idle', _tries: 0, _retryAt: 0 });
+  const sk = Object.assign({}, row, { layers: [], texts: [], layerImgs: [], _row: row, _raw: null, _st: 'idle', _tries: 0, _retryAt: 0 });
+  const nv = _plNavFromRow(row && row.nav);
+  if (nv) { sk._nav = nv; _PL.stats.navPre++; }
+  return sk;
 }
 // Hoja a partir de datos ya en memoria (copia offline / archivo standalone): sin red, solo falta prepararla.
 function _plSkeletonFromData(p) {
@@ -2166,10 +2442,20 @@ function _plAddCredits() {
 // hoja sin capas — esa se pide aparte, ver _plFetchRaw). Las columnas son las mismas que pide el propio
 // editor al descargar una obra (downloadDraftAsEditorData); si aun así la consulta ligera falla, se
 // repite con la completa de siempre.
+// v42.27: pide además panels.nav (resumen de botones «ir a hoja», ver _plNavFromRow). Si la base aún no tiene esa columna (o rechaza
+// la consulta) se repite sin ella y, como último recurso, con la completa de siempre; ante un fallo de red o un tiempo agotado
+// se repite UNA vez la misma consulta (antes la consulta completa hacía de reintento).
 async function _plFetchPanelList(sbFetch, workId) {
   const base = 'panels?work_id=eq.' + workId + '&order=panel_order.asc';
-  try { return await sbFetch(base + '&select=id,panel_order,orientation,text_mode'); }
-  catch (_) { return await sbFetch(base); }
+  const cols = ['id,panel_order,orientation,text_mode,nav', 'id,panel_order,orientation,text_mode', ''];
+  let lv = 0, netTries = 0;
+  for (;;) {
+    try { return await sbFetch(base + (cols[lv] ? '&select=' + cols[lv] : '')); }
+    catch (e) {
+      if (/^Supabase 4\d\d$/.test(String((e && e.message) || '')) && lv < cols.length - 1) { lv++; continue; }
+      if (++netTries >= 2) throw e;
+    }
+  }
 }
 
 // Logo e icono de la hoja de créditos (data URL, instantáneos): deben estar listos antes de llegar a ella.
@@ -2186,15 +2472,40 @@ async function _plPreloadBrand() {
   await Promise.all(jobs);
 }
 
+// v42.27 — filas (capas + textos) de UNA hoja: de la caché de sesión si ya se bajaron en esta lectura (ver «CACHÉ DE SESIÓN DEL
+// LECTOR») y, si no, de la nube —una sola petición por hoja aunque la pidan a la vez el escaneo y el planificador— guardándolas.
+// Cada llamador recibe su propia copia ligera: las filas se decoran después con las descargas de animación y _plParse marca
+// los textos, y eso no debe llegar a lo guardado (las cadenas grandes se comparten, no se duplican).
+function _plFetchRows(panel) {
+  const id = panel.id;
+  let pr = _SS.inflight.get(id);
+  if (!pr) {
+    pr = (async () => {
+      const hit = await _ssGetRows(id);
+      if (hit) return hit;
+      const f = RS._sbFetch;
+      const [rows, texts] = await Promise.all([
+        f('panel_layers?panel_id=eq.' + id + '&order=layer_order.asc&select=*'),
+        f('panel_texts?panel_id=eq.'  + id + '&order=text_order.asc'),
+      ]);
+      const rec = { layerRows: (rows || []).slice().sort((a, b) => a.layer_order - b.layer_order), texts: texts || [] };
+      _PL.stats.netRows++;
+      _ssPutRows(id, rec);
+      return rec;
+    })();
+    _SS.inflight.set(id, pr);
+    const done = () => { if (_SS.inflight.get(id) === pr) _SS.inflight.delete(id); };
+    pr.then(done, done);
+  }
+  return pr.then(r => ({ layerRows: r.layerRows.map(x => Object.assign({}, x)), texts: r.texts.map(x => Object.assign({}, x)), dataUrl: r.dataUrl }));
+}
+
 // ── Carril de RED: capas y textos de UNA hoja (+ sus APNG/GIF) ───────────────
 async function _plFetchRaw(panel) {
   const f = RS._sbFetch;
   _plProg(panel, 0.02);
-  const [rows, texts] = await Promise.all([
-    f('panel_layers?panel_id=eq.' + panel.id + '&order=layer_order.asc&select=*'),
-    f('panel_texts?panel_id=eq.'  + panel.id + '&order=text_order.asc'),
-  ]);
-  const layerRows = (rows || []).slice().sort((a, b) => a.layer_order - b.layer_order);
+  const rec = await _plFetchRows(panel);
+  const layerRows = rec.layerRows, texts = rec.texts;
   // Animaciones: se bajan aquí (red), en paralelo, para que el carril de CPU no se quede esperando.
   // cache:'no-store' (ver _animDownload). Un fallo aislado deja esa capa sin animación, como siempre.
   // v41.78: la barra de carga cuenta los bytes recibidos de las animaciones (0,12 → 0,55 del progreso de la hoja; sin
@@ -2215,10 +2526,15 @@ async function _plFetchRaw(panel) {
   }
   if (dl.length) await Promise.all(dl);
   _plProg(panel, P1);
-  // Hoja sin capas: se dibuja su miniatura (data_url), como siempre — única razón de pedirla.
+  // Hoja sin capas: se dibuja su miniatura (data_url), como siempre — única razón de pedirla. v42.27: también se guarda en la
+  // caché de sesión (al soltar la hoja se borra de _row.data_url y no hay que pedirla de nuevo).
   if (!layerRows.length && panel._row.data_url === undefined) {
-    const d = await f('panels?id=eq.' + panel.id + '&select=data_url');
-    panel._row.data_url = (d && d[0] && d[0].data_url) || null;
+    if (rec.dataUrl !== undefined) panel._row.data_url = rec.dataUrl;
+    else {
+      const d = await f('panels?id=eq.' + panel.id + '&select=data_url');
+      panel._row.data_url = (d && d[0] && d[0].data_url) || null;
+      _ssPutRows(panel.id, { layerRows: [], texts: texts, dataUrl: panel._row.data_url });
+    }
     panel.data_url = panel._row.data_url;
   }
   panel._raw = { layerRows, texts: texts || [] };
@@ -2333,14 +2649,9 @@ async function _plDecode(panel) {
       if (!layer._gifUrl) return Promise.resolve(null);
       // Ya descargado en el carril de red; si aquella descarga falló, se intenta aquí como siempre.
       // cache:'no-store' — mismo motivo que _animDownload.
+      // v42.27: por _animDownload, que usa la caché de sesión (null si la descarga falla → decode(null) falla y se cae al catch).
       const _pre = _plGifDl.get(layer);
-      const _dataP = _pre ? Promise.resolve(_pre) : fetch(layer._gifUrl, { cache: 'no-store' })
-        .then(r => r.blob())
-        .then(blob => new Promise(res => {
-          const fr = new FileReader();
-          fr.onload = e => res(e.target.result);
-          fr.readAsDataURL(blob);
-        }));
+      const _dataP = _pre ? Promise.resolve(_pre) : _animDownload(layer._gifUrl);
       return _dataP
         .then(dataUrl => window.GifDecoder ? window.GifDecoder.decode(dataUrl) : null)
         .then(decoded => {
@@ -2473,14 +2784,8 @@ async function _plDecode(panel) {
     });
   });
   if (_richAnimLines.length && window.GifDecoder) {
-    await Promise.all(_richAnimLines.map(line => fetch(line.gifUrl, { cache: 'no-store' })
-      .then(r => r.blob())
-      .then(blob => new Promise(res => {
-        const fr = new FileReader();
-        fr.onload = e => res(e.target.result);
-        fr.readAsDataURL(blob);
-      }))
-      .then(dataUrl => window.GifDecoder.decode(dataUrl))
+    await Promise.all(_richAnimLines.map(line => _animDownload(line.gifUrl)   // v42.27: con caché de sesión (ver _animDownload)
+      .then(dataUrl => { if (!dataUrl) throw new Error('anim'); return window.GifDecoder.decode(dataUrl); })
       .then(decoded => {
         if (!decoded || !decoded.frames.length) return;
         const oc = document.createElement('canvas');
@@ -2511,14 +2816,8 @@ async function _plDecode(panel) {
     });
   });
   if (_richApngLines.length && window.ApngDecoder) {
-    await Promise.all(_richApngLines.map(line => fetch(line.animUrl, { cache: 'no-store' })
-      .then(r => r.blob())
-      .then(blob => new Promise(res => {
-        const fr = new FileReader();
-        fr.onload = e => res(e.target.result);
-        fr.readAsDataURL(blob);
-      }))
-      .then(dataUrl => _plApngLoad(dataUrl, line._gcpFrameDelay || 100))
+    await Promise.all(_richApngLines.map(line => _animDownload(line.animUrl)   // v42.27: con caché de sesión (ver _animDownload)
+      .then(dataUrl => { if (!dataUrl) throw new Error('anim'); return _plApngLoad(dataUrl, line._gcpFrameDelay || 100); })
       .then(decoded => {
         if (!decoded || !decoded.frames.length) return;
         const oc = document.createElement('canvas');
@@ -3057,10 +3356,12 @@ function _plFail(panel, backTo, e) {
 // ── Escaneo de navegación (v41.68) ────────────────────────────────────────────
 // Las reglas de navegación dirigida miran los botones «ir a hoja» de TODA la obra (una hoja es «destino de un salto»
 // si un botón de cualquier otra apunta a ella — ver _panelIsJumpTarget). Con la ventana de memoria las hojas lejanas no
-// se cargan, así que su resumen (_nav) se obtiene aparte: se baja solo la columna layer_data de la hoja, se descomprime
-// cada capa y solo si su JSON menciona un botón se parsea; nada se decodifica ni se guarda salvo el resumen. Una hoja cada
-// vez, con la red y el navegador libres; no en dispositivos de ≤1 GB ni con el ahorro de datos activado.
-// (Hasta v41.67 esa misma información llegaba porque el segundo plano cargaba todas las hojas.)
+// se cargan, así que su resumen (_nav) se obtiene aparte: se bajan las filas de la hoja (v42.27: por la caché de sesión, así
+// que no se repite al llegar a ella), se descomprime cada capa y solo si su JSON menciona un botón se parsea; nada se
+// decodifica ni se guarda en memoria salvo el resumen. Una hoja cada vez, con la red y el navegador libres; no en
+// dispositivos de ≤1 GB ni con el ahorro de datos activado. (Hasta v41.67 esa misma información llegaba porque el segundo
+// plano cargaba todas las hojas.) v42.27: si la obra trae el resumen precalculado (panels.nav, ver _plNavFromRow) las hojas
+// que lo tienen no se escanean —ni se baja nada—, y eso vale también en los dispositivos de ≤1 GB y con ahorro de datos.
 function _plScanNext() {
   if (_PL_QS.get('rdscan') === '0') return null;
   const dm = Number(navigator.deviceMemory) || 0;
@@ -3076,9 +3377,11 @@ function _plScanNext() {
   return best;
 }
 async function _plScanNav(panel) {
-  const rows = await RS._sbFetch('panel_layers?panel_id=eq.' + panel.id + '&order=layer_order.asc&select=layer_data');
+  // v42.27: las filas pasan por la caché de sesión (_plFetchRows): lo que baja el escaneo no se tira, se guarda en el dispositivo
+  // y, si el lector llega a esa hoja, se lee de ahí en vez de volver a pedirlo a la nube (antes: layer_data dos veces por hoja).
+  const rec = await _plFetchRows(panel);
   const layers = [];
-  for (const r of (rows || [])) {
+  for (const r of rec.layerRows) {
     let s = null;
     try { s = await _czDecompress(r.layer_data); } catch (_) { s = null; }
     if (s && s.indexOf('"_buttonAction"') >= 0) {
@@ -3412,6 +3715,7 @@ function _frSample(tag) {
     idx: (RS.idx || 0) + 1, n: RS.panels.filter(p => !p.isCredits).length,
     res: res.join(','), w: Math.round(w / 1048576), ev: _PL.stats.evicted, sc: _PL.stats.scanned, vis: document.hidden ? 'h' : 'v',
     nat: _PL.stats.native || 0, nf: _PL.stats.nativeFail || 0, gt: _PL.stats.gated || 0, hd: _frHeld(),
+    nr: _PL.stats.netRows || 0, hr: _SS.st.hitR || 0, ha: _SS.st.hitA || 0, np: _PL.stats.navPre || 0, sm: _SS.mode || '-',
   };
 }
 function _frPush(tag) {
@@ -3445,7 +3749,8 @@ function _frDiagWanted() {
 function _frFmt(s) {
   return s.t + 's ' + s.vis + ' hoja ' + s.idx + '/' + s.n + ' en memoria [' + s.res + '] ≈' + s.w + 'MB · JS ' +
     (s.heap == null ? '-' : s.heap + '/' + s.tot + 'MB') + ' · soltadas ' + s.ev + ' · escaneadas ' + s.sc +
-    ' · anim. nativas ' + (s.nat || 0) + '/' + (s.nf || 0) + 'fallos · pasos bloqueados ' + (s.gt || 0) + ' · fotogramas retenidos ' + (s.hd || 0) + (s.tag ? ' (' + s.tag + ')' : '');
+    ' · anim. nativas ' + (s.nat || 0) + '/' + (s.nf || 0) + 'fallos · pasos bloqueados ' + (s.gt || 0) + ' · fotogramas retenidos ' + (s.hd || 0) +
+    ' · hojas pedidas a la nube ' + (s.nr || 0) + ' · servidas de la caché ' + (s.hr || 0) + '+' + (s.ha || 0) + 'anim (' + (s.sm || '-') + ') · navegación precalculada ' + (s.np || 0) + (s.tag ? ' (' + s.tag + ')' : '');
 }
 function _frReport() {
   const out = [];
@@ -3647,7 +3952,9 @@ async function sbGet(path) {
     });
     clearTimeout(timer);
     if (!res.ok) throw new Error('Supabase ' + res.status);
-    return res.json();
+    const txt = await res.text();      // v42.27: igual que res.json(), pero anotando lo que baja (libro de egress)
+    _egNote(res.url, txt.length);
+    return JSON.parse(txt);
   } catch(e) {
     clearTimeout(timer);
     if (e.name === 'AbortError') throw new Error('Timeout cargando obra (sin respuesta en ' + (_SB_TIMEOUT_MS/1000) + 's)');
@@ -3674,7 +3981,9 @@ async function sbGetAuth(path) {
     });
     clearTimeout(timer);
     if (!res.ok) throw new Error('Supabase ' + res.status);
-    return res.json();
+    const txt = await res.text();      // v42.27: igual que res.json(), pero anotando lo que baja (libro de egress)
+    _egNote(res.url, txt.length);
+    return JSON.parse(txt);
   } catch(e) {
     clearTimeout(timer);
     if (e.name === 'AbortError') throw new Error('Timeout cargando obra (sin respuesta en ' + (_SB_TIMEOUT_MS/1000) + 's)');
@@ -5213,9 +5522,11 @@ function _safeFileName(title) {
 // ya en estado "descargada"...) que no deben quedar grabados en el archivo
 // — el archivo exportado debe arrancar siempre limpio, sea quien sea que lo
 // abra y en el dispositivo que sea.
-async function _buildStandaloneBundle() {
+// v42.27: `pre` = la instantánea que el llamador ya construyó (el botón de descarga guarda la copia del dispositivo Y baja este
+// archivo con UNA sola instantánea; antes se construía dos veces y cada vez se volvían a pedir las hojas que no estaban en memoria).
+async function _buildStandaloneBundle(pre) {
   if (!RS._sourcePanels) return null;
-  const snapshot = await _buildOfflineSnapshot();
+  const snapshot = pre || await _buildOfflineSnapshot();
   if (!snapshot) return null;
 
   // IMPORTANTE: cada dependencia se incrusta DENTRO de una etiqueta
@@ -5426,8 +5737,8 @@ function _rdShowDupNameModal(fullName, { onChange, onOverwrite }) {
   ov.querySelector('#rdDupNameOverwrite').addEventListener('click', () => { ov.remove(); onOverwrite(); });
 }
 
-async function _downloadStandaloneBundle() {
-  const bundle = await _buildStandaloneBundle();
+async function _downloadStandaloneBundle(pre) {
+  const bundle = await _buildStandaloneBundle(pre);
   if (!bundle) return false;
   const blob = new Blob([bundle.html], { type: 'text/html' });
 
@@ -5500,7 +5811,7 @@ async function _setupOfflineBtn() {
       const snapshot = await _buildOfflineSnapshot();
       if (snapshot) {
         await _offlineSave(RS._workId, snapshot);
-        const _downloaded = await _downloadStandaloneBundle();
+        const _downloaded = await _downloadStandaloneBundle(snapshot);   // v42.27: la misma instantánea (no se vuelve a construir)
         if (_downloaded) _readerToast(I18n.t('reader_downloadedToast'), 3500);
       } else {
         _readerToast(I18n.t('reader_downloadPrepareFail'), 3000);

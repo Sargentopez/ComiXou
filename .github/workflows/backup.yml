@@ -1,0 +1,72 @@
+name: Copia de seguridad de la base de datos
+
+# Cada domingo (y cuando se pulse «Run workflow») copia la base de datos de Supabase a un bucket PRIVADO de Cloudflare R2,
+# cifrada con contraseña, y comprueba que esa copia se puede restaurar de verdad (en una base temporal del propio ejecutor).
+# No usa nada de pago: Actions es gratis en repositorios públicos y R2 tiene 10 GB gratis.
+# Puesta en marcha y restauración: backup/LEEME_BACKUP.md
+#
+# Para cambiar la frecuencia edita la línea «cron» (minuto hora día-del-mes mes día-de-la-semana, en UTC):
+#   '17 3 * * 0'      cada domingo a las 03:17 UTC   (valor actual)
+#   '17 3 1,15 * *'   los días 1 y 15 de cada mes
+#   '17 3 1 * *'      el día 1 de cada mes
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Copia → R2 → comprobación de restauración
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Descargar los guiones del repositorio
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: backup
+          persist-credentials: false
+
+      - name: Comprobar que están configurados los secretos
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          falta=0
+          for v in SUPABASE_DB_URL R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BACKUP_BUCKET BACKUP_PASSPHRASE; do
+            if [ -z "${!v}" ]; then echo "::error::Falta el secreto $v (Settings → Secrets and variables → Actions → New repository secret). Guía: backup/LEEME_BACKUP.md"; falta=1; fi
+          done
+          exit $falta
+
+      - name: Instalar PostgreSQL de la misma versión que Supabase
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash backup/install-pg-client.sh --detect --server
+
+      - name: Copia de seguridad → R2
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          R2_JURISDICTION: ${{ vars.R2_JURISDICTION }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          BACKUP_KEEP: ${{ vars.BACKUP_KEEP }}
+          BACKUP_COPY_DIR: ${{ runner.temp }}/copia
+        run: bash backup/backup.sh
+
+      - name: Comprobar que la copia se puede restaurar
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: bash backup/verify.sh "$RUNNER_TEMP"/copia/*

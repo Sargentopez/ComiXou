@@ -239,3 +239,40 @@
   }
 
 })();
+
+/* ============================================================
+   v42.27 · Restos de lecturas del reproductor
+   El reproductor guarda lo que baja en una base IndexedDB por lectura (cxrs-<id>) y la borra al abandonar la obra (ver
+   «CACHÉ DE SESIÓN DEL LECTOR» en reader/reader.js). Si Android mata la página sin avisar, la base queda huérfana: la borra la
+   siguiente página de la app al arrancar —esta o el propio lector—. Misma regla que _ssPurgeStale: una lectura está «viva» si su
+   página mantiene el Web Lock con el nombre de la base (el navegador lo suelta solo cuando la página desaparece); sin Web Locks,
+   cuenta el registro cx_rs_reg con la hora de la última actividad (muerta a las 6 h). Unos segundos tras arrancar, sin competir
+   con la carga, y sin tocar la red.
+   ============================================================ */
+(function () {
+  async function purgeReaderSessions() {
+    try {
+      if (typeof indexedDB === 'undefined') return;
+      let reg = {};
+      try { reg = JSON.parse(localStorage.getItem('cx_rs_reg') || '{}') || {}; } catch (_) { reg = {}; }
+      const names = new Set();
+      if (indexedDB.databases) { const l = await indexedDB.databases(); (l || []).forEach(d => { if (d && /^cxrs-/.test(d.name || '')) names.add(d.name); }); }
+      Object.keys(reg).forEach(s => names.add('cxrs-' + s));
+      if (!names.size) return;
+      let held = null;
+      try { if (navigator.locks && navigator.locks.query) { const s = await navigator.locks.query(); held = new Set(((s && s.held) || []).map(x => x.name)); } } catch (_) {}
+      const now = Date.now();
+      let dropped = false;
+      names.forEach(n => {
+        const sid = n.slice(5);
+        const alive = held ? held.has(n) : (now - (reg[sid] || 0) < 6 * 3600e3);
+        if (alive) return;
+        try { indexedDB.deleteDatabase(n); } catch (_) {}
+        if (sid in reg) { delete reg[sid]; dropped = true; }
+      });
+      if (dropped) { try { localStorage.setItem('cx_rs_reg', JSON.stringify(reg)); } catch (_) {} }
+    } catch (_) {}
+  }
+  window._cxPurgeReaderSessions = purgeReaderSessions;   // también la usan las pruebas
+  setTimeout(purgeReaderSessions, 6000);
+})();

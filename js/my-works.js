@@ -127,7 +127,9 @@ async function _mcRest(path, hdrs, ms) {
   try {
     const r = await fetch(`${_MC_BASE}/${path}`, { headers: hdrs, cache: 'no-store', signal: ctl.signal });
     if (!r.ok) { console.warn('[Mis obras] la nube respondió ' + r.status + ' a ' + path.split('?')[0]); return null; }
-    const j = await r.json();
+    const txt = await r.text();
+    try { if (window.EgressLedger) window.EgressLedger.note(r.url, txt.length, 'app'); } catch (_e) {} // v42.27: libro de egress
+    const j = JSON.parse(txt);
     return Array.isArray(j) ? j : null;
   } catch (_e) { return null; }
   finally { clearTimeout(timer); }
@@ -238,6 +240,9 @@ async function _mcFetchLocalCover(comic) {
 async function _mcFetchCloudCover(comic) {
   const sid = comic.supabaseId;
   if (!sid) return '';
+  // v42.26: identidad local (sin sesión de nube): no se pregunta a la nube — sin token solo respondería la clave anónima (y
+  // gastaría datos de balde); null = «no se pudo preguntar» → la miniatura sale de la portada guardada en el dispositivo.
+  if (typeof Auth !== 'undefined' && Auth.currentUser?.()?.offline) return null;
   let url = _mcCoverUrls.get(sid) || '';
   if (!url) {
     const hdrs = await _mcAuthHdrs();
@@ -977,6 +982,8 @@ async function _mcSyncCloudDatesInner() {
   if (typeof SupabaseClient === 'undefined') return true;
   const _mcUser = Auth.currentUser?.();
   if (typeof Auth === 'undefined' || !_mcUser) return true;
+  // v42.26: identidad local sin sesión de nube: no hay nada que consultar (y sin esto cada «volvió la red» reintentaría en vano)
+  if (_mcUser.offline) return true;
   const mine = c => c.userId === _mcUser.id || c.username === _mcUser.username;
 
   let changed = false;     // ¿hay que repintar la lista?
@@ -1115,12 +1122,41 @@ async function _mcResolveBiblioteca(comicToEdit) {
   if (!_bibUser || !_bibUser.id || !_bibSbId || typeof SupabaseClient.bibDownload !== 'function') {
     return result;
   }
+  // v42.26: identidad local (sin sesión de nube): la biblioteca que hay en el dispositivo es la única; no se consulta la nube
+  if (_bibUser.offline) { result.action = 'skipped_offline_identity'; return result; }
   try {
     const localBib = window._bibLoadWithKey ? await window._bibLoadWithKey(_bibKey) : null;
     const localModifiedAt = (localBib && localBib._localModifiedAt) || 0;
     const localItems = (localBib?.folders || []).reduce((n, f) => n + (f.items?.length || 0), 0);
     result.localModifiedAt = localModifiedAt;
     result.localItems = localItems;
+
+    // v42.27 — SONDEO ANTES DE BAJAR (egress): primero se pregunta a la nube, en ligero (id + fecha de cada objeto, ver bibProbe), si
+    // hay algo que bajar. No hace falta bajar la biblioteca entera cuando
+    //   · lo local es más reciente que TODO lo que hay en la nube (se iba a descartar lo bajado: «kept_local_newer»), ni
+    //   · la nube está exactamente como la dejó la última sincronización de este dispositivo (sello igual, ver bibStampGet): la copia
+    //     local ya es la buena. Antes, cada «Editar» tras guardar volvía a bajarla y a reescribirla.
+    // Si el sondeo falla o hay cualquier duda, se hace lo de siempre (bajarla y decidir).
+    let probe = null;
+    try {
+      const _pre = window._mcBibProbe; window._mcBibProbe = null;
+      if (_pre && _pre.comicId === comicToEdit.id && _pre.sbId === _bibSbId && (Date.now() - _pre.at) < 120000) probe = await _pre.p;   // el que salió al empezar «Editar»
+      else if (typeof SupabaseClient.bibProbe === 'function') probe = await SupabaseClient.bibProbe(_bibUser.id, _bibSbId);
+    } catch (_pe) { probe = null; }
+    if (probe) {
+      result.probe = { items: probe.items, modifiedAt: probe.modifiedAt };
+      if (localItems > 0 && localModifiedAt > probe.modifiedAt) {
+        result.cloudModifiedAt = probe.modifiedAt; result.cloudItems = probe.items;
+        result.action = 'kept_local_newer';
+        return result;
+      }
+      const _st = SupabaseClient.bibStampGet ? SupabaseClient.bibStampGet(_bibUser.id, _bibSbId) : null;
+      if (localItems > 0 && _st && _st.m === probe.modifiedAt && _st.n === probe.items) {
+        result.cloudModifiedAt = probe.modifiedAt; result.cloudItems = probe.items;
+        result.action = 'kept_local_cloud_unchanged';
+        return result;
+      }
+    }
 
     const cloudBib = await SupabaseClient.bibDownload(_bibUser.id, _bibSbId);
     const allCloudItems = (cloudBib?.folders || []).flatMap(f => f.items || []);
@@ -1168,6 +1204,8 @@ async function _mcResolveBiblioteca(comicToEdit) {
       else { try { localStorage.setItem(_bibKey, JSON.stringify(_toSave)); } catch(e) {} }
       result.action = 'overwritten_from_cloud';
       if (_oriMerged) result.orientMerged = _oriMerged; // lo local ya NO es idéntico a la nube (ver _edBibNoteMirroredSync)
+      // v42.27: el sello es el del sondeo de ANTES de bajar (si la nube cambió entre medias, el sello queda viejo y no coincidirá: se baja de nuevo)
+      if (probe && SupabaseClient.bibStampSet) SupabaseClient.bibStampSet(_bibUser.id, _bibSbId, probe);
     } else if (localItems === 0) {
       // Ambos vacíos — dejar un scaffold vacío limpio
       const _emptyBib = { folders: [{ id: '__root__', name: 'General', items: [] }, { id: '__anim__', name: 'Animaciones', items: [] }], _localModifiedAt: 0 };
@@ -1206,26 +1244,37 @@ function _mcRenderList() {
       <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">${I18n.t('pageLogin')}</button>
     </div>`;
 
+  // v42.26 — OBRAS DEL DISPOSITIVO SIN SESIÓN. Antes, sin sesión, esta vista solo enseñaba las obras de invitado y, si no había
+  // ninguna, «no tienes obras»: las de la cuenta —intactas en el dispositivo— parecían perdidas (caso real: Supabase restringido,
+  // sesión borrada, imposible volver a entrar). Ahora:
+  //  · Sesión cerrada a propósito + obras de una cuenta en el dispositivo → aviso con «Abrir sin conexión» (identidad local).
+  //  · Identidad local activa (sin sesión de nube) → aviso de que se trabaja en local, con «Iniciar sesión» para sincronizar.
+  const _dev = (!user && typeof Auth !== 'undefined' && Auth.deviceIdentity) ? Auth.deviceIdentity() : null;
+  const _deviceBanner = _dev ? `
+    <div id="mcDeviceBanner" style="background:var(--yellow);color:var(--black);padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:.85rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1">${I18n.t('mc_deviceWorksBanner', { user: escHtml(_dev.username), n: _dev.count })}</span>
+      <button id="mcDeviceOpenBtn" onclick="_mcOpenDeviceWorks()" style="background:var(--black);color:var(--yellow);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">${I18n.t('mc_deviceWorksOpen')}</button>
+    </div>` : '';
+  const _offlineBanner = (user && user.offline) ? `
+    <div id="mcOfflineBanner" style="background:var(--blue);color:#fff;padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:.85rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="flex:1">📴 ${I18n.t('mc_offlineBanner')}</span>
+      <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">${I18n.t('pageLogin')}</button>
+    </div>` : '';
+  const _banners = _loginBanner + _deviceBanner + _offlineBanner;
+  // v42.27: pie discreto con el informe de consumo de datos (solo lectura, ver _mcShowEgress). No es el 🔍 de diagnóstico, que sigue oculto.
+  const _egressFoot = `<div style="text-align:center;padding:14px 8px 26px"><button type="button" onclick="_mcShowEgress()" style="font-size:.72rem;padding:4px 12px;background:transparent;border:1px solid var(--gray-300);border-radius:8px;color:var(--gray-500);cursor:pointer">${I18n.t('mc_egLink')}</button></div>`;
+
   if (!comics.length) {
-    wrap.innerHTML = `
-      <div style="text-align:center;padding:60px 20px;color:var(--gray-500)">
+    wrap.innerHTML = _banners + `
+      <div style="text-align:center;padding:${_banners ? 40 : 60}px 20px;color:var(--gray-500)">
         <span style="font-size:3rem;display:block;margin-bottom:12px">📝</span>
         <p style="font-weight:700;font-size:1rem">${I18n.t('mc_emptyTitle')}</p>
         <p style="font-size:.88rem;margin-top:6px">${I18n.t('mc_emptyHint', { btn: I18n.t('mc_createNewBtn') })}</p>
-      </div>`;
+      </div>` + _egressFoot;
     return;
   }
 
-  if (!comics.length && !user) {
-    wrap.innerHTML = _loginBanner + `
-      <div style="text-align:center;padding:40px 20px;color:var(--gray-500)">
-        <span style="font-size:3rem;display:block;margin-bottom:12px">📝</span>
-        <p style="font-weight:700;font-size:1rem">${I18n.t('mc_emptyTitle')}</p>
-        <p style="font-size:.88rem;margin-top:6px">${I18n.t('mc_emptyHint', { btn: I18n.t('mc_createNewBtn') })}</p>
-      </div>`;
-    return;
-  }
-  wrap.innerHTML = _loginBanner + comics.map(comic => {
+  wrap.innerHTML = _banners + comics.map(comic => {
     // BUG CORREGIDO (v38.29 — Alberto: "la miniatura de my-works solo
     // aparece cuando la obra está en la nube... debe comprobarse cuál es la
     // versión más reciente"). Antes, en cuanto una obra tenía supabaseId
@@ -1283,7 +1332,7 @@ function _mcRenderList() {
         </div>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + _egressFoot;
 
   // Botón de diagnóstico oculto a petición de Alberto (no borrar):
   // para volver a mostrarlo, descomentar el bloque de abajo.
@@ -1314,6 +1363,17 @@ function _mcRenderList() {
     wrap.addEventListener('click', _mcOnListClick);
     wrap.addEventListener('error', _mcOnThumbError, true);   // el error de una <img> no burbujea: se captura
   }
+}
+
+// v42.26 — «Abrir sin conexión» (aviso de obras del dispositivo con la sesión cerrada, ver _mcRenderList): activa la identidad
+// local de la cuenta cuyas obras guarda este dispositivo (Auth.useDeviceIdentity) y repinta cabecera y lista.
+async function _mcOpenDeviceWorks() {
+  const btn = document.getElementById('mcDeviceOpenBtn');
+  if (btn) btn.disabled = true;
+  try { await Auth.useDeviceIdentity(); } catch (e) { console.warn('useDeviceIdentity:', e); }
+  if (typeof Header !== 'undefined' && Header.refresh) Header.refresh();
+  if (typeof window._adjustSpacingNow === 'function') window._adjustSpacingNow();
+  _mcRenderList();
 }
 
 async function _mcOnListClick(e) {
@@ -1356,6 +1416,8 @@ async function _mcOnListClick(e) {
         appAlert(I18n.t('mc_noPermPublish'));
         return;
       }
+      // v42.26: identidad local sin sesión de nube → publicar necesita iniciar sesión
+      if (typeof Auth !== 'undefined' && Auth.currentUser?.()?.offline) { appAlert(I18n.t('mc_needLoginCloud')); return; }
       // 1. Nunca subida a la nube → bloquear
       if (!comic.supabaseId) {
         appAlert(I18n.t('mc_needCloudFirst'));
@@ -1446,6 +1508,9 @@ async function _mcOnListClick(e) {
         appAlert(I18n.t('mc_noPermUnpublish'));
         return;
       }
+      // v42.26: identidad local sin sesión de nube → retirar una obra de la portada también toca la nube: necesita iniciar sesión
+      // (si no, se marcaba como retirada solo aquí y la nube la seguía mostrando)
+      if (typeof Auth !== 'undefined' && Auth.currentUser?.()?.offline) { appAlert(I18n.t('mc_needLoginCloud')); return; }
       WorkStore.save({ ...comic, published: false, approved: false, pendingReview: false });
       if (typeof SupabaseClient !== 'undefined' && comic.supabaseId) {
         _mcPubBusy.add(id);
@@ -1485,6 +1550,8 @@ async function _mcOnListClick(e) {
     } else if (action === 'share') {
       const comic = WorkStore.getById(id);
       if (!comic || !_mcOwns(comic)) return;
+      // v42.26: identidad local sin sesión de nube → compartir necesita iniciar sesión
+      if (typeof Auth !== 'undefined' && Auth.currentUser?.()?.offline) { appAlert(I18n.t('mc_needLoginCloud')); return; }
       // 1. Verificar que la obra ha sido subida a la nube al menos una vez
       if (!comic.supabaseId) {
         appAlert(I18n.t('mc_notInCloudShare'));
@@ -1599,6 +1666,9 @@ async function _mcOpenWorkForEdit(id) {
   // contador: su red de seguridad (utils.js, _cxLoadOverlayArmSafety) solo da la carga por colgada tras 25 s SIN
   // progreso; antes se agotaba durante aperturas lentas pero sanas (móvil con obra pesada y descarga lenta).
   const _pk = () => { if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); };
+  // v42.26: si la identidad local se acaba de recuperar al arrancar, esperar a que termine de reasignar las obras de invitado
+  // (su archivo pesado cambia de carpeta OPFS): abrir una obra antes de eso la leería de la carpeta equivocada.
+  try { if (window._authAdoptPromise) await window._authAdoptPromise; } catch (_e) {}
   const _comicMeta = WorkStore.getById(id);
   if (!_comicMeta || !_mcOwns(_comicMeta)) {
     window._mcEditLock = false;
@@ -1646,8 +1716,24 @@ async function _mcOpenWorkForEdit(id) {
   const _hasLocalVersion = !!(comicToEdit.editorData?.pages?.length);
   let _cloudRow = null;         // fila `works` de la nube (null si la obra no existe allí)
   let _cloudCheckFailed = null; // Error si NO se ha podido consultar la nube
-  if (comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
+  // v42.26: con la identidad local (sin sesión de nube) no hay nube que consultar: se abre lo que hay en el dispositivo sin
+  // esperar un tiempo agotado ni preguntar cada vez («la versión local puede no estar actualizada»): ya se sabe, y la persona
+  // lo ve en el aviso de «Mis creaciones» y en la cabecera (📴).
+  const _mcOfflineId = !!(typeof Auth !== 'undefined' && Auth.currentUser?.()?.offline);
+  if (comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined' && _mcOfflineId) {
+    _cloudCheckFailed = new Error('Sin sesión de nube (identidad local)');
+  } else if (comicToEdit.supabaseId && typeof SupabaseClient !== 'undefined') {
     if (typeof _cxLoadOverlayUpdate === 'function') _cxLoadOverlayUpdate(I18n.t('mc_checkingCloud'));
+    // v42.27: el sondeo ligero de la biblioteca (ver _mcResolveBiblioteca) sale YA, a la vez que esta comprobación y que la descarga de
+    // hojas si hace falta: así no añade ni un viaje de red de espera cuando llegue el momento de decidir sobre la biblioteca.
+    try {
+      const _pu = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
+      if (_pu && _pu.id && typeof SupabaseClient.bibProbe === 'function') {
+        const _pp = SupabaseClient.bibProbe(_pu.id, comicToEdit.supabaseId);
+        _pp.catch(() => {});
+        window._mcBibProbe = { comicId: comicToEdit.id, sbId: comicToEdit.supabaseId, at: Date.now(), p: _pp };
+      }
+    } catch (_e) { window._mcBibProbe = null; }
     try {
       // fetchWorksByIds refresca el token y lee con cache:'no-store'. El tope
       // de 12 s cubre también el refresco, que no tiene tiempo límite propio.
@@ -1740,15 +1826,21 @@ async function _mcOpenWorkForEdit(id) {
       else appAlert(I18n.t('mc_cloudUnreachableNoLocal'));
       return;
     }
-    // El contador bloqueante (z-index mayor) taparía el diálogo: ocultarlo.
-    if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
-    const _openAnyway = await new Promise(res => {
-      appConfirm(I18n.t('mc_cloudUnreachableLocal'), () => res(true),
-                 I18n.t('mc_cloudUnreachableYes'), () => res(false));
-    });
-    if (!_openAnyway) { window._mcEditLock = false; return; }
-    window._mcLastEditDecision.openedLocalUnverified = true;
-    if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
+    if (_mcOfflineId) {
+      // v42.26: identidad local → se abre lo del dispositivo sin preguntar (ver arriba)
+      window._mcLastEditDecision.openedLocalUnverified = true;
+      window._mcLastEditDecision.offlineIdentity = true;
+    } else {
+      // El contador bloqueante (z-index mayor) taparía el diálogo: ocultarlo.
+      if (typeof _cxLoadOverlayHide === 'function') _cxLoadOverlayHide();
+      const _openAnyway = await new Promise(res => {
+        appConfirm(I18n.t('mc_cloudUnreachableLocal'), () => res(true),
+                   I18n.t('mc_cloudUnreachableYes'), () => res(false));
+      });
+      if (!_openAnyway) { window._mcEditLock = false; return; }
+      window._mcLastEditDecision.openedLocalUnverified = true;
+      if (typeof _cxLoadOverlayShow === 'function') _cxLoadOverlayShow(I18n.t('mc_openingWork'));
+    }
   }
 
   if (comicToEdit && _needsDownload) {
@@ -2137,7 +2229,7 @@ function MyWorksView_destroy() {
 async function _mcCloudLoad() {
   if (typeof SupabaseClient === 'undefined') { _mcToast(I18n.t('mc_noServerConn')); return; }
   const user = Auth.currentUser();
-  if (!user) { _mcToast(I18n.t('mc_loginToLoadCloud')); return; }
+  if (!user || user.offline) { _mcToast(I18n.t('mc_loginToLoadCloud')); return; }   // v42.26: la identidad local no tiene sesión de nube
 
   const btn = document.getElementById('mcCloudLoadBtn');
   if (btn) { btn.textContent = '⏳ ' + I18n.t('admin_loading'); btn.disabled = true; }
@@ -2153,7 +2245,9 @@ async function _mcCloudLoad() {
     const _wr = await fetch(`${_MC_BASE}/works?author_name=eq.${username}&order=updated_at.desc&select=*,panel_count`,
       { headers: _authHdrs, cache: 'no-store' });
     if (!_wr.ok) throw new Error('works: ' + _wr.status);
-    const works = await _wr.json();
+    const _wrTxt = await _wr.text();
+    try { if (window.EgressLedger) window.EgressLedger.note(_wr.url, _wrTxt.length, 'app'); } catch (_e) {} // v42.27: libro de egress
+    const works = JSON.parse(_wrTxt);
 
     if (!Array.isArray(works) || !works.length) {
       _mcToast(I18n.t('mc_noCloudWorks'));
@@ -2318,6 +2412,15 @@ async function _mcRunDiag() {
   // 3. Usuario y supabaseId de obras locales
   const user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
   L(user ? ok('Usuario: ' + user.username + ' (' + user.id.slice(0,8) + '...)') : err('Sin usuario'));
+  // v42.26: estado de la sesión (identidad local sin nube / token / refresh / cierre voluntario) — para diagnosticar «no entra»
+  try {
+    const _s = JSON.parse(localStorage.getItem('cs_session') || 'null');
+    const _tk = _s && _s.token ? (_mcJwtExpired(_s.token) ? 'caducado' : 'válido') : 'ninguno';
+    L('Sesión: ' + (_s ? (_s.offline ? 'IDENTIDAD LOCAL (sin sesión de nube)' : 'de nube') : 'ninguna') + ' · token=' + _tk
+      + ' · refresh=' + (localStorage.getItem('cs_refresh') ? 'sí' : 'no') + ' · cierre voluntario=' + (localStorage.getItem('cs_loggedout') === '1' ? 'sí' : 'no'));
+    const _dv = (typeof Auth !== 'undefined' && Auth.deviceIdentity) ? Auth.deviceIdentity() : null;
+    L('Obras de cuenta en el dispositivo: ' + (_dv ? (_dv.count + ' de ' + _dv.username + ' (' + _dv.id.slice(0,8) + '...)') : 'ninguna'));
+  } catch (_e) {}
 
   // 4. Biblioteca local por obra
   const comics = WorkStore.getAll().filter(c => c.supabaseId);
@@ -2466,6 +2569,81 @@ async function _mcRunDiag() {
     document.body.appendChild(p);
   }
   document.getElementById('_mcDiagTa').value = lines.join('\n');
+}
+
+// ── INFORME DE CONSUMO DE DATOS (v42.27) ──────────────────────────────────────────────────────────────
+// El 28-oct-2026 Supabase restringió el proyecto al agotar los 5 GB de egress del mes y no había forma de saber qué lo consumía.
+// EgressLedger (supabase-client.js; el lector anota en el mismo libro) apunta en ESTE dispositivo, por día, lo que se ha bajado de
+// Supabase y de R2, por tipo de petición y según lo pidiera la aplicación o el lector. Aquí solo se LEE: no hace ninguna petición.
+// Vista de solo lectura al pie de «Mis obras» (no es el 🔍 de diagnóstico, que sigue oculto).
+function _mcEgressKindName(k) {
+  k = String(k);
+  if (k.indexOf('rpc/') === 0) return I18n.t('mc_egK_rpc') + ' (' + k.slice(4) + ')';
+  const key = 'mc_egK_' + k, v = I18n.t(key);
+  return v === key ? k : v;
+}
+// Últimos 7 días con datos (los más recientes primero): [{ day, today, supa, supaN, r2, app, rd, kinds: [{ k, n, b }] }]
+function _mcEgressData() {
+  const L = window.EgressLedger;
+  if (!L || typeof L.days !== 'function') return [];
+  const t = new Date(), pad = n => (n < 10 ? '0' : '') + n;
+  const todayKey = t.getFullYear() + '-' + pad(t.getMonth() + 1) + '-' + pad(t.getDate());
+  return L.days().slice(0, 7).map(d => ({
+    day: d.day, today: d.day === todayKey, supa: d.supa, supaN: d.supaN, r2: d.r2, app: d.src.app || 0, rd: d.src.rd || 0,
+    kinds: Object.keys(d.kinds).filter(k => L.isSupabase(k)).map(k => ({ k, n: d.kinds[k][0], b: d.kinds[k][1] })).sort((a, b) => b.b - a.b).slice(0, 4),
+  }));
+}
+function _mcEgressText(rows) {
+  const fmt = window.EgressLedger.fmt, out = [I18n.t('mc_egTitle')];
+  if (!rows.length) { out.push(I18n.t('mc_egEmpty')); return out.join('\n'); }
+  let ts = 0, tr = 0;
+  rows.forEach(r => {
+    ts += r.supa; tr += r.r2;
+    out.push('', r.day + (r.today ? ' (' + I18n.t('mc_egToday') + ')' : ''));
+    out.push('  ' + I18n.t('mc_egSupa') + ': ' + fmt(r.supa) + ' · ' + I18n.t(r.supaN === 1 ? 'mc_egReq1' : 'mc_egReq', { n: r.supaN }) + '   ' + I18n.t('mc_egR2') + ': ' + fmt(r.r2));
+    if (r.kinds.length) out.push('  ' + r.kinds.map(x => _mcEgressKindName(x.k) + ' ' + fmt(x.b) + (r.supa ? ' (' + Math.round(100 * x.b / r.supa) + '%)' : '')).join(' · '));
+    out.push('  ' + I18n.t('mc_egApp') + ' ' + fmt(r.app) + ' · ' + I18n.t('mc_egReader') + ' ' + fmt(r.rd));
+  });
+  out.push('', I18n.t('mc_egTotal') + ': ' + I18n.t('mc_egSupa') + ' ' + fmt(ts) + ' · ' + I18n.t('mc_egR2') + ' ' + fmt(tr));
+  return out.join('\n');
+}
+async function _mcEgressCopy(txt) {
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(txt); return true; } } catch (_) {}
+  try { const ta = document.createElement('textarea'); ta.value = txt; ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return !!ok; } catch (_) { return false; }
+}
+function _mcShowEgress() {
+  try { document.getElementById('mcEgressOv')?.remove(); } catch (_) {}
+  if (!window.EgressLedger) return;
+  const fmt = window.EgressLedger.fmt, rows = _mcEgressData(), txt = _mcEgressText(rows);
+  let ts = 0, tr = 0;
+  const body = rows.length ? rows.map(r => {
+    ts += r.supa; tr += r.r2;
+    return '<div style="border-top:1px solid #e5e5e5;padding:9px 0">'
+      + '<div style="font-weight:700;font-size:.88rem;color:#222">' + escHtml(r.day) + (r.today ? ' <span style="font-weight:500;color:#888">(' + I18n.t('mc_egToday') + ')</span>' : '') + '</div>'
+      + '<div style="font-size:.84rem;color:#333;margin-top:3px"><b>' + I18n.t('mc_egSupa') + '</b> ' + fmt(r.supa) + ' <span style="color:#888">· ' + I18n.t(r.supaN === 1 ? 'mc_egReq1' : 'mc_egReq', { n: r.supaN }) + '</span>'
+      + ' &nbsp; <b>' + I18n.t('mc_egR2') + '</b> ' + fmt(r.r2) + '</div>'
+      + (r.kinds.length ? '<div style="font-size:.78rem;color:#555;margin-top:3px">' + r.kinds.map(x => escHtml(_mcEgressKindName(x.k)) + ' <b>' + fmt(x.b) + '</b>' + (r.supa ? ' (' + Math.round(100 * x.b / r.supa) + '%)' : '')).join(' · ') + '</div>' : '')
+      + '<div style="font-size:.76rem;color:#888;margin-top:2px">' + I18n.t('mc_egApp') + ' ' + fmt(r.app) + ' · ' + I18n.t('mc_egReader') + ' ' + fmt(r.rd) + '</div>'
+      + '</div>';
+  }).join('') + '<div style="border-top:2px solid #ccc;padding:9px 0 0;font-size:.84rem;color:#222"><b>' + I18n.t('mc_egTotal') + '</b>: ' + I18n.t('mc_egSupa') + ' ' + fmt(ts) + ' · ' + I18n.t('mc_egR2') + ' ' + fmt(tr) + '</div>'
+    : '<div style="padding:14px 0;color:#666;font-size:.88rem">' + I18n.t('mc_egEmpty') + '</div>';
+  const ov = document.createElement('div');
+  ov.id = 'mcEgressOv';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  ov.innerHTML = '<div style="background:#fff;border-radius:16px;padding:18px 18px 14px;max-width:440px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.28);font-family:sans-serif">'
+    + '<div style="font-weight:700;font-size:1.02rem;color:#222;margin-bottom:6px">' + I18n.t('mc_egTitle') + '</div>'
+    + '<div style="font-size:.76rem;color:#777;line-height:1.4;margin-bottom:8px">' + I18n.t('mc_egIntro') + '</div>'
+    + '<div style="overflow:auto;flex:1;min-height:0">' + body + '</div>'
+    + '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">'
+    + (rows.length ? '<button type="button" id="mcEgCopy" style="padding:8px 16px;border-radius:8px;border:1.5px solid #ccc;background:#f5f5f5;font-size:.88rem;cursor:pointer;font-weight:500">' + I18n.t('mc_egCopy') + '</button>' : '')
+    + '<button type="button" id="mcEgClose" style="padding:8px 18px;border-radius:8px;border:none;background:#222;color:#fff;font-size:.88rem;cursor:pointer;font-weight:600">' + I18n.t('mc_egClose') + '</button>'
+    + '</div></div>';
+  document.body.appendChild(ov);
+  const close = () => { try { ov.remove(); } catch (_) {} };
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  document.getElementById('mcEgClose').onclick = close;
+  const cp = document.getElementById('mcEgCopy');
+  if (cp) cp.onclick = async () => { const ok = await _mcEgressCopy(txt); if (ok) { cp.textContent = I18n.t('mc_egCopied'); setTimeout(() => { try { cp.textContent = I18n.t('mc_egCopy'); } catch (_) {} }, 1800); } };
 }
 
 // ── Overlay de guardado para envío a revisión ──────────────────────────────

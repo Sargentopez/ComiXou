@@ -32889,7 +32889,10 @@ async function _edCloudSaveInner() {
   // (todas las hojas quedan «limpias», así que no serializa nada). Se pierde solo que una obra
   // demasiado grande ya no se rechaza ANTES de guardarla en el dispositivo: se guarda (que es lo que
   // se quiere) y se rechaza solo la subida.
-  if (!Auth?.currentUser?.()) {
+  // v42.26: hace falta sesión de NUBE. La identidad local sin conexión (currentUser().offline, sin token) edita y guarda en el
+  // dispositivo pero no puede subir: se le ofrece iniciar sesión (y al volver se retoma la subida pendiente, ver auth-pages doLogin).
+  const _edCloudUser = Auth?.currentUser?.();
+  if (!_edCloudUser || _edCloudUser.offline) {
     // Sin sesión: ofrecer login en lugar de rechazar.
     // v38.27 — unificado con edConfirm() (modal propio, usado en el resto
     // del proyecto) en vez del confirm() nativo, que rompe la pantalla
@@ -33295,6 +33298,12 @@ async function _edCloudSaveInner() {
           await SupabaseClient.bibSync(user.id, _bib, comic.supabaseId);
           // Confirmar la huella SOLO tras éxito — igual que con las páginas
           try { localStorage.setItem(_bibHashKey, _bibHashNow); } catch(_) {}
+          // v42.27: sello de la biblioteca de la nube tal como ha quedado tras subirla (sondeo ligero, sin esperar: no frena el guardado).
+          // El próximo «Editar» lo compara con el sondeo de entonces y, si coincide, no baja la biblioteca (ver _mcResolveBiblioteca).
+          try {
+            if (typeof SupabaseClient.bibProbe === 'function') SupabaseClient.bibProbe(user.id, comic.supabaseId)
+              .then(pr => SupabaseClient.bibStampSet(user.id, comic.supabaseId, pr)).catch(() => {});
+          } catch(_) {}
           // Éxito: limpiar cualquier error anterior para que el diagnóstico
           // no siga mostrando un fallo ya resuelto.
           window._edLastBibSyncError = null;
@@ -42612,7 +42621,8 @@ async function _bibInitIdb(supabaseWorkId) {
             { id: '__anim__', name: I18n.t('bib_animFolder'), items: [] }
           ]};
           const _user = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-          if (_user && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
+          // v42.26 — identidad local sin sesión de nube (user.offline): no hay nada que pedir a la nube (sin token solo respondería la clave anónima)
+          if (_user && !_user.offline && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
             SupabaseClient.bibDownload(_user.id, supabaseWorkId).then(downloaded => {
               if (downloaded && Array.isArray(downloaded.folders) &&
                   downloaded.folders.some(f => f.items && f.items.length > 0)) {
@@ -42646,7 +42656,7 @@ async function _bibInitIdb(supabaseWorkId) {
     ]};
     // Intentar cargar de Supabase en memoria
     const _user3 = (typeof Auth !== 'undefined') ? Auth.currentUser?.() : null;
-    if (_user3 && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {
+    if (_user3 && !_user3.offline && typeof SupabaseClient !== 'undefined' && supabaseWorkId) {   // v42.26: identidad local → sin consulta a la nube
       SupabaseClient.bibDownload(_user3.id, supabaseWorkId).then(downloaded => {
         if (downloaded && Array.isArray(downloaded.folders) &&
             downloaded.folders.some(f => f.items && f.items.length > 0)) {
@@ -53956,7 +53966,8 @@ async function _edRunDiag() {
         L('    local: ' + _b.localItems + ' item(s), _localModifiedAt=' + (_b.localModifiedAt ? new Date(_b.localModifiedAt).toISOString() : '0 (nunca editada localmente / dato legado)'));
         L('    nube:  ' + _b.cloudItems + ' item(s), últ. modificación=' + (_b.cloudModifiedAt ? new Date(_b.cloudModifiedAt).toISOString() : '0 (nube vacía)'));
       }
-      if (_b.action === 'kept_local_newer') L('  ✓ Local es más reciente que la nube — se conservó tal cual (correcto)');
+      if (_b.action === 'kept_local_newer') L('  ✓ Local es más reciente que la nube — se conservó tal cual (correcto)' + (_b.probe ? ' · decidido con el sondeo ligero (sin bajar la biblioteca)' : ''));
+      else if (_b.action === 'kept_local_cloud_unchanged') L('  ✓ La nube no ha cambiado desde la última sincronización de este dispositivo (mismo sello: ' + _b.cloudItems + ' objeto(s), última modificación ' + (_b.cloudModifiedAt ? new Date(_b.cloudModifiedAt).toISOString() : '?') + ') — se conservó la copia local y NO se bajó la biblioteca (v42.27)');
       else if (_b.action === 'overwritten_from_cloud') L('  ⚠️ La nube era igual o más reciente — se sobrescribió lo local con la nube' +
         (_b.hashNoted ? ' · huella anotada al abrir como ya sincronizada: ' + _b.hash
           : (_b.orientMerged ? ' · huella NO anotada a propósito: se conservó la orientación local de ' + _b.orientMerged + ' animación(es) que la nube aún no tenía y el siguiente guardado la subirá'

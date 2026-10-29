@@ -1,0 +1,69 @@
+name: Restaurar una copia de seguridad
+
+# SOLO se ejecuta a mano (Actions → «Restaurar una copia de seguridad» → Run workflow). Restaura una copia del bucket de R2 en el
+# proyecto de Supabase cuya URI está en el secreto RESTORE_DB_URL. Ese proyecto debe estar NUEVO y VACÍO: si no lo está, el guion
+# se niega y no toca nada. Guía: backup/LEEME_BACKUP.md (apartado «Restaurar»)
+run-name: Restaurar ${{ inputs.copia }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      copia:
+        description: 'Nombre de la copia (p. ej. comxow-db-20261101T031700Z.tar.gpg) o «latest» para la más reciente'
+        required: true
+        default: latest
+      confirmar:
+        description: 'Escribe RESTAURAR para confirmar'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-restore
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: Restaurar en la base de datos de RESTORE_DB_URL
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Comprobar los datos introducidos
+        env:
+          CONFIRMAR: ${{ inputs.confirmar }}
+          COPIA: ${{ inputs.copia }}
+          RESTORE_DB_URL: ${{ secrets.RESTORE_DB_URL }}
+        run: |
+          [ "$CONFIRMAR" = "RESTAURAR" ] || { echo "::error::Para restaurar hay que escribir RESTAURAR (en mayúsculas) en el campo «confirmar»."; exit 1; }
+          printf '%s' "$COPIA" | grep -Eq '^(latest|comxow-db-[0-9]{8}T[0-9]{6}Z\.tar(\.gpg)?)$' || { echo "::error::El nombre de la copia no es válido: usa «latest» o un nombre como comxow-db-20261101T031700Z.tar.gpg"; exit 1; }
+          [ -n "$RESTORE_DB_URL" ] || { echo "::error::Falta el secreto RESTORE_DB_URL (la URI del «Session pooler» del proyecto de Supabase NUEVO donde restaurar)."; exit 1; }
+
+      - name: Descargar los guiones del repositorio
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: backup
+          persist-credentials: false
+
+      - name: Instalar PostgreSQL de la versión del proyecto de destino
+        env:
+          SUPABASE_DB_URL: ${{ secrets.RESTORE_DB_URL }}
+        run: bash backup/install-pg-client.sh --detect
+
+      - name: Descargar la copia de R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BACKUP_BUCKET: ${{ secrets.R2_BACKUP_BUCKET }}
+          R2_JURISDICTION: ${{ vars.R2_JURISDICTION }}
+          COPIA: ${{ inputs.copia }}
+        run: |
+          f="$(bash backup/download.sh "$COPIA" "$RUNNER_TEMP/copia")"
+          echo "COPIA_ARCHIVO=$f" >> "$GITHUB_ENV"
+
+      - name: Restaurar
+        env:
+          RESTORE_DB_URL: ${{ secrets.RESTORE_DB_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: bash backup/restore.sh --yes --bundle "$COPIA_ARCHIVO"

@@ -75,15 +75,19 @@ const Header = (() => {
       var adminLink = user.role === 'admin'
         ? '<a href="#admin" class="dropdown-item admin-item" data-route="admin">' + T('adminPanel') + '</a>'
         : '';
+      // v42.26: identidad local sin sesión de nube (ver auth.js): se ve la cuenta, marcada con 📴, y se ofrece iniciar sesión;
+      // «Cambiar contraseña» necesita sesión de nube, así que no se ofrece.
+      var offline = !!user.offline;
       userBlock = '<div class="dropdown">'
-        + '<button class="home-user-link" id="avatarBtn">'
+        + '<button class="home-user-link" id="avatarBtn"' + (offline ? ' title="' + escHtml(T('header_offlineTitle')) + '"' : '') + '>'
         + (user.role === 'admin' ? '⚙️ ' : '')
-        + escHtml(user.username) + ' ▾</button>'
+        + escHtml(user.username) + (offline ? ' 📴' : '') + ' ▾</button>'
         + '<div class="dropdown-menu" id="avatarMenu">'
         + '<a href="#editor" class="dropdown-item" data-route="my-works">' + T('myWorks') + '</a>'
+        + (offline ? '<a href="#login" class="dropdown-item" data-route="login">🔑 ' + T('login') + '</a>' : '')
         + adminLink
         + '<div class="dropdown-divider"></div>'
-        + '<a href="#" class="dropdown-item" id="avatarChangePassword">' + T('changePassword') + '</a>'
+        + (offline ? '' : '<a href="#" class="dropdown-item" id="avatarChangePassword">' + T('changePassword') + '</a>')
         + '<a href="#" class="dropdown-item" id="logoutBtn">' + T('logout') + '</a>'
         + '</div></div>';
     } else {

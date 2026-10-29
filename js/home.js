@@ -218,6 +218,10 @@ function HomeView_init() {
   // golpe, así que se deja para cuando vuelva a "Novedades" o reabra la app.
   _homeRefreshTimer = setInterval(() => {
     if (!document.getElementById('worksGrid')) { _homeStopRefresh(); return; }
+    // v42.27 (egress): con la app oculta (otra app delante, pantalla apagada) no se refresca: nadie lo va a ver, y una portada abierta
+    // todo el día pedía la lista a Supabase cada 5 minutos sin que nadie la mirase. Al volver al foco, _homeVisibilityFn la renueva
+    // si ha pasado el tiempo (patrón «revalidar al volver al foco»).
+    if (document.hidden) return;
     if (_homeWorks.length <= _HOME_PAGE_SIZE) _homeStartLoading();
   }, _HOME_REFRESH_MS);
 

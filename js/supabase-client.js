@@ -201,6 +201,90 @@ async function _sbPoolMap(items, limit, worker) {
   return results;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// LIBRO DE EGRESS (v42.27)
+//
+// El 28-oct-2026 Supabase (plan Free) restringió el proyecto por superar la cuota de egress (6,06 GB de 5 GB). Hasta ahora el
+// reparto de ese gasto estaba solo DEDUCIDO leyendo el código; este libro lo MIDE: cada respuesta que se lee de la nube apunta
+// cuántos bytes trajo, por tipo de petición (panel_layers, biblioteca, works…) y por día, en el propio dispositivo
+// (localStorage, sin enviar nada a ningún sitio). Lo enseña el pie de «Mis obras» («Datos de la nube»). Cuenta lo que ve ESTE
+// dispositivo (la app y el lector comparten el libro); los bytes son los del texto recibido ya descomprimido, así que son una
+// cota por arriba de lo que cuenta Supabase en la red. Lo de R2 (animaciones, portadas) se apunta aparte: no es egress de Supabase.
+// Se escribe agrupando (cada ~4 s y al irse) y mezclando con lo que haya guardado, para que dos pestañas no se pisen.
+// ══════════════════════════════════════════════════════════════════════════
+const EgressLedger = (() => {
+  const KEY = 'cx_egress_v1', KEEP_DAYS = 21;
+  let pend = {}, timer = 0;
+  const pad = n => (n < 10 ? '0' : '') + n;
+  const dayOf = (t) => { const d = new Date(t || Date.now()); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+  function kindOf(url) {
+    const u = String(url || '');
+    const m = u.match(/supabase\.co\/rest\/v1\/([a-z_]+(?:\/[a-z_]+)?)/i);
+    if (m) return m[1].toLowerCase();
+    if (/supabase\.co\/storage\//i.test(u)) return 'storage';
+    if (/supabase\.co\/auth\//i.test(u)) return 'auth';
+    if (/supabase\.co/i.test(u)) return 'supabase';
+    if (/workers\.dev|r2\.dev|cloudflarestorage/i.test(u)) return 'r2';
+    return 'otros';
+  }
+  const isSupabase = k => k !== 'r2' && k !== 'otros';
+  function read() {
+    try { const o = JSON.parse(localStorage.getItem(KEY) || 'null'); if (o && typeof o === 'object' && o.d && typeof o.d === 'object') return o; } catch (_) {}
+    return { d: {} };
+  }
+  function flush() {
+    clearTimeout(timer); timer = 0;
+    const p = pend; pend = {};
+    if (!Object.keys(p).length) return;
+    try {
+      const o = read();
+      for (const day in p) {
+        const dst = o.d[day] || (o.d[day] = {});
+        for (const src in p[day]) {
+          const s = dst[src] || (dst[src] = {});
+          for (const k in p[day][src]) { const a = s[k] || (s[k] = [0, 0]); a[0] += p[day][src][k][0]; a[1] += p[day][src][k][1]; }
+        }
+      }
+      const keep = Object.keys(o.d).sort().slice(-KEEP_DAYS);
+      for (const day in o.d) if (keep.indexOf(day) < 0) delete o.d[day];
+      localStorage.setItem(KEY, JSON.stringify(o));
+    } catch (_) {}
+  }
+  // src: 'app' (la aplicación) o 'rd' (el lector). bytes: tamaño del cuerpo recibido.
+  function note(url, bytes, src) {
+    try {
+      const b = +bytes; if (!(b >= 0)) return;
+      const day = dayOf(), s = src || 'app', k = kindOf(url);
+      const a = ((pend[day] || (pend[day] = {}))[s] || (pend[day][s] = {}))[k] || (pend[day][s][k] = [0, 0]);
+      a[0]++; a[1] += b;
+      if (!timer) timer = setTimeout(flush, 4000);
+    } catch (_) {}
+  }
+  const fmt = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : (b >= 1024 ? Math.round(b / 1024) + ' kB' : b + ' B');
+  // Resumen por día: { day, supa: bytes, supaN, r2: bytes, kinds: {kind: [n, bytes]}, src: {app: bytes, rd: bytes} } (días más recientes primero).
+  function days() {
+    flush();
+    const o = read(), out = [];
+    Object.keys(o.d).sort().reverse().forEach(day => {
+      const r = { day, supa: 0, supaN: 0, r2: 0, kinds: {}, src: {} };
+      for (const s in o.d[day]) for (const k in o.d[day][s]) {
+        const [n, b] = o.d[day][s][k];
+        const t = r.kinds[k] || (r.kinds[k] = [0, 0]); t[0] += n; t[1] += b;
+        if (isSupabase(k)) { r.supa += b; r.supaN += n; r.src[s] = (r.src[s] || 0) + b; } else if (k === 'r2') r.r2 += b;
+      }
+      out.push(r);
+    });
+    return out;
+  }
+  function reset() { pend = {}; clearTimeout(timer); timer = 0; try { localStorage.removeItem(KEY); } catch (_) {} }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+  }
+  return { note, flush, days, reset, fmt, kindOf, isSupabase };
+})();
+if (typeof window !== 'undefined') window.EgressLedger = EgressLedger;
+
 // ── Progreso real de descarga para el contador bloqueante (v41.69) ──────────
 // El contador de «Abriendo obra…» (utils.js, _cxLoadOverlay*) da la carga por colgada tras 25 s SIN progreso. Una
 // descarga lenta pero constante no es un cuelgue: mientras el contador está en pantalla, los cuerpos de respuesta se
@@ -224,17 +308,27 @@ async function _sbDlChunks(res) {
   return chunks;
 }
 async function _sbResText(res) {
-  if (!_sbDlWatched(res)) return res.text();
-  const chunks = await _sbDlChunks(res);
-  const dec = new TextDecoder('utf-8'); // quita el BOM inicial igual que Response.text()
-  let out = '';
-  for (const c of chunks) out += dec.decode(c, { stream: true });
-  return out + dec.decode();
+  let out;
+  if (!_sbDlWatched(res)) out = await res.text();
+  else {
+    const chunks = await _sbDlChunks(res);
+    const dec = new TextDecoder('utf-8'); // quita el BOM inicial igual que Response.text()
+    out = '';
+    for (const c of chunks) out += dec.decode(c, { stream: true });
+    out += dec.decode();
+  }
+  EgressLedger.note(res.url, out.length, 'app'); // v42.27: libro de egress
+  return out;
 }
 async function _sbResBlob(res) {
-  if (!_sbDlWatched(res)) return res.blob();
-  const chunks = await _sbDlChunks(res);
-  return new Blob(chunks, { type: res.headers.get('content-type') || '' });
+  let blob;
+  if (!_sbDlWatched(res)) blob = await res.blob();
+  else {
+    const chunks = await _sbDlChunks(res);
+    blob = new Blob(chunks, { type: res.headers.get('content-type') || '' });
+  }
+  EgressLedger.note(res.url, blob.size, 'app'); // v42.27: libro de egress
+  return blob;
 }
 
 const SupabaseClient = (() => {
@@ -1057,6 +1151,55 @@ const SupabaseClient = (() => {
         .map(r => r.layer_type + '@' + r.layer_order + ':' + Math.round((r.layer_data ? r.layer_data.length : 0) / 1024) + 'KB' +
           ((r.gif_url || r.anim_url) ? ':B' : (_cloudOrders ? (_cloudOrders.has(r.layer_order) ? ':C' : ':N') : '')));
     }
+    return panelId; // v42.27: para anotar el resumen de navegación de la hoja (ver _syncNav)
+  }
+
+  // ── RESUMEN DE NAVEGACIÓN PRECALCULADO (v42.27) ───────────────────────────────────────────────
+  // El lector necesita saber de TODAS las hojas cuáles tienen botones «ir a hoja» y a dónde saltan (las reglas de navegación
+  // dirigida). Hasta ahora lo averiguaba bajando el layer_data de cada hoja lejana: en el plan Free de Supabase eso es egress
+  // (medio mundo de megas solo para mirar si hay un botón). Ahora cada hoja que se sube lleva en la columna panels.nav
+  // (jsonb) ese resumen, { btn, targets } con la misma forma que calcula el lector (_plNavOf), y el lector, si lo encuentra,
+  // no escanea esa hoja. Se anota DESPUÉS de escribir las capas de la hoja:
+  //   · un disparador de la base pone panels.nav a NULL cuando se escribe cualquier capa de la hoja (así un cliente antiguo
+  //     que no sepa de esto no deja un resumen obsoleto) y aquí se vuelve a poner el resumen bueno;
+  //   · si falla (red) o la columna aún no existe, la hoja se queda con nav = NULL y el lector la escanea como siempre: nunca
+  //     puede romper un guardado. Un 4xx marca _navColOk = false y no se vuelve a intentar en esta sesión.
+  // Agrupa por valor: casi todas las hojas son «sin botones» → UNA petición PATCH para todas (id=in.(…)).
+  // Función pura sobre las capas del editor (las mismas que _buildLayerRow serializa): nada que ver con la red.
+  function _navOfEdLayers(layers) {
+    let btn = false; const targets = [];
+    for (const l of (layers || [])) {
+      const a = l && l._buttonAction;
+      if (a && a.type === 'page') {
+        if (!Number.isInteger(a.pageIdx)) return null; // dato raro: sin resumen, el lector escanea la hoja
+        btn = true; if (targets.indexOf(a.pageIdx) < 0) targets.push(a.pageIdx);
+      }
+    }
+    return { btn, targets };
+  }
+  let _navColOk = null; // null = aún sin probar · true = la columna existe · false = no existe (no se vuelve a intentar)
+  async function _syncNav(items) {
+    if (_navColOk === false || !items || !items.length) return;
+    try {
+      const groups = new Map();
+      for (const it of items) {
+        if (!it || !it.id || !it.nav) continue;
+        const k = JSON.stringify(it.nav);
+        let g = groups.get(k); if (!g) { g = { nav: it.nav, ids: [] }; groups.set(k, g); }
+        g.ids.push(it.id);
+      }
+      const jobs = [];
+      for (const g of groups.values()) {
+        for (let a = 0; a < g.ids.length; a += 40) jobs.push(_patch('panels', `id=in.(${g.ids.slice(a, a + 40).join(',')})`, { nav: g.nav }));
+      }
+      if (!jobs.length) return;
+      _recMark('nav:' + jobs.length);
+      await Promise.all(jobs);
+      _navColOk = true;
+    } catch (e) {
+      if (/PATCH panels: 4\d\d/.test(String((e && e.message) || ''))) _navColOk = false;
+      console.warn('[nube] resumen de navegación no guardado:', (e && e.message) || e);
+    }
   }
 
   // Limpia del bucket los gif/anim de las filas panel_layers antiguas de un
@@ -1173,14 +1316,17 @@ const SupabaseClient = (() => {
       // adelante a lo que de verdad ha llegado a Supabase.
       const _totalPages = dirtyPageIndices.length;
       let _donePages = 0;
+      const _navItems = []; // v42.27: resumen de navegación de las hojas subidas (ver _syncNav)
       await _sbPoolMap(dirtyPageIndices, 3, async (i) => {
         const existingId = _panelIdByOrder[i];
         // v41.46: ya no hay un GET previo de las capas antiguas (_cleanupPanelFiles): _uploadOnePanel
         // las recibe en la respuesta del DELETE y borra del bucket solo lo que las filas nuevas no usan.
-        await _uploadOnePanel(comic, edPages, panels[i], i, existingId);
+        const _pid = await _uploadOnePanel(comic, edPages, panels[i], i, existingId);
+        if (_pid) _navItems.push({ id: _pid, nav: _navOfEdLayers(edPages[i] && edPages[i].layers) });
         _donePages++;
         if (typeof onProgress === 'function') { try { onProgress(_donePages, _totalPages); } catch(_) {} }
       });
+      await _syncNav(_navItems);
       if (_coverP) await _coverP;
       return;
     }
@@ -1221,11 +1367,14 @@ const SupabaseClient = (() => {
     // junto a _donePages más arriba.
     const _totalPagesFull = panels.length;
     let _donePagesFull = 0;
+    const _navItemsFull = []; // v42.27: resumen de navegación de todas las hojas (ver _syncNav)
     await _sbPoolMap(panels, 3, async (p, i) => {
-      await _uploadOnePanel(comic, edPages, p, i, null);
+      const _pid = await _uploadOnePanel(comic, edPages, p, i, null);
+      if (_pid) _navItemsFull.push({ id: _pid, nav: _navOfEdLayers(edPages[i] && edPages[i].layers) });
       _donePagesFull++;
       if (typeof onProgress === 'function') { try { onProgress(_donePagesFull, _totalPagesFull); } catch(_) {} }
     });
+    await _syncNav(_navItemsFull);
     if (_coverP) await _coverP;
   }
 
@@ -1432,8 +1581,10 @@ const SupabaseClient = (() => {
     let _projectPalette = null;
     try { const _pp = work.palette ? JSON.parse(work.palette) : null; if (Array.isArray(_pp)) _projectPalette = _pp; } catch(e) { _projectPalette = null; }
 
+    // v42.27: la lista de hojas YA NO trae la miniatura (data_url, 20-200 KB por hoja): solo sirve de reserva para una hoja sin capas
+    // legibles, y esas se piden aparte más abajo (una consulta para todas). «Editar» bajaba la miniatura de CADA hoja para nada.
     const _panelsRaw = await _get(
-      `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode,data_url`
+      `panels?work_id=eq.${supabaseId}&order=panel_order.asc&select=id,panel_order,orientation,text_mode`
     ) || [];
 
     // Defensa contra páginas duplicadas: si por cualquier motivo hay más de
@@ -1577,10 +1728,28 @@ const SupabaseClient = (() => {
     // por hoja, filas leídas / capas legibles / descartadas y si se usó la miniatura de reserva (una hoja sin
     // capas legibles se reconstruye con su miniatura JPEG como imagen — y un dibujo así sale difuso).
     const _dlTrace = { at: new Date().toISOString(), supabaseId: supabaseId, pages: [] };
+    const _layersByPage = panels.map((panel, pi) => {
+      const _n = (_layerRowsByPanel[pi] || []).length;
+      const _ls = _flatResults.slice(_cursor, _cursor + _n).filter(Boolean);
+      _cursor += _n;
+      return _ls;
+    });
+    // v42.27: miniatura de reserva SOLO de las hojas que se han quedado sin capas legibles (obras antiguas o filas dañadas). Si esa
+    // consulta falla se reintenta una vez y, si sigue fallando, la descarga FALLA (como la de las capas): nunca se abre una obra
+    // con una hoja en blanco que antes habría salido con su miniatura.
+    const _needThumbs = panels.filter((p, pi) => _layersByPage[pi].length === 0);
+    if (_needThumbs.length) {
+      const _tq = `panels?id=in.(${_needThumbs.map(p => p.id).join(',')})&select=id,data_url`;
+      let _th;
+      try { _th = await _get(_tq); }
+      catch (_e1) { await new Promise(r => setTimeout(r, 400)); _th = await _get(_tq); }
+      const _thMap = {};
+      (_th || []).forEach(r => { _thMap[r.id] = r.data_url; });
+      _needThumbs.forEach(p => { p.data_url = _thMap[p.id]; });
+    }
     const pages = panels.map((panel, pi) => {
       const _rowCount = (_layerRowsByPanel[pi] || []).length;
-      const layers = _flatResults.slice(_cursor, _cursor + _rowCount).filter(Boolean);
-      _cursor += _rowCount;
+      const layers = _layersByPage[pi];
       const _parsed = layers.length;
 
       // Fallback: si no hay panel_layers (obra antigua), usar data_url como ImageLayer
@@ -1618,6 +1787,36 @@ const SupabaseClient = (() => {
     };
   }
 
+  // ── MINIATURAS DE RESERVA (v42.27) ───────────────────────────────────────────────────────────────
+  // Una obra sin cover_url (guardada antes de que existiera la portada con el texto horneado) enseña la miniatura de su hoja 1
+  // (panels.data_url, de 20 a 200 KB). Cada recarga de la lista —la portada se renueva sola, «Mis obras» al entrar, el
+  // administrador— volvía a pedir esas miniaturas a Supabase aunque la obra no hubiera cambiado. Ahora se recuerdan en memoria
+  // (no en disco) por (obra, revisión updated_at): una obra editada cambia de revisión y se vuelve a pedir; la misma, no.
+  // Acotada a 12 miniaturas (unos pocos MB como mucho) y la más antigua sale primero: seguro para un móvil de gama baja.
+  const _thumbMem = new Map();   // 'id|updated_at' → data URL
+  const _THUMB_MEM_MAX = 12;
+  async function _fallbackThumbs(works) {
+    const out = {}, need = [];
+    for (const w of works) {
+      const k = w.id + '|' + (w.updated_at || '');
+      if (_thumbMem.has(k)) { const v = _thumbMem.get(k); _thumbMem.delete(k); _thumbMem.set(k, v); out[w.id] = v; }
+      else need.push(w);
+    }
+    if (need.length) {
+      const panels = await _get(`panels?work_id=in.(${need.map(w => w.id).join(',')})&panel_order=eq.0&select=work_id,data_url`);
+      const got = {};
+      (panels || []).forEach(p => { got[p.work_id] = p.data_url; });
+      for (const w of need) {
+        const v = got[w.id];
+        if (!v) continue;
+        out[w.id] = v;
+        _thumbMem.set(w.id + '|' + (w.updated_at || ''), v);
+        while (_thumbMem.size > _THUMB_MEM_MAX) _thumbMem.delete(_thumbMem.keys().next().value);
+      }
+    }
+    return out;
+  }
+
   // ── ADMIN: LISTAR OBRAS DESDE SUPABASE ──────────────────────
   // Devuelven obras en formato compatible con buildAdminRow del admin.
   // Fetch genérico de obras + thumbnail del primer panel (dos queries, sin join).
@@ -1631,15 +1830,10 @@ const SupabaseClient = (() => {
     // cover_url (con el texto horneado, ver edRenderPage(page,withText) en
     // editor.js) si existe — obras guardadas antes de este cambio no lo
     // tienen, el panel_order=0 (sin texto) sigue de respaldo para esas.
-    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
+    const _needFallback = works.filter(w => !w.cover_url);
     let thumbMap = {};
     if (_needFallback.length) {
-      try {
-        const panels = await _get(
-          `panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`
-        );
-        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
-      } catch(e) { /* sin thumbnails */ }
+      try { thumbMap = await _fallbackThumbs(_needFallback); } catch(e) { /* sin thumbnails */ }
     }
 
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
@@ -1695,15 +1889,10 @@ const SupabaseClient = (() => {
     );
     if (!works || !works.length) return { items: [], nextCursor: cursor, hasMore: false };
 
-    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
+    const _needFallback = works.filter(w => !w.cover_url);
     let thumbMap = {};
     if (_needFallback.length) {
-      try {
-        const panels = await _get(
-          `panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`
-        );
-        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
-      } catch(e) { /* sin thumbnails */ }
+      try { thumbMap = await _fallbackThumbs(_needFallback); } catch(e) { /* sin thumbnails */ }
     }
 
     const items = works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
@@ -1845,6 +2034,44 @@ const SupabaseClient = (() => {
     }
     // Red de seguridad: aunque el servidor devolviera de más, solo se entregan las de esta obra.
     return rows.filter(_mine);
+  }
+
+  // v42.27 — SONDEO LIGERO de la biblioteca de una obra en la nube: cuántas filas tiene y cuándo se tocó la más reciente (solo id y
+  // created_at, unos 60 bytes por objeto; sin layer_data ni miniaturas). Las mismas dos consultas filtradas que bibFetch. Sirve a
+  // «Editar» para decidir si hace falta bajar la biblioteca entera (ver _mcResolveBiblioteca en my-works.js): casi siempre no.
+  // Devuelve { items, modifiedAt (ms) } o lanza si la nube no responde.
+  async function bibProbe(authorId, workId) {
+    if (!authorId || !workId) return null;
+    if (window._authTryRefresh) await window._authTryRefresh();
+    const _q = async (extra) => {
+      const r = await fetch(`${BASE}/biblioteca?author_id=eq.${authorId}${extra}&select=id,created_at`, { headers: _hdrsUser(), cache: 'no-store' });
+      if (!r.ok) throw new Error(`bibProbe: ${r.status}`);
+      return JSON.parse(await _sbResText(r));
+    };
+    const [own, legacy] = await Promise.all([_q(`&folder_id=like.${workId}::*`), _q('&folder_id=in.(__root__,__anim__)')]);
+    const seen = new Set(); let n = 0, m = 0;
+    for (const r of own.concat(legacy)) {
+      if (!r || seen.has(r.id)) continue;
+      seen.add(r.id); n++;
+      const t = Date.parse(r.created_at) || 0;
+      if (t > m) m = t;
+    }
+    return { items: n, modifiedAt: m };
+  }
+
+  // v42.27 — SELLO de la biblioteca de la nube «tal como la dejó la última sincronización de ESTE dispositivo»: { m: fecha de la fila
+  // más reciente, n: nº de filas } (lo que devuelve bibProbe). Se anota al espejar la nube (Editar) y tras subir la biblioteca
+  // (guardar en la nube). Si al abrir una obra el sondeo da el MISMO sello, nadie ha tocado la biblioteca de la nube desde entonces y
+  // la copia local ya es la buena: no se baja nada (antes, cada «Editar» tras guardar volvía a bajar y reescribir la biblioteca entera,
+  // porque la subida cambia los created_at de la nube y parecía «más reciente»). Cualquier cambio en la nube —desde otro dispositivo,
+  // una fila nueva, una borrada— cambia la fecha máxima o el recuento y el sello deja de coincidir: entonces se actúa como siempre.
+  const _bibStampKey = (u, w) => 'cx_bib_cloud_stamp_' + u + '_' + w;
+  function bibStampGet(authorId, workId) {
+    try { const o = JSON.parse(localStorage.getItem(_bibStampKey(authorId, workId)) || 'null'); return (o && typeof o.m === 'number' && typeof o.n === 'number') ? o : null; }
+    catch (_) { return null; }
+  }
+  function bibStampSet(authorId, workId, probe) {
+    try { if (probe && authorId && workId) localStorage.setItem(_bibStampKey(authorId, workId), JSON.stringify({ m: probe.modifiedAt, n: probe.items })); } catch (_) {}
   }
 
   // Borra filas de la biblioteca DEVOLVIENDO (id, anim_url) de lo borrado, en la misma petición
@@ -2508,13 +2735,10 @@ continue;
     if(!works || !works.length) return [];
     // cover_url (con el texto horneado) si existe; respaldo al panel_order=0
     // (sin texto) solo para las obras que aún no lo tengan.
-    const _needFallback = works.filter(w => !w.cover_url).map(w => w.id);
+    const _needFallback = works.filter(w => !w.cover_url);
     let thumbMap = {};
     if (_needFallback.length) {
-      try {
-        const panels = await _get(`panels?work_id=in.(${_needFallback.join(',')})&panel_order=eq.0&select=work_id,data_url`);
-        (panels || []).forEach(p => { thumbMap[p.work_id] = p.data_url; });
-      } catch(_) {}
+      try { thumbMap = await _fallbackThumbs(_needFallback); } catch(_) {}
     }
     return works.map(w => _workToComic(w, w.published, w.cover_url || thumbMap[w.id] || ''));
   }
@@ -2544,5 +2768,5 @@ continue;
     return r.json();
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog };
 })();

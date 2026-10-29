@@ -49,10 +49,30 @@
      Supabase (v6.0 — el mecanismo FIXED_USERS se retiró tras confirmar
      que ambas funcionan con email/contraseña propios). Sin conexión,
      la app sigue siendo usable en modo invitado.
+
+   v42.26 — LOCAL PRIMERO («offline first»). Las obras guardadas en el dispositivo
+   son del dispositivo: no pueden depender de que la nube esté viva.
+   Caso real (oct 2026): Supabase restringió el proyecto por cuota (todas las
+   peticiones respondían 402); al intentar renovar el token, la app tomaba
+   cualquier respuesta no-OK por «sesión inválida» y BORRABA la sesión (y el
+   refresh token), y sin sesión «Mis creaciones» solo enseña obras de invitado:
+   las obras de la cuenta, intactas en el dispositivo, dejaron de verse y no se
+   podía volver a entrar porque el login también devolvía 402.
+   · Un error del SERVIDOR (402, 408, 429, 5xx, red caída, tiempo agotado) NO
+     cierra la sesión: solo la rechazo explícito del refresh token (400/401/403
+     con error de token) lo hace — mismo criterio que supabase-js y Firebase Auth.
+   · Si aun así no hay sesión (o ya se perdió con una versión anterior) y en el
+     dispositivo hay obras de una cuenta, se recupera una IDENTIDAD LOCAL
+     (`offline:true`, sin token): sirve para listar/editar/guardar en local
+     (carpeta OPFS e índice por userId, como siempre) pero NO cuenta como sesión
+     de nube (`isLogged()` es false). Al iniciar sesión de verdad la sustituye.
+   · Cerrar sesión a propósito (`cs_loggedout`) NO recupera nada solo: ahí manda
+     la decisión de la persona; «Mis creaciones» ofrece «Abrir sin conexión».
    ============================================================ */
 
 const Auth = (() => {
-  const KEY_SESSION = 'cs_session';
+  const KEY_SESSION   = 'cs_session';
+  const KEY_LOGGEDOUT = 'cs_loggedout';   // v42.26: '1' = la persona cerró sesión a propósito (no recuperar la identidad local sola)
   const SB_URL      = 'https://qqgsbyylaugsagbxsetc.supabase.co';
   const SB_KEY      = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
 
@@ -112,8 +132,93 @@ const Auth = (() => {
   }
 
   function getSession()    { return JSON.parse(localStorage.getItem(KEY_SESSION) || 'null'); }
-  function _saveSession(s) { localStorage.setItem(KEY_SESSION, JSON.stringify(s)); }
+  function _saveSession(s) {
+    localStorage.setItem(KEY_SESSION, JSON.stringify(s));
+    // Una sesión de verdad (no la identidad local sin conexión) anula la marca de «cerré sesión a propósito».
+    if (!s || !s.offline) { try { localStorage.removeItem(KEY_LOGGEDOUT); } catch (_) {} }
+  }
   function _clearSession() { localStorage.removeItem(KEY_SESSION); }
+
+  // ── v42.26 — ¿rechaza el servidor de forma DEFINITIVA la sesión? ───────────────────────────────────────────────
+  // Solo entonces se cierra la sesión. 402 (proyecto restringido por cuota), 408, 429, 5xx, red caída o tiempo agotado
+  // son «el servidor no puede atender AHORA», no «tu sesión ya no vale»: borrarla dejaba sin identidad —y sin ver sus
+  // obras locales— a quien justo en ese momento no podía volver a iniciar sesión. GoTrue responde a un refresh token
+  // inválido con 400 {error:'invalid_grant'|error_code:'refresh_token_not_found'|'refresh_token_already_used'…} y a una
+  // sesión revocada con 401/403 (session_not_found, bad_jwt…); un cuerpo que no sea ese error (HTML de un proxy o de un
+  // portal cautivo, JSON desconocido) NO es un rechazo.
+  function _isAuthRejection(status, body) {
+    if (status !== 400 && status !== 401 && status !== 403) return false;
+    let txt = '';
+    try {
+      txt = [body && body.error, body && body.error_code, body && body.code, body && body.msg,
+             body && body.message, body && body.error_description].join(' ').toLowerCase();
+    } catch (_) {}
+    return /refresh_token|invalid_grant|session_not_found|session_expired|bad_jwt|invalid.{0,12}(token|jwt)|jwt.{0,12}(expired|invalid)/.test(txt);
+  }
+
+  // ── v42.26 — OBRAS DEL DISPOSITIVO SIN SESIÓN ──────────────────────────────────────────────────────────────────
+  // El índice local (cs_comics) guarda el dueño de cada obra (userId + username). De él se deduce qué cuenta usa este
+  // dispositivo: la dueña de la obra guardada más recientemente (las obras de invitado, '_anon_', y los registros de
+  // obras que solo existen en la nube —sin datos aquí— no cuentan). Sin escribir nada.
+  const _UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  function deviceIdentity() {
+    try {
+      const list = JSON.parse(localStorage.getItem('cs_comics') || '[]');
+      if (!Array.isArray(list)) return null;
+      const by = new Map();
+      list.forEach(c => {
+        if (!c || c.cloudOnly === true || typeof c.userId !== 'string' || !_UUID_RE.test(c.userId)) return;
+        const t = Date.parse(c.updatedAt || c.createdAt || '') || 0;
+        let e = by.get(c.userId);
+        if (!e) { e = { id: c.userId, username: '', count: 0, t: -1 }; by.set(c.userId, e); }
+        e.count++;
+        if (t >= e.t) { e.t = t; e.username = c.username || c.author || e.username; }
+      });
+      let best = null;
+      by.forEach(e => { if (!best || e.t > best.t) best = e; });
+      return best ? { id: best.id, username: best.username || '—', count: best.count } : null;
+    } catch (_) { return null; }
+  }
+
+  // Identidad local: misma forma que una sesión (el resto de la app lee cs_session.id/username para el índice y la
+  // carpeta OPFS), pero sin token ni refresh token y marcada `offline`.
+  function _offlineSession(dev) {
+    return { id: dev.id, username: dev.username, email: '', role: 'user', token: null, offline: true };
+  }
+  // Las obras de invitado se reasignan a la cuenta igual que al iniciar sesión (ver _claimGuestWorks): si no, al
+  // activarse la identidad quedarían ocultas (la lista filtra por dueño) aunque sus datos estén intactos.
+  function _claimWhenReady(dev) {
+    const run = () => { window._authAdoptPromise = _claimGuestWorks(dev.id, dev.username).catch(() => {}); };
+    // storage.js (WorkStore) se carga DESPUÉS de este archivo: en el arranque se espera a que estén todos los scripts.
+    if (typeof WorkStore !== 'undefined' || document.readyState !== 'loading') run();
+    else document.addEventListener('DOMContentLoaded', run, { once: true });
+  }
+  // Recuperación automática: sin sesión, sin salida voluntaria y con obras de una cuenta en el dispositivo.
+  function _adoptDeviceIdentity() {
+    try {
+      if (localStorage.getItem(KEY_LOGGEDOUT) === '1') return null;
+      const cur = getSession();
+      if (cur) return cur;
+      const dev = deviceIdentity();
+      if (!dev) return null;
+      const s = _offlineSession(dev);
+      _saveSession(s);
+      _claimWhenReady(dev);
+      return s;
+    } catch (_) { return null; }
+  }
+  // La misma recuperación, pedida a mano («Abrir sin conexión» en Mis creaciones): también tras cerrar sesión a propósito.
+  async function useDeviceIdentity() {
+    try { localStorage.removeItem(KEY_LOGGEDOUT); } catch (_) {}
+    const cur = getSession();
+    if (cur) return cur;
+    const dev = deviceIdentity();
+    if (!dev) return null;
+    const s = _offlineSession(dev);
+    _saveSession(s);
+    try { await _claimGuestWorks(dev.id, dev.username); } catch (_) {}
+    return s;
+  }
 
   function _buildSession(id, username, email, role, token) {
     return { id, username, email, role: role || 'user', token: token || null };
@@ -174,13 +279,27 @@ const Auth = (() => {
 
   async function login(email, password) {
     const key = email.toLowerCase().trim();
+    // v42.26 — distinguir «contraseña incorrecta» de «el servidor no responde». Antes CUALQUIER fallo (sin red, cuota
+    // agotada 402, 5xx…) se decía «Usuario o contraseña incorrectos»: con Supabase restringido por cuota la persona
+    // creía haber olvidado su contraseña. Tope de 20 s: un servidor que no contesta no deja el botón en «…» para siempre.
+    let res = null, data = {};
+    const _ctl = new AbortController();
+    const _tm  = setTimeout(() => _ctl.abort(), 20000);
     try {
-      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+      res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
         method: 'POST',
         headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: key, password }),
+        signal: _ctl.signal,
       });
-      const data = await res.json();
+      data = await res.json().catch(() => ({}));
+    } catch (_) {
+      return { ok: false, err: 'errNoNetwork' };      // red caída o tiempo agotado
+    } finally { clearTimeout(_tm); }
+    if (!res.ok && (res.status === 402 || res.status === 408 || res.status === 429 || res.status >= 500)) {
+      return { ok: false, err: 'errServerDown' };     // el servidor no puede atender ahora: no es la contraseña
+    }
+    try {
       if (res.ok && data.access_token) {
         const profile  = await _fetchProfile(data.user.id, data.access_token);
         const role     = profile?.role || data.user.user_metadata?.role || 'user';
@@ -197,11 +316,11 @@ const Auth = (() => {
         await _claimGuestWorks(data.user.id, username);
         return { ok: true, user: session };
       }
-      const errMsg = (data.error_description || data.msg || '').toLowerCase();
-      if (errMsg.includes('invalid') || res.status === 400) {
-        return { ok: false, err: 'errUserNotFound' };
-      }
     } catch (_) {}
+    const errMsg = (data.error_description || data.msg || '').toLowerCase();
+    if (errMsg.includes('invalid') || res.status === 400) {
+      return { ok: false, err: 'errUserNotFound' };
+    }
 
     return { ok: false, err: 'errUserNotFound' };
   }
@@ -264,6 +383,8 @@ const Auth = (() => {
     }
     _clearSession();
     localStorage.removeItem('cs_refresh');
+    // v42.26: cerrar sesión es una decisión de la persona → no se recupera sola la identidad local (ver _adoptDeviceIdentity)
+    try { localStorage.setItem(KEY_LOGGEDOUT, '1'); } catch (_) {}
   }
 
   async function deleteAccount() {
@@ -271,6 +392,7 @@ const Auth = (() => {
     if (!user) return;
     _clearSession();
     localStorage.removeItem('cs_refresh');
+    try { localStorage.setItem(KEY_LOGGEDOUT, '1'); } catch (_) {}
   }
 
   async function changePassword(newPassword) {
@@ -411,6 +533,9 @@ const Auth = (() => {
     // Si no hay sesión, nada que hacer
     if(!session) return;
 
+    // v42.26: identidad local sin conexión (sin token ni refresh token): no hay nada que renovar
+    if(session.offline) return;
+
     // Si el token no ha caducado, no hace falta refrescar
     if(session.token && !_tokenExpired(session.token)) return;
 
@@ -418,16 +543,35 @@ const Auth = (() => {
     if(!refresh) {
       // Sin refresh token y token caducado → sesión inválida, limpiar
       _clearSession();
+      _adoptDeviceIdentity();   // v42.26: las obras locales de la cuenta siguen siendo accesibles (sin nube)
       if(typeof Header !== 'undefined') Header.refresh();
       return;
     }
     try {
-      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
-        method: 'POST',
-        headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refresh }),
-      });
-      if (!res.ok) { _clearSession(); localStorage.removeItem('cs_refresh'); if(typeof Header!=='undefined') Header.refresh(); return; }
+      // v42.26: tope de 15 s — un servidor que no contesta no debe dejar el arranque esperando (y esto NO cierra la sesión)
+      const _ctl = new AbortController();
+      const _tm  = setTimeout(() => _ctl.abort(), 15000);
+      let res;
+      try {
+        res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: { 'apikey': SB_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refresh }),
+          signal: _ctl.signal,
+        });
+      } finally { clearTimeout(_tm); }
+      if (!res.ok) {
+        // v42.26: la sesión solo se cierra si el servidor RECHAZA el refresh token (ver _isAuthRejection). Con el proyecto
+        // restringido por cuota (402), saturado (5xx) o limitando (429) se conserva: seguirá valiendo cuando vuelva.
+        let body = null;
+        try { body = await res.json(); } catch (_) {}
+        if (_isAuthRejection(res.status, body)) {
+          _clearSession(); localStorage.removeItem('cs_refresh');
+          _adoptDeviceIdentity();   // v42.26: sin sesión de nube, pero las obras locales de la cuenta siguen ahí
+          if(typeof Header!=='undefined') Header.refresh();
+        }
+        return;
+      }
       const data = await res.json();
       if (data.access_token) {
         const profile  = await _fetchProfile(data.user.id, data.access_token);
@@ -439,6 +583,7 @@ const Auth = (() => {
       } else {
         // Respuesta sin access_token → refresh inválido
         _clearSession(); localStorage.removeItem('cs_refresh');
+        _adoptDeviceIdentity();
         if(typeof Header !== 'undefined') Header.refresh();
       }
     } catch (_) {}
@@ -450,6 +595,10 @@ const Auth = (() => {
   // el token viejo y PostgREST respondía 401 «JWT expired» aunque los datos fueran públicos.
   // Ahora quien lee espera a esta promesa (ver refreshRole, window._authTryRefresh y _get de
   // supabase-client.js). _authStartupDone permite no esperar nada una vez terminada.
+  // v42.26 — sin sesión al arrancar (p. ej. la perdió una versión anterior cuando el servidor devolvió un error) pero con obras
+  // de una cuenta en el dispositivo: se recupera la identidad local ANTES del primer pintado (cabecera, «Mis creaciones»…).
+  if (!getSession()) _adoptDeviceIdentity();
+
   const _startupRefresh = _tryRefresh();
   window._authStartupRefresh = _startupRefresh.catch(() => {});
   _startupRefresh.finally(() => { window._authStartupDone = true; });
@@ -461,7 +610,7 @@ const Auth = (() => {
   // la sesión (degradación elegante en modo offline).
   async function _validateServerSession() {
     const session = getSession();
-    if (!session?.token) return;              // sin sesión → nada que validar
+    if (!session?.token) return;              // sin sesión (o identidad local sin conexión) → nada que validar
     if (_tokenExpired(session.token)) return; // caducado localmente → _tryRefresh ya lo maneja
     try {
       const res = await fetch(`${SB_URL}/auth/v1/user`, {
@@ -470,6 +619,7 @@ const Auth = (() => {
       if (res.status === 401 || res.status === 403) {
         _clearSession();
         localStorage.removeItem('cs_refresh');
+        _adoptDeviceIdentity();   // v42.26: sin sesión de nube, pero las obras locales de la cuenta siguen ahí
         if (typeof Header !== 'undefined') Header.refresh();
         return;
       }
@@ -512,14 +662,18 @@ const Auth = (() => {
   function currentUser() {
     const s = getSession();
     if(!s) return null;
+    // v42.26: identidad local sin conexión (token null a propósito): es el dueño de las obras de este dispositivo
+    if(s.offline) return s;
     // Si el token está caducado y no hay refresh, sesión inválida
     if(_tokenExpired(s.token) && !localStorage.getItem('cs_refresh')) {
       _clearSession();
-      return null;
+      return _adoptDeviceIdentity();   // v42.26: null si salió a propósito o no hay obras de cuenta en el dispositivo
     }
     return s;
   }
-  function isLogged()    { return !!currentUser(); }
+  // v42.26: «con sesión de NUBE». La identidad local sin conexión (currentUser().offline) NO cuenta: sirve para ver y editar
+  // las obras del dispositivo, no para hablar con el servidor (guardar en la nube, cambiar la contraseña…).
+  function isLogged()    { const u = currentUser(); return !!u && !u.offline; }
   function isAdmin()     { const u = getSession(); return !!(u && u.role === 'admin'); }
 
   // Vuelve a comprobar el ROLE real en el servidor y actualiza la sesión en
@@ -558,7 +712,8 @@ const Auth = (() => {
     return comic.userId === u.id || comic.username === u.username;
   }
 
-  return { login, register, logout, deleteAccount, changePassword, requestPasswordReset, currentUser, isLogged, isAdmin, canManage, refreshRole };
+  return { login, register, logout, deleteAccount, changePassword, requestPasswordReset, currentUser, isLogged, isAdmin, canManage, refreshRole,
+           deviceIdentity, useDeviceIdentity };
 })();
 
 // Exponer _tryRefresh globalmente para que supabase-client pueda refrescar el token antes de escribir
