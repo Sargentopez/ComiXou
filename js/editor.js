@@ -40105,6 +40105,11 @@ function EditorView_init(){
 
   // ── POLÍGONOS (desde menú Insertar) ──
   function _esbActivate(shapeType, lineType, keepStyle) {
+    // v42.31: la ayuda de «Dibujo vectorial» sale SOLO al ENTRAR en el editor vectorial. Se mide aquí, antes de cambiar nada: si ya había una
+    // sesión vectorial abierta (panel de rectas/formas, aunque esté plegado, o su barra flotante), esto es un cambio de herramienta DENTRO de
+    // ella —por el selector de la barra flotante o por Dibujar → Dibujo vectorial— y no debe volver a abrirla. Tras el OK, la entrada siguiente
+    // vuelve a mostrarla (si no se marcó «No volver a mostrar»).
+    const _esbWasOpen = _edVecSessionOpen();
     edCloseMenus();
     // v41.85: pasar a rectángulo/elipse con un polígono a medias lo confirma (≥2 puntos) o lo descarta (antes quedaba «vivo»)
     if (shapeType && _edLineLayer) _edFinishLine();
@@ -40144,7 +40149,8 @@ function EditorView_init(){
     // después (si no se ha desactivado antes para este usuario). Cubre los
     // 4 accesos del submenú Dibujo vectorial (Rectángulo/Elipse comparten
     // _edActivateShapeTool; Polígonos/Segmentos comparten _edActivateLineTool).
-    setTimeout(() => edHelpShow('vector-draw'), 500);
+    // v42.31: solo al entrar (ver _esbWasOpen arriba), no en cada cambio de herramienta de la sesión.
+    if (!_esbWasOpen) setTimeout(() => edHelpShow('vector-draw'), 500);
   }
   $('dd-shape-rect')?.addEventListener('click', () => _esbActivate('rect'));
   $('dd-shape-ellipse')?.addEventListener('click', () => _esbActivate('ellipse'));
