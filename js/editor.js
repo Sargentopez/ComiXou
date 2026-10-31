@@ -19891,11 +19891,12 @@ function _vsApply(snap) {
 // v41.85 — deshacer/rehacer reconstruyen el panel (_edActivateLineTool) y eso reiniciaba NODOS (V⟺C): el objeto seguía seleccionado
 // pero sus nodos desaparecían solos y había que volver a pulsar NODOS. NODOS es un MODO elegido por el usuario: se conserva.
 function _vsRerender() {
-  const _keepNodes = _edCurveModeActive();
+  let _keepNodes = _edCurveModeActive();
   // v42.23 — un polígono/recta en construcción que REVIVE con deshacer/rehacer solo se puede continuar con la herramienta de
   // polígono/recta (el tipo, polígono o recta, se conserva en _edLineType): si entre medias se había cambiado de herramienta (p. ej.
   // a rectángulo), se vuelve a ella; si no, el trazo recuperado quedaría «fantasma» y los toques empezarían otro objeto.
-  if (_edLineLayer && edActiveTool !== 'line') { edActiveTool = 'line'; if (edCanvas) edCanvas.className = 'tool-line'; }
+  // v42.34: y volver a una herramienta de creación apaga NODOS (excluyentes).
+  if (_edLineLayer && edActiveTool !== 'line') { edActiveTool = 'line'; if (edCanvas) edCanvas.className = 'tool-line'; _edNodesOff(); _keepNodes = false; }
   _edActivateLineTool(false, true);
   window._edCurveVertIdx = -1; // el vértice «activo» de antes puede haber desaparecido con el deshacer/rehacer
   const _pl = $('edOptionsPanel');
@@ -24550,6 +24551,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   // ── Herramientas ──
   $('op-tool-shape')?.addEventListener('click',()=>{ _edActivateShapeTool(false, true); }); // isCreating=true: preservar sesión activa
   $('op-tool-line')?.addEventListener('click',()=>{
+    _edNodesOff(); // v42.34: pasa a una herramienta de creación (rectas) → NODOS apagado
     // T1-shapes: convertir shape actual a LineLayer y asignar fusionId
     const _curS = _curShape();
     if(_curS){
@@ -24667,6 +24669,12 @@ function _edActivateShapeTool(isNew, isCreating) {
   $('op-shape-curve-btn')?.addEventListener('click',()=>{
     const sl=$('op-shape-curve-slider');
     const open=sl?.style.display==='none'||sl?.style.display==='';
+    // v42.34: ídem panel de rectas: NODOS sustituye a la herramienta de creación en uso por la selección.
+    if(open && _edNodesEnsureSelectTool()){
+      _edActivateShapeTool(false, true); // isCreating=true: preservar sesión activa
+      _edRestoreCurveModeInPanel('shape');
+      return;
+    }
     if(sl) sl.style.display=open?'flex':'none';
     const btn=$('op-shape-curve-btn');
     btn.style.background=open?'var(--black)':'transparent';
@@ -24928,25 +24936,30 @@ function _edActivateLineTool(isNew, isCreating) {
   // Pestañas Objeto/Rectas eliminadas — panel unificado
 
   // ── Modo dibujar / seleccionar ──
+  // v42.34: elegir CUALQUIER herramienta de creación apaga NODOS (_edNodesOff): nunca se editan nodos mientras se crea.
   $('op-line-draw-btn')?.addEventListener('click',()=>{
+    _edNodesOff();
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='draw'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-segment-btn')?.addEventListener('click',()=>{
+    _edNodesOff();
     if(_edLineLayer && _edLineLayer.points.length >= 2) _edFinishLine();
     _edLineType='segment'; edActiveTool='line'; edCanvas.className='tool-line';
     _edLineFusionId = null;
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-rect-btn')?.addEventListener('click',()=>{
+    _edNodesOff();
     if(_edLineLayer) _edFinishLine(); // v41.85: el polígono a medias se confirma (≥2 puntos) o se descarta, como al pasar a selección
     _edShapeType='rect'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
     _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
   });
   $('op-line-ellipse-btn')?.addEventListener('click',()=>{
+    _edNodesOff();
     if(_edLineLayer) _edFinishLine(); // v41.85: ídem
     _edShapeType='ellipse'; edActiveTool='shape'; edCanvas.className='tool-shape';
     _edLineFusionId = null;
@@ -25134,6 +25147,13 @@ function _edActivateLineTool(isNew, isCreating) {
   $('op-line-curve-btn')?.addEventListener('click',()=>{
     const sl=$('op-line-curve-slider');
     const open=sl?.style.display==='none'||sl?.style.display==='';
+    // v42.34: NODOS y herramientas de creación son excluyentes: activar NODOS con una en uso (p. ej. elipse) la sustituye por la selección
+    // —el panel se repinta con la flecha marcada— y deja NODOS encendido.
+    if(open && _edNodesEnsureSelectTool()){
+      _edActivateLineTool(false, true); // isCreating=true: preservar sesión activa
+      _edRestoreCurveModeInPanel('line');
+      return;
+    }
     if(sl) sl.style.display=open?'flex':'none';
     const btn=$('op-line-curve-btn');
     btn.style.background=open?'var(--black)':'transparent';
@@ -26048,6 +26068,19 @@ function _edDrawModeActive(){
 function _edSetDrawColor(hex){
   edDrawColor = hex;
   if (_edDrawModeActive()) _edToolColor[_edTmp.active] = hex;
+  _edbPaintSwatch(); // v42.35: la muestra de la barra flotante sigue SIEMPRE al color vivo (ver _edbPaintSwatch)
+}
+// v42.35 — Muestra de color de la barra flotante de dibujo a mano (#edb-color): enseña SIEMPRE el color con el que se va a pintar
+// (edDrawColor). Se repinta desde los dos únicos sitios donde ese color cambia por la vía normal —_edSetDrawColor (el usuario elige
+// color) y _edSyncToolColor (la herramienta activa carga el suyo)—, en vez de depender de que cada llamador recuerde sincronizar la barra
+// DESPUÉS. Con el panel plegado (▲) los cambios de herramienta de la barra hacían _edbSyncTool() ANTES de edRenderOptionsPanel() —que es
+// quien carga el color de la herramienta nueva— y esa rama no vuelve a sincronizar la barra: se pintaba con el color de la herramienta
+// (sanguina, el recordado…) y la muestra se quedaba con el de la anterior (Alberto: «ahora utiliza los colores default sin cambiarlos en
+// la muestra»). Solo toca la muestra (barato y sin efectos laterales); _edbSyncColor hace además el resto de la sincronía de la barra.
+function _edbPaintSwatch(){
+  const sw = $('edb-color'); if (!sw) return;
+  sw.style.background = edDrawColor;
+  sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
 }
 // Carga en edDrawColor el color de la herramienta activa. Sustituye al antiguo
 // bloque "Defaults por herramienta", que se ejecutaba en CADA repintado del panel
@@ -26063,6 +26096,7 @@ function _edSyncToolColor(){
     _edToolColor[t] = (ED_TOOL_COLOR_DEFAULTS[t] !== undefined) ? ED_TOOL_COLOR_DEFAULTS[t] : edDrawColor;
   }
   edDrawColor = _edToolColor[t];
+  _edbPaintSwatch(); // v42.35: la muestra de la barra flotante enseña el color de la herramienta que se acaba de cargar
   // edSelectedPaletteIdx ya NO decide qué muestra se marca como "seleccionada"
   // (v41.05 — ver _edUpdatePaletteDots y el punto equivalente del template del
   // panel: el aro ahora compara por VALOR, edColorPalette[idx]===edDrawColor,
@@ -29222,6 +29256,7 @@ function edMaximize(keepBar=false, keepKeyboard=false){
 // replicando el estado que deja el botón NODOS del panel al pulsarlo.
 // Usado al maximizar cuando ese modo estaba activo en la barra flotante.
 function _edRestoreCurveModeInPanel(mode){
+  if(_edVecCreationToolActive()) return; // v42.34: NODOS y herramientas de creación son excluyentes (ver _edVecCreationToolActive)
   const slId  = mode==='shape' ? 'op-shape-curve-slider' : 'op-line-curve-slider';
   const btnId = mode==='shape' ? 'op-shape-curve-btn'    : 'op-line-curve-btn';
   const sl = $(slId), btn = $(btnId);
@@ -31360,9 +31395,8 @@ function _edbSyncOffsetBtn(){
 }
 
 function _edbSyncColor() {
-  const sw = $('edb-color'); if (!sw) return;
-  sw.style.background = edDrawColor;
-  sw.style.display = edActiveTool === 'eraser' ? 'none' : '';
+  _edbPaintSwatch(); // v42.35: la misma función que usan _edSetDrawColor y _edSyncToolColor
+  if (!$('edb-color')) return;
   // También actualizar las muestras de la barra de polígonos (v41.84: las decide _esbSync: objeto seleccionado o
   // estilo del próximo; antes se pintaba aquí la muestra de línea con edDrawColor)
   if($('esb-color')) _esbSync();
@@ -31619,7 +31653,75 @@ function _edbSyncSizePreview() {
 /* Calcular posición por defecto de una barra flotante:
    pegada al borde izquierdo del lienzo, centrada verticalmente */
 
+/* ── v42.34 · NODOS ⟂ herramientas de CREACIÓN vectorial ───────────────────────────────────────────────────────────────────────────
+   La edición de nodos (NODOS, V⟺C) y las herramientas que CREAN objetos (rectángulo, elipse, polígono, segmento) son excluyentes:
+   nunca se editan nodos mientras una herramienta de creación está en uso (Alberto: «cuando se seleccione "NODOS" con la barra
+   flotante o desde el panel, automáticamente se desactive la herramienta que se estuviera usando (por ejemplo elipses) y se active
+   selección … Al volver a seleccionarse una herramienta (por ejemplo polígonos) dejará de estar activado automáticamente NODOS»).
+     · Activar NODOS con una herramienta de creación en uso  → _edNodesEnsureSelectTool(): la herramienta pasa a selección y NODOS queda encendido.
+     · Elegir una herramienta de creación (panel, selector de la barra flotante, menú Dibujar → Dibujo vectorial) → _edNodesOff().
+     · Red de seguridad: _edCurveModeActive() devuelve false mientras haya una herramienta de creación activa; aunque algún control de
+       NODOS quedara marcado por otra vía, los nodos ni se pintan ni se editan. */
+function _edVecCreationToolActive(){
+  // Cualquier herramienta de selección deja edActiveTool en 'select' (flecha del panel/barra, fin de objeto, reedición…), así que
+  // 'line' (polígono/recta) y 'shape' (rectángulo/elipse) SON las herramientas de creación; un polígono a medias también cuenta.
+  return edActiveTool === 'line' || edActiveTool === 'shape' || !!_edLineLayer;
+}
+// Apaga NODOS en TODA la interfaz: control del panel de rectas y del de formas, botón de la barra flotante y su control de curvatura,
+// cursor vectorial (COF) y nodo activo. Repinta solo si había algo encendido (para que los nodos desaparezcan del lienzo). Devuelve si lo había.
+function _edNodesOff(){
+  let was = false;
+  [['op-line-curve-slider','op-line-curve-btn'], ['op-shape-curve-slider','op-shape-curve-btn']].forEach(([sid, bid]) => {
+    const sl = $(sid), btn = $(bid);
+    if(sl && sl.style.display === 'flex'){ was = true; sl.style.display = 'none'; }
+    if(btn){ btn.style.background = 'transparent'; btn.style.color = 'var(--gray-700)'; btn.style.borderColor = 'var(--gray-300)'; }
+  });
+  const _vw = $('op-vcof-wrap'); if(_vw) _vw.style.display = 'none';
+  const _vp = $('op-vcof-pop'); if(_vp) _vp.style.display = 'none';
+  if(typeof _vcof !== 'undefined' && _vcof && _vcof.on){ was = true; _vcofSetOn(false); }
+  const _cb = $('esb-curve');
+  if(_cb){
+    if(_cb.dataset.curveActive === '1'){ was = true; _cb.dataset.curveActive = '0'; }
+    _cb.style.background = ''; _cb.style.color = ''; _cb.style.outline = '';
+  }
+  const _sp = $('esb-slider-panel');
+  if(_sp && _sp._mode === 'curve'){ _sp.style.display = 'none'; _sp._mode = null; }
+  if(window._edCurveVertIdx >= 0) was = true;
+  window._edCurveVertIdx = -1;
+  if(was) edRedraw();
+  return was;
+}
+// Pasa a la herramienta de SELECCIÓN del editor vectorial. Un polígono/recta a medias se confirma (≥ 2 puntos) o se descarta, igual que con
+// la flecha del panel. No toca NODOS ni repinta el panel: eso lo hace quien llama.
+function _edVecToSelectTool(){
+  if(_edLineLayer){
+    if(_edLineLayer.points.length >= 2){
+      _edFinishLine(); // lo confirma sin cerrar (y ya deja la selección activa)
+    } else {
+      const _ix = edLayers.indexOf(_edLineLayer);
+      if(_ix >= 0){
+        edLayers.splice(_ix, 1);
+        if(edSelectedIdx === _ix) edSelectedIdx = -1; else if(edSelectedIdx > _ix) edSelectedIdx--;
+      }
+      _edLineLayer = null;
+    }
+  }
+  _edLineType = 'select'; edActiveTool = 'select'; if(edCanvas) edCanvas.className = '';
+  if($('edOptionsPanel')?.dataset.mode === 'shape') _edShapeType = 'select'; // en el panel de formas «selección» es _edShapeType
+  edRedraw();
+}
+// Entrada común de «activar NODOS» (panel de rectas, panel de formas y barra flotante): si hay una herramienta de creación en uso, la
+// sustituye por la selección. Devuelve true si hubo cambio de herramienta (quien llama repinta su panel y enciende NODOS).
+function _edNodesEnsureSelectTool(){
+  if(!_edVecCreationToolActive()) return false;
+  _edVecToSelectTool();
+  if(typeof window._esbSyncTool === 'function') window._esbSyncTool(); // icono de la herramienta en la barra flotante (↖)
+  return true;
+}
+
 function _edCurveModeActive(){
+  // v42.34: con una herramienta de creación activa no hay edición de nodos (ver arriba).
+  if(_edVecCreationToolActive()) return false;
   const panelS=$('op-shape-curve-slider');
   const panelL=$('op-line-curve-slider');
   const barBtn=$('esb-curve');
@@ -31745,6 +31847,7 @@ let _esbX = 12, _esbY = 120;
 // segunda vía solo iluminaba el botón sin abrir el control, obligando a
 // desactivar y reactivar NODOS a mano para verlo (bug reportado por Alberto).
 function _esbActivateCurveUI(){
+  if(_edVecCreationToolActive()) return; // v42.34: NODOS y herramientas de creación son excluyentes (ver _edVecCreationToolActive)
   const _cb = $('esb-curve');
   if(_cb){
     _cb.dataset.curveActive = '1';
@@ -32190,6 +32293,9 @@ function edInitShapeBar() {
     // Activar — icono + control de curvatura (función compartida, también
     // usada al restaurar el estado desde el panel al colapsar; ver
     // edShapeBarShow y _esbActivateCurveUI).
+    // v42.34: NODOS y herramientas de creación son excluyentes: si hay una en uso (p. ej. elipse) se sustituye por la selección
+    // (el icono de la barra pasa a ↖; el polígono a medias se confirma o se descarta) y NODOS queda encendido.
+    _edNodesEnsureSelectTool();
     // v41.85: _esbActivateCurveUI() activa el estado Y repinta (antes se repintaba ANTES de activarlo y los nodos no se veían)
     _esbActivateCurveUI();
     // El slider permanece abierto hasta que se desactive V⟺C pulsando el botón de nuevo
@@ -40272,6 +40378,9 @@ function EditorView_init(){
     // vuelve a mostrarla (si no se marcó «No volver a mostrar»).
     const _esbWasOpen = _edVecSessionOpen();
     edCloseMenus();
+    // v42.34: elegir una herramienta de creación (selector de la barra flotante o menú Dibujar → Dibujo vectorial) apaga NODOS: nunca se
+    // editan nodos mientras se crea. Sirve para panel y para barra (botón NODOS, control de curvatura, cursor COF y nodo activo).
+    _edNodesOff();
     // v41.85: pasar a rectángulo/elipse con un polígono a medias lo confirma (≥2 puntos) o lo descarta (antes quedaba «vivo»)
     if (shapeType && _edLineLayer) _edFinishLine();
     edSelectedIdx = -1;
