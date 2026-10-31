@@ -4451,6 +4451,44 @@ function _edFillSwatchBg(la){
   return has ? la.fillColor : ((la && la._lastFillColor) || '#ffffff');
 }
 
+/* ── v42.33 — DEGRADADO POR CONTORNO en objetos unidos ⊕ ──────────────────────────────────────────────────────────────────
+   Alberto: «Los objetos no deben perder sus distintos rellenos, ni al unirse ni al desunirse» (un objeto con degradado se desunía al hacer OK
+   y, al volver a unirlo con Unir, se quedaba en negro). Un ⊕ guarda UN estilo por contorno en groupedStyles[]; ahora ese estilo puede traer
+   también fillGradient (mismo formato que en un objeto suelto, definido sobre la caja de ESE contorno —no la del ⊕ entero—, así que el
+   contorno se ve igual unido que suelto). `fillColor` sigue siendo el color de respaldo (= c1). */
+// Copia de groupedStyles clonando también el degradado de cada contorno (un {...s} dejaría el mismo objeto compartido entre copias/historial).
+function _edCloneGroupedStyles(arr){
+  return arr.map(s => {
+    const o = {...s};
+    const g = _edCloneGrad(s && s.fillGradient);
+    if(g) o.fillGradient = g; else delete o.fillGradient;
+    return o;
+  });
+}
+// Caja (px) de un contorno de puntos locales normalizados: centro y tamaño. Mismo criterio que LineLayer._updateBbox (mínimo 0.01 de página),
+// que es la caja sobre la que se define el degradado del objeto suelto.
+function _edContourBoxPx(pts, pw, ph){
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for(const p of pts){ if(!p) continue; if(p.x < x0) x0 = p.x; if(p.x > x1) x1 = p.x; if(p.y < y0) y0 = p.y; if(p.y > y1) y1 = p.y; }
+  if(x0 === Infinity) return {cx:0, cy:0, w:0.01*pw, h:0.01*ph};
+  return {cx:(x0+x1)/2*pw, cy:(y0+y1)/2*ph, w:Math.max(x1-x0, 0.01)*pw, h:Math.max(y1-y0, 0.01)*ph};
+}
+// Relleno de un contorno ⊕ con degradado propio. ctx con origen en el centro del ⊕; `pts` = puntos locales normalizados del contorno.
+function _edContourFillStyle(ctx, g, fallback, pts, pw, ph){
+  if(!_edGradValid(g)) return fallback;
+  const b = _edContourBoxPx(pts, pw, ph);
+  const q = _edGradGeom(g, b.w, b.h);
+  const len = Math.hypot(q.x1-q.x0, q.y1-q.y0);
+  if(len < 1) return g.c1;
+  const x0 = b.cx+q.x0, y0 = b.cy+q.y0, x1 = b.cx+q.x1, y1 = b.cy+q.y1;
+  const grad = g.type==='radial'
+    ? ctx.createRadialGradient(x0, y0, 0, x0, y0, len)
+    : ctx.createLinearGradient(x0, y0, x1, y1);
+  grad.addColorStop(0, g.c1);
+  grad.addColorStop(1, g.c2);
+  return grad;
+}
+
 class ShapeLayer extends BaseLayer {
   constructor(shape='rect', x=0.5, y=0.5, w=0.3, h=0.2) {
     super('shape', x, y, w, h);
@@ -4734,7 +4772,8 @@ class LineLayer extends BaseLayer {
         _contours.forEach((c, _ci) => {
           const _st = _gStyles[_ci] || {};
           const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
-          const _fcStyle = _st.fillColor !== undefined ? _fc : _edFillStyle(ctx, this, this.width*pw, this.height*ph);
+          const _fcStyle = _edGradValid(_st.fillGradient) ? _edContourFillStyle(ctx, _st.fillGradient, _fc, c, pw, ph)   // v42.33: degradado propio del contorno
+                         : (_st.fillColor !== undefined ? _fc : _edFillStyle(ctx, this, this.width*pw, this.height*ph));
           const _sc = _st.color     !== undefined ? _st.color     : this.color;
           const _lw = _st.lineWidth !== undefined ? _st.lineWidth : this.lineWidth;
           const _cl = _st.closed    !== undefined ? _st.closed    : this.closed;
@@ -5079,7 +5118,7 @@ function _edSnapLayerFragment(l){
       hidden:l.hidden||false,
       groupId: l.groupId || undefined,
       grouped: l.grouped||false,
-      groupedStyles: l.groupedStyles ? l.groupedStyles.map(s=>({...s})) : undefined,
+      groupedStyles: l.groupedStyles ? _edCloneGroupedStyles(l.groupedStyles) : undefined,
       subPaths: l.subPaths&&l.subPaths.length ? l.subPaths.map(sp=>{const _s=sp.slice(); if(sp.cornerRadii)_s.cornerRadii={...sp.cornerRadii}; return _s;}) : undefined,
       cornerRadii: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : {...l.cornerRadii}) : null,
       _motionPath: l._motionPath ? _edCopyMotionPathPts(l._motionPath) : undefined,
@@ -6450,7 +6489,7 @@ function edApplyHistory(snapshot){
       if(o.cornerRadius) l.cornerRadius=o.cornerRadius;
       if(o.cornerRadii) l.cornerRadii = Array.isArray(o.cornerRadii) ? [...o.cornerRadii] : {...o.cornerRadii};
       if(o.grouped) l.grouped = true;
-      if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
+      if(o.groupedStyles) l.groupedStyles = _edCloneGroupedStyles(o.groupedStyles);
       if(o.groupId) l.groupId=o.groupId;
       if(o.locked) l.locked=true;
       if(o.hidden) l.hidden=true;
@@ -6469,7 +6508,7 @@ function edApplyHistory(snapshot){
       // ver _edSnapLayerFragment, y sí se restaura para 'shape' más abajo — comparado
       // campo a campo, era el único tipo al que le faltaba esta restauración).
       if(o.grouped) l.grouped = true;
-      if(o.groupedStyles) l.groupedStyles = o.groupedStyles.map(s=>({...s}));
+      if(o.groupedStyles) l.groupedStyles = _edCloneGroupedStyles(o.groupedStyles);
       if(o.x!=null){l.x=o.x;l.y=o.y;l.width=o.width||0.01;l.height=o.height||0.01;}
       else l._updateBbox();
       if(o.groupId) l.groupId=o.groupId;
@@ -15282,6 +15321,7 @@ function _edDissolveJoined(la) {
     sub.x = la.x; sub.y = la.y;   // mismo origen; _updateBbox los recentrará
     _edCarryMotionPath(la, sub);  // v41.56: cada sub-camino conserva la trayectoria del objeto unido
     sub.closed    = st.closed !== undefined ? st.closed : la.closed;
+    { const _g = _edCloneGrad(st.fillGradient); if (_g) sub.fillGradient = _g; }   // v42.33: el degradado propio del contorno vuelve con él
     sub.cornerRadii = {};
     let localIdx = 0;
     for (let i = range.start; i <= range.end; i++) {
@@ -19682,7 +19722,7 @@ function _vsSerLayer(l) {
     if (l.name) _s.name = l.name;
     if (l._buttonAction) _s._buttonAction = Object.assign({}, l._buttonAction);
     if (l.grouped) _s.grouped = true;
-    if (l.groupedStyles) _s.groupedStyles = l.groupedStyles.map(s => ({ ...s }));
+    if (l.groupedStyles) _s.groupedStyles = _edCloneGroupedStyles(l.groupedStyles);
     if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
     if (l._motionSpeed != null) _s._motionSpeed = l._motionSpeed;
@@ -20092,7 +20132,7 @@ function _edShapeApplyHistory(snapshot){
   else { delete la._fusionId; } // snapshot sin _fusionId → objeto ya no es miembro de fusión
   // Restaurar flag de unión y estilos por contorno
   if(d.grouped !== undefined) la.grouped = d.grouped; else delete la.grouped;
-  if(d.groupedStyles) la.groupedStyles = d.groupedStyles.map(s=>({...s})); else delete la.groupedStyles;
+  if(d.groupedStyles) la.groupedStyles = _edCloneGroupedStyles(d.groupedStyles); else delete la.groupedStyles;
   if(d.closed       !== undefined) la.closed      = d.closed;
   if(d.cornerRadius !== undefined) la.cornerRadius= d.cornerRadius;
   la.cornerRadii = d.cornerRadii
@@ -34741,9 +34781,20 @@ function _edBuildUnitedVector(layers){
     return { x: lpx * cos - lpy * sin, y: lpx * sin + lpy * cos };
   }
 
-  // Devuelve array de contornos en px absolutos.
+  // v42.33 — Extremos A→B de un degradado en px absolutos de la página. `g` se define sobre una caja de w×h px centrada en (ox,oy) del espacio local
+  // del objeto de origen, que gira `rot` sobre su centro (cx,cy). Se guardan como puntos absolutos —y no como fracciones de la caja del objeto
+  // suelto— porque al unir cambian la caja de referencia (pasa a ser la del contorno) y los ejes (la rotación del objeto se absorbe en los puntos).
+  function _gradAbs(g, w, h, ox, oy, cx, cy, cos, sin) {
+    const q = _edGradGeom(g, w, h);
+    const T = (x, y) => { const lx = x + ox, ly = y + oy; return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos }; };
+    return { type: g.type, c1: g.c1, c2: g.c2, A: T(q.x0, q.y0), B: T(q.x1, q.y1) };
+  }
+
+  // Devuelve array de contornos en px absolutos y, en paralelo (stylesOut / gradsOut), el estilo y el degradado de cada contorno.
   // Cada punto preserva: x, y (px), cp1, cp2 (px, opcionales), curve, cornerRadius (de cornerRadii)
-  function _layerToPixelContours(la) {
+  // v42.33: si el objeto de origen ya es una unión ⊕ (varios contornos, cada uno con su estilo en groupedStyles), cada contorno conserva SU estilo y
+  // su degradado; antes todos los contornos de una unión heredaban el estilo global de esa unión y se perdían sus distintos rellenos al volver a unir.
+  function _layerToPixelContours(la, stylesOut, gradsOut) {
     const contours = [];
     if(la.type === 'line') {
       const cx = mx + la.x * pw;
@@ -34751,11 +34802,35 @@ function _edBuildUnitedVector(layers){
       const rot = (la.rotation || 0) * Math.PI / 180;
       const cos = Math.cos(rot), sin = Math.sin(rot);
       const cr = la.cornerRadii || {};
-      let cur = [];
+      const _gsArr = (la.grouped && Array.isArray(la.groupedStyles)) ? la.groupedStyles : null;
+      let cur = [], curLocal = [];
+      const _flush = () => {
+        if(!cur.length) return;
+        const ci = contours.length;
+        contours.push(cur);
+        const gs = _gsArr ? (_gsArr[ci] || null) : null;
+        stylesOut.push({
+          fillColor: (gs && gs.fillColor !== undefined) ? gs.fillColor : (la.fillColor || 'none'),
+          color:     (gs && gs.color     !== undefined) ? gs.color     : (la.color     || '#000000'),
+          lineWidth: (gs && gs.lineWidth !== undefined) ? gs.lineWidth : (la.lineWidth ?? 3),
+          closed:    (gs && gs.closed    !== undefined) ? !!gs.closed  : !!la.closed
+        });
+        let g = null, w = 0, h = 0, ox = 0, oy = 0;
+        if(gs && _edGradValid(gs.fillGradient)) {
+          // degradado propio del contorno de una unión: se definió sobre la caja de ESE contorno
+          const b = _edContourBoxPx(curLocal, pw, ph);
+          g = gs.fillGradient; w = b.w; h = b.h; ox = b.cx; oy = b.cy;
+        } else if(_edGradValid(la.fillGradient) && !(gs && gs.fillColor !== undefined)) {
+          g = la.fillGradient; w = la.width * pw; h = la.height * ph;   // objeto suelto (o fusionado ☯): su caja entera, centrada en el objeto
+        }
+        const _fcol = stylesOut[stylesOut.length - 1].fillColor;
+        gradsOut.push(g && _fcol && _fcol !== 'none' ? _gradAbs(g, w, h, ox, oy, cx, cy, cos, sin) : null);
+        cur = []; curLocal = [];
+      };
       for(let _pi = 0; _pi < la.points.length; _pi++) {
         const p = la.points[_pi];
         if(p === null) {
-          if(cur.length) { contours.push(cur); cur = []; }
+          _flush();
         } else {
           const rp = _rotPx(p.x, p.y, cos, sin);
           const np = { x: cx + rp.x, y: cy + rp.y };
@@ -34764,10 +34839,10 @@ function _edBuildUnitedVector(layers){
           if(p.cp2) { const c2 = _rotPx(p.cp2.x, p.cp2.y, cos, sin); np.cp2 = { x: cx + c2.x, y: cy + c2.y }; }
           // cornerRadii indexado por posición en la.points (incluyendo nulls)
           if(cr[_pi]) np._cr = cr[_pi];
-          cur.push(np);
+          cur.push(np); curLocal.push(p);
         }
       }
-      if(cur.length) contours.push(cur);
+      _flush();
     } else {
       // ShapeLayer → polígono en px, preservando cornerRadii si los tiene
       const cx = mx + la.x * pw;
@@ -34795,25 +34870,27 @@ function _edBuildUnitedVector(layers){
         }
       }
       contours.push(pts);
+      stylesOut.push({
+        fillColor: la.fillColor || 'none',
+        color:     la.color     || '#000000',
+        lineWidth: la.lineWidth ?? 3,
+        closed:    true
+      });
+      const _fcol = stylesOut[stylesOut.length - 1].fillColor;
+      gradsOut.push(_edGradValid(la.fillGradient) && _fcol !== 'none'
+        ? _gradAbs(la.fillGradient, la.width * pw, la.height * ph, 0, 0, cx, cy, cos, sin) : null);
     }
     return contours;
   }
 
-  // Recoger todos los contornos en px, con sus estilos individuales
+  // Recoger todos los contornos en px, con sus estilos individuales (y el degradado de cada uno, si lo tiene)
   const allContoursPx = [];
   const allContourStyles = []; // estilo por contorno
+  const allContourGrads  = []; // degradado por contorno en px absolutos (o null)
   for(const la of layers) {
-    const _cs = _layerToPixelContours(la);
-    const _style = {
-      fillColor: la.fillColor || 'none',
-      color:     la.color     || '#000000',
-      lineWidth: la.lineWidth ?? 3,
-      closed:    la.type === 'shape' || (la.type === 'line' && !!la.closed)
-    };
-    for(const c of _cs) {
-      allContoursPx.push(c);
-      allContourStyles.push(_style);
-    }
+    const _st = [], _gr = [];
+    const _cs = _layerToPixelContours(la, _st, _gr);
+    _cs.forEach((c, i) => { allContoursPx.push(c); allContourStyles.push(_st[i]); allContourGrads.push(_gr[i]); });
   }
 
   // Centro del bbox en px
@@ -34831,14 +34908,27 @@ function _edBuildUnitedVector(layers){
 
   for(let ci = 0; ci < allContoursPx.length; ci++) {
     if(ci > 0) { newLL.points.push(null); } // el null ocupa índice en points
+    let _bx0 = Infinity, _by0 = Infinity, _bx1 = -Infinity, _by1 = -Infinity;   // caja del contorno (normalizada, espacio local del ⊕)
     for(const p of allContoursPx[ci]) {
       const np = { x: (p.x - cxPx) / pw, y: (p.y - cyPx) / ph };
+      if(np.x < _bx0) _bx0 = np.x; if(np.x > _bx1) _bx1 = np.x;
+      if(np.y < _by0) _by0 = np.y; if(np.y > _by1) _by1 = np.y;
       if(p.curve !== undefined) np.curve = p.curve;
       if(p.cp1) np.cp1 = { x: (p.cp1.x - cxPx) / pw, y: (p.cp1.y - cyPx) / ph };
       if(p.cp2) np.cp2 = { x: (p.cp2.x - cxPx) / pw, y: (p.cp2.y - cyPx) / ph };
       // cornerRadii se indexa por posición en points INCLUYENDO nulls
       if(p._cr) newLL.cornerRadii[newLL.points.length] = p._cr;
       newLL.points.push(np);
+    }
+    // v42.33 — el degradado de este contorno, en fracciones de SU caja (formato de línea guía de fillGradient: 0 = centro de la caja)
+    const gr = allContourGrads[ci];
+    if(gr) {
+      const bw = Math.max(_bx1 - _bx0, 0.01) * pw, bh = Math.max(_by1 - _by0, 0.01) * ph;
+      const bcx = (_bx0 + _bx1) / 2 * pw + cxPx, bcy = (_by0 + _by1) / 2 * ph + cyPx;   // centro de la caja en px absolutos
+      allContourStyles[ci] = Object.assign({}, allContourStyles[ci], { fillGradient: {
+        type: gr.type, c1: gr.c1, c2: gr.c2, angle: 0,
+        x0: (gr.A.x - bcx) / bw, y0: (gr.A.y - bcy) / bh, x1: (gr.B.x - bcx) / bw, y1: (gr.B.y - bcy) / bh
+      } });
     }
   }
   newLL.closed = _allClosed;
@@ -34860,8 +34950,7 @@ function _edBuildUnitedVector(layers){
      · En el historial general quedan DOS pasos —«objetos creados» y «objetos unidos»—, como si se hubiese usado Unir justo después
        del OK: un solo deshacer del editor general vuelve a separarlos. (Al re-editar un ⊕ es UN solo paso: «⊕ antes» → «⊕ después».)
    ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
-// ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el degradado, el
-// nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo; da UNA sola opacidad al resultado y trata cada
+// ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo; da UNA sola opacidad al resultado y trata cada
 // contorno de un objeto fusionado ☯ (con huecos) como un objeto independiente, con lo que los huecos se rellenarían.
 // v42.25: `uni` = marcador de la edición de un ⊕ (_vsUnion). Sus contornos sueltos llevan una COPIA de la trayectoria del ⊕ (así lo deja
 // _edDissolveJoined) y esa trayectoria se restituye al volver a unirlos, así que no impide la unión.
@@ -34869,7 +34958,7 @@ function _edVecJoinable(l, uni){
   if(!l || (l.type !== 'line' && l.type !== 'shape')) return false;
   if(l.hidden || l.locked || l.groupId || l.name || l._buttonAction) return false;
   if(l._motionPath && l._motionPath.length && !(uni && uni.src && uni.src._motionPath && uni.src._motionPath.length)) return false;
-  if(_edGradValid(l.fillGradient)) return false;
+  // v42.33: el degradado ya NO impide la unión: cada contorno del ⊕ lleva el suyo (groupedStyles[].fillGradient, ver _edBuildUnitedVector).
   if(l.type === 'line'){
     if(l.grouped || (l.subPaths && l.subPaths.length)) return false;   // ya unido ⊕ / con huecos
     const pts = l.points || [];
@@ -35003,7 +35092,7 @@ function edUnmergeSelected(){
       if(un.groupId) pc.groupId = un.groupId;        // si la unión formaba parte de un grupo, las piezas siguen en él
       // Contorno sin relleno propio en groupedStyles: se pintaba con el relleno/degradado general del ⊕ (ver LineLayer.draw)
       const st = (un.groupedStyles || [])[ci] || {};
-      if(st.fillColor === undefined){
+      if(st.fillColor === undefined && !pc.fillGradient){
         const g = _edCloneGrad(un.fillGradient);
         if(g) pc.fillGradient = g;
       }
@@ -35558,7 +35647,9 @@ function edSerLayer(l, skipCompress){
   }
   if(l.type==='line'){
     const _cr=l.cornerRadii||{};
-    const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0);
+    // v42.33: una unión ⊕ también se hornea a bitmap (renderDataUrl): el lector no conoce «grouped» y la dibujaba como UN solo contorno
+    // fusionado (even-odd) con un único relleno, perdiendo los distintos rellenos/degradados de cada contorno.
+    const _hasR=Object.keys(_cr).some(k=>(_cr[k]||0)>0) || (!!l.grouped && Array.isArray(l.groupedStyles) && l.groupedStyles.length>0);
     const _lobj={type:'line', points:l.points.map(_edCloneLinePoint),
       x:l.x, y:l.y, width:l.width, height:l.height, rotation:l.rotation||0,
       closed:l.closed, color:l.color, fillColor:l.fillColor||'#ffffff', fillGradient:_edCloneGrad(l.fillGradient), lineWidth:l.lineWidth, opacity:l.opacity??1,
@@ -35572,7 +35663,7 @@ function edSerLayer(l, skipCompress){
     if(l._fusionId)_lobj._fusionId=l._fusionId; // T1: preservar en historial vectorial
     // Objeto unido (⊕ Unir): preservar flag y estilos individuales por contorno
     if(l.grouped) _lobj.grouped=true;
-    if(l.groupedStyles) _lobj.groupedStyles=l.groupedStyles.map(s=>({...s}));
+    if(l.groupedStyles) _lobj.groupedStyles=_edCloneGroupedStyles(l.groupedStyles);
     if(_hasR){
       try{
         const _pw=edPageW(),_ph=edPageH();
@@ -35584,7 +35675,9 @@ function edSerLayer(l, skipCompress){
         l.draw(_fctx);
         l.rotation=_savedRot;
         // Recortar zona del objeto con margen para el trazo
-        const _pad=Math.ceil((l.lineWidth||3)/2)+2;
+        let _padLw=l.lineWidth||3;                               // v42.33: en una unión ⊕ cada contorno puede tener un grosor distinto
+        if(l.grouped&&l.groupedStyles) l.groupedStyles.forEach(st=>{ if(st&&st.lineWidth!=null) _padLw=Math.max(_padLw,st.lineWidth); });
+        const _pad=Math.ceil(_padLw/2)+2;
         const _cx=edMarginX()+l.x*_pw, _cy=edMarginY()+l.y*_ph;
         const _hw=l.width*_pw/2, _hh=l.height*_ph/2;
         const _ox=Math.max(0,Math.round(_cx-_hw-_pad));
@@ -35810,7 +35903,7 @@ function edDeserLayer(d, pageOrientation, light){
     if(d.locked) l.locked=true;
     // Objeto unido (⊕ Unir): restaurar flag y estilos individuales por contorno
     if(d.grouped) l.grouped=true;
-    if(d.groupedStyles) l.groupedStyles=d.groupedStyles.map(s=>({...s}));
+    if(d.groupedStyles) l.groupedStyles=_edCloneGroupedStyles(d.groupedStyles);
     if(d.hidden) l.hidden=true;
     if(d.name) l.name=d.name;
 
@@ -42456,13 +42549,20 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
         const pts  = c.map(({ p }) => p);
         const st   = la.groupedStyles[ci] || {};
         const gcl  = st.closed  !== undefined ? st.closed  : la.closed;
-        const gf   = (gcl && st.fillColor && st.fillColor !== 'none') ? st.fillColor
+        let gf   = (gcl && st.fillColor && st.fillColor !== 'none') ? st.fillColor
                    : (gcl && la.fillColor && la.fillColor !== 'none') ? la.fillColor : 'none';
+        // v42.33: degradado propio del contorno (definido sobre la caja de ese contorno; el <g> está centrado en el objeto)
+        let gDef = '';
+        if (gf !== 'none' && _edGradValid(st.fillGradient)) {
+          const bx = _edContourBoxPx(pts, pw, ph);
+          const gd = _edSvgGrad({ fillGradient: st.fillGradient }, bx.w, bx.h, bx.cx, bx.cy);
+          if (gd) { gf = `url(#${gd.id})`; gDef = `<defs>${gd.def}</defs>`; }
+        }
         const gc   = st.color     || la.color     || '#000';
         const glw  = st.lineWidth !== undefined ? st.lineWidth : sw;
         const d    = _edBuildLineSvgPath(pts, localCr, gcl, pw, ph);
         const _gStroke = glw > 0 ? `stroke="${gc}" stroke-width="${glw}"` : 'stroke="none" stroke-width="0"';
-        return `<path d="${d}" fill="${gf}" ${_gStroke} stroke-linecap="round" stroke-linejoin="round"/>`;
+        return `${gDef}<path d="${d}" fill="${gf}" ${_gStroke} stroke-linecap="round" stroke-linejoin="round"/>`;
       }).join('');
       return `<g transform="${gXform}"${op}>${parts}</g>`;
     }
