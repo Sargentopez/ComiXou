@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.31</footer>
+    <footer class="app-version">v42.32</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -519,6 +519,7 @@ Router.register('editor', {
                 </div>
               </div>
               <button class="ed-dropdown-item" id="_sel-merge" data-i18n="ed_merge">⊕ Unir</button>
+              <button class="ed-dropdown-item" id="_sel-unmerge" data-i18n="ed_unmerge">⊖ Desunir</button>
               <button class="ed-dropdown-item" id="_sel-bib-save" data-i18n="ed_saveToLibrary">📥 Guardar en biblioteca</button>
               <div class="ed-dropdown-sep"></div>
               <button class="ed-dropdown-item" id="_sel-delete" style="color:#c00" data-i18n="ed_deleteSelection">✕ Eliminar selección</button>

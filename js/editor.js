@@ -7152,6 +7152,9 @@ function _edUpdateSelectMenu(){
   // Descargar/Agrupar, se deshabilita en vez de ocultarse cuando no aplica.
   if(_btnAlign) _btnAlign.setAttribute('style', _hasSel ? '' : _dis);
   if(_btnMerge) _btnMerge.style.display = (_hasSel && _mergeTypes) ? '' : 'none';
+  // v42.32 — Desunir: solo activo si hay seleccionada (sola o con más objetos) una unión ⊕ de vectoriales; si no, atenuado como Agrupar/Alinear.
+  const _btnUnmerge = $('_sel-unmerge');
+  if(_btnUnmerge) _btnUnmerge.setAttribute('style', _edSelectedUnionIdxs().length ? '' : _dis);
   if(_btnDel)   _btnDel.setAttribute('style', _hasSel ? 'color:#c00' : 'color:#c00;' + _dis);
 }
 
@@ -29779,6 +29782,11 @@ function edInitSelectMenu(){
     edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edMergeSelected();
   });
+  // v42.32 — ⊖ Desunir: reparte cada unión ⊕ de la selección en sus objetos originales.
+  $('_sel-unmerge')?.addEventListener('click', ()=>{
+    edCloseMenus();
+    edUnmergeSelected();
+  });
   $('_sel-bib-save')?.addEventListener('click', ()=>{
     edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     edBibGuardar();
@@ -32619,31 +32627,22 @@ const _edHelpContent = {
     const withIco = (label, ico) => `<span style="white-space:nowrap">${label}&nbsp;${ico}</span>`;
     return `
       <div style="margin-bottom:14px">
-        <b>1.</b> ${I18n.t('ed_helpVectorP0')}
+        <b>1.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>2.</b> ${I18n.t('ed_helpVectorPU')}
+        <b>2.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
       </div>
       <div style="margin-bottom:14px">
-        <b>3.</b> ${I18n.t('ed_helpVectorP1', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
+        <b>3.</b> ${I18n.t('ed_helpVectorP3')}
       </div>
       <div style="margin-bottom:14px">
-        <b>4.</b> ${I18n.t('ed_helpVectorP2', { cursor: `<span style="white-space:nowrap">${icoCursor}</span>` })}
+        <b>4.</b> ${I18n.t('ed_helpVectorP4')}
       </div>
       <div style="margin-bottom:14px">
-        <b>5.</b> ${I18n.t('ed_helpVectorP3')}
-      </div>
-      <div style="margin-bottom:14px">
-        <b>6.</b> ${I18n.t('ed_helpVectorP4')}
-      </div>
-      <div style="margin-bottom:14px">
-        <b>7.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
-      </div>
-      <div style="margin-bottom:14px">
-        <b>8.</b> ${I18n.t('ed_helpVectorPJ')}
+        <b>5.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
       </div>
       <div>
-        <b>9.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
+        <b>6.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
       </div>
     `;
     })()
@@ -34959,6 +34958,75 @@ function _edVecCommitSession(){
   if(uni && unchanged && _edVecUnionPutBack(uni, sess)){ edPushHistory(); edRedraw(); return; }
   if(!(uni && join)) edPushHistory();
   if(join) _edVecJoinApply(join, uni);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.32 — DESUNIR: lo contrario de ⊕ Unir.
+   Alberto: «crea un botón "Desunir" dentro del menú de selección. Solo se activará cuando esté seleccionada una unión de objetos
+   vectoriales y permitirá desunir la unión seleccionada».
+   Un objeto «unido» ⊕ es UN solo LineLayer con grouped=true cuyos contornos van separados por null en points y cada uno con su estilo en
+   groupedStyles (ver _edBuildUnitedVector). Desunir reparte cada contorno en su propio objeto con ESE estilo (relleno, color, grosor, abierto/
+   cerrado y curvatura de esquinas), exactamente igual que cuando se abre un ⊕ para editarlo (_edDissolveJoined), y los deja en el mismo sitio del
+   apilado y en el mismo orden en que se unieron. Un objeto fusionado ☯ (con huecos: grouped=false + subPaths/even-odd) NO es una unión y no se
+   toca. Solo actúa sobre las uniones de la selección; el resto de objetos seleccionados se quedan como estaban.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+// ¿Es un objeto unido ⊕ (varios contornos en un único LineLayer agrupado)?
+function _edIsUnitedVector(la){
+  return !!(la && la.type === 'line' && la.grouped && Array.isArray(la.points) && _edGetSubPathRanges(la.points).length >= 2);
+}
+// Índices (ascendentes) de la selección actual, sea un objeto suelto (edSelectedIdx) o una multiselección.
+function _edSelectionIdxs(){
+  const src = (edActiveTool === 'multiselect' && edMultiSel.length) ? edMultiSel : (edSelectedIdx >= 0 ? [edSelectedIdx] : []);
+  return [...new Set(src)].filter(i => i >= 0 && i < edLayers.length && edLayers[i]).sort((a, b) => a - b);
+}
+// Índices (ascendentes) de los objetos unidos ⊕ que hay en la selección actual.
+function _edSelectedUnionIdxs(){
+  return _edSelectionIdxs().filter(i => _edIsUnitedVector(edLayers[i]));
+}
+function edUnmergeSelected(){
+  if(window._gcpActive) return;
+  const page = edPages[edCurrentPage]; if(!page) return;
+  const selIdxs = _edSelectionIdxs();
+  const unionIdxs = selIdxs.filter(i => _edIsUnitedVector(edLayers[i]));
+  if(!unionIdxs.length) return;
+
+  edPushHistory();                                   // «antes»
+  const selObjs  = selIdxs.map(i => edLayers[i]);    // por referencia: los índices cambian al repartir cada unión en varias piezas
+  const replaced = new Map();                        // unión → sus piezas
+  // De arriba abajo, para que los índices que faltan por tratar no se desplacen.
+  for(let k = unionIdxs.length - 1; k >= 0; k--){
+    const i = unionIdxs[k], un = edLayers[i];
+    const pieces = _edDissolveJoined(un);            // un LineLayer por contorno, con su propio estilo y la trayectoria del ⊕
+    if(pieces.length < 2) continue;
+    pieces.forEach((pc, ci) => {
+      if(un.locked)  pc.locked  = true;
+      if(un.groupId) pc.groupId = un.groupId;        // si la unión formaba parte de un grupo, las piezas siguen en él
+      // Contorno sin relleno propio en groupedStyles: se pintaba con el relleno/degradado general del ⊕ (ver LineLayer.draw)
+      const st = (un.groupedStyles || [])[ci] || {};
+      if(st.fillColor === undefined){
+        const g = _edCloneGrad(un.fillGradient);
+        if(g) pc.fillGradient = g;
+      }
+    });
+    edLayers.splice(i, 1, ...pieces);
+    replaced.set(un, pieces);
+  }
+  if(!replaced.size) return;                         // (no ocurre: _edIsUnitedVector ya exige ≥2 contornos)
+  page.layers = edLayers;
+
+  // La selección pasa a ser las piezas (más los demás objetos que ya estaban seleccionados), como tras Duplicar.
+  const newSel = [];
+  selObjs.forEach(o => { if(replaced.has(o)) newSel.push(...replaced.get(o)); else newSel.push(o); });
+  _msClear();
+  edMultiSel = newSel.map(l => edLayers.indexOf(l)).filter(i => i >= 0);
+  edSelectedIdx = -1;
+  edMultiGroupRot = 0;
+  edActiveTool = 'multiselect'; edCanvas.className = 'tool-multiselect';
+  _msRecalcBbox();
+  edCloseOptionsPanel();
+  _edDrawUnlockUI(); _edPropsOverlayHide();
+  edPushHistory(); edRedraw();                       // «después»
+  edToast(I18n.t('ed_objectsUnmerged'));
 }
 
 /* ── Une los objetos seleccionados en uno solo ── */
