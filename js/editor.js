@@ -1957,6 +1957,13 @@ let edMultiGroupRot = 0;    // rotación acumulada del bbox del grupo (grados)
 // bbox persistente del grupo — solo lo actualiza _msRecalcBbox()
 // {w, h, cx, cy, offX, offY}  (offX/Y = offset centro respecto al centroide)
 let edMultiBbox = null;
+// v42.36 — selección múltiple DENTRO de la sesión de dibujo vectorial (ver «SELECCIÓN MÚLTIPLE VECTORIAL» más abajo). Estado propio: NO usa
+// edMultiSel/edActiveTool='multiselect' (esos son del editor general, con sus menús, atajos e historial global).
+let _vsMulti = [];        // capas de la sesión seleccionadas a la vez (≥ 2). El principal es siempre edLayers[edSelectedIdx].
+let _vsMultiBB = null;    // caja envolvente del grupo {x0,y0,x1,y1,cx,cy,w,h} (coordenadas normalizadas de página)
+let _vsMultiOp = null;    // gesto de grupo en curso: {kind:'drag'|'resize', …}
+let _vsNodeSel = null;    // NODOS: {la, set:Set<índice de nodo>, tap:índice|null, moved:bool, drag:{…}|null}; solo con ≥ 2 nodos
+let _vsMarqueeAdd = false;// la marquesina vectorial en curso se empezó con Mayús (añadir a la selección)
 
 // ── Dimensiones del lienzo (la página reproducible) ──
 // Ratio 6:13 (≈2.167) cabe sin corte en OPPO A38 (720×1612, útil ~720×1588)
@@ -4753,12 +4760,17 @@ class LineLayer extends BaseLayer {
       if(isClosed) target.moveTo(t0.p1.x, t0.p1.y);
       else         target.moveTo(t0.cur.x, t0.cur.y);
       const _limit = isClosed ? _n : _n - 1;
+      // v42.37 — LOS CONTORNOS ABIERTOS TAMBIÉN SE CURVAN. Antes todo el redondeo estaba condicionado a `isClosed`, así que un objeto
+      // abierto con curvatura (cornerRadii) se dibujaba RECTO en cuanto pasaba a ser un contorno de una unión ⊕ (Unir, o el OK de una
+      // sesión de dibujo vectorial): los radios seguían guardados, pero ya no se veían. Mismo trazado que el contorno único de más abajo
+      // y que _edBuildLineSvgPath: solo los nodos INTERIORES de un abierto se curvan (los dos extremos no tienen vecino a ambos lados).
+      const _canRound = i => isClosed || (i > 0 && i < _n - 1);
       for(let i=0;i<_limit;i++){
-        const {p1,p2,cur,r}=_tgs[i];
-        if(isClosed && r>0){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
-        const next=_tgs[(i+1)%_n];
-        if(isClosed && next.r>0){ target.lineTo(next.p1.x,next.p1.y); }
-        else                     { target.lineTo(next.cur.x,next.cur.y); }
+        const {p2,cur,r}=_tgs[i];
+        if(r>0 && _canRound(i)){ target.quadraticCurveTo(cur.x,cur.y,p2.x,p2.y); }
+        const ni=(i+1)%_n, next=_tgs[ni];
+        if(next.r>0 && _canRound(ni)){ target.lineTo(next.p1.x,next.p1.y); }
+        else                          { target.lineTo(next.cur.x,next.cur.y); }
       }
       if(isClosed) target.closePath();
     };
@@ -4769,8 +4781,15 @@ class LineLayer extends BaseLayer {
         const _gStyles = this.groupedStyles || [];
         // Acumular offset en pts para mapear cornerRadii correctamente por contorno
         let _ptBase = 0; // índice de inicio en pts del contorno actual (incluye nulls previos)
+        const _a0 = ctx.globalAlpha;   // v42.37: opacidad ya compuesta (la del objeto unido); la propia de cada contorno se multiplica encima
         _contours.forEach((c, _ci) => {
           const _st = _gStyles[_ci] || {};
+          // v42.37: _st.opacity = opacidad que ese contorno tenía como objeto suelto, RELATIVA a la del objeto unido. Un objeto suelto
+          // con opacidad o se ve con alfa o² (edRedraw/visor/miniaturas/exportar fijan globalAlpha=o y draw() la vuelve a multiplicar);
+          // para que unir no cambie el aspecto, el contorno se compone con el MISMO cuadrado: _a0 * r². (En el horneado para el lector
+          // _a0 = U y el lector multiplica otra vez por U → U²·r² = o²: igual que en pantalla.)
+          const _rOp = _st.opacity != null ? _st.opacity : 1;
+          ctx.globalAlpha = _a0 * _rOp * _rOp;
           const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
           const _fcStyle = _edGradValid(_st.fillGradient) ? _edContourFillStyle(ctx, _st.fillGradient, _fc, c, pw, ph)   // v42.33: degradado propio del contorno
                          : (_st.fillColor !== undefined ? _fc : _edFillStyle(ctx, this, this.width*pw, this.height*ph));
@@ -4799,6 +4818,7 @@ class LineLayer extends BaseLayer {
             ctx.stroke(_path);
           }
         });
+        ctx.globalAlpha = _a0;
       } else {
         // Fusionado (⊕ Fusionar): evenodd para huecos booleanos
         const combined = new Path2D();
@@ -8097,6 +8117,8 @@ function edDrawSel(){
     // sin return: continúa más abajo con el dibujo normal del marco/handles
   }
   if(edSelectedIdx<0||edSelectedIdx>=edLayers.length)return;
+  // v42.36: varios objetos vectoriales seleccionados → marco y tiradores del GRUPO en lugar de los del objeto suelto
+  if(_vsMulti.length && _vsMultiActive()){ _vsMultiDraw(); return; }
   const la=edLayers[edSelectedIdx];
   // Objeto perteneciente a un grupo: NUNCA mostrar sus handlers individuales
   // (resize/rotate/nodos/cola de bocadillo, vértices de curva, etc.) — mientras
@@ -8338,6 +8360,7 @@ function edDrawSel(){
       const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
       return Math.max(0,Math.min(r,Math.min(d1,d2)-2));
     };
+    const _vsSetN = _vsNodeSel ? _vsNodeSelActive(la) : null;   // v42.36: nodos seleccionados a la vez (marquesina)
     la.points.forEach((p,i)=>{
       if(!p) return; // separador de contorno
       const r=_er2(i);
@@ -8359,10 +8382,11 @@ function edDrawSel(){
       const cpx=cx + lpx*cos - lpy*sin;
       const cpy=cy + lpx*sin + lpy*cos;
       const isActive=window._edCurveVertIdx===i;
-      const _blink3=isActive?(Math.sin(Date.now()/200)*0.25+0.25):1; // parpadeo 0..0.5
+      const _inSet=!!(_vsSetN && _vsSetN.has(i));   // v42.36: miembro del conjunto → naranja fijo (sin parpadeo), algo mayor
+      const _blink3=(isActive&&!_inSet)?(Math.sin(Date.now()/200)*0.25+0.25):1; // parpadeo 0..0.5
       edCtx.globalAlpha=_blink3;
-      edCtx.beginPath();edCtx.arc(cpx,cpy,hr,0,Math.PI*2);
-      edCtx.fillStyle=isActive?'#e67e22':(_cvm?'#2ecc71':'#e63030');edCtx.fill();
+      edCtx.beginPath();edCtx.arc(cpx,cpy,_inSet?hr*1.2:hr,0,Math.PI*2);
+      edCtx.fillStyle=(isActive||_inSet)?'#e67e22':(_cvm?'#2ecc71':'#e63030');edCtx.fill();
       edCtx.strokeStyle='#fff';edCtx.lineWidth=lw*1.5;edCtx.stroke();
       edCtx.globalAlpha=1;
     });
@@ -13334,6 +13358,7 @@ function _edRemoveLayersWithCompanions(page, mainIdxs){
 function edDeleteSelected(){
   if(edSelectedIdx<0){edToast(I18n.t('ed_selectAnObject'));return;}
   if(edLayers[edSelectedIdx]?.locked){ _edShowLockIcon(edLayers[edSelectedIdx]); return; }
+  if(_vsMulti.length && _vsMultiActive()) _vsMultiDelete();   // v42.36: selección múltiple vectorial → se quitan los demás y el principal sigue el camino normal
   // Si el modo recorte está activo, cancelarlo antes de eliminar
   if(_edCropMode){ _edCropMode=false; _edCropLayer=null; _edCropPts=[]; _edCropDragIdx=-1; _edCropDragging=false; _edCropLastTapSeg=-1; _edCropLastTapTime=0; _edCropHistory=[]; _edCropHistIdx=-1; _edCropShapeType='free'; _edCropShape=null; _edCropShapeDrag=null; _edDrawUnlockUI(); _edPropsOverlayHide(); }
   const _delLay=edLayers[edSelectedIdx];
@@ -13426,6 +13451,8 @@ function _edVectorSelectorActive(){
 // de nodos), sean o no "handlers" de escala/rotación.
 function _edVectorFreehandGesture(){
   if(typeof _edCurveModeActive === 'function' && _edCurveModeActive()) return true;
+  // v42.36: con varios objetos seleccionados el pellizco es solo de cámara (el grupo no se escala ni gira con dos dedos)
+  if(_vsMulti.length && _vsMultiActive()) return true;
   return !_edVectorSelectorActive();
 }
 
@@ -15316,7 +15343,8 @@ function _edDissolveJoined(la) {
     sub.color     = st.color     !== undefined ? st.color     : la.color;
     sub.fillColor = st.fillColor !== undefined ? st.fillColor : la.fillColor;
     sub.lineWidth = st.lineWidth !== undefined ? st.lineWidth : la.lineWidth;
-    sub.opacity   = la.opacity ?? 1;
+    // v42.37: cada contorno de una unión puede traer su propia opacidad (st.opacity, relativa a la del objeto unido): al separarlo vuelve a ser la suya
+    sub.opacity   = (la.opacity ?? 1) * (st.opacity != null ? st.opacity : 1);
     sub.rotation  = la.rotation || 0;
     sub.x = la.x; sub.y = la.y;   // mismo origen; _updateBbox los recentrará
     _edCarryMotionPath(la, sub);  // v41.56: cada sub-camino conserva la trayectoria del objeto unido
@@ -15378,6 +15406,8 @@ function _edLineEditNodes(la, mutate){
   const own = la === _edLineLayer || (edSelectedIdx >= 0 && edLayers[edSelectedIdx] === la);
   const selNode = (own && window._edCurveVertIdx >= 0) ? pts0[window._edCurveVertIdx] : null;
   const vcNode  = (own && _vcof.activeNodeIdx >= 0)    ? pts0[_vcof.activeNodeIdx]    : null;
+  // v42.36: los nodos del conjunto seleccionado (marquesina con NODOS) también pertenecen al VÉRTICE, no a su número
+  const setNodes = (_vsNodeSel && _vsNodeSel.la === la) ? [..._vsNodeSel.set].map(k => pts0[k]).filter(Boolean) : null;
   const res = mutate();
   const pts1 = la.points;
   if(cr0){
@@ -15388,6 +15418,11 @@ function _edLineEditNodes(la, mutate){
   if(own){
     if(window._edCurveVertIdx >= 0) window._edCurveVertIdx = selNode ? pts1.indexOf(selNode) : -1;
     if(_vcof.activeNodeIdx >= 0)    _vcof.activeNodeIdx    = vcNode  ? pts1.indexOf(vcNode)  : -1;
+  }
+  if(setNodes){
+    const idxs = setNodes.map(n => pts1.indexOf(n)).filter(k => k >= 0);
+    if(idxs.length >= 2){ _vsNodeSel.set = new Set(idxs); _vsNodeSel.tap = null; _vsNodeSel.drag = null; }
+    else _vsNodeSel = null;
   }
   return res;
 }
@@ -16249,6 +16284,8 @@ function edOnStart(e){
         if(_vcBestI >= 0){
           const i = _vcBestI;
           {
+            // v42.36: Mayús+clic añade/quita el nodo del conjunto; un nodo del conjunto arrastra a TODO el conjunto (ver _vsNodePress)
+            if(_vsNodePress(e, la, i, c2)) return;
             // Doble tap en nodo ya seleccionado → eliminar nodo
             const _isDblNode = window._edCurveVertIdx===i &&
               (_vcNow - (window._edCurveLastTapTime||0)) < _edDoubleTapMs;
@@ -16434,6 +16471,10 @@ function edOnStart(e){
     if(window._edMpTouchTimer){ clearTimeout(window._edMpTouchTimer); window._edMpTouchTimer = null; }
     // Si rubber band ya había empezado (caso borde), cancelarla
     if(edRubberBand){ edRubberBand = null; edRedraw(); }
+    // v42.36: selección múltiple vectorial — el 2.º dedo es cámara: el gesto de grupo se descarta (vuelve a como estaba) y el toque sobre un
+    // nodo del conjunto ya no colapsa la selección al soltar
+    if(_vsMultiOp) _vsMultiCancelOp();
+    if(_vsNodeSel){ _vsNodeSel.tap = null; _vsNodeSel.drag = null; }
     // Con multiselección activa: cancelar drag en curso y activar pinch de grupo
     if(edActiveTool==='multiselect' && edMultiSel.length){
       edMultiDragging=false; edMultiDragOffs=[];
@@ -17066,6 +17107,8 @@ function edOnStart(e){
     return;
   }
   const c=edCoords(e);
+  // v42.36 — selección múltiple vectorial: tiradores y cuerpo del GRUPO, antes que los del objeto suelto
+  if(_vsMulti.length && _vsMultiPointerDown(e, c)) return;
   // Cola bocadillo — nunca mientras se escribe en él (edición in situ activa,
   // v40.14): el texto fuerza el tamaño del bocadillo, no hay ninguna razón
   // para permitir arrastrar nada suyo mientras tanto, y era precisamente el
@@ -17113,7 +17156,7 @@ function edOnStart(e){
     // (los nodos están en las esquinas, los handles en los centros de segmento)
     // Comprobar estos handles ANTES del hit-test de nodos para evitar conflicto
     if(la.closed && !la._fromEllipse && la.points.filter(Boolean).length===4
-       && e.pointerType!=='touch'
+       && e.pointerType!=='touch' && !_vsMultiActive()
        && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
       const _laForH = la;
       const _isT2 = false; // PC only
@@ -17261,6 +17304,7 @@ function edOnStart(e){
             _edLastNodeTapTime=_now2;
             _edLastNodeTapIdx = _hitId;
             if(_lineHit.type==='node'){
+              if(_vsNodePress(e, la, _lineHit.idx, c)) return;   // v42.36 (ver _vsNodePress)
               _edShapePushHistory(); // pre-snapshot antes del drag
               if(e.pointerType === 'pen'){
                 window._edPenNodeDragPending = { voiceIdx: _lineHit.idx, startX: e.clientX, startY: e.clientY };
@@ -17307,7 +17351,7 @@ function edOnStart(e){
   // pinchable. En PC fuera de V⟺C no aplica: sigue siendo la única forma de
   // redimensionar/rotar.
   const _inCurveMode = _edCurveModeActive && _edCurveModeActive();
-  const _skipHandles = (_inCurveMode || (window._edIsTouch === true && _edVectorFreehandGesture()))
+  const _skipHandles = (_inCurveMode || (window._edIsTouch === true && _edVectorFreehandGesture()) || _vsMultiActive())
     && (_la?.type === 'line' || _la?.type === 'shape');
   // Objeto agrupado: sin handles individuales (ver mismo guard en edDrawSel).
   // Sin esto, aunque el handle no se dibuje, seguiría siendo clicable en su
@@ -17420,9 +17464,10 @@ function edOnStart(e){
     const _lsLa = edLayers[edSelectedIdx];
     if(_lsLa && _lsLa.type === 'line'){
       // Radio normal para detectar nodos y candidatos de doble-tap
-      // Radio ampliado SOLO para iniciar drag del objeto (más fácil desplazar)
-      const _hitSegDrag = 48; // táctil: radio drag > radio nodo (28px)
       const _lsHit = _edLineHitTest(_lsLa, c.nx, c.ny, true);
+      // v42.36: _edLineHitTest devuelve null si el toque no cae sobre ningún nodo ni segmento; antes eso era un TypeError que abortaba todo el
+      // manejador táctil con NODOS activo al tocar fuera del objeto (sin deselección ni marquesina). Sin acierto se pasa al radio ampliado.
+      if(_lsHit){
       const _hitId3 = _lsHit.type==='node' ? _lsHit.idx : 1000+_lsHit.idx;
       const _now4 = Date.now();
       const _sameHit3 = _edLastNodeTapIdx !== -1 && _edLastNodeTapIdx === _hitId3
@@ -17456,6 +17501,7 @@ function edOnStart(e){
       // Primer tap: registrar candidato
       _edLastNodeTapTime=_now4; _edLastNodeTapIdx=_hitId3;
       if(_lsHit.type==='node'){
+        _vsNodePress(e, _lsLa, _lsHit.idx, c);   // v42.36: táctil no tiene Mayús → solo mantiene o vacía el conjunto (ver _vsNodePress)
         if (_vcof.on) {
           // vcof activo: snap al nodo tocado (el drag arranca desde el cuadrado)
           _vcof.activeNodeIdx = _lsHit.idx;
@@ -17503,19 +17549,11 @@ function edOnStart(e){
       window._edMoved = false;
       if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
       return;
+      }   // v42.36: fin de «if(_lsHit)»
     }
-    // Sin hit con radio normal: intentar con radio ampliado para drag del objeto
-    // (hace más fácil desplazar sin necesidad de tocar exactamente la línea)
-    const _lsHitDrag = _edLineHitTest(_lsLa, c.nx, c.ny, true, _hitSegDrag);
-    if(_lsHitDrag && _lsHitDrag.type === 'seg'){
-      edDragOffX = c.nx - _lsLa.x;
-      edDragOffY = c.ny - _lsLa.y;
-      edIsDragging = true;
-      window._edMoved = false;
-      if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
-      return;
-    }
-    // Fuera del área ampliada: dejar caer al bloque de selección
+    // v42.36: un toque que no cae sobre ningún nodo ni segmento NO arrastra el objeto entero (el «radio ampliado» de 48 px que había aquí
+    // era inalcanzable: el TypeError de arriba cortaba antes, y para un objeto que no es línea _hitSegDrag ni siquiera existía en este ámbito).
+    // Con NODOS ese toque cae al bloque de selección: abre la marquesina de nodos o, en vacío, deselecciona.
   }
   // Con panel vectorial abierto o barra flotante:
   // - Objetos vectoriales de la sesión actual: seleccionables y arrastrables
@@ -17547,6 +17585,14 @@ function edOnStart(e){
       }
     }
     if(_hitVec){
+      const _vsPrevSel = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;   // v42.36
+      const _vsNodesOn = !!(_edCurveModeActive && _edCurveModeActive());
+      // v42.36: Mayús+clic (PC, selector, NODOS apagado) añade o quita el objeto del grupo de selección
+      if(e.shiftKey && e.pointerType !== 'touch' && edActiveTool === 'select' && !_vsNodesOn && _vsSelectable(_hitVec)){
+        _vsMultiToggle(_hitVec); edRedraw(); return;
+      }
+      // v42.36: con NODOS, pulsar en el cuerpo del objeto que ya se está editando (sin tocar ningún nodo ni segmento) abre la marquesina de nodos
+      if(_vsNodesOn && _vsPrevSel === _hitVec && _vsMarqueeArm(e, c)) return;
       edSelectedIdx = edLayers.indexOf(_hitVec);
       // En modo V⟺C (edición de nodos) NUNCA se debe poder arrastrar el
       // objeto completo con el selector — solo los nodos individuales (ver
@@ -17566,6 +17612,8 @@ function edOnStart(e){
       edRedraw();
       return;
     }
+    // v42.36: ni objeto ni tirador bajo el puntero → marquesina de selección (objetos; con NODOS, nodos del objeto en edición)
+    if(_vsMarqueeArm(e, c)) return;
     edRedraw(); return;
   }
   // Si se está creando una línea nueva (_edLineLayer sin objeto seleccionado aún), bloquear selección
@@ -18213,6 +18261,8 @@ function edOnMove(e){
     }
     return;
   }
+  // v42.36 — gesto de grupo vectorial (mover / redimensionar varios objetos a la vez)
+  if(_vsMultiOp){ _vsMultiMove(e, edCoords(e)); return; }
   // ── RUBBER BAND en modo select (PC) ────────────────────────
   if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     e.preventDefault();
@@ -18706,6 +18756,8 @@ function edOnMove(e){
       window._edMoved=true; edRedraw(); return;
     }
     if(edTailPointType==='linevertex'){
+      // v42.36: varios nodos seleccionados (marquesina con NODOS) → se mueven TODOS el mismo desplazamiento, sin cambiar sus distancias
+      if(_vsNodeSel && _vsNodeGroupMove(la, c, edTailVoiceIdx)){ edRedraw(); return; }
       // Convertir posición absoluta al espacio local de la línea
       const pw2=edPageW(), ph2=edPageH();
       const rot=-(la.rotation||0)*Math.PI/180;
@@ -19124,6 +19176,8 @@ function edOnEnd(e){
   if(window._edLinePan && (!window._edActivePointers || window._edActivePointers.size <= 1)){
     window._edLinePan = null;
   }
+  // v42.36 — fin de un gesto de grupo vectorial (mover / redimensionar varios objetos): un solo paso de historial
+  if(_vsMultiOp){ _vsMultiEnd(e); return; }
   // Drag de nodo diferido: si el dedo se levanta antes de que dispare el
   // timer de 120ms (que espera un posible segundo dedo para pinch/cámara),
   // el propio hecho de soltar YA demuestra que no va a llegar ese segundo
@@ -19147,6 +19201,8 @@ function edOnEnd(e){
       edRedraw();
     }
   }
+  // v42.36: soltar tras pulsar un nodo del conjunto de nodos seleccionados — sin arrastre, ese nodo pasa a ser el único seleccionado
+  if(_vsNodeSel) _vsNodeEnd();
   // Añadir punto de línea diferido: mismo caso que el nodo — si el dedo se
   // levanta antes de los 120ms de espera por un posible segundo dedo, ya no
   // puede llegar ese segundo dedo, así que el punto debe colocarse ya en vez
@@ -19200,6 +19256,8 @@ function edOnEnd(e){
     clearTimeout(window._edRbTouchTimer);
     window._edRbTouchTimer = null;
     window._edPendingRbC = null;
+    // v42.36: toque en vacío dentro de la sesión vectorial = un clic sin arrastre (el grupo / conjunto de nodos se deshace)
+    if (edActiveTool === 'select' && _edVecSessionOpen()) _vsMarqueeTap();
     // Si el timer pendiente era por un toque sobre un objeto/grupo bloqueado
     // (ver _edLockTapOrRubberBand) y el dedo se levantó antes de disparar,
     // fue un tap simple y rápido — mostrar el candado ahora, no perderlo.
@@ -19332,6 +19390,8 @@ function edOnEnd(e){
   }
   // ── RUBBER BAND en modo select (PC) → activar multiselect ──
   if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
+    // v42.36: dentro de la sesión vectorial la marquesina selecciona SOLO objetos de la sesión (o nodos, con NODOS) — ver _vsMarqueeFinish
+    if(_vsMarqueeActive()){ _vsMarqueeFinish(); edRedraw(); return; }
     const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
     window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
@@ -19886,6 +19946,8 @@ function _vsApply(snap) {
   // Seleccionar el último objeto de la SESIÓN restaurado (o el trazo en construcción); nunca uno ajeno.
   const _lastSes = [...restored].reverse().find(Boolean) || null;
   edSelectedIdx = _lastSes ? page.layers.indexOf(_lastSes) : (_edLineLayer ? page.layers.indexOf(_edLineLayer) : -1);
+  // v42.36: las capas se han recreado → los grupos de selección (objetos y nodos) apuntaban a instancias que ya no existen
+  _vsMultiClear(); _vsNodeSel = null;
 }
 
 // v41.85 — deshacer/rehacer reconstruyen el panel (_edActivateLineTool) y eso reiniciaba NODOS (V⟺C): el objeto seguía seleccionado
@@ -19991,6 +20053,7 @@ function _vsInit(isNew) {
 
 function _vsClear() {
   if(typeof _vcofSetOn === 'function' && _vcof && _vcof.on) _vcofSetOn(false);
+  _vsMultiClear(); _vsNodeSel = null;   // v42.36: fin de la sesión vectorial → sin selección múltiple
   _vsHistory = []; _vsHistIdx = -1;
   _vsIsNew = true;
   _vsUnion = null;   // v42.25
@@ -24917,7 +24980,11 @@ function _edActivateLineTool(isNew, isCreating) {
   const _updateInfo = () => {
     const info=$('op-line-info');
     const l=_curLine();
-    if(info) info.textContent = l ? I18n.t('op_vertCount', { n: l.points.length }) : I18n.t('op_tapToAddVertices');
+    // v42.36: con varios objetos / nodos seleccionados el texto informativo cuenta la selección, no los vértices del principal
+    const _nSelNodes = (l && _vsNodeSel) ? (_vsNodeSelActive(l) || {size:0}).size : 0;
+    if(info) info.textContent = _vsMultiActive() ? I18n.t('op_vecMultiN', { n: _vsMulti.length })
+      : _nSelNodes > 1 ? I18n.t('op_vecNodesN', { n: _nSelNodes })
+      : (l ? I18n.t('op_vertCount', { n: l.points.length }) : I18n.t('op_tapToAddVertices'));
     const status=$('op-line-status');
     if(status){ const ll=_curLine(); if(ll) status.textContent=ll.lineWidth+'px·'+Math.round((ll.opacity??1)*100)+'%'; }
     // Actualizar visibilidad dinámica del botón "Cerrar objeto"
@@ -25004,14 +25071,14 @@ function _edActivateLineTool(isNew, isCreating) {
   });
   $('op-dsize')?.addEventListener('input',e=>{
     const v=+e.target.value; edDrawSize=v;
-    const l=_curLine(); if(l){l.lineWidth=v;edRedraw();} _updateInfo();
+    const l=_curLine(); if(l){l.lineWidth=v;_vsEach(l,p=>{p.lineWidth=v;});edRedraw();} _updateInfo();   // v42.36: _vsEach = selección múltiple
   });
   $('op-dsize')?.addEventListener('change',()=>{ _edShapePushHistory(); });
   $('op-dsize-num')?.addEventListener('change',e=>{
     const v=Math.max(0,Math.min(20,parseInt(e.target.value)||0));
     e.target.value=v; edDrawSize=v;
     const sl=$('op-dsize'); if(sl) sl.value=v;
-    const l=_curLine(); if(l){l.lineWidth=v;edRedraw();} _updateInfo();
+    const l=_curLine(); if(l){l.lineWidth=v;_vsEach(l,p=>{p.lineWidth=v;});edRedraw();} _updateInfo();
     _edShapePushHistory();
   });
 
@@ -25026,14 +25093,14 @@ function _edActivateLineTool(isNew, isCreating) {
   });
   $('op-line-opacity')?.addEventListener('input',e=>{
     const v=+e.target.value;
-    const l=_curLine(); if(l){l.opacity=v/100;edRedraw();} _updateInfo();
+    const l=_curLine(); if(l){l.opacity=v/100;_vsEach(l,p=>{p.opacity=v/100;});edRedraw();} _updateInfo();   // v42.36: selección múltiple
   });
   $('op-line-opacity')?.addEventListener('change',()=>{ _edShapePushHistory(); });
   $('op-line-opacity-num')?.addEventListener('change',e=>{
     const v=Math.max(0,Math.min(100,parseInt(e.target.value)||100));
     e.target.value=v;
     const sl=$('op-line-opacity'); if(sl) sl.value=v;
-    const l=_curLine(); if(l){l.opacity=v/100;edRedraw();} _updateInfo();
+    const l=_curLine(); if(l){l.opacity=v/100;_vsEach(l,p=>{p.opacity=v/100;});edRedraw();} _updateInfo();
     _edShapePushHistory();
   });
 
@@ -25176,7 +25243,7 @@ function _edActivateLineTool(isNew, isCreating) {
     window._edCurveRadius=v;
     const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const vi=window._edCurveVertIdx;
-    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; _vsNodeApplyRadius(la2, v); }   // v42.36: con varios nodos seleccionados, a todos
     edRedraw();
   });
   $('op-line-curve-r')?.addEventListener('change',()=>{ _edShapePushHistory(); });
@@ -25186,7 +25253,7 @@ function _edActivateLineTool(isNew, isCreating) {
     window._edCurveRadius=v;
     const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const vi=window._edCurveVertIdx;
-    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; }
+    if(la2&&vi>=0){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; _vsNodeApplyRadius(la2, v); }   // v42.36
     edRedraw(); _edShapePushHistory();
   });
 
@@ -25266,8 +25333,11 @@ function _edActivateLineTool(isNew, isCreating) {
     // ── Eliminar ──
   $('op-line-del')?.addEventListener('click',()=>{
     const l=_curLine(); if(!l) return;
-    edConfirm(I18n.t('ed_confirmDeleteGeneric'), ()=>{
+    const _nMulti = _vsMultiPeers(l).length + 1;   // v42.36: con varios objetos seleccionados se borran todos (un solo paso)
+    edConfirm(_nMulti>1 ? I18n.t('ed_confirmDeleteVecMulti',{n:_nMulti}) : I18n.t('ed_confirmDeleteGeneric'), ()=>{
       _edLineLayer=null;
+      _vsMultiPeers(l).forEach(p=>{ const j=edLayers.indexOf(p); if(j>=0) edLayers.splice(j,1); });
+      _vsMultiClear();
       const idx=edLayers.indexOf(l);
       if(idx>=0){edLayers.splice(idx,1);}
       edSelectedIdx=-1;
@@ -26373,8 +26443,10 @@ function _edVecRefreshColorUI(pfx, la){
 function _edVecApplyColor(pfx, la, hex){
   if(_edVecTarget(pfx)==='fill'){
     la.fillColor=hex; delete la.fillGradient; la._lastFillColor=hex; edDrawFillColor=hex;
+    _vsEach(la, p=>{ p.fillColor=hex; delete p.fillGradient; p._lastFillColor=hex; });   // v42.36: selección múltiple
   } else {
     la.color=hex;
+    _vsEach(la, p=>{ p.color=hex; });   // v42.36: selección múltiple
     // v42.22 — el color de línea que elige el usuario es también el de los SIGUIENTES objetos (mismo criterio que Illustrator, Inkscape
     // o Affinity: «último estilo usado»), con o sin objeto seleccionado y cambie de herramienta vectorial las veces que cambie, hasta el OK.
     // (Sin objeto, `la` es _edVecNewStyle y su accesor ya escribe edDrawColor; con objeto real hay que escribirlo aquí.)
@@ -26393,9 +26465,12 @@ function _edVecSetFillOn(on, getLayer){
     const lf = la._lastFillColor;
     const hex = (lf && lf!=='none') ? lf : ((edDrawFillColor && edDrawFillColor!=='none') ? edDrawFillColor : '#ffffff');
     la.fillColor = hex; edDrawFillColor = hex;
+    // v42.36: selección múltiple — todos rellenan con el color del principal
+    _vsEach(la, p=>{ p.fillColor = hex; p._lastFillColor = hex; });
   } else {
     if(la.fillColor && la.fillColor!=='none') la._lastFillColor = la.fillColor;
     la.fillColor = 'none'; edDrawFillColor = 'none';
+    _vsEach(la, p=>{ if(p.fillColor && p.fillColor!=='none') p._lastFillColor = p.fillColor; p.fillColor = 'none'; });   // v42.36
   }
   _edVecRefreshColorUI('', la);
   edRedraw(); _edShapePushHistory();
@@ -30905,7 +30980,7 @@ function edInitDrawBar() {
       edDrawSize = v;
       const l = _edVecSelObj();
       if(l){
-        l.lineWidth = v; edRedraw();
+        l.lineWidth = v; _vsEach(l, p=>{ p.lineWidth = v; }); edRedraw();   // v42.36: _vsEach = selección múltiple
         // Sincronizar el panel de propiedades si está abierto (mismo efecto
         // que ya tenía el slider genérico anterior de la barra vectorial)
         const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
@@ -30935,7 +31010,7 @@ function edInitDrawBar() {
       edDrawSize = v;   // v42.22: ídem (también el deslizador de la barra fija el grosor de los siguientes)
       const l = _edVecSelObj();
       if(l){
-        l.lineWidth = v; edRedraw();
+        l.lineWidth = v; _vsEach(l, p=>{ p.lineWidth = v; }); edRedraw();   // v42.36: _vsEach = selección múltiple
         const _sl=$('op-dsize'); if(_sl){ _sl.value=v; _edUpdateBubble(_sl, 'px'); }
         const _ss=$('op-size-btn'); if(_ss) _ss.style.background='var(--gray-200)';
         const _sls=$('op-size-slider'); if(_sls) _sls.style.display='flex';
@@ -31653,6 +31728,465 @@ function _edbSyncSizePreview() {
 /* Calcular posición por defecto de una barra flotante:
    pegada al borde izquierdo del lienzo, centrada verticalmente */
 
+/* ── v42.36 · SELECCIÓN MÚLTIPLE VECTORIAL ──────────────────────────────────────────────────────────────────────────────────────────
+   Petición de Alberto: «habilita la selección arrastrando desde vacío cuando se esté editando dibujos vectoriales, de modo que se puedan
+   seleccionar varios objetos vectoriales y cambiarles en conjunto su grosor de línea o su color de relleno o de línea, o que se puedan
+   draguear o redimensionar juntos; y cuando esté activado NODOS, que se puedan seleccionar varios nodos a la vez para cambiarles su
+   curvatura o draguearlos sin modificar la relación de distancia entre los nodos seleccionados».
+   Es lo estándar de la industria (marquesina de selección, Mayús para añadir, caja de grupo con tiradores), con el criterio del propio
+   editor general: la marquesina selecciona lo que queda ENCERRADO por entero (_edAllCornersInside).
+
+   OBJETOS (selector, NODOS apagado)
+     · Arrastrar desde un punto VACÍO dibuja la marquesina (la misma goma elástica del editor general, edRubberBand). Al soltar se
+       seleccionan los objetos de la SESIÓN encerrados; los vectoriales previos a la sesión, los ocultos y los bloqueados no entran
+       (siguen siendo intocables, igual que con el clic). Mayús al empezar = añade a lo ya seleccionado. Un solo objeto = selección normal.
+     · Estado propio (_vsMulti), NO el del editor general (edMultiSel/'multiselect': traería sus menús, atajos e historial global).
+       El objeto PRINCIPAL del grupo es siempre edLayers[edSelectedIdx]: el panel y la barra flotante siguen mostrándolo y todo su código
+       (color, grosor, opacidad, relleno, borrar…) sigue funcionando igual. Lo nuevo es que, al cambiar una propiedad del principal, se
+       propaga al resto del grupo en cada punto de escritura (_vsMultiPeers) y se apunta UN solo paso de historial.
+     · Mover / redimensionar juntos: caja del grupo con 8 tiradores (sin giro, a propósito) → _vsMultiPointerDown / _vsMultiMove / _vsMultiEnd.
+     · El grupo se deshace solo (_vsMultiActive) al cambiar de herramienta, activar NODOS, cerrar la sesión, tocar un objeto que no es del
+       grupo o cuando deshacer/rehacer recrea las capas.
+   NODOS (edita los nodos del objeto seleccionado)
+     · La marquesina selecciona NODOS (por la posición VISIBLE del tirador, también con curvatura). Mayús = añadir/quitar nodo.
+     · Con varios nodos seleccionados la curvatura se aplica a todos y arrastrar uno mueve TODOS el mismo desplazamiento (las distancias
+       entre ellos no cambian). Un toque sin arrastre sobre un nodo del conjunto lo deja como único seleccionado. */
+
+// ── Objetos ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function _vsMultiClear(){ _vsMulti = []; _vsMultiBB = null; _vsMultiOp = null; }
+// ¿Hay un grupo vigente? Se autolimpia en cuanto deja de tener sentido (ver cabecera).
+function _vsMultiActive(){
+  if(_vsMulti.length < 2){ if(_vsMulti.length) _vsMultiClear(); return false; }
+  const la = (edSelectedIdx >= 0 && edSelectedIdx < edLayers.length) ? edLayers[edSelectedIdx] : null;
+  if(!la || _vsMulti.indexOf(la) < 0 || edActiveTool !== 'select' || _edLineLayer || !_edVecSessionOpen() || _edCurveModeActive()
+     || _vsMulti.some(l => edLayers.indexOf(l) < 0)){
+    _vsMultiClear(); return false;
+  }
+  return true;
+}
+// Los demás miembros del grupo cuando `la` es el principal; [] si no hay grupo o `la` no es el principal (p. ej. el estilo del próximo objeto).
+function _vsMultiPeers(la){
+  if(!la || !_vsMultiActive() || edLayers[edSelectedIdx] !== la) return [];
+  return _vsMulti.filter(l => l !== la);
+}
+// Aplica `fn` a cada miembro del grupo salvo `la`. Es la llamada que ponen los puntos de escritura (color, grosor, opacidad…).
+function _vsEach(la, fn){ _vsMultiPeers(la).forEach(fn); }
+// ¿Puede entrar este objeto en una selección múltiple? Solo objetos vectoriales de la sesión, visibles y sin bloquear.
+function _vsSelectable(l){
+  return !!l && (l.type === 'line' || l.type === 'shape') && !l.hidden && !l.locked && !_vsPreSessionLayers.has(l)
+    && l !== _edLineLayer && l !== _edShapePreview;
+}
+// Selección actual como lista de capas (grupo, o el objeto suelto seleccionado, o nada).
+function _vsMultiCurrent(){
+  if(_vsMultiActive()) return _vsMulti.slice();
+  const l = (edSelectedIdx >= 0 && edSelectedIdx < edLayers.length) ? edLayers[edSelectedIdx] : null;
+  return _vsSelectable(l) ? [l] : [];
+}
+// Fija la selección. 0 → no toca nada; 1 → selección normal; ≥ 2 → grupo (principal: `primary` si es miembro, si no el de más arriba).
+function _vsMultiSet(list, primary){
+  const uniq = [...new Set(list)].filter(l => edLayers.indexOf(l) >= 0);
+  if(!uniq.length) return;
+  if(uniq.length === 1){ _vsMultiClear(); edSelectedIdx = edLayers.indexOf(uniq[0]); _vsSyncPanel(); return; }
+  uniq.sort((a, b) => edLayers.indexOf(a) - edLayers.indexOf(b));
+  _vsMulti = uniq; _vsMultiOp = null;
+  edSelectedIdx = edLayers.indexOf(primary && uniq.indexOf(primary) >= 0 ? primary : uniq[uniq.length - 1]);
+  _vsMultiRecalcBB();
+  _vsSyncPanel();
+}
+// Mayús+clic sobre un objeto: lo añade al grupo o lo quita de él.
+function _vsMultiToggle(l){
+  const cur = _vsMultiCurrent();
+  const had = cur.indexOf(l) >= 0;
+  const next = had ? cur.filter(x => x !== l) : cur.concat([l]);
+  if(!next.length) return;                       // nunca se deja sin objeto seleccionado (igual que el clic en vacío)
+  const prim = edLayers[edSelectedIdx];
+  _vsMultiSet(next, had ? (prim === l ? null : prim) : l);
+}
+// Texto informativo del panel («3 objetos», «2 nodos»…) y demás controles que miran la selección.
+function _vsSyncPanel(){
+  if(typeof window._edLinePanelUpdate === 'function') window._edLinePanelUpdate();
+}
+// Caja envolvente del grupo (unión de las cajas, giradas, de sus miembros) en coordenadas normalizadas de página.
+function _vsMultiRecalcBB(){
+  const pw = edPageW(), ph = edPageH();
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for(const l of _vsMulti){
+    const rot = (l.rotation || 0) * Math.PI / 180, cs = Math.cos(rot), sn = Math.sin(rot);
+    const hw = l.width / 2, hh = l.height / 2;
+    for(const [dx, dy] of [[-hw, -hh], [hw, -hh], [-hw, hh], [hw, hh]]){
+      const rx = dx * pw, ry = dy * ph;
+      const wx = l.x + (rx * cs - ry * sn) / pw, wy = l.y + (rx * sn + ry * cs) / ph;
+      if(wx < x0) x0 = wx; if(wx > x1) x1 = wx;
+      if(wy < y0) y0 = wy; if(wy > y1) y1 = wy;
+    }
+  }
+  if(!isFinite(x0)){ _vsMultiBB = null; return null; }
+  _vsMultiBB = { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+  return _vsMultiBB;
+}
+// Marco de cada miembro (tenue) + marco del grupo con sus 8 tiradores de escala. Sin tirador de giro.
+function _vsMultiDraw(){
+  const bb = _vsMultiRecalcBB(); if(!bb) return;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z, lw = 1 / z, hr = 6 / z;
+  edCtx.save();
+  for(const l of _vsMulti){
+    edCtx.save();
+    edCtx.translate(edMarginX() + l.x * pw, edMarginY() + l.y * ph);
+    edCtx.rotate((l.rotation || 0) * Math.PI / 180);
+    edCtx.strokeStyle = 'rgba(26,140,255,0.4)'; edCtx.lineWidth = lw; edCtx.setLineDash([4 / z, 3 / z]);
+    edCtx.strokeRect(-l.width * pw / 2, -l.height * ph / 2, l.width * pw, l.height * ph);
+    edCtx.restore();
+  }
+  edCtx.strokeStyle = '#1a8cff'; edCtx.lineWidth = 1.5 / z; edCtx.setLineDash([6 / z, 3 / z]);
+  edCtx.strokeRect(edMarginX() + bb.x0 * pw, edMarginY() + bb.y0 * ph, bb.w * pw, bb.h * ph);
+  edCtx.setLineDash([]);
+  for(const h of _msHandles(bb)){
+    edCtx.beginPath(); edCtx.arc(edMarginX() + h.x * pw, edMarginY() + h.y * ph, hr, 0, Math.PI * 2);
+    edCtx.fillStyle = '#fff'; edCtx.fill();
+    edCtx.strokeStyle = '#1a8cff'; edCtx.lineWidth = lw * 1.5; edCtx.stroke();
+  }
+  edCtx.restore();
+}
+// Objeto de la sesión que hay bajo el punto (el de más arriba): acierto exacto y, en táctil, caja ampliada 28 px (como el clic normal).
+function _vsPickTop(c, isTouch){
+  const list = edLayers.filter(_vsSelectable);
+  for(let i = list.length - 1; i >= 0; i--){ if(list[i].contains(c.nx, c.ny)) return list[i]; }
+  if(isTouch){
+    const pw = edPageW(), ph = edPageH(), tol = 28 / (edCamera.z * Math.min(pw, ph));
+    for(let i = list.length - 1; i >= 0; i--){
+      const l = list[i], r = (l.rotation || 0) * Math.PI / 180;
+      const dx = (c.nx - l.x) * pw, dy = (c.ny - l.y) * ph;
+      const lx = (dx * Math.cos(-r) - dy * Math.sin(-r)) / pw, ly = (dx * Math.sin(-r) + dy * Math.cos(-r)) / ph;
+      if(Math.abs(lx) <= l.width / 2 + tol && Math.abs(ly) <= l.height / 2 + tol) return l;
+    }
+  }
+  return null;
+}
+// Pulsación con un grupo vigente. true = la ha resuelto (tirador → redimensionar; sobre un miembro o en un hueco de la caja → arrastrar el
+// grupo; Mayús → añadir/quitar). false = el flujo normal sigue (objeto ajeno al grupo → selección sencilla; fuera de la caja → marquesina).
+function _vsMultiPointerDown(e, c){
+  if(!_vsMultiActive()) return false;
+  const isTouch = e.pointerType === 'touch';
+  const bb = _vsMultiRecalcBB(); if(!bb) return false;
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  const grab = () => { if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} } };
+  // 1) tiradores de la caja (radio proporcional a la caja, como los del objeto suelto)
+  const R = Math.min(isTouch ? 22 : 14, Math.max(4, Math.min(bb.w * pw, bb.h * ph) * z / 2 * 0.7));
+  for(const h of _msHandles(bb)){
+    if(Math.hypot((c.nx - h.x) * pw, (c.ny - h.y) * ph) * z < R){ _vsMultiBeginResize(h.c, bb); grab(); return true; }
+  }
+  // 2) objeto de la sesión bajo el puntero
+  const top = _vsPickTop(c, isTouch);
+  const shift = e.shiftKey && !isTouch;
+  if(top && _vsMulti.indexOf(top) < 0){
+    if(shift){ _vsMultiToggle(top); edRedraw(); return true; }
+    return false;                                  // clic en otro objeto: lo gestiona la selección normal (el grupo se deshace solo)
+  }
+  if(top && shift){ _vsMultiToggle(top); edRedraw(); return true; }
+  // 3) miembro, o hueco dentro de la caja: arrastrar el grupo
+  if(top || (c.nx >= bb.x0 && c.nx <= bb.x1 && c.ny >= bb.y0 && c.ny <= bb.y1)){
+    _vsMultiOp = { kind: 'drag', nx0: c.nx, ny0: c.ny, hit: top || null, moved: false,
+                   items: _vsMulti.map(l => ({ l, x: l.x, y: l.y })) };
+    grab();
+    return true;
+  }
+  return false;
+}
+function _vsMultiBeginResize(corner, bb){
+  const ax = (corner === 'tl' || corner === 'bl' || corner === 'ml') ? bb.x1 : (corner === 'tr' || corner === 'br' || corner === 'mr') ? bb.x0 : bb.cx;
+  const ay = (corner === 'tl' || corner === 'tr' || corner === 'mt') ? bb.y1 : (corner === 'bl' || corner === 'br' || corner === 'mb') ? bb.y0 : bb.cy;
+  const clonePts = pts => pts.map(_edCloneLinePoint);
+  _vsMultiOp = { kind: 'resize', corner, ax, ay, w0: Math.max(bb.w, 0.002), h0: Math.max(bb.h, 0.002), moved: false,
+    items: _vsMulti.map(l => ({
+      l, x: l.x, y: l.y, w: l.width, h: l.height,
+      pts: (l.type === 'line' && l.points) ? clonePts(l.points) : null,
+      sub: (l.type === 'line' && l.subPaths && l.subPaths.length)
+        ? l.subPaths.map(sp => { const n = clonePts(sp); if(sp.cornerRadii) n.cornerRadii = { ...sp.cornerRadii }; return n; }) : null,
+      cr: l.cornerRadii ? (Array.isArray(l.cornerRadii) ? [...l.cornerRadii] : { ...l.cornerRadii }) : null
+    })) };
+}
+function _vsMultiMove(e, c){
+  const op = _vsMultiOp; if(!op) return false;
+  if(e.cancelable) e.preventDefault();
+  const pw = edPageW(), ph = edPageH(), z = edCamera.z;
+  if(op.kind === 'drag'){
+    if(!op.moved){
+      // umbral: un clic con temblor no debe desplazar el grupo (el toque sobre un miembro sirve para dejarlo como único)
+      if(Math.hypot((c.nx - op.nx0) * pw, (c.ny - op.ny0) * ph) * z < (e.pointerType === 'touch' ? 6 : 3)) return true;
+      op.moved = true;
+    }
+    const dx = c.nx - op.nx0, dy = c.ny - op.ny0;
+    op.items.forEach(s => { s.l.x = s.x + dx; s.l.y = s.y + dy; });
+  } else {
+    op.moved = true;
+    // Escala desde el tirador opuesto (que queda fijo). Esquinas: proporcional; Mayús = libre. Lados: solo ese eje.
+    const cn = op.corner;
+    let sx = 1, sy = 1;
+    const ex = Math.abs(c.nx - op.ax) / op.w0, ey = Math.abs(c.ny - op.ay) / op.h0;
+    if(cn === 'ml' || cn === 'mr') sx = ex;
+    else if(cn === 'mt' || cn === 'mb') sy = ey;
+    else if(e.shiftKey){ sx = ex; sy = ey; }
+    else { sx = sy = Math.max(ex, ey); }
+    sx = Math.max(sx, 0.05); sy = Math.max(sy, 0.05);
+    op.items.forEach(s => {
+      const l = s.l;
+      l.x = op.ax + (s.x - op.ax) * sx;
+      l.y = op.ay + (s.y - op.ay) * sy;
+      l.width = Math.max(s.w * sx, 0.01); l.height = Math.max(s.h * sy, 0.01);
+      if(s.pts){
+        const sp = p => { if(!p) return null; const q = { ...p, x: p.x * sx, y: p.y * sy };
+          if(p.cp1) q.cp1 = { x: p.cp1.x * sx, y: p.cp1.y * sy }; if(p.cp2) q.cp2 = { x: p.cp2.x * sx, y: p.cp2.y * sy }; return q; };
+        l.points = s.pts.map(sp);
+        if(s.sub) l.subPaths = s.sub.map(arr => { const n = arr.map(sp); if(arr.cornerRadii) n.cornerRadii = { ...arr.cornerRadii }; return n; });
+      }
+      if(s.cr){
+        // radios de esquina: se escalan con el lado menor y se limitan al máximo posible (igual que el redimensionado de un objeto suelto)
+        const k = Math.min(sx, sy), mx = Math.min(l.width * pw, l.height * ph) / 2;
+        if(Array.isArray(s.cr)) l.cornerRadii = s.cr.map(r => r ? Math.min(r * k, mx) : 0);
+        else { const n = {}; for(const key in s.cr){ const r = s.cr[key] || 0; n[key] = r ? Math.min(r * k, mx) : 0; } l.cornerRadii = n; }
+      }
+    });
+  }
+  window._edMoved = true;
+  if(typeof edHideGearIcon === 'function') edHideGearIcon();
+  edRedraw();
+  return true;
+}
+// Fin del gesto de grupo (soltar). Un toque sin arrastre sobre un miembro lo deja como único seleccionado.
+function _vsMultiEnd(e){
+  const op = _vsMultiOp; _vsMultiOp = null;
+  window._edMoved = false;
+  if(!window._edActivePointers || window._edActivePointers.size === 0) _edPinchHappened = false;
+  if(!op) return;
+  if(!op.moved){
+    if(op.kind === 'drag' && op.hit && edLayers.indexOf(op.hit) >= 0){ _vsMultiClear(); edSelectedIdx = edLayers.indexOf(op.hit); _vsSyncPanel(); }
+    edRedraw(); return;
+  }
+  op.items.forEach(s => {
+    const l = s.l;
+    if(l.type === 'line' && l.points && l.points.length && !(l.subPaths && l.subPaths.length)) l._updateBbox();   // recentra y deja width/height exactos
+  });
+  _vsMultiRecalcBB();
+  _edShapePushHistory();                      // un solo paso de deshacer para todo el grupo
+  edRedraw();
+}
+// Un segundo dedo (pellizco/cámara) o cualquier interrupción: el gesto se descarta y todo vuelve a como estaba al pulsar.
+function _vsMultiCancelOp(){
+  const op = _vsMultiOp; if(!op) return;
+  _vsMultiOp = null; window._edMoved = false;
+  if(op.moved){
+    op.items.forEach(s => {
+      const l = s.l; l.x = s.x; l.y = s.y;
+      if(op.kind === 'resize'){
+        l.width = s.w; l.height = s.h;
+        if(s.pts) l.points = s.pts.map(_edCloneLinePoint);
+        if(s.sub) l.subPaths = s.sub.map(arr => { const n = arr.map(_edCloneLinePoint); if(arr.cornerRadii) n.cornerRadii = { ...arr.cornerRadii }; return n; });
+        if(s.cr) l.cornerRadii = Array.isArray(s.cr) ? [...s.cr] : { ...s.cr };
+      }
+    });
+  }
+  edRedraw();
+}
+// Borrar con un grupo: se quitan primero los demás miembros y el principal lo borra el camino normal (edDeleteSelected: historial, limpieza
+// de la sesión, barra flotante…), de modo que todo el borrado es UN paso de deshacer.
+function _vsMultiDelete(){
+  const prim = (edSelectedIdx >= 0) ? edLayers[edSelectedIdx] : null;
+  const peers = _vsMultiPeers(prim);
+  if(!peers.length) return false;
+  peers.forEach(p => { const i = edLayers.indexOf(p); if(i >= 0) edLayers.splice(i, 1); });
+  edSelectedIdx = edLayers.indexOf(prim);
+  _vsMultiClear();
+  return true;
+}
+
+// ── Marquesina desde un punto vacío ─────────────────────────────────────────────────────────────────────────────────────────────
+// Se arma en edOnStart cuando la pulsación no cae sobre nada del selector vectorial. Reutiliza edRubberBand (dibujo y seguimiento del
+// editor general): en PC nace al pulsar; en táctil tras los 120 ms de espera por un posible segundo dedo (o antes, si el dedo se mueve:
+// ver la EXCEPCIÓN de edOnMove), con los mismos _edRbTouchTimer/_edPendingRbC.
+function _vsMarqueeArm(e, c){
+  if(edActiveTool !== 'select' || _edLineLayer || window._gcpActive || !_edVecSessionOpen()) return false;
+  _vsMarqueeAdd = e.shiftKey && e.pointerType !== 'touch';
+  if(e.pointerType === 'touch'){
+    const _e = e;
+    clearTimeout(window._edRbTouchTimer);
+    window._edPendingRbC = { nx: c.nx, ny: c.ny };
+    window._edRbTouchTimer = setTimeout(() => {
+      window._edRbTouchTimer = null; window._edPendingRbC = null;
+      if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
+      const rc = edCoords(_e);
+      edRubberBand = { x0: rc.nx, y0: rc.ny, x1: rc.nx, y1: rc.ny };
+      if(_e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(_e.pointerId); }catch(_){} }
+      window._edRubberBandEndPos = null;
+      edRedraw();
+    }, 120);
+  } else {
+    edRubberBand = { x0: c.nx, y0: c.ny, x1: c.nx, y1: c.ny };
+    if(e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+    window._edRubberBandEndPos = null;
+  }
+  edRedraw();
+  return true;
+}
+// ¿Es la marquesina en curso una marquesina vectorial? (cualquier goma elástica con el selector dentro de la sesión vectorial lo es)
+function _vsMarqueeActive(){
+  return !!edRubberBand && edActiveTool === 'select' && _edVecSessionOpen();
+}
+// Un toque en vacío sin llegar a abrir la marquesina (táctil: el dedo se levantó antes de los 120 ms): igual que un clic sin arrastre.
+function _vsMarqueeTap(){
+  if(edActiveTool !== 'select' || !_edVecSessionOpen()) return;
+  if(_edCurveModeActive()){
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if(la && _vsNodeSelActive(la)){ const p = window._edCurveVertIdx; _vsNodeSelSet(la, [p], p); edRedraw(); }
+  } else if(_vsMultiActive()){
+    _vsMultiClear(); _vsSyncPanel(); edRedraw();                 // el grupo se deshace; queda seleccionado el principal
+  }
+}
+function _vsMarqueeFinish(){
+  const rb = edRubberBand;
+  edRubberBand = null; window._edRubberBandEndPos = null;
+  const add = _vsMarqueeAdd; _vsMarqueeAdd = false;
+  if(!rb) return;
+  const rx0 = Math.min(rb.x0, rb.x1), ry0 = Math.min(rb.y0, rb.y1), rx1 = Math.max(rb.x0, rb.x1), ry1 = Math.max(rb.y0, rb.y1);
+  const real = Math.hypot((rx1 - rx0) * edPageW(), (ry1 - ry0) * edPageH()) * edCamera.z >= 4;   // menos de 4 px = un clic, no una marquesina
+  if(!real){ _vsMarqueeTap(); return; }
+  if(_edCurveModeActive()){
+    const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
+    if(!la || la.type !== 'line' || !la.points) return;
+    const cur = _vsNodeSelIdxs(la);
+    const inside = [];
+    la.points.forEach((p, i) => {
+      if(!p) return;
+      const v = _vsNodeWorldPos(la, i);
+      if(v.x >= rx0 && v.x <= rx1 && v.y >= ry0 && v.y <= ry1) inside.push(i);
+    });
+    const next = add ? cur.concat(inside.filter(i => cur.indexOf(i) < 0)) : inside;
+    _vsNodeSelSet(la, next, next.length ? next[next.length - 1] : null);
+    _vsSyncPanel();
+    return;
+  }
+  const cur = _vsMultiCurrent();
+  const inside = edLayers.filter(l => _vsSelectable(l) && _edAllCornersInside(l, rx0, ry0, rx1, ry1));
+  const found = add ? cur.concat(inside.filter(l => cur.indexOf(l) < 0)) : inside;
+  if(!found.length){ if(cur.length > 1 && !add){ _vsMultiClear(); _vsSyncPanel(); } return; }   // nada encerrado: el grupo, si lo había, se deshace
+  _vsMultiSet(found, (edSelectedIdx >= 0 && found.indexOf(edLayers[edSelectedIdx]) >= 0) ? edLayers[edSelectedIdx] : null);
+}
+
+// ── Nodos (NODOS activo) ────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Conjunto (Set de índices) de nodos seleccionados a la vez en `la`, o null si no hay ≥ 2. Se autolimpia si deja de ser válido.
+function _vsNodeSelActive(la){
+  const s = _vsNodeSel;
+  if(!s) return null;
+  la = la || (edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null);
+  if(!la || s.la !== la || edLayers[edSelectedIdx] !== la || !_edCurveModeActive()){ _vsNodeSel = null; return null; }
+  s.set.forEach(i => { if(!la.points || !la.points[i]) s.set.delete(i); });
+  if(s.set.size < 2){ _vsNodeSel = null; return null; }
+  return s.set;
+}
+// Índices de los nodos seleccionados: el conjunto, o el nodo activo suelto, o [].
+function _vsNodeSelIdxs(la){
+  const set = _vsNodeSelActive(la);
+  if(set) return [...set];
+  const i = window._edCurveVertIdx;
+  return (la && i >= 0 && la.points && la.points[i]) ? [i] : [];
+}
+// Fija la selección de nodos. ≥ 2 → conjunto; 1 → nodo activo suelto; 0 → ninguno. `primary` = nodo cuya curvatura muestra el deslizador.
+function _vsNodeSelSet(la, idxs, primary){
+  idxs = [...new Set(idxs)].filter(i => i >= 0 && la.points && la.points[i]);
+  if(idxs.length >= 2){
+    _vsNodeSel = { la, set: new Set(idxs), tap: null, moved: false, press: null, drag: null };
+    window._edCurveVertIdx = (primary != null && idxs.indexOf(primary) >= 0) ? primary : idxs[idxs.length - 1];
+  } else {
+    _vsNodeSel = null;
+    window._edCurveVertIdx = idxs.length ? idxs[0] : -1;
+  }
+  const i = window._edCurveVertIdx;
+  if(i >= 0){
+    // El deslizador de curvatura (panel y barra) pasa a mostrar la del nodo principal, como al seleccionar un nodo suelto.
+    const r = (la.cornerRadii && la.cornerRadii[i]) || 0;
+    window._edCurveRadius = r;
+    const a = $('esb-slider-input'); if(a) a.value = r;
+    const b = $('op-line-curve-r'); if(b) b.value = r;
+    const d = $('op-line-curve-rnum'); if(d) d.value = r;
+  }
+  edRedraw();
+}
+// Posición VISIBLE del tirador del nodo (con curvatura, el tirador se desplaza hacia dentro de la esquina) en coordenadas de página.
+function _vsNodeWorldPos(la, i){
+  const pw = edPageW(), ph = edPageH(), n = la.points.length, p = la.points[i];
+  let lpx = p.x * pw, lpy = p.y * ph;
+  const r = (la.cornerRadii && la.cornerRadii[i]) || 0;
+  if(r > 0){
+    const noSep = la.closed && !la.points.includes(null);
+    const prev = (i > 0 && la.points[i - 1] !== null) ? la.points[i - 1] : (noSep ? la.points[(i - 1 + n) % n] : null);
+    const next = (i < n - 1 && la.points[i + 1] !== null) ? la.points[i + 1] : (noSep ? la.points[(i + 1) % n] : null);
+    if(prev && next){
+      const d1 = Math.hypot((p.x - prev.x) * pw, (p.y - prev.y) * ph), d2 = Math.hypot((next.x - p.x) * pw, (next.y - p.y) * ph);
+      const rr = Math.max(0, Math.min(r, Math.min(d1 / 2, d2 / 2)));
+      const v1x = d1 > 0 ? (p.x - prev.x) * pw / d1 : 0, v1y = d1 > 0 ? (p.y - prev.y) * ph / d1 : 0;
+      const v2x = d2 > 0 ? (next.x - p.x) * pw / d2 : 0, v2y = d2 > 0 ? (next.y - p.y) * ph / d2 : 0;
+      lpx = ((p.x * pw - v1x * rr) + 2 * p.x * pw + (p.x * pw + v2x * rr)) / 4;
+      lpy = ((p.y * ph - v1y * rr) + 2 * p.y * ph + (p.y * ph + v2y * rr)) / 4;
+    }
+  }
+  const rot = (la.rotation || 0) * Math.PI / 180, cs = Math.cos(rot), sn = Math.sin(rot);
+  return { x: la.x + (lpx * cs - lpy * sn) / pw, y: la.y + (lpx * sn + lpy * cs) / ph };
+}
+// Pulsación sobre el nodo `i` de `la` con NODOS activo. true = resuelta por completo (Mayús+clic: añade/quita el nodo del conjunto, sin
+// arrastrar). false = sigue el flujo normal de selección/arrastre de nodo: con el conjunto intacto si `i` es miembro (el arrastre moverá a
+// todos) o vaciado si no lo es (selección sencilla de ese nodo).
+function _vsNodePress(e, la, i, c){
+  if(!la || la.type !== 'line') return false;
+  if(e && e.shiftKey && e.pointerType !== 'touch'){
+    const cur = _vsNodeSelIdxs(la), had = cur.indexOf(i) >= 0;
+    _vsNodeSelSet(la, had ? cur.filter(k => k !== i) : cur.concat([i]), had ? null : i);
+    _vsSyncPanel();
+    return true;
+  }
+  const set = _vsNodeSelActive(la);
+  if(set && set.has(i)){
+    _vsNodeSel.tap = i; _vsNodeSel.moved = false; _vsNodeSel.drag = null;
+    _vsNodeSel.press = c ? { nx: c.nx, ny: c.ny } : null;
+  } else if(_vsNodeSel){
+    _vsNodeSel = null; _vsSyncPanel();
+  }
+  return false;
+}
+// Arrastre de un nodo del conjunto: TODOS se desplazan lo mismo (el desplazamiento del cursor desde la pulsación), en el espacio local de
+// la capa. Así las distancias entre los nodos seleccionados no cambian. Devuelve true si ha movido el conjunto.
+function _vsNodeGroupMove(la, c, prim){
+  const set = _vsNodeSelActive(la);
+  if(!set || !set.has(prim)) return false;
+  const s = _vsNodeSel;
+  if(!s.drag || s.drag.la !== la){
+    const orig = new Map();
+    set.forEach(i => { const p = la.points[i]; if(p) orig.set(i, { ...p }); });
+    s.drag = { la, orig, ref: s.press || { nx: c.nx, ny: c.ny } };   // sin pulsación registrada (cursor desplazado…) vale el primer movimiento
+  }
+  const pw = edPageW(), ph = edPageH();
+  const rot = -(la.rotation || 0) * Math.PI / 180, cs = Math.cos(rot), sn = Math.sin(rot);
+  const dx = (c.nx - s.drag.ref.nx) * pw, dy = (c.ny - s.drag.ref.ny) * ph;
+  const ddx = (dx * cs - dy * sn) / pw, ddy = (dx * sn + dy * cs) / ph;
+  if(Math.hypot(dx, dy) * edCamera.z > 0.5) s.moved = true;
+  s.drag.orig.forEach((o, i) => { la.points[i] = { ...la.points[i], x: o.x + ddx, y: o.y + ddy }; });
+  // width/height sin recentrar (recentrar durante el arrastre provoca saltos; se recentra al soltar)
+  const xs = la.points.filter(Boolean).map(p => p.x), ys = la.points.filter(Boolean).map(p => p.y);
+  if(xs.length){ la.width = Math.max(Math.max(...xs) - Math.min(...xs), 0.01); la.height = Math.max(Math.max(...ys) - Math.min(...ys), 0.01); }
+  return true;
+}
+// Soltar: un toque sin arrastre sobre un nodo del conjunto lo deja como único seleccionado.
+function _vsNodeEnd(){
+  const s = _vsNodeSel; if(!s) return;
+  const tap = s.tap, moved = s.moved, la = s.la;
+  s.tap = null; s.press = null; s.drag = null; s.moved = false;
+  if(tap != null && !moved && _vsNodeSelActive(la)) _vsNodeSelSet(la, [tap], tap);
+}
+// Curvatura: el deslizador (panel o barra) fija el radio del nodo activo; con un conjunto, el de todos los seleccionados.
+function _vsNodeApplyRadius(la, v){
+  const set = _vsNodeSelActive(la); if(!set) return;
+  if(!la.cornerRadii) la.cornerRadii = {};
+  set.forEach(i => { la.cornerRadii[i] = v; });
+}
+
 /* ── v42.34 · NODOS ⟂ herramientas de CREACIÓN vectorial ───────────────────────────────────────────────────────────────────────────
    La edición de nodos (NODOS, V⟺C) y las herramientas que CREAN objetos (rectángulo, elipse, polígono, segmento) son excluyentes:
    nunca se editan nodos mientras una herramienta de creación está en uso (Alberto: «cuando se seleccione "NODOS" con la barra
@@ -31688,6 +32222,7 @@ function _edNodesOff(){
   if(_sp && _sp._mode === 'curve'){ _sp.style.display = 'none'; _sp._mode = null; }
   if(window._edCurveVertIdx >= 0) was = true;
   window._edCurveVertIdx = -1;
+  _vsNodeSel = null;   // v42.36
   if(was) edRedraw();
   return was;
 }
@@ -31873,7 +32408,7 @@ function _esbActivateCurveUI(){
       const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
       const vi=window._edCurveVertIdx;
       if(la2&&vi>=0){
-        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; la2._updateBbox(); }
+        if(la2.type==='line'){ if(!la2.cornerRadii)la2.cornerRadii={}; la2.cornerRadii[vi]=v; _vsNodeApplyRadius(la2, v); la2._updateBbox(); }   // v42.36: con varios nodos seleccionados, a todos
         else if(la2.type==='shape'&&la2.shape==='rect'){ if(!la2.cornerRadii)la2.cornerRadii=[0,0,0,0]; la2.cornerRadii[vi]=v; }
         edRedraw();
       }
@@ -32267,7 +32802,7 @@ function edInitShapeBar() {
     const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
     const op=la?Math.round((la.opacity??1)*100):100;
     _esbShowSlider('opacity', 0, 100, op,
-      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.opacity=v/100; edRedraw();
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){l.opacity=v/100; _vsEach(l, p=>{ p.opacity=v/100; }); edRedraw();   // v42.36: _vsEach = selección múltiple
         // Sincronizar slider de opacidad del panel si está abierto
         const _osl=$('op-line-opacity'); if(_osl){ _osl.value=v; _edUpdateBubble(_osl,'%'); }
         const _st=$('op-line-status'); if(_st){ _st.textContent=(l.lineWidth||3)+'px·'+v+'%'; }
@@ -32787,8 +33322,11 @@ const _edHelpContent = {
       <div style="margin-bottom:14px">
         <b>5.</b> ${I18n.t('ed_helpVectorP5', { fuse: withIco('<b>' + I18n.t('ed_fuseWord') + '</b>', icoFuse) })}
       </div>
-      <div>
+      <div style="margin-bottom:14px">
         <b>6.</b> ${I18n.t('ed_helpVectorP6')} <i>${I18n.t('ed_helpVectorP6b')}</i>
+      </div>
+      <div>
+        <b>7.</b> ${I18n.t('ed_helpVectorP7', { nodes: `<span style="white-space:nowrap">${nodesChip}</span>` })}
       </div>
     `;
     })()
@@ -34871,7 +35409,7 @@ function _edBuildUnitedVector(layers){
   const first = layers[0];
   newLL.color     = first.color     || '#000000';
   newLL.lineWidth = first.lineWidth || 3;
-  newLL.opacity   = first.opacity   ?? 1;
+  newLL.opacity   = first.opacity   ?? 1;   // (se recalcula al final: ver «OPACIDAD POR CONTORNO»)
   const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
   newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
   const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
@@ -34919,7 +35457,8 @@ function _edBuildUnitedVector(layers){
           fillColor: (gs && gs.fillColor !== undefined) ? gs.fillColor : (la.fillColor || 'none'),
           color:     (gs && gs.color     !== undefined) ? gs.color     : (la.color     || '#000000'),
           lineWidth: (gs && gs.lineWidth !== undefined) ? gs.lineWidth : (la.lineWidth ?? 3),
-          closed:    (gs && gs.closed    !== undefined) ? !!gs.closed  : !!la.closed
+          closed:    (gs && gs.closed    !== undefined) ? !!gs.closed  : !!la.closed,
+          opacity:   (la.opacity ?? 1) * ((gs && gs.opacity != null) ? gs.opacity : 1)   // v42.37: opacidad ABSOLUTA del contorno (se normaliza al final)
         });
         let g = null, w = 0, h = 0, ox = 0, oy = 0;
         if(gs && _edGradValid(gs.fillGradient)) {
@@ -34966,7 +35505,14 @@ function _edBuildUnitedVector(layers){
       } else {
         // rect: 4 esquinas TL, TR, BR, BL — mismo orden que cornerRadii [0,1,2,3]
         const hw = la.width * pw / 2, hh = la.height * ph / 2;
-        const _shCr = Array.isArray(la.cornerRadii) ? la.cornerRadii : [0,0,0,0];
+        // v42.37: ShapeLayer.draw usa los radios por esquina si hay alguno > 0 y, si no, el radio GLOBAL heredado (cornerRadius, obras antiguas);
+        // aquí solo se leía el primero, así que una forma con radio global perdía las esquinas redondeadas al unirse. Mismo tope que draw: min(w,h)/2.
+        const _shMaxR = Math.min(hw, hh);
+        let _shCr = (Array.isArray(la.cornerRadii) && la.cornerRadii.length === 4 && la.cornerRadii.some(r => r > 0)) ? la.cornerRadii : null;
+        if(!_shCr){ const _g = la.cornerRadius || 0; _shCr = _g > 0 ? [_g, _g, _g, _g] : [0,0,0,0]; }
+        // ShapeLayer.draw redondea con ARCOS circulares (roundRect) y _buildContour con curvas cuadráticas: para un ángulo recto la cuadrática se
+        // pega al arco con una distancia de tangencia d ≈ 1,145·R (error máx. 0,011·R; con d = R sería 0,061·R, unos 3,6 px en R = 60).
+        _shCr = _shCr.map(r => Math.min(Math.min(r || 0, _shMaxR) * 1.145, _shMaxR));
         let _shIdx = 0;
         for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]) {
           const pt = { x: cx + lx*cos - ly*sin, y: cy + lx*sin + ly*cos };
@@ -34980,7 +35526,8 @@ function _edBuildUnitedVector(layers){
         fillColor: la.fillColor || 'none',
         color:     la.color     || '#000000',
         lineWidth: la.lineWidth ?? 3,
-        closed:    true
+        closed:    true,
+        opacity:   la.opacity ?? 1
       });
       const _fcol = stylesOut[stylesOut.length - 1].fillColor;
       gradsOut.push(_edGradValid(la.fillGradient) && _fcol !== 'none'
@@ -35039,6 +35586,18 @@ function _edBuildUnitedVector(layers){
   }
   newLL.closed = _allClosed;
   newLL.grouped = true; // agrupado sin fusión booleana
+  // v42.37 — OPACIDAD POR CONTORNO. Antes el objeto unido tenía UNA sola opacidad (la del primero) y todos los contornos la heredaban: un relleno
+  // semitransparente que dejaba ver la línea de debajo pasaba a taparla del todo (o al revés) al unir. Ahora, si los contornos no tienen todos la
+  // misma, cada uno guarda la suya en groupedStyles[i].opacity (relativa a la del objeto unido, que queda en 1) y el aspecto no cambia; si son
+  // iguales se conserva el formato de siempre (la opacidad en el objeto, sin nada por contorno).
+  const _ops = allContourStyles.map(s => (s.opacity != null ? s.opacity : 1));
+  const _sameOp = _ops.every(o => Math.abs(o - _ops[0]) < 1e-6);
+  allContourStyles.forEach(s => { delete s.opacity; });
+  if(_sameOp) newLL.opacity = _ops[0];
+  else {
+    newLL.opacity = 1;
+    allContourStyles.forEach((s, i) => { if(Math.abs(_ops[i] - 1) > 1e-6) s.opacity = _ops[i]; });
+  }
   newLL.groupedStyles = allContourStyles; // estilos individuales por contorno
   newLL._updateBbox();
   return newLL;
@@ -35052,12 +35611,14 @@ function _edBuildUnitedVector(layers){
      · Solo se unen sesiones de CREACIÓN (empezaron sin objetos propios): editar un objeto existente no une nada. Excepción (v42.25): la edición
        de un objeto YA UNIDO ⊕ —sus contornos se disuelven para editarlos— vuelve a unir todo al OK (ver _vsUnion).
      · Solo se unen los objetos que se pueden unir sin perder nada ni cambiar su aspecto (_edVecJoinable); el resto se queda como estaba.
+     · v42.38: se unen SIEMPRE todos los que se pueden unir, aunque haya otras capas entre medias (ver «ORDEN DE CAPAS» más abajo).
      · Los vectoriales previos a la sesión nunca se tocan.
      · En el historial general quedan DOS pasos —«objetos creados» y «objetos unidos»—, como si se hubiese usado Unir justo después
        del OK: un solo deshacer del editor general vuelve a separarlos. (Al re-editar un ⊕ es UN solo paso: «⊕ antes» → «⊕ después».)
    ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
-// ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo; da UNA sola opacidad al resultado y trata cada
+// ¿Se puede meter este vectorial en la unión sin perder nada ni cambiar su aspecto? La herramienta ⊕ Unir descarta el nombre, el botón-acción y la trayectoria, el estado oculto/bloqueado y el grupo y trata cada
 // contorno de un objeto fusionado ☯ (con huecos) como un objeto independiente, con lo que los huecos se rellenarían.
+// (v42.37: la opacidad ya no cuenta: cada contorno de la unión conserva la suya, ver _edBuildUnitedVector.)
 // v42.25: `uni` = marcador de la edición de un ⊕ (_vsUnion). Sus contornos sueltos llevan una COPIA de la trayectoria del ⊕ (así lo deja
 // _edDissolveJoined) y esa trayectoria se restituye al volver a unirlos, así que no impide la unión.
 function _edVecJoinable(l, uni){
@@ -35073,33 +35634,36 @@ function _edVecJoinable(l, uni){
   return true;
 }
 
+/* ── v42.38 — ORDEN DE CAPAS AL UNIR / DESUNIR ────────────────────────────────────────────────────────────────────────────
+   Alberto: «si los objetos vectoriales que se pretende unir están en capas distintas, aunque haya capas intermedias, deberán unirse quedando en
+   la misma capa y verse los de las capas superiores por encima de los de las capas inferiores».
+   Un objeto unido ⊕ pinta sus contornos de abajo a arriba, cada uno con su relleno y su trazo, y los contornos van EN EL ORDEN DEL APILADO de los
+   objetos de origen (los de capas superiores, encima de los de capas inferiores): lo que un objeto tapaba de otro lo sigue tapando exactamente igual,
+   y Desunir los reparte en ese mismo orden. Se unen SIEMPRE todos los candidatos: que haya otras capas entre medias no lo impide (v42.37 los dejaba
+   sueltos si se solapaban con ellas; no era lo pedido).
+   Como la unión ocupa UN solo sitio del apilado, las capas ajenas que había entre medias quedan por encima o por debajo de la unión entera:
+     · creación (OK de una sesión, o ⊕ Unir): el sitio del objeto más ALTO, como en los editores vectoriales y como la unión de dibujos a mano;
+     · re-edición de un ⊕ (OK): el sitio del propio ⊕ (el contorno más bajo), de modo que lo que había por encima de él sigue por encima. */
 // Objetos que se unirán al pulsar OK (de abajo a arriba), o null si no hay nada que unir. Hay que llamarla ANTES de _vsClear():
-// necesita saber qué vectoriales son de la sesión y cómo empezó esta.
+// necesita saber qué vectoriales son de la sesión y cómo empezó esta. (La opacidad no impide unir: cada contorno lleva la suya, ver
+// _edBuildUnitedVector; tampoco las capas intermedias: ver «ORDEN DE CAPAS» arriba.)
 function _edVecJoinPick(uni){
   const h0 = _vsHistory[0];
   if(!h0) return null;
   if(!uni && ((h0.vecLayers && h0.vecLayers.length) || h0.lineLayer)) return null;   // la sesión empezó con un objeto en edición (v42.25: salvo la de un ⊕ disuelto)
-  const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l, uni));
-  if(cands.length < 2) return null;
-  // Unir da UNA sola opacidad al objeto resultante: se unen los de la opacidad más repetida (a igualdad, la del objeto más bajo);
-  // los demás conservan la suya.
-  const opOf = l => Math.round((l.opacity == null ? 1 : l.opacity) * 1000) / 1000;
-  const groups = new Map();
-  cands.forEach(l => { const k = opOf(l); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(l); });
-  let best = null;
-  groups.forEach(g => { if(!best || g.length > best.length) best = g; });
-  // v42.25: al re-editar un ⊕ manda la opacidad del ⊕ original (la de sus contornos), no la del objeto nuevo que se haya añadido
-  if(uni && uni.src){ const g0 = groups.get(opOf(uni.src)); if(g0 && g0.length >= 2) best = g0; }
-  return best && best.length >= 2 ? best : null;
+  const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l, uni));   // edLayers va de abajo a arriba → los contornos salen en ese orden
+  return cands.length >= 2 ? cands : null;
 }
 
-// Sustituye `layers` (de abajo a arriba) por su objeto unido, en la posición del más alto, y apunta el paso en el historial general.
+// Sustituye `layers` (de abajo a arriba) por su objeto unido y apunta el paso en el historial general. Posición: la del objeto más alto de
+// `layers` (creación) o, al re-editar un ⊕ (`uni`), la del más bajo, que es donde estaba el ⊕ (v42.37; antes subía siempre a la cima y
+// arrastraba consigo los contornos del ⊕ por encima de las capas que tenía encima).
 function _edVecJoinApply(layers, uni){
   const united = _edBuildUnitedVector(layers);
   const idxs = layers.map(l => edLayers.indexOf(l)).filter(i => i >= 0).sort((a, b) => a - b);
   if(!united || idxs.length < 2) return;
   if(uni) _edVecUnionRestoreMeta(united, uni.src);   // v42.25: re-edición de un ⊕ → el nuevo ⊕ sigue siendo «el mismo objeto»
-  let insertAt = idxs[idxs.length - 1];
+  let insertAt = uni ? idxs[0] : idxs[idxs.length - 1];
   for(let i = idxs.length - 1; i >= 0; i--){
     const ri = idxs[i];
     edLayers.splice(ri, 1);
@@ -42671,7 +43235,8 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
         const glw  = st.lineWidth !== undefined ? st.lineWidth : sw;
         const d    = _edBuildLineSvgPath(pts, localCr, gcl, pw, ph);
         const _gStroke = glw > 0 ? `stroke="${gc}" stroke-width="${glw}"` : 'stroke="none" stroke-width="0"';
-        return `${gDef}<path d="${d}" fill="${gf}" ${_gStroke} stroke-linecap="round" stroke-linejoin="round"/>`;
+        const _gOp = (st.opacity != null && st.opacity < 1) ? ` opacity="${(+st.opacity).toFixed(3)}"` : '';   // v42.37: opacidad propia del contorno
+        return `${gDef}<path d="${d}" fill="${gf}" ${_gStroke} stroke-linecap="round" stroke-linejoin="round"${_gOp}/>`;
       }).join('');
       return `<g transform="${gXform}"${op}>${parts}</g>`;
     }
