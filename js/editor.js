@@ -25684,6 +25684,195 @@ function _edFreezeAllDrawLayersInner(page){
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.40 — REEDITAR UN DIBUJO NO BAJA SU RESOLUCIÓN («Claro, reeditar no debe bajar la resolución», Alberto, tras v42.39).
+   «Editar dibujo» aplana la tinta (StrokeLayer.toDrawLayer) en el lienzo de trabajo, donde 1 px = 1 px de página; al pulsar OK
+   _edFreezeDrawLayer recorta ese lienzo. Una tinta con más detalle que eso (v41.77: un trazo puede tener cualquier resolución; también la
+   de una unión ⊕ desde v42.39) quedaba reducida a 1× para siempre, aunque no se hubiera tocado nada. Ahora, si la tinta original es más
+   densa que 1 px/px (ED_HAND_HI_TOL):
+     · al ENTRAR se guarda su bitmap original (H) y una copia de su versión aplanada (B, solo la caja que ocupa);
+     · al dar OK se compara lo que hay (F, el lienzo de la sesión) con B: los píxeles que NO han cambiado conservan el bitmap original a
+       su densidad nativa, y solo donde se ha pintado o borrado (más ½ px de página alrededor) manda lo editado, que es lo único que
+       existe a 1×. Es independiente de la herramienta: pincel, goma, iluminar/oscurecer, difuminar… todo es «píxeles distintos».
+     · el lienzo de tinta resultante cubre la MISMA caja de píxeles enteros de página que relleno, acuarela y lápiz (que siguen a 1×, por
+       diseño), así que siguen perfectamente registrados. Mismos topes de memoria que la unión (ED_HAND_MAX_PX / ED_HAND_MAX_DIM).
+   Sin tinta de alta densidad (lo normal) no cambia nada: _edReeditHiResBegin devuelve null y todo sigue el camino de siempre.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+// Al entrar en «Editar dibujo» (justo después de sl.toDrawLayer()): guarda lo necesario para conservar la tinta original.
+// → null si la tinta no es más densa que 1 px/px (nada que conservar) o no se puede.
+function _edReeditHiResBegin(sl, dl){
+  try {
+    if(!sl || !sl._canvas || sl._canvasUnloaded || !dl || !dl._canvas) return null;
+    const H = sl._canvas, pw = edPageW(), ph = edPageH();
+    const w = (sl.width || 0) * pw, h = (sl.height || 0) * ph;
+    if(!(w > 0 && h > 0 && H.width > 1 && H.height > 1)) return null;
+    const dx = H.width / w, dy = H.height / h;
+    if(!(dx > ED_HAND_HI_TOL || dy > ED_HAND_HI_TOL)) return null;
+    const cx = edMarginX() + sl.x * pw, cy = edMarginY() + sl.y * ph;           // exactamente los de toDrawLayer
+    const rot = sl.rotation || 0, r = rot * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));
+    const hw = (w * c + h * s) / 2 + 2, hh = (w * s + h * c) / 2 + 2;
+    const bx = Math.max(0, Math.floor(cx - hw)), by = Math.max(0, Math.floor(cy - hh));
+    const bw = Math.min(ED_CANVAS_W, Math.ceil(cx + hw)) - bx, bh = Math.min(ED_CANVAS_H, Math.ceil(cy + hh)) - by;
+    if(!(bw > 0 && bh > 0)) return null;
+    const B = document.createElement('canvas'); B.width = bw; B.height = bh;
+    B.getContext('2d').drawImage(dl._canvas, bx, by, bw, bh, 0, 0, bw, bh);   // la tinta aplanada al entrar (lo demás del lienzo está vacío)
+    _edFCL('[Reedición] tinta de alta resolución guardada: ' + H.width + 'x' + H.height + ' (' + dx.toFixed(2) + '×' + dy.toFixed(2) + ' px de bitmap por px de página), copia aplanada ' + bw + 'x' + bh);
+    return { H, w, h, cx, cy, rot, op: sl.opacity ?? 1, dx, dy, B, bx, by };
+  } catch(e){
+    console.warn('[Reedición] no se pudo guardar la tinta original:', e);
+    return null;
+  }
+}
+
+// Al dar OK (con la sesión ya volcada en dl._canvas, bb = su caja de tinta): qué ha cambiado y qué queda de la tinta original.
+// → { D, M, mb, n, hbox } | null.  D = región comparada {x0,y0,w,h} (lienzo de trabajo); M = máscara (Uint8Array D.w×D.h) de los píxeles
+// retocados; mb = su caja dentro de D; n = nº de píxeles retocados; hbox = caja {x0,y0,x1,y1} (px de página enteros) de lo que sobrevive
+// de la tinta original (sus píxeles con alfa > 10 fuera de M), o null si no sobrevive nada.
+function _edReeditHiResPlan(dl, bb){
+  const hr = dl && dl._hiRes;
+  if(!hr || !bb) return null;
+  const t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
+  const W = ED_CANVAS_W, HH = ED_CANVAS_H;
+  const X0 = Math.max(0, Math.min(bb.x, hr.bx) - 2), Y0 = Math.max(0, Math.min(bb.y, hr.by) - 2);
+  const X1 = Math.min(W, Math.max(bb.x + bb.w, hr.bx + hr.B.width) + 2), Y1 = Math.min(HH, Math.max(bb.y + bb.h, hr.by + hr.B.height) + 2);
+  const D = { x0: X0, y0: Y0, w: X1 - X0, h: Y1 - Y0 };
+  if(!(D.w > 0 && D.h > 0)) return null;
+  // 1) píxeles que han cambiado desde que se entró (F = ahora, Bd = al entrar; tolerancia de redondeo en alfa premultiplicado)
+  const F = dl._ctx.getImageData(D.x0, D.y0, D.w, D.h).data;
+  const tc = document.createElement('canvas'); tc.width = D.w; tc.height = D.h;
+  const tx = tc.getContext('2d', { willReadFrequently: true });
+  tx.drawImage(hr.B, hr.bx - D.x0, hr.by - D.y0);
+  const Bd = tx.getImageData(0, 0, D.w, D.h).data;
+  tc.width = 0; tc.height = 0;
+  const N = D.w * D.h, TOL = 2, T = new Uint8Array(N);
+  let n = 0;
+  for(let p = 0, o = 0; p < N; p++, o += 4){
+    const af = F[o + 3], ab = Bd[o + 3];
+    if(af === 0 && ab === 0) continue;
+    let d = af > ab ? af - ab : ab - af;
+    if(d <= TOL){
+      const fa = af / 255, ba = ab / 255;
+      d = Math.max(Math.abs(F[o] * fa - Bd[o] * ba), Math.abs(F[o + 1] * fa - Bd[o + 1] * ba), Math.abs(F[o + 2] * fa - Bd[o + 2] * ba));
+    }
+    if(d > TOL){ T[p] = 1; n++; }
+  }
+  // 2) caja de lo retocado (la máscara es T tal cual; el margen de ½ px que necesita la interpolación se añade al ampliarla, ver _edReeditHiResCompose)
+  let M = null, mb = null;
+  if(n > 0){
+    M = T;
+    let mx0 = D.w, my0 = D.h, mx1 = -1, my1 = -1;
+    for(let y = 0; y < D.h; y++){
+      const row = y * D.w;
+      for(let x = 0; x < D.w; x++){
+        if(!T[row + x]) continue;
+        if(x < mx0) mx0 = x; if(x > mx1) mx1 = x; if(y < my0) my0 = y; if(y > my1) my1 = y;
+      }
+    }
+    mb = { x0: mx0, y0: my0, x1: mx1 + 1, y1: my1 + 1 };
+  }
+  // 3) caja de lo que sobrevive de la tinta original, medida en SU bitmap (a densidad nativa, no en el aplanado: ahí los extremos finos
+  //    de un trazo apenas dejan alfa y quedaría cortada su punta) — por filas, para no leer de golpe un bitmap enorme
+  const H = hr.H, hw = H.width, hh = H.height, hctx = H.getContext('2d');
+  const rr = hr.rot * Math.PI / 180, cs = Math.cos(rr), sn = Math.sin(rr), sx = hr.w / hw, sy = hr.h / hh;
+  const BAND = Math.max(1, Math.min(hh, Math.floor(2e6 / hw)));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for(let y0 = 0; y0 < hh; y0 += BAND){
+    const bh = Math.min(BAND, hh - y0);
+    const d = hctx.getImageData(0, y0, hw, bh).data;
+    for(let j = 0; j < bh; j++){
+      const v = (y0 + j + 0.5) * sy - hr.h / 2, rowo = j * hw * 4 + 3;
+      for(let i = 0; i < hw; i++){
+        if(d[rowo + i * 4] <= 10) continue;
+        const u = (i + 0.5) * sx - hr.w / 2;
+        const px = hr.cx + u * cs - v * sn, py = hr.cy + u * sn + v * cs;
+        if(M){
+          const mxp = Math.floor(px) - D.x0, myp = Math.floor(py) - D.y0;
+          if(mxp >= 0 && myp >= 0 && mxp < D.w && myp < D.h && M[myp * D.w + mxp]) continue;
+        }
+        if(px < minX) minX = px; if(px > maxX) maxX = px; if(py < minY) minY = py; if(py > maxY) maxY = py;
+      }
+    }
+  }
+  const hbox = (maxX >= minX) ? { x0: Math.max(0, Math.floor(minX - 1)), y0: Math.max(0, Math.floor(minY - 1)),
+                                  x1: Math.min(W, Math.ceil(maxX + 1)),  y1: Math.min(HH, Math.ceil(maxY + 1)) } : null;
+  _edFCL('[Reedición] comparación: ' + D.w + 'x' + D.h + ' px, retocados ' + n + (mb ? ' (zona ' + (mb.x1 - mb.x0) + 'x' + (mb.y1 - mb.y0) + ')' : '') +
+    ', tinta original que sobrevive: ' + (hbox ? (hbox.x1 - hbox.x0) + 'x' + (hbox.y1 - hbox.y0) + ' px de página' : 'ninguna') +
+    ' · ' + Math.round(((typeof performance !== 'undefined') ? performance.now() : 0) - t0) + ' ms');
+  return { D, M, mb, n, hbox };
+}
+
+// Compone la tinta de un dibujo reeditado ya recortada a la caja U {x0,y0,x1,y1} (px de página enteros): la original a densidad nativa y,
+// encima, lo retocado. → lienzo | null (nada que ganar con respecto al camino normal a 1×).
+function _edReeditHiResCompose(dl, plan, U){
+  const hr = dl && dl._hiRes;
+  if(!hr || !plan) return null;
+  const uW = U.x1 - U.x0, uH = U.y1 - U.y0;
+  if(!(uW > 0 && uH > 0)) return null;
+  let sx = hr.dx, sy = hr.dy, capped = false;
+  const f = Math.min(1, Math.sqrt(ED_HAND_MAX_PX / (uW * sx * uH * sy)), ED_HAND_MAX_DIM / (uW * sx), ED_HAND_MAX_DIM / (uH * sy));
+  if(f < 1){ sx = Math.max(1, sx * f); sy = Math.max(1, sy * f); capped = true; }
+  const cw = Math.max(1, Math.round(uW * sx)), ch = Math.max(1, Math.round(uH * sy));
+  if(cw <= uW && ch <= uH) return null;
+  const kx = cw / uW, ky = ch / uH;                                      // escala exacta página → lienzo (el lienzo cubre justo la caja)
+  const R = document.createElement('canvas'); R.width = cw; R.height = ch;
+  const cx = R.getContext('2d');
+  // 1) la tinta original, tal como la pintaba toDrawLayer pero a densidad nativa. Sin giro y a ~1:1 con su bitmap se COPIA píxel a píxel
+  //    (colocarla con interpolación en una posición fraccionaria la emborronaría); con giro o cambio de escala se interpola, con el
+  //    mejor filtro (una sola vez: el aplanado de siempre ya lo hacía, y además a 1×).
+  cx.save();
+  cx.setTransform(kx, 0, 0, ky, -U.x0 * kx, -U.y0 * ky);
+  if(capped || hr.rot) cx.imageSmoothingQuality = 'high';
+  if(!hr.rot && Math.abs(kx / hr.dx - 1) * hr.H.width <= 1 && Math.abs(ky / hr.dy - 1) * hr.H.height <= 1) cx.imageSmoothingEnabled = false;
+  cx.globalAlpha = hr.op;
+  cx.translate(hr.cx, hr.cy); cx.rotate(hr.rot * Math.PI / 180);
+  cx.drawImage(hr.H, -hr.w / 2, -hr.h / 2, hr.w, hr.h);
+  cx.restore();
+  // 2) lo retocado: R = original·(1 − m) + editado·m. m = los píxeles retocados ampliados SIN interpolar (a bloques) y ensanchados ½ px de
+  //    página por cada lado: es justo hasta donde llega, al ampliar el editado con interpolación bilineal, la cola de un píxel retocado, así
+  //    que el borde de un trazo nuevo conserva su degradado entero y la tinta original no se suaviza más allá de ese ½ px.
+  //    Con alfa premultiplicado: «destination-out» multiplica por (1 − m), «destination-in» por m y «lighter» suma.
+  if(plan.n > 0 && plan.M && plan.mb){
+    const D = plan.D, mb = plan.mb;
+    const Fc = document.createElement('canvas'); Fc.width = D.w; Fc.height = D.h;       // lo editado, a 1×, en la región comparada
+    Fc.getContext('2d').drawImage(dl._canvas, D.x0, D.y0, D.w, D.h, 0, 0, D.w, D.h);
+    const Tc = document.createElement('canvas'); Tc.width = D.w; Tc.height = D.h;       // los píxeles retocados, como canal alfa
+    const tctx = Tc.getContext('2d'), ti = tctx.createImageData(D.w, D.h), td = ti.data, M = plan.M;
+    for(let p = 0, o = 3; p < M.length; p++, o += 4) if(M[p]) td[o] = 255;
+    tctx.putImageData(ti, 0, 0);
+    const ox = (D.x0 - U.x0) * kx, oy = (D.y0 - U.y0) * ky;                              // origen de la región comparada en el lienzo R
+    const rx0 = Math.max(0, Math.floor(ox + (mb.x0 - 1) * kx)), ry0 = Math.max(0, Math.floor(oy + (mb.y0 - 1) * ky));
+    const rx1 = Math.min(cw, Math.ceil(ox + (mb.x1 + 1) * kx)),  ry1 = Math.min(ch, Math.ceil(oy + (mb.y1 + 1) * ky));
+    const TW = Math.max(1, Math.min(rx1 - rx0, 2048)), TH = Math.max(1, Math.min(ry1 - ry0, Math.floor(1.5e6 / TW)));   // baldosas de ≤ 1,5 Mpx
+    const T1 = document.createElement('canvas'), T2 = document.createElement('canvas');
+    T1.width = T2.width = TW; T1.height = T2.height = TH;
+    const c1 = T1.getContext('2d'), c2 = T2.getContext('2d');
+    c1.imageSmoothingEnabled = false;                                                    // bloques, sin interpolar
+    for(let ty = ry0; ty < ry1; ty += TH) for(let tx2 = rx0; tx2 < rx1; tx2 += TW){
+      const tw = Math.min(TW, rx1 - tx2), th = Math.min(TH, ry1 - ty);
+      // m: la máscara ampliada a bloques, repetida desplazada ±½ px de página (9 copias = ensanchado cuadrado)
+      c1.setTransform(1, 0, 0, 1, 0, 0); c1.clearRect(0, 0, TW, TH);
+      c1.save(); c1.beginPath(); c1.rect(0, 0, tw, th); c1.clip();
+      for(let jy = -1; jy <= 1; jy++) for(let jx = -1; jx <= 1; jx++){
+        c1.setTransform(kx, 0, 0, ky, ox - tx2 + jx * 0.5 * kx, oy - ty + jy * 0.5 * ky); c1.drawImage(Tc, 0, 0);
+      }
+      c1.restore();
+      // quitar de R la tinta original bajo la máscara
+      cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'destination-out'; cx.globalAlpha = 1;
+      cx.drawImage(T1, 0, 0, tw, th, tx2, ty, tw, th); cx.restore();
+      // lo editado, ampliado con interpolación y recortado por la máscara
+      c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.clearRect(0, 0, TW, TH);
+      c2.save(); c2.beginPath(); c2.rect(0, 0, tw, th); c2.clip();
+      c2.setTransform(kx, 0, 0, ky, ox - tx2, oy - ty); c2.drawImage(Fc, 0, 0); c2.restore();
+      c2.save(); c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'destination-in'; c2.drawImage(T1, 0, 0); c2.restore();
+      cx.save(); cx.setTransform(1, 0, 0, 1, 0, 0); cx.globalCompositeOperation = 'lighter'; cx.globalAlpha = 1;
+      cx.drawImage(T2, 0, 0, tw, th, tx2, ty, tw, th); cx.restore();
+    }
+    for(const c of [Fc, Tc, T1, T2]){ c.width = 0; c.height = 0; }
+  }
+  _edFCL('[Reedición] tinta recompuesta a ' + cw + 'x' + ch + ' (' + kx.toFixed(3) + '×' + ky.toFixed(3) + ') sobre ' + uW + 'x' + uH + ' px de página' + (capped ? ' · densidad reducida por el tope de memoria' : ''));
+  return R;
+}
+
 function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   let dlIdx = page.layers.findIndex(l => l.type === 'draw');
@@ -25870,9 +26059,21 @@ function _edFreezeDrawLayer(){
   const _bbPencil     = _pencilFreeze ? StrokeLayer._boundingBox(_pencilFreeze._canvas) : null;
   const _bbWatercolor = _wcFreeze     ? StrokeLayer._boundingBox(_wcFreeze._canvas)     : null;
 
+  // v42.40 — dibujo REEDITADO con tinta de alta resolución: qué se retocó en la sesión y qué queda de la tinta original (ver el bloque
+  // «REEDITAR UN DIBUJO NO BAJA SU RESOLUCIÓN»). Si falla, todo sigue por el camino de siempre (tinta a 1×).
+  let _hiPlan = null;
+  if (dl._hiRes) {
+    try { _hiPlan = _edReeditHiResPlan(dl, _bbDraw); }
+    catch(_e) { _hiPlan = null; console.warn('[Reedición] no se pudo comparar con la tinta original:', _e); }
+  }
+
   // Union bbox en coords workspace
   let _uX0 = _bbDraw.x, _uY0 = _bbDraw.y;
   let _uX1 = _bbDraw.x + _bbDraw.w, _uY1 = _bbDraw.y + _bbDraw.h;
+  if (_hiPlan && _hiPlan.hbox) {   // …y lo que sobrevive del bitmap original (sus extremos finos pueden no pasar del umbral a 1×)
+    _uX0 = Math.min(_uX0, _hiPlan.hbox.x0); _uY0 = Math.min(_uY0, _hiPlan.hbox.y0);
+    _uX1 = Math.max(_uX1, _hiPlan.hbox.x1); _uY1 = Math.max(_uY1, _hiPlan.hbox.y1);
+  }
   for (const _bb of [_bbFill, _bbPencil, _bbWatercolor]) {
     if (!_bb) continue;
     _uX0 = Math.min(_uX0, _bb.x);
@@ -25908,10 +26109,19 @@ function _edFreezeDrawLayer(){
   sl._bboxOriginX = _uX0;
   sl._bboxOriginY = _uY0;
   // Redibujar el canvas al tamaño del bbox union
-  const _slCrop = document.createElement('canvas');
-  _slCrop.width  = Math.max(1, _uW);
-  _slCrop.height = Math.max(1, _uH);
-  _slCrop.getContext('2d').drawImage(dl._canvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+  // v42.40 — con tinta de alta resolución reeditada, la tinta se recompone a su densidad nativa sobre esa misma caja
+  let _slCrop = null;
+  if (_hiPlan) {
+    try { _slCrop = _edReeditHiResCompose(dl, _hiPlan, { x0: _uX0, y0: _uY0, x1: _uX0 + _uW, y1: _uY0 + _uH }); }
+    catch(_e) { _slCrop = null; console.warn('[Reedición] no se pudo conservar la resolución de la tinta:', _e); }
+  }
+  if (!_slCrop) {
+    _slCrop = document.createElement('canvas');
+    _slCrop.width  = Math.max(1, _uW);
+    _slCrop.height = Math.max(1, _uH);
+    _slCrop.getContext('2d').drawImage(dl._canvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+  }
+  dl._hiRes = null;   // v42.40: la sesión ha terminado, se suelta el bitmap original y la copia aplanada
   sl._canvas = _slCrop;
   if(dl.locked) sl.locked = true;
   if(dl.groupId) sl.groupId = dl.groupId;
@@ -28905,6 +29115,9 @@ function edRenderOptionsPanel(mode){
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
       edPushHistory();
       const dl=sl.toDrawLayer();
+      // v42.40 — si la tinta es más densa que 1 px/px (v41.77, uniones), se guarda su bitmap original para que reeditar no la baje a 1× (ver _edReeditHiResBegin)
+      const _hrEdit = _edReeditHiResBegin(sl, dl);
+      if(_hrEdit) dl._hiRes = _hrEdit;
       if(sl._uid)               dl._uid               = sl._uid;
       if(sl._fillLayerId)       dl._fillLayerId       = sl._fillLayerId;
       if(sl._pencilLayerId)     dl._pencilLayerId     = sl._pencilLayerId;
@@ -35266,6 +35479,27 @@ function _edRenderLayerToWorkspace(la){
    ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 const _ED_HAND_SLOT = { fill: 0, watercolor: 1, pencil: 2, stroke: 3, draw: 3 };
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.39 — LA UNIÓN NO PIERDE DEFINICIÓN («He detectado que al unir múltiples dibujos a mano hay una pérdida de definición […]
+   No debe haber pérdida», Alberto). Hasta v42.38 todo se fundía en lienzos de 1 px de bitmap = 1 px de página: un dibujo cuya TINTA
+   tuviera más detalle que eso (uno grande que se redujo y se copió, o la unión de otros así) quedaba remuestreado a la baja al unirlo,
+   y al acercar el zoom el resultado salía borroso y pixelado. La tinta (StrokeLayer) es un bitmap con su geometría aparte —puede tener
+   cualquier resolución, ver v41.77—, y relleno, acuarela y lápiz miden siempre lo que su caja (FillLayer.syncFrom y fromDataUrl los
+   ajustan a esa medida), así que solo la tinta puede tener algo que perder. Ahora:
+     · La unión se hace como siempre, a 1 px = 1 px de página (sobre la caja de los dibujos, no sobre los 2700×2340 del lienzo de
+       trabajo entero) y sirve para los tres tipos de abajo y para medir la caja común.
+     · Si alguna tinta de origen tiene más densidad que eso, la capa de tinta se vuelve a componer, ya recortada a esa caja, a la
+       DENSIDAD NATIVA MÁS ALTA de las tintas de origen (la de su bitmap, no un entero redondeado: un bitmap que cae a 1:1 se copia
+       píxel a píxel, sin interpolar, que es lo que emborrona). Las tintas de menos densidad se estiran como siempre, igual que se veían.
+       La capa resultante cubre la MISMA caja (px enteros de página) que las otras tres, así que siguen perfectamente registradas.
+     · Tope de memoria: ≤ 16 Mpx por lienzo (el máximo de iOS/Safari) y ≤ 8192 px por lado; si una unión enorme lo supera, la densidad
+       baja lo justo (con filtro de calidad alta).
+     · Con todos los dibujos a 1× (lo normal) no hay segunda composición y el resultado es el de siempre.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+const ED_HAND_MAX_PX  = 16000000;   // píxeles máximos del lienzo de tinta de la unión
+const ED_HAND_MAX_DIM = 8192;       // lado máximo (px) de ese lienzo
+const ED_HAND_HI_TOL  = 1.06;       // una tinta hasta un 6 % más densa que 1 px/px se trata como 1× (redondeo del tamaño del bitmap)
+
 // Capas de origen de los dibujos a mano a unir (cada tinta con su relleno/acuarela/lápiz vinculados por _uid),
 // en su orden Z REAL (de abajo arriba). Las ocultas se descartan. → [{ l, t:0..3, op, z }]
 function _edHandSources(mains){
@@ -35292,28 +35526,75 @@ function _edHandSources(mains){
 
 // Caja (en px del lienzo de trabajo) que contiene seguro lo que pinta la capa: la de su bitmap girado y escalado,
 // con 2 px de margen. Los lienzos de trabajo completos (DrawLayer, capas en edición) ocupan todo el lienzo.
+// Usa la posición y el giro con los que la capa se PINTA (también con trayectoria de animación activa).
 function _edLayerAabb(l){
   const W = ED_CANVAS_W, H = ED_CANVAS_H;
   if(l.type === 'draw' || l._isWorkspaceCanvas || !l._canvas) return { x0: 0, y0: 0, x1: W, y1: H };
   const pw = edPageW(), ph = edPageH();
   const w = (l.width || 0) * pw, h = (l.height || 0) * ph;
-  const cx = edMarginX() + (l.x || 0) * pw, cy = edMarginY() + (l.y || 0) * ph;
-  const r = (l.rotation || 0) * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));
+  const cx = edMarginX() + (_edCurX(l) || 0) * pw, cy = edMarginY() + (_edCurY(l) || 0) * ph;
+  const r = ((l.rotation || 0) + _edLayerPathRotDeg(l)) * Math.PI / 180, c = Math.abs(Math.cos(r)), s = Math.abs(Math.sin(r));
   const hw = (w * c + h * s) / 2 + 2, hh = (w * s + h * c) / 2 + 2;
   return { x0: Math.max(0, Math.floor(cx - hw)), y0: Math.max(0, Math.floor(cy - hh)),
            x1: Math.min(W, Math.ceil(cx + hw)),  y1: Math.min(H, Math.ceil(cy + hh)) };
 }
 
-// Corrige, sobre los 4 lienzos ya fundidos por tipo (ctxs), los píxeles donde una pareja invertida se solapa (ver arriba).
-function _edHandFixInversions(src, ctxs){
+// v42.39 — Caja de lo que de verdad pinta una capa de origen (null = no pinta nada). Igual que _edLayerAabb, salvo que un lienzo
+// de trabajo completo (DrawLayer sin congelar) se mide por lo pintado en él (+2 px de margen) en vez de ocupar todo el lienzo:
+// así la unión trabaja sobre la caja de los dibujos y no sobre los 6,3 Mpx del lienzo entero.
+function _edHandSrcBox(l){
+  if(!l._canvas || l._canvas.width === 0) return null;
+  const W = ED_CANVAS_W, H = ED_CANVAS_H;
+  if(!(l.type === 'draw' || l._isWorkspaceCanvas)) return _edLayerAabb(l);
+  if(_edPathCurX(l) != null || l._canvas.width !== W || l._canvas.height !== H) return { x0: 0, y0: 0, x1: W, y1: H };
+  const bb = StrokeLayer._boundingBox(l._canvas);
+  if(!bb) return null;
+  return { x0: Math.max(0, bb.x - 2), y0: Math.max(0, bb.y - 2), x1: Math.min(W, bb.x + bb.w + 2), y1: Math.min(H, bb.y + bb.h + 2) };
+}
+
+// v42.39 — Densidad con la que se pinta una capa de origen, por eje: px de bitmap por px de página. 1 en los lienzos de trabajo
+// (DrawLayer, capas en edición); en un bitmap recortado, la de su lienzo respecto a su caja (puede ser > 1: ver v41.77).
+function _edHandSrcDensity(l){
+  if(l.type === 'draw' || l._isWorkspaceCanvas || !l._canvas) return { x: 1, y: 1 };
+  const w = (l.width || 0) * edPageW(), h = (l.height || 0) * edPageH();
+  if(!(w > 0 && h > 0)) return { x: 1, y: 1 };
+  const cw = l._canvasUnloaded ? (l._unloadedCanvasW || 0) : (l._canvas.width || 0);
+  const ch = l._canvasUnloaded ? (l._unloadedCanvasH || 0) : (l._canvas.height || 0);
+  return { x: cw / w, y: ch / h };
+}
+
+// ¿Hay que suavizar (interpolar) al pintar esta tinta en la rejilla de escala (kx, ky)? NO si su bitmap cae a ~1:1 sobre ella y no
+// está girada: entonces es una COPIA del bitmap, y colocarla en la posición fraccionaria que tenga mediante interpolación la
+// emborronaría (media posición de bitmap, aun sin cambiar de tamaño). Sin interpolar se copia píxel a píxel, nítida, con un error de
+// posición de ≤ ½ px de bitmap (≤ 1/(2k) px de página: imperceptible) y una deriva de tamaño de ≤ 1 px de bitmap en todo el ancho.
+// Todo lo demás (otra densidad, giro) se interpola, como siempre.
+function _edHandSmooth(s, kx, ky){
+  if(s.t !== 3 || !(kx > 1 || ky > 1)) return true;
+  const l = s.l;
+  if((l.rotation || 0) + _edLayerPathRotDeg(l)) return true;
+  const d = _edHandSrcDensity(l);
+  if(!(d.x > 0 && d.y > 0)) return true;
+  const cw = l._canvas.width, ch = l._canvas.height;
+  return !(Math.abs(kx / d.x - 1) * cw <= 1 && Math.abs(ky / d.y - 1) * ch <= 1);
+}
+
+// Corrige, sobre los lienzos ya fundidos por tipo (ctxs, solo los tipos `wts`), los píxeles donde una pareja invertida se solapa (ver
+// arriba). Trabaja en la rejilla de esos lienzos: origen (X0, Y0) en px de página y escala (kx, ky) px de lienzo por px de página
+// (a 1 en la unión normal; la tinta de alta densidad la corrige aparte, en la suya). Los tipos que no se escriben aquí no se tocan,
+// pero su alfa cuenta en la transparencia de los de debajo.
+function _edHandFixGrid(src, cvs, ctxs, wts, kx, ky, X0, Y0){
   const M = src.length;
   if(M < 2) return;
-  const boxes = src.map(s => _edLayerAabb(s.l));
+  const GW = cvs[wts[0]].width, GH = cvs[wts[0]].height;       // medidas de la rejilla (las de todos los tipos que viven en ella)
+  const boxes = src.map(s => s.box ? {
+    x0: Math.max(0, Math.floor((s.box.x0 - X0) * kx)), y0: Math.max(0, Math.floor((s.box.y0 - Y0) * ky)),
+    x1: Math.min(GW, Math.ceil((s.box.x1 - X0) * kx)), y1: Math.min(GH, Math.ceil((s.box.y1 - Y0) * ky)) } : null);
   // Región donde alguna pareja invertida (i debajo de j, pero tipo(i) > tipo(j)) puede solaparse
   let rx0 = Infinity, ry0 = Infinity, rx1 = -Infinity, ry1 = -Infinity;
   for(let i = 0; i < M; i++) for(let j = i + 1; j < M; j++){
     if(src[i].t <= src[j].t) continue;
     const a = boxes[i], b = boxes[j];
+    if(!a || !b) continue;
     const x0 = Math.max(a.x0, b.x0), y0 = Math.max(a.y0, b.y0), x1 = Math.min(a.x1, b.x1), y1 = Math.min(a.y1, b.y1);
     if(x1 <= x0 || y1 <= y0) continue;
     if(x0 < rx0) rx0 = x0; if(y0 < ry0) ry0 = y0; if(x1 > rx1) rx1 = x1; if(y1 > ry1) ry1 = y1;
@@ -35326,26 +35607,29 @@ function _edHandFixInversions(src, ctxs){
   const EPS = 0.5 / 255;                                       // por debajo de esto, lo de arriba lo tapa por completo
   const Va = new Float32Array(4), Vr = new Float32Array(4), Vg = new Float32Array(4), Vb = new Float32Array(4);
   const D = new Array(M);
+  const wIdx = [-1, -1, -1, -1]; wts.forEach((t, i) => { wIdx[t] = i; });
   for(let by = ry0; by < ry1; by += BH){
     const bh = Math.min(BH, ry1 - by);
     let any = false;
-    for(let k = 0; k < M; k++){
-      const b = boxes[k];
-      if(b.y1 <= by || b.y0 >= by + bh || b.x1 <= rx0 || b.x0 >= rx1){ D[k] = null; continue; }
+    for(let n = 0; n < M; n++){
+      const b = boxes[n];
+      if(!b || b.y1 <= by || b.y0 >= by + bh || b.x1 <= rx0 || b.x0 >= rx1){ D[n] = null; continue; }
       sx.setTransform(1, 0, 0, 1, 0, 0); sx.clearRect(0, 0, RW, BH);
-      sx.save(); sx.setTransform(1, 0, 0, 1, -rx0, -by); sx.globalAlpha = src[k].op; src[k].l.draw(sx); sx.restore();
-      D[k] = sx.getImageData(0, 0, RW, bh).data; any = true;
+      sx.save(); sx.setTransform(kx, 0, 0, ky, -X0 * kx - rx0, -Y0 * ky - by);
+      if(!_edHandSmooth(src[n], kx, ky)) sx.imageSmoothingEnabled = false;   // misma regla que al componer la tinta
+      sx.globalAlpha = src[n].op; src[n].l.draw(sx); sx.restore();
+      D[n] = sx.getImageData(0, 0, RW, bh).data; any = true;
     }
     if(!any) continue;
-    const NI = ctxs.map(c => c.getImageData(rx0, by, RW, bh)), ND = NI.map(im => im.data);
+    const NI = wts.map(t => ctxs[t].getImageData(rx0, by, RW, bh)), ND = NI.map(im => im.data);
     let changed = false;
-    for(let p = 0, n = RW * bh; p < n; p++){
+    for(let p = 0, np = RW * bh; p < np; p++){
       const o = p << 2;
       // ¿Este píxel tiene una pareja invertida con alfa en las dos capas?
       let maxT = -1, inv = false;
-      for(let k = 0; k < M; k++){
-        const d = D[k]; if(d === null || d[o + 3] === 0) continue;
-        const t = src[k].t;
+      for(let n = 0; n < M; n++){
+        const d = D[n]; if(d === null || d[o + 3] === 0) continue;
+        const t = src[n].t;
         if(t < maxT){ inv = true; break; }
         if(t > maxT) maxT = t;
       }
@@ -35353,49 +35637,132 @@ function _edHandFixInversions(src, ctxs){
       // Contribución visible de cada capa de origen (de arriba abajo), repartida por tipo
       Va.fill(0); Vr.fill(0); Vg.fill(0); Vb.fill(0);
       let tr = 1;
-      for(let k = M - 1; k >= 0; k--){
-        const d = D[k]; if(d === null) continue;
+      for(let n = M - 1; n >= 0; n--){
+        const d = D[n]; if(d === null) continue;
         const a8 = d[o + 3]; if(a8 === 0) continue;
-        const a = a8 / 255, w = a * tr, t = src[k].t, wc = w / 255;
+        const a = a8 / 255, w = a * tr, t = src[n].t, wc = w / 255;
         Va[t] += w; Vr[t] += d[o] * wc; Vg[t] += d[o + 1] * wc; Vb[t] += d[o + 2] * wc;
         tr *= 1 - a;
       }
       // Capas resultantes, de arriba abajo: contribución visible / transparencia acumulada de lo que queda encima
       let U = 1;
       for(let t = 3; t >= 0; t--){
-        const q = ND[t];
+        const q = wIdx[t] >= 0 ? ND[wIdx[t]] : null;
         let a, r, g, b;
         if(U > EPS){ a = Va[t] / U; r = Vr[t] / U; g = Vg[t] / U; b = Vb[t] / U; }
-        else { a = q[o + 3] / 255; r = q[o] / 255 * a; g = q[o + 1] / 255 * a; b = q[o + 2] / 255 * a; } // tapado del todo: no se ve, se deja como estaba
+        else if(q){ a = q[o + 3] / 255; r = q[o] / 255 * a; g = q[o + 1] / 255 * a; b = q[o + 2] / 255 * a; } // tapado del todo: no se ve, se deja como estaba
+        else { a = 0; r = g = b = 0; }                                                                       // (y de otra rejilla: ya no influye)
         if(a > 1) a = 1;
         const aq = Math.round(a * 255);
-        if(aq <= 0){ q[o] = q[o + 1] = q[o + 2] = q[o + 3] = 0; continue; }
+        if(aq <= 0){ if(q){ q[o] = q[o + 1] = q[o + 2] = q[o + 3] = 0; } continue; }
         const af = aq / 255;
-        q[o + 3] = aq;
-        q[o]     = Math.min(255, Math.round(r / af * 255));
-        q[o + 1] = Math.min(255, Math.round(g / af * 255));
-        q[o + 2] = Math.min(255, Math.round(b / af * 255));
+        if(q){
+          q[o + 3] = aq;
+          q[o]     = Math.min(255, Math.round(r / af * 255));
+          q[o + 1] = Math.min(255, Math.round(g / af * 255));
+          q[o + 2] = Math.min(255, Math.round(b / af * 255));
+        }
         U *= 1 - af;
       }
       changed = true;
     }
-    if(changed) for(let t = 0; t < 4; t++) ctxs[t].putImageData(NI[t], rx0, by);
+    if(changed) wts.forEach((t, i) => { ctxs[t].putImageData(NI[i], rx0, by); });
   }
 }
 
-// Funde los dibujos a mano seleccionados en 4 lienzos del tamaño del lienzo de trabajo (relleno, acuarela, lápiz, tinta)
-// con SOLO las partes visibles de cada capa de origen. → { fill, watercolor, pencil, stroke }
+// Funde los dibujos a mano seleccionados en 4 lienzos (relleno, acuarela, lápiz, tinta) con SOLO las partes visibles de cada
+// capa de origen, a 1 px = 1 px de página y sobre la caja de los dibujos (px enteros de página: origen X0,Y0, medidas FW×FH).
+// → { fill, watercolor, pencil, stroke, X0, Y0, FW, FH, src, sx, sy, hi, inkBox }
+//   hi = true si alguna tinta de origen es más densa que 1 px/px (sx, sy = su densidad máxima por eje): ver _edHandInkHiRes.
+//   inkBox = (solo con hi) caja de lo pintado por esas tintas, en px de página, medida en sus propios bitmaps.
 function _edHandMergeSlots(mains){
   const W = ED_CANVAS_W, H = ED_CANVAS_H;
   const src = _edHandSources(mains);
-  const cvs = [0, 1, 2, 3].map(() => { const c = document.createElement('canvas'); c.width = W; c.height = H; return c; });
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, w); c.height = Math.max(1, h); return c; };
+  // 1) caja de trabajo: unión de las cajas de las capas de origen (enteros de página, dentro del lienzo de trabajo)
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for(const s of src){
+    s.box = _edHandSrcBox(s.l);
+    if(!s.box) continue;
+    if(s.box.x0 < bx0) bx0 = s.box.x0; if(s.box.y0 < by0) by0 = s.box.y0;
+    if(s.box.x1 > bx1) bx1 = s.box.x1; if(s.box.y1 > by1) by1 = s.box.y1;
+  }
+  const X0 = Math.max(0, Math.floor(bx0)), Y0 = Math.max(0, Math.floor(by0));
+  const X1 = Math.min(W, Math.ceil(bx1)),  Y1 = Math.min(H, Math.ceil(by1));
+  if(!(X1 > X0 && Y1 > Y0)){                                  // nada que pintar (todo oculto o vacío)
+    return { fill: mk(1, 1), watercolor: mk(1, 1), pencil: mk(1, 1), stroke: mk(1, 1), X0: 0, Y0: 0, FW: 1, FH: 1, src: [], sx: 1, sy: 1, hi: false, inkBox: null };
+  }
+  const FW = X1 - X0, FH = Y1 - Y0;
+  // 2) cada tipo con sus capas de origen, en su orden Z real
+  const cvs = [0, 1, 2, 3].map(() => mk(FW, FH));
   const ctxs = cvs.map(c => c.getContext('2d', { willReadFrequently: true }));
-  // 1) cada tipo con sus capas de origen, en su orden Z real
-  for(const s of src){ const cx = ctxs[s.t]; cx.save(); cx.globalAlpha = s.op; s.l.draw(cx); cx.restore(); }
-  // 2) lo que en el apilado original tapaba a otra capa que en la unión queda encima
-  try { _edHandFixInversions(src, ctxs); }
+  for(const s of src){
+    if(!s.box) continue;
+    const cx = ctxs[s.t];
+    cx.save(); cx.translate(-X0, -Y0); cx.globalAlpha = s.op; s.l.draw(cx); cx.restore();
+  }
+  // 3) lo que en el apilado original tapaba a otra capa que en la unión queda encima
+  try { _edHandFixGrid(src, cvs, ctxs, [0, 1, 2, 3], 1, 1, X0, Y0); }
   catch(e){ console.warn('[Unir] no se pudo conservar el orden de solape entre los dibujos:', e); }
-  return { fill: cvs[0], watercolor: cvs[1], pencil: cvs[2], stroke: cvs[3] };
+  // 4) densidad nativa más alta de las tintas de origen (por eje)
+  let sx = 1, sy = 1;
+  for(const s of src){
+    if(!s.box || s.t !== 3) continue;
+    const d = _edHandSrcDensity(s.l);
+    if(d.x > sx) sx = d.x; if(d.y > sy) sy = d.y;
+  }
+  const hi = sx > ED_HAND_HI_TOL || sy > ED_HAND_HI_TOL;
+  // 5) con tinta de alta densidad, la caja de la tinta se mide en SUS bitmaps (no en la composición a 1×: los extremos finos de un
+  //    trazo, de ½ px de bitmap, apenas dejan alfa al reducirlos a 1 px de página y quedaría cortada su punta)
+  let inkBox = null;
+  if(hi){
+    const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+    for(const s of src){
+      if(!s.box || s.t !== 3) continue;
+      const l = s.l;
+      if(l.type === 'draw' || l._isWorkspaceCanvas) continue;           // lienzos de trabajo (1×): ya los recoge la composición
+      const cv = l._canvas, bb = StrokeLayer._boundingBox(cv);
+      if(!bb) continue;
+      const w = (l.width || 0) * pw, h = (l.height || 0) * ph, cxp = mx + (_edCurX(l) || 0) * pw, cyp = my + (_edCurY(l) || 0) * ph;
+      const r = ((l.rotation || 0) + _edLayerPathRotDeg(l)) * Math.PI / 180, cs = Math.cos(r), sn = Math.sin(r);
+      const u0 = (bb.x / cv.width - 0.5) * w, u1 = ((bb.x + bb.w) / cv.width - 0.5) * w;
+      const v0 = (bb.y / cv.height - 0.5) * h, v1 = ((bb.y + bb.h) / cv.height - 0.5) * h;
+      for(const [u, v] of [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]){
+        const px = cxp + u * cs - v * sn, py = cyp + u * sn + v * cs;
+        if(!inkBox) inkBox = { x0: px, y0: py, x1: px, y1: py };
+        else { if(px < inkBox.x0) inkBox.x0 = px; if(py < inkBox.y0) inkBox.y0 = py; if(px > inkBox.x1) inkBox.x1 = px; if(py > inkBox.y1) inkBox.y1 = py; }
+      }
+    }
+  }
+  return { fill: cvs[0], watercolor: cvs[1], pencil: cvs[2], stroke: cvs[3], X0, Y0, FW, FH, src, sx, sy, hi, inkBox };
+}
+
+// v42.39 — Capa de TINTA de la unión a la densidad nativa de las tintas de origen. Se compone ya recortada a la caja común
+// (ux0, uy0, uw×uh en px enteros de página): mismo recuadro que los otros tres tipos, que siguen a 1 px = 1 px de página.
+// Devuelve el lienzo (de tamaño ≈ uw·sx × uh·sy) o null si no hay nada que ganar. Ver el bloque «LA UNIÓN NO PIERDE DEFINICIÓN».
+function _edHandInkHiRes(hm, ux0, uy0, uw, uh){
+  const ink = hm.src.filter(s => s.box && s.t === 3);
+  if(!ink.length || !hm.hi) return null;
+  let sx = Math.max(1, hm.sx), sy = Math.max(1, hm.sy), capped = false;
+  // tope de memoria: ≤ ED_HAND_MAX_PX px y ≤ ED_HAND_MAX_DIM por lado
+  const f = Math.min(1, Math.sqrt(ED_HAND_MAX_PX / (uw * sx * uh * sy)), ED_HAND_MAX_DIM / (uw * sx), ED_HAND_MAX_DIM / (uh * sy));
+  if(f < 1){ sx = Math.max(1, sx * f); sy = Math.max(1, sy * f); capped = true; }
+  const cw = Math.max(1, Math.round(uw * sx)), ch = Math.max(1, Math.round(uh * sy));
+  if(cw <= uw && ch <= uh) return null;
+  const kx = cw / uw, ky = ch / uh;                              // escala exacta página → lienzo (el lienzo cubre justo la caja)
+  const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const cx = cv.getContext('2d', { willReadFrequently: true });
+  for(const s of ink){
+    cx.save();
+    cx.setTransform(kx, 0, 0, ky, -ux0 * kx, -uy0 * ky);        // coordenadas de página → lienzo
+    if(capped) cx.imageSmoothingQuality = 'high';               // si hay que reducir, con el mejor filtro
+    if(!_edHandSmooth(s, kx, ky)) cx.imageSmoothingEnabled = false; // bitmap a ~1:1: copia píxel a píxel (ver _edHandSmooth)
+    cx.globalAlpha = s.op; s.l.draw(cx); cx.restore();
+  }
+  // la misma corrección de solapes que en la composición a 1×, ahora sobre la rejilla de la tinta (solo se escribe la tinta)
+  try { _edHandFixGrid(hm.src, [null, null, null, cv], [null, null, null, cx], [3], kx, ky, ux0, uy0); }
+  catch(e){ console.warn('[Unir] no se pudo conservar el orden de solape en la tinta de alta resolución:', e); }
+  return cv;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -35860,8 +36227,12 @@ function edMergeSelected(){
     // nuevo: orden fill → watercolor → pencil → stroke.
     // v42.16 — la fusión por tipo respeta el orden de solape REAL entre los dibujos (ver _edHandMergeSlots):
     // la unión conserva solo las partes visibles de las capas de origen y el aspecto no cambia.
+    // v42.39 — sin pérdida de definición: los lienzos cubren solo la caja de los dibujos (a 1 px = 1 px de página) y, si alguna tinta de
+    // origen es más densa, la capa de tinta se vuelve a componer a esa densidad (_edHandInkHiRes). Ver «LA UNIÓN NO PIERDE DEFINICIÓN».
     const _hm = _edHandMergeSlots(layers);
     const fillCanvas = _hm.fill, wcCanvas = _hm.watercolor, pencilCanvas = _hm.pencil, strokeCanvas = _hm.stroke;
+    const _HX0 = _hm.X0, _HY0 = _hm.Y0;                // origen (px de página) de los lienzos de trabajo
+    const _releaseHand = () => { for(const c of [fillCanvas, wcCanvas, pencilCanvas, strokeCanvas]){ c.width = 0; c.height = 0; } };
 
     // Bbox unión de las 4 capas combinadas — mismo criterio que
     // _edFreezeDrawLayer: las 4 capas resultantes comparten una única
@@ -35872,11 +36243,12 @@ function edMergeSelected(){
     const _bbPencil = StrokeLayer._boundingBox(pencilCanvas);
     const _bbStroke = StrokeLayer._boundingBox(strokeCanvas);
     const _bbs = [_bbFill, _bbWc, _bbPencil, _bbStroke].filter(Boolean);
-    if(_bbs.length === 0){
+    if(_bbs.length === 0 && !_hm.inkBox){
       // Defensivo: ningún tipo tenía contenido real (no debería ocurrir si
       // _edMergeableTypes ya exigió objetos válidos; v42.16: o todo estaba oculto)
       // — no crear nada vacío ni tocar las capas (antes ya se habían quitado las
       // sub-capas en este punto).
+      _releaseHand();
       _finishMerge(null);
       return;
     }
@@ -35895,10 +36267,18 @@ function edMergeSelected(){
         }
       }
     }
+    // (los lienzos de trabajo cubren la caja de los dibujos, no el lienzo entero: sus coordenadas llevan el origen _HX0/_HY0)
     let _uX0=Infinity, _uY0=Infinity, _uX1=-Infinity, _uY1=-Infinity;
     for(const _b of _bbs){
-      _uX0 = Math.min(_uX0, _b.x); _uY0 = Math.min(_uY0, _b.y);
-      _uX1 = Math.max(_uX1, _b.x + _b.w); _uY1 = Math.max(_uY1, _b.y + _b.h);
+      _uX0 = Math.min(_uX0, _HX0 + _b.x); _uY0 = Math.min(_uY0, _HY0 + _b.y);
+      _uX1 = Math.max(_uX1, _HX0 + _b.x + _b.w); _uY1 = Math.max(_uY1, _HY0 + _b.y + _b.h);
+    }
+    if(_hm.inkBox){   // tinta de alta densidad: su caja viene de sus propios bitmaps (ver _edHandMergeSlots); a px enteros de página, hacia fuera
+      const _ib = _hm.inkBox;
+      _uX0 = Math.floor(Math.min(_uX0, _ib.x0) + 1e-6); _uY0 = Math.floor(Math.min(_uY0, _ib.y0) + 1e-6);
+      _uX1 = Math.ceil(Math.max(_uX1, _ib.x1) - 1e-6);  _uY1 = Math.ceil(Math.max(_uY1, _ib.y1) - 1e-6);
+      _uX0 = Math.max(0, _uX0); _uY0 = Math.max(0, _uY0);
+      _uX1 = Math.min(ED_CANVAS_W, _uX1); _uY1 = Math.min(ED_CANVAS_H, _uY1);
     }
     const _uW = Math.max(1, _uX1 - _uX0), _uH = Math.max(1, _uY1 - _uY0);
     const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
@@ -35908,11 +36288,15 @@ function edMergeSelected(){
 
     // Recorta un canvas combinado al bbox unión y crea la capa del tipo dado
     // (null si ese tipo no tenía contenido en ninguno de los objetos unidos).
-    const _cropToUnion = (srcCanvas, bb, LayerClass, prefix) => {
-      if(!bb) return null;
+    const _cropSlot = (srcCanvas) => {
       const crop = document.createElement('canvas');
       crop.width = _uW; crop.height = _uH;
-      crop.getContext('2d').drawImage(srcCanvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+      crop.getContext('2d').drawImage(srcCanvas, _uX0 - _HX0, _uY0 - _HY0, _uW, _uH, 0, 0, _uW, _uH);
+      return crop;
+    };
+    const _cropToUnion = (srcCanvas, bb, LayerClass, prefix) => {
+      if(!bb) return null;
+      const crop = _cropSlot(srcCanvas);
       const gl = new LayerClass();
       gl._canvas = crop; gl._ctx = crop.getContext('2d');
       gl._isWorkspaceCanvas = false;
@@ -35931,9 +36315,15 @@ function edMergeSelected(){
     // recortaría por su cuenta a SU PROPIO bbox si se le pasara el canvas
     // completo, así que se construye "a mano", igual que hace
     // _edFreezeDrawLayer con el StrokeLayer final.
-    const strokeCrop = document.createElement('canvas');
-    strokeCrop.width = _uW; strokeCrop.height = _uH;
-    strokeCrop.getContext('2d').drawImage(strokeCanvas, _uX0, _uY0, _uW, _uH, 0, 0, _uW, _uH);
+    // v42.39: con tinta de origen más densa que 1 px/px, la tinta se compone aparte, ya recortada a esta caja, a esa densidad (si algo
+    // falla se cae al recorte a 1×, que es lo de siempre).
+    let strokeCrop = null;
+    if(_hm.hi){
+      try { strokeCrop = _edHandInkHiRes(_hm, _uX0, _uY0, _uW, _uH); }
+      catch(e){ console.warn('[Unir] no se pudo componer la tinta a su resolución nativa:', e); strokeCrop = null; }
+    }
+    if(!strokeCrop) strokeCrop = _cropSlot(strokeCanvas);
+    _releaseHand();   // los 4 lienzos de trabajo ya no hacen falta: soltarlos ya (en Android no se espera al GC)
     const newSL = new StrokeLayer(document.createElement('canvas')); // canvas vacío → placeholder, se sobreescribe a continuación
     newSL._canvas = strokeCrop; newSL._ctx = strokeCrop.getContext('2d');
     newSL.x = _cx; newSL.y = _cy; newSL.width = _fw; newSL.height = _fh; newSL.rotation = 0;

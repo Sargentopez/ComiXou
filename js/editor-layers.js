@@ -667,8 +667,10 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
     if ((l.type==='stroke'||l.type==='draw') && l._canvas && !l._isWorkspaceCanvas) {
       const ox = l._bboxOriginX!=null ? l._bboxOriginX : (_mx + l.x*_pw - l.width*_pw/2);
       const oy = l._bboxOriginY!=null ? l._bboxOriginY : (_my + l.y*_ph - l.height*_ph/2);
+      // v42.39: medida = la de su caja en la página, no la de su bitmap (un trazo puede tener más píxeles que px de página: v41.77)
+      const ew = l.width>0 ? l.width*_pw : l._canvas.width, eh = l.height>0 ? l.height*_ph : l._canvas.height;
       uX0=Math.min(uX0,ox); uY0=Math.min(uY0,oy);
-      uX1=Math.max(uX1,ox+l._canvas.width); uY1=Math.max(uY1,oy+l._canvas.height);
+      uX1=Math.max(uX1,ox+ew); uY1=Math.max(uY1,oy+eh);
     } else {
       const cx = _mx + l.x*_pw, cy = _my + l.y*_ph;
       const hw = (l.width||0.1)*_pw/2, hh = (l.height||0.1)*_ph/2;
@@ -694,7 +696,7 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
       if ((l.type==='stroke'||l.type==='draw') && l._canvas && !l._isWorkspaceCanvas) {
         const ox = l._bboxOriginX!=null?l._bboxOriginX:(_mx+l.x*_pw-l.width*_pw/2);
         const oy = l._bboxOriginY!=null?l._bboxOriginY:(_my+l.y*_ph-l.height*_ph/2);
-        const dx=wx2t(ox), dy=wy2t(oy), dw=l._canvas.width*sc, dh=l._canvas.height*sc;
+        const dx=wx2t(ox), dy=wy2t(oy), dw=(l.width>0?l.width*_pw:l._canvas.width)*sc, dh=(l.height>0?l.height*_ph:l._canvas.height)*sc;
         const _uid = l._uid||l._fillLayerId;
         if (typeof edLayers!=='undefined' && _uid) {
           const _fl=edLayers.find(f=>f&&f.type==='fill'       &&f._drawLayerId===_uid);
