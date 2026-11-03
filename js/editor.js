@@ -9963,8 +9963,14 @@ function _edApplyCrop() {
       // horneaba y las capas vinculadas de las dos piezas volvían a 100 %.
       const _opSave = la.opacity;
       la.opacity = 1;
-      let _dlTmp;
-      try { _dlTmp = la.toDrawLayer(); } finally { la.opacity = _opSave; }
+      let _dlTmp, _hrCrop = null;
+      try {
+        _dlTmp = la.toDrawLayer();
+        // v42.41 — si la tinta es más densa que 1 px/px (v41.77, uniones), se guarda su bitmap original para recortarlo a su densidad nativa
+        // en vez de a la del aplanado (ver _edCropHiResPieces). Con la opacidad ya a 1, como el aplanado.
+        _hrCrop = _edReeditHiResBegin(la, _dlTmp, 'Recorte');
+      } finally { la.opacity = _opSave; }
+      if (_hrCrop) _dlTmp._cropHi = _hrCrop;
       // Identidad del grupo: el id del trazo (o, si lo perdió, el de sus capas) y marcas SOLO de las capas que existen.
       const _gU = _gi0.uid || ('dl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
       _dlTmp._uid = _gU;
@@ -10289,6 +10295,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     // El polígono no toca nada: la original se vuelve a congelar tal cual (con lo que tenía: opacidad, nombre…)
     if (dl._cropAttrs) dl._carryAttrs = Object.assign({}, dl._cropAttrs.both, dl._cropAttrs.out);
     _edCropPieceUids = _dlUid ? [_dlUid] : [];
+    if (dl._cropHi) { dl._hiRes = dl._cropHi; dl._cropHi = null; }   // v42.41: nada recortado → la tinta original vuelve tal cual, a su densidad (como reeditar sin tocar)
     if (_onDone) _onDone(null);
     return;
   }
@@ -10379,6 +10386,13 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     dlOutside._carryAttrs = Object.assign({}, dl._cropAttrs.both, dl._cropAttrs.out);
   }
   _edCropPieceUids = [_uidOutV, _uidInV].filter(Boolean);
+  // v42.41 — tinta de alta resolución: cada pieza lleva su trozo del bitmap original, recortado a su densidad nativa (ver _edCropHiResPieces);
+  // _edFreezeDrawLayer la recompone sobre la caja común. Si algo falla, las piezas siguen por el camino de siempre (tinta aplanada a 1×).
+  if (dl._cropHi) {
+    try { const _hp = _edCropHiResPieces(dl._cropHi, wsPts); dlInside._hiRes = _hp.inside; dlOutside._hiRes = _hp.outside; }
+    catch(_e) { console.warn('[Recorte] no se pudo recortar la tinta a su resolución original:', _e); }
+    dl._cropHi = null;
+  }
 
   // ── 6. Sustituir el DrawLayer original (y todas sus capas) en edLayers ──
   const page = edPages[edCurrentPage];
@@ -25700,7 +25714,7 @@ function _edFreezeAllDrawLayersInner(page){
    ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
 // Al entrar en «Editar dibujo» (justo después de sl.toDrawLayer()): guarda lo necesario para conservar la tinta original.
 // → null si la tinta no es más densa que 1 px/px (nada que conservar) o no se puede.
-function _edReeditHiResBegin(sl, dl){
+function _edReeditHiResBegin(sl, dl, tag){
   try {
     if(!sl || !sl._canvas || sl._canvasUnloaded || !dl || !dl._canvas) return null;
     const H = sl._canvas, pw = edPageW(), ph = edPageH();
@@ -25716,12 +25730,44 @@ function _edReeditHiResBegin(sl, dl){
     if(!(bw > 0 && bh > 0)) return null;
     const B = document.createElement('canvas'); B.width = bw; B.height = bh;
     B.getContext('2d').drawImage(dl._canvas, bx, by, bw, bh, 0, 0, bw, bh);   // la tinta aplanada al entrar (lo demás del lienzo está vacío)
-    _edFCL('[Reedición] tinta de alta resolución guardada: ' + H.width + 'x' + H.height + ' (' + dx.toFixed(2) + '×' + dy.toFixed(2) + ' px de bitmap por px de página), copia aplanada ' + bw + 'x' + bh);
+    _edFCL('[' + (tag || 'Reedición') + '] tinta de alta resolución guardada: ' + H.width + 'x' + H.height + ' (' + dx.toFixed(2) + '×' + dy.toFixed(2) + ' px de bitmap por px de página), copia aplanada ' + bw + 'x' + bh);
     return { H, w, h, cx, cy, rot, op: sl.opacity ?? 1, dx, dy, B, bx, by };
   } catch(e){
     console.warn('[Reedición] no se pudo guardar la tinta original:', e);
     return null;
   }
+}
+
+// Caja {x0,y0,x1,y1} (px de página enteros) de lo que sobrevive de la tinta original hr.H: sus píxeles con alfa > 10 cuya posición en la
+// página NO cae en la máscara M (región D del lienzo de trabajo; M = null → sin máscara, vale todo el bitmap). null si no sobrevive nada.
+// Compartido por la reedición (M = lo retocado) y por las piezas de un recorte (H ya recortado, M = null).
+function _edHiResSurvivorBox(hr, M, D){
+  const W = ED_CANVAS_W, HH = ED_CANVAS_H;
+  // caja de lo que sobrevive de la tinta original, medida en SU bitmap (a densidad nativa, no en el aplanado: ahí los extremos finos
+  //    de un trazo apenas dejan alfa y quedaría cortada su punta) — por filas, para no leer de golpe un bitmap enorme
+  const H = hr.H, hw = H.width, hh = H.height, hctx = H.getContext('2d');
+  const rr = hr.rot * Math.PI / 180, cs = Math.cos(rr), sn = Math.sin(rr), sx = hr.w / hw, sy = hr.h / hh;
+  const BAND = Math.max(1, Math.min(hh, Math.floor(2e6 / hw)));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for(let y0 = 0; y0 < hh; y0 += BAND){
+    const bh = Math.min(BAND, hh - y0);
+    const d = hctx.getImageData(0, y0, hw, bh).data;
+    for(let j = 0; j < bh; j++){
+      const v = (y0 + j + 0.5) * sy - hr.h / 2, rowo = j * hw * 4 + 3;
+      for(let i = 0; i < hw; i++){
+        if(d[rowo + i * 4] <= 10) continue;
+        const u = (i + 0.5) * sx - hr.w / 2;
+        const px = hr.cx + u * cs - v * sn, py = hr.cy + u * sn + v * cs;
+        if(M){
+          const mxp = Math.floor(px) - D.x0, myp = Math.floor(py) - D.y0;
+          if(mxp >= 0 && myp >= 0 && mxp < D.w && myp < D.h && M[myp * D.w + mxp]) continue;
+        }
+        if(px < minX) minX = px; if(px > maxX) maxX = px; if(py < minY) minY = py; if(py > maxY) maxY = py;
+      }
+    }
+  }
+  return (maxX >= minX) ? { x0: Math.max(0, Math.floor(minX - 1)), y0: Math.max(0, Math.floor(minY - 1)),
+                                  x1: Math.min(W, Math.ceil(maxX + 1)),  y1: Math.min(HH, Math.ceil(maxY + 1)) } : null;
 }
 
 // Al dar OK (con la sesión ya volcada en dl._canvas, bb = su caja de tinta): qué ha cambiado y qué queda de la tinta original.
@@ -25770,35 +25816,57 @@ function _edReeditHiResPlan(dl, bb){
     }
     mb = { x0: mx0, y0: my0, x1: mx1 + 1, y1: my1 + 1 };
   }
-  // 3) caja de lo que sobrevive de la tinta original, medida en SU bitmap (a densidad nativa, no en el aplanado: ahí los extremos finos
-  //    de un trazo apenas dejan alfa y quedaría cortada su punta) — por filas, para no leer de golpe un bitmap enorme
-  const H = hr.H, hw = H.width, hh = H.height, hctx = H.getContext('2d');
-  const rr = hr.rot * Math.PI / 180, cs = Math.cos(rr), sn = Math.sin(rr), sx = hr.w / hw, sy = hr.h / hh;
-  const BAND = Math.max(1, Math.min(hh, Math.floor(2e6 / hw)));
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for(let y0 = 0; y0 < hh; y0 += BAND){
-    const bh = Math.min(BAND, hh - y0);
-    const d = hctx.getImageData(0, y0, hw, bh).data;
-    for(let j = 0; j < bh; j++){
-      const v = (y0 + j + 0.5) * sy - hr.h / 2, rowo = j * hw * 4 + 3;
-      for(let i = 0; i < hw; i++){
-        if(d[rowo + i * 4] <= 10) continue;
-        const u = (i + 0.5) * sx - hr.w / 2;
-        const px = hr.cx + u * cs - v * sn, py = hr.cy + u * sn + v * cs;
-        if(M){
-          const mxp = Math.floor(px) - D.x0, myp = Math.floor(py) - D.y0;
-          if(mxp >= 0 && myp >= 0 && mxp < D.w && myp < D.h && M[myp * D.w + mxp]) continue;
-        }
-        if(px < minX) minX = px; if(px > maxX) maxX = px; if(py < minY) minY = py; if(py > maxY) maxY = py;
-      }
-    }
-  }
-  const hbox = (maxX >= minX) ? { x0: Math.max(0, Math.floor(minX - 1)), y0: Math.max(0, Math.floor(minY - 1)),
-                                  x1: Math.min(W, Math.ceil(maxX + 1)),  y1: Math.min(HH, Math.ceil(maxY + 1)) } : null;
+  // 3) caja de lo que sobrevive de la tinta original (ver _edHiResSurvivorBox)
+  const hbox = _edHiResSurvivorBox(hr, M, D);
   _edFCL('[Reedición] comparación: ' + D.w + 'x' + D.h + ' px, retocados ' + n + (mb ? ' (zona ' + (mb.x1 - mb.x0) + 'x' + (mb.y1 - mb.y0) + ')' : '') +
     ', tinta original que sobrevive: ' + (hbox ? (hbox.x1 - hbox.x0) + 'x' + (hbox.y1 - hbox.y0) + ' px de página' : 'ninguna') +
     ' · ' + Math.round(((typeof performance !== 'undefined') ? performance.now() : 0) - t0) + ' ms');
   return { D, M, mb, n, hbox };
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+   v42.41 — RECORTAR (✂) UN DIBUJO NO BAJA SU RESOLUCIÓN («Si arregla recortar para que no haya pérdida», Alberto, tras v42.40).
+   Un dibujo SIN relleno / acuarela / lápiz ya se recortaba sobre su propio bitmap (_edApplyCropStroke: el polígono se lleva a los píxeles del
+   bitmap), pero uno CON capas vinculadas —el caso normal— se aplanaba a 1 px = 1 px de página (toDrawLayer), se cortaba ahí y se congelaba, así
+   que las dos piezas salían a 1×. Ahora, si la tinta es más densa que eso (ED_HAND_HI_TOL):
+     · _edApplyCrop guarda el descriptor de la tinta original (_edReeditHiResBegin) en el DrawLayer aplanado (dl._cropHi);
+     · _edApplyCropDraw, una vez decidido que el polígono toca algo, parte el bitmap original en sus dos piezas A SU DENSIDAD NATIVA
+       (_edCropHiResPieces: mismo recorte que _edApplyCropStroke) y deja cada una en el dl._hiRes de su pieza (piece: true);
+     · _edFreezeDrawLayer las trata con la misma maquinaria que la reedición: la caja de lo que contiene (_edHiResSurvivorBox) entra en la caja
+       común con relleno / acuarela / lápiz y _edReeditHiResCompose coloca la tinta, a densidad nativa, en esa misma caja de píxeles enteros de
+       página (registro perfecto). Aquí no hay nada que comparar con una copia aplanada: recortar no retoca píxeles, los reparte, y el borde del
+       corte queda a la precisión del bitmap, no a la de la página.
+   Sin tinta de alta densidad no cambia nada (_edReeditHiResBegin devuelve null y todo sigue el camino de siempre).
+   ────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+// Parte la tinta original hr.H en sus dos piezas —dentro y fuera del polígono wsPts (vértices en coordenadas del lienzo de trabajo)— sin bajar
+// su densidad. → { inside, outside }: dos descriptores {…hr, H: bitmap recortado, piece: true, B: null}, listos para dl._hiRes de cada pieza.
+function _edCropHiResPieces(hr, wsPts){
+  const H = hr.H, sw = H.width, sh = H.height;
+  const r = -hr.rot * Math.PI / 180, cs = Math.cos(r), sn = Math.sin(r);
+  const loc = wsPts.map(p => {                                     // punto del lienzo de trabajo → píxel del bitmap (como localPts de _edApplyCropStroke)
+    const dx = p.x - hr.cx, dy = p.y - hr.cy;
+    return { x: ((dx * cs - dy * sn) / hr.w + 0.5) * sw, y: ((dx * sn + dy * cs) / hr.h + 0.5) * sh };
+  });
+  const poly = c => { c.beginPath(); c.moveTo(loc[0].x, loc[0].y); for(let i = 1; i < loc.length; i++) c.lineTo(loc[i].x, loc[i].y); c.closePath(); };
+  const mk = () => { const c = document.createElement('canvas'); c.width = sw; c.height = sh; return c; };
+  const cin = mk(), xin = cin.getContext('2d');
+  xin.save(); poly(xin); xin.clip(); xin.drawImage(H, 0, 0); xin.restore();                       // dentro: lo que cae bajo el polígono
+  const cout = mk(), xout = cout.getContext('2d');
+  xout.drawImage(H, 0, 0); xout.globalCompositeOperation = 'destination-out'; poly(xout); xout.fill();   // fuera: el resto
+  xout.globalCompositeOperation = 'source-over';
+  const piece = Hp => Object.assign({}, hr, { H: Hp, piece: true, B: null });
+  return { inside: piece(cin), outside: piece(cout) };
+}
+
+// Pieza de un recorte (dl._hiRes.piece): su tinta ya es la definitiva, solo hace falta la caja de lo que contiene. Mismo formato que _edReeditHiResPlan.
+function _edCropHiResPlan(dl, bb){
+  const hr = dl && dl._hiRes;
+  if(!hr || !bb) return null;
+  const t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
+  const hbox = _edHiResSurvivorBox(hr, null, null);
+  _edFCL('[Recorte] pieza: tinta ' + hr.H.width + 'x' + hr.H.height + ', contenido: ' + (hbox ? (hbox.x1 - hbox.x0) + 'x' + (hbox.y1 - hbox.y0) + ' px de página' : 'ninguno') +
+    ' · ' + Math.round(((typeof performance !== 'undefined') ? performance.now() : 0) - t0) + ' ms');
+  return { D: null, M: null, mb: null, n: 0, hbox };
 }
 
 // Compone la tinta de un dibujo reeditado ya recortada a la caja U {x0,y0,x1,y1} (px de página enteros): la original a densidad nativa y,
@@ -25822,7 +25890,9 @@ function _edReeditHiResCompose(dl, plan, U){
   cx.save();
   cx.setTransform(kx, 0, 0, ky, -U.x0 * kx, -U.y0 * ky);
   if(capped || hr.rot) cx.imageSmoothingQuality = 'high';
-  if(!hr.rot && Math.abs(kx / hr.dx - 1) * hr.H.width <= 1 && Math.abs(ky / hr.dy - 1) * hr.H.height <= 1) cx.imageSmoothingEnabled = false;
+  // v42.41: la discrepancia que cuenta es la que se acumula a lo largo de la caja U (cw − uW·dx, siempre ≤ ½ px de bitmap salvo si se ha
+  // topado), no a lo largo de todo el bitmap original: con una pieza pequeña (recorte) aquel criterio fallaba y la tinta salía interpolada.
+  if(!hr.rot && Math.abs(cw - uW * hr.dx) <= 1 && Math.abs(ch - uH * hr.dy) <= 1) cx.imageSmoothingEnabled = false;
   cx.globalAlpha = hr.op;
   cx.translate(hr.cx, hr.cy); cx.rotate(hr.rot * Math.PI / 180);
   cx.drawImage(hr.H, -hr.w / 2, -hr.h / 2, hr.w, hr.h);
@@ -26063,7 +26133,7 @@ function _edFreezeDrawLayer(){
   // «REEDITAR UN DIBUJO NO BAJA SU RESOLUCIÓN»). Si falla, todo sigue por el camino de siempre (tinta a 1×).
   let _hiPlan = null;
   if (dl._hiRes) {
-    try { _hiPlan = _edReeditHiResPlan(dl, _bbDraw); }
+    try { _hiPlan = dl._hiRes.piece ? _edCropHiResPlan(dl, _bbDraw) : _edReeditHiResPlan(dl, _bbDraw); }   // v42.41: pieza de un recorte → _edCropHiResPlan
     catch(_e) { _hiPlan = null; console.warn('[Reedición] no se pudo comparar con la tinta original:', _e); }
   }
 
