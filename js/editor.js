@@ -1503,6 +1503,8 @@ function _edWcReset(){ if(edFillBrushType==='watercolor'){ edFillBrushType='buck
 // Cuatro canvases independientes, compositan al hacer OK.
 // _edTmp.active: 'pen'|'pencil'|'watercolor'|'bucket'
 let _edTmp = { pen:null, pencil:null, watercolor:null, bucket:null, active:'pen' };
+let _edHiSess = null;   // v42.42: vista nítida de la tinta de alta resolución durante «Editar dibujo» (ver «LA TINTA SIGUE NÍTIDA MIENTRAS SE EDITA»)
+const _edHiSessTileInk = new WeakMap();   // v42.42: baldosa (inmutable) del historial → ¿tiene algún píxel de tinta (alfa > 10)?
 // ── Color de cada herramienta de dibujo (v40.44) ──────────────────────────
 // Petición de Alberto: el color por defecto de la tinta es negro y el del lápiz
 // sanguina, pero SOLO cuando se inicia la edición y mientras no se elija otro.
@@ -1693,6 +1695,7 @@ function _edTmpCreate() {
 }
 
 function _edTmpDestroy() {
+  _edHiSessEnd(); // v42.42: fin de la vista nítida de la tinta de la sesión (libera DISP y la máscara)
   _edTmp.pen=null; _edTmp.pencil=null; _edTmp.watercolor=null; _edTmp.bucket=null;
 }
 
@@ -3610,8 +3613,11 @@ class DrawLayer extends BaseLayer {
     }
     const alpha = (opacity ?? 100) / 100;
     { // v41.89: ANTES de pintar — copy-on-write del «volver atrás» táctil + rectángulo sucio del historial local
-      const _pd = (!isEraser && typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil') ? size * 0.7 + 3 : size / 2 + 2;
-      this._markPaint(x - _pd, y - _pd, x + _pd, y + _pd);
+      const _isPencil = !isEraser && typeof edDrawBrushType !== 'undefined' && edDrawBrushType === 'pencil';
+      const _pd = _isPencil ? size * 0.7 + 3 : size / 2 + 2;
+      const _hs = (this._hiSess && !_isPencil) ? this._hiSess : null; // v42.42: el punto inicial (tinta/goma) se repite sobre la máscara de la vista nítida, circular y exacto
+      this._markPaint(x - _pd, y - _pd, x + _pd, y + _pd, !!_hs);
+      if(_hs) _edHiSessNoteDot(_hs, x, y, size / 2 + 1);
     }
     this._ctx.save();
     if(clipR > 0){ this._ctx.beginPath(); this._ctx.arc(x,y,clipR,0,Math.PI*2); this._ctx.clip(); }
@@ -3678,10 +3684,11 @@ class DrawLayer extends BaseLayer {
   // ── v41.89 — rectángulo sucio del historial local + «volver atrás» del gesto táctil (copy-on-write por baldosas) ──
   // _markPaint se llama SIEMPRE justo ANTES de pintar: guarda los píxeles previos de las baldosas que se van a tocar (sólo si el «volver
   // atrás» está armado) y amplía el rectángulo sucio que _edDrawPushHistory convertirá en baldosas nuevas del historial.
-  _markPaint(x0, y0, x1, y1){
+  _markPaint(x0, y0, x1, y1, precise){
     if(this._rv) this._rvSave(x0, y0, x1, y1);
     if(x0 < this._hdX0) this._hdX0 = x0; if(y0 < this._hdY0) this._hdY0 = y0;
     if(x1 > this._hdX1) this._hdX1 = x1; if(y1 > this._hdY1) this._hdY1 = y1;
+    if(this._hiSess) _edHiSessNote(this._hiSess, x0, y0, x1, y1, precise); // v42.42: la vista nítida de la tinta de alta resolución anota la zona (ver _edHiSessNote)
   }
   // El escritor NO es DrawLayer.continueStroke (acuarela, iluminar/oscurecer): marca la zona igual que _markPaint. La acuarela la llama ANTES
   // de pintar (con el «volver atrás» armado guarda sus baldosas: acuarela táctil con arranque inmediato); iluminar/oscurecer la llama
@@ -3718,12 +3725,16 @@ class DrawLayer extends BaseLayer {
     let n = 0;
     rv.tiles.forEach(t => { if(t){ try { this._ctx.putImageData(t.d, t.x, t.y); n++; } catch(_){} } });
     this._hdX0 = rv.hd[0]; this._hdY0 = rv.hd[1]; this._hdX1 = rv.hd[2]; this._hdY1 = rv.hd[3]; // el trazo revertido no deja zona sucia
+    if(this._hiSess) this._hiSess.settle = true; // v42.42: los píxeles han vuelto atrás → que la vista nítida compare de nuevo lo anotado en vivo
     return n > 0;
   }
   _btFlush(){
     const b = this._bt; if(!b) return; this._bt = null;
     const ctx = this._ctx;
-    this._markPaint(b.x0 - b.pad, b.y0 - b.pad, b.x1 + b.pad, b.y1 + b.pad); // v41.89: ANTES de pintar
+    // v42.42: tinta / goma → la vista nítida repite el trazado exacto sobre su máscara (el lápiz de grafito reparte fibras al azar: su rectángulo)
+    const _hs = (this._hiSess && b.kind !== 'pencil') ? this._hiSess : null;
+    this._markPaint(b.x0 - b.pad, b.y0 - b.pad, b.x1 + b.pad, b.y1 + b.pad, !!_hs); // v41.89: ANTES de pintar
+    if(_hs) _edHiSessNoteStroke(_hs, b);
     ctx.save();
     if(b.kind === 'pencil'){
       this._smStamp(b);
@@ -7475,7 +7486,8 @@ function _edRenderDrawTmp(ctx) {
   _dt(_edTmp.bucket);
   _dt(_edTmp.watercolor);
   _dt(_edTmp.pencil);
-  _dt(_edTmp.pen);
+  // v42.42: con tinta de alta resolución reeditada, la sesión enseña la tinta original a su densidad nativa y sólo lo editado a 1× (ver _edHiSessDrawPen)
+  if (!(_edHiSess && _edHiSessDrawPen(ctx))) _dt(_edTmp.pen);
   ctx.globalAlpha = 1;
 }
 
@@ -20356,7 +20368,13 @@ function _edHistMarkCanvas(canvas, x, y, w, h){
   _edHtUnknownDirty = true; // canvas desconocido (p. ej. el relleno real) → el próximo apunte será completo
 }
 // hint = {auto:true} → apunte de un TRAZO (sólo las baldosas que tocó); sin argumentos → apunte COMPLETO de los 5 canvas.
+// v42.42: tras CADA apunte (también si no añade entrada: el trazo no cambió nada) la vista nítida de la tinta de alta resolución mira qué baldosas
+// de la tinta han cambiado (ver _edHiSessAfterPush).
 function _edDrawPushHistory(hint){
+  try { return _edDrawPushHistoryCore(hint); }
+  finally { if(_edHiSess){ try { _edHiSessAfterPush(); } catch(_e){ _edHiSess.broken = true; console.warn('[Sesión]', _e); } } }
+}
+function _edDrawPushHistoryCore(hint){
   const _dlReal = edPages[edCurrentPage]?.layers.find(l=>l.type==='draw');
   const srcs = [['pen', _edTmp.pen], ['pencil', _edTmp.pencil], ['watercolor', _edTmp.watercolor], ['bucket', _edTmp.bucket], ['drawLayer', _dlReal]];
   const prev = (edDrawHistoryIdx >= 0 && edDrawHistory.length > 0) ? edDrawHistory[edDrawHistoryIdx] : null;
@@ -20410,6 +20428,7 @@ function _edDrawApplyHistory(snapshot){
     if(_dlR?._canvas){ _edHtApply(_dlR._canvas, _dlR._ctx, snapshot.g.drawLayer); if(_dlR.histTake) _dlR.histTake(); }
   }
   _edHtUnknownDirty = false;
+  if(_edHiSess){ try { _edHiSessAfterApply(snapshot); } catch(_e){ _edHiSess.broken = true; console.warn('[Sesión]', _e); } } // v42.42: qué baldosas de la tinta han vuelto atrás
   edRedraw();
 }
 function edDrawUndo(){
@@ -20541,6 +20560,8 @@ function _edDrawInitHistory(){
   edDrawHistoryIdx = -1;
   window._edDrawSessionActive = true; // bloquear edPushHistory durante la sesión
   _edDrawPushHistory(); // primer punto = estado al abrir el editor
+  // v42.42: si la tinta que se reedita es más densa que 1 px/px (dl._hiRes, ver _edReeditHiResBegin), la sesión la enseña a su densidad nativa
+  _edHiSessStart(page.layers.find(l => l.type === 'draw'));
 }
 /* ══════════════════════════════════════════
    DIBUJO LIBRE  (DrawLayer)
@@ -25770,6 +25791,25 @@ function _edHiResSurvivorBox(hr, M, D){
                                   x1: Math.min(W, Math.ceil(maxX + 1)),  y1: Math.min(HH, Math.ceil(maxY + 1)) } : null;
 }
 
+// Compara dos lecturas RGBA (F = ahora, Bd = al entrar; N píxeles) y marca en T (Uint8Array de N) con un 1 los píxeles que han cambiado, con una
+// tolerancia de redondeo en alfa premultiplicado. → nº de píxeles distintos. Lo comparten el OK (_edReeditHiResPlan) y la vista en directo de la
+// sesión (v42.42, _edHiSessDiff): han de coincidir al píxel, así que es UNA sola función.
+function _edHiResDiff(F, Bd, T, N){
+  const TOL = 2;
+  let n = 0;
+  for(let p = 0, o = 0; p < N; p++, o += 4){
+    const af = F[o + 3], ab = Bd[o + 3];
+    if(af === 0 && ab === 0) continue;
+    let d = af > ab ? af - ab : ab - af;
+    if(d <= TOL){
+      const fa = af / 255, ba = ab / 255;
+      d = Math.max(Math.abs(F[o] * fa - Bd[o] * ba), Math.abs(F[o + 1] * fa - Bd[o + 1] * ba), Math.abs(F[o + 2] * fa - Bd[o + 2] * ba));
+    }
+    if(d > TOL){ T[p] = 1; n++; }
+  }
+  return n;
+}
+
 // Al dar OK (con la sesión ya volcada en dl._canvas, bb = su caja de tinta): qué ha cambiado y qué queda de la tinta original.
 // → { D, M, mb, n, hbox } | null.  D = región comparada {x0,y0,w,h} (lienzo de trabajo); M = máscara (Uint8Array D.w×D.h) de los píxeles
 // retocados; mb = su caja dentro de D; n = nº de píxeles retocados; hbox = caja {x0,y0,x1,y1} (px de página enteros) de lo que sobrevive
@@ -25790,18 +25830,8 @@ function _edReeditHiResPlan(dl, bb){
   tx.drawImage(hr.B, hr.bx - D.x0, hr.by - D.y0);
   const Bd = tx.getImageData(0, 0, D.w, D.h).data;
   tc.width = 0; tc.height = 0;
-  const N = D.w * D.h, TOL = 2, T = new Uint8Array(N);
-  let n = 0;
-  for(let p = 0, o = 0; p < N; p++, o += 4){
-    const af = F[o + 3], ab = Bd[o + 3];
-    if(af === 0 && ab === 0) continue;
-    let d = af > ab ? af - ab : ab - af;
-    if(d <= TOL){
-      const fa = af / 255, ba = ab / 255;
-      d = Math.max(Math.abs(F[o] * fa - Bd[o] * ba), Math.abs(F[o + 1] * fa - Bd[o + 1] * ba), Math.abs(F[o + 2] * fa - Bd[o + 2] * ba));
-    }
-    if(d > TOL){ T[p] = 1; n++; }
-  }
+  const N = D.w * D.h, T = new Uint8Array(N);
+  const n = _edHiResDiff(F, Bd, T, N);
   // 2) caja de lo retocado (la máscara es T tal cual; el margen de ½ px que necesita la interpolación se añade al ampliarla, ver _edReeditHiResCompose)
   let M = null, mb = null;
   if(n > 0){
@@ -25941,6 +25971,358 @@ function _edReeditHiResCompose(dl, plan, U){
   }
   _edFCL('[Reedición] tinta recompuesta a ' + cw + 'x' + ch + ' (' + kx.toFixed(3) + '×' + ky.toFixed(3) + ') sobre ' + uW + 'x' + uH + ' px de página' + (capped ? ' · densidad reducida por el tope de memoria' : ''));
   return R;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.42 — LA TINTA SIGUE NÍTIDA MIENTRAS SE EDITA («Durante la edición de un dibujo a mano no debe perderse la definición», Alberto, tras v42.40).
+   v42.40 conserva la resolución de la tinta AL DAR OK, pero durante «Editar dibujo» la sesión enseñaba su lienzo de trabajo (_edTmp.pen: 1 px = 1 px de
+   página), que lleva la tinta aplanada a 1×: borrosa hasta pulsar OK. Ahora, mientras dura la sesión de un dibujo con tinta más densa que eso
+   (dl._hiRes), en pantalla se pinta LA MISMA composición que se hará al dar OK:
+     · DISP: lienzo a densidad nativa que cubre la caja de la tinta original (la de su copia aplanada B). Es «la tinta original donde no se ha tocado
+       nada y, donde se ha pintado o borrado, lo editado ampliado» — _edHiSessPaint, el mismo algoritmo que _edReeditHiResCompose pero por regiones.
+     · MASK: los píxeles «tocados» (alfa 255) a 1×, en dos tiempos:
+         – EN VIVO, sin leer píxeles (nada de getImageData por fotograma): lo que pinta la tinta o la goma se repite sobre la máscara con el mismo
+           trazado (el Path2D del lote, +1 px) y lo que escribe cualquier otra herramienta marca su rectángulo (DrawLayer._markPaint);
+         – EXACTO, al acabar el trazo / deshacer / rehacer: se compara la sesión (S) con la copia aplanada (B) en la zona afectada —con la MISMA
+           función que usa el OK, _edHiResDiff— y se sustituye la máscara. La zona sale de las baldosas del historial local que han cambiado
+           (son inmutables y se comparan por identidad: coste ∝ lo cambiado) más lo anotado en vivo.
+     · _edRenderDrawTmp pinta DISP en su caja (rectángulo de píxeles de pantalla enteros: sin costura) y la sesión S fuera de ella (lo que se pinte
+       más allá de la tinta original, que es 1×).
+     · Si se VACÍA toda la tinta (convertir en relleno, vaciar capa, borrar color, borrarla a mano…), al dar OK no se conserva nada de la original
+       (_edFreezeDrawLayer: «tinta vacía», alfa > 10): s.empty —sale de la rejilla del historial— hace que entonces se enseñe S tal cual, sin DISP.
+   Es SOLO visualización: al dar OK sigue siendo _edFreezeDrawLayer quien compara y compone desde cero. Si algo falla, s.broken y se vuelve a enseñar S.
+   Sin tinta de alta densidad (lo normal) no hay sesión y todo sigue como siempre. window._edHiSessOff = true la desactiva (para comparar).
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+// Unión de dos rectángulos {x0,y0,x1,y1} (null = ninguno). Nunca modifica los argumentos.
+function _edRectUnion(a, b){
+  if(!a) return b ? { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 } : null;
+  if(!b) return { x0: a.x0, y0: a.y0, x1: a.x1, y1: a.y1 };
+  return { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) };
+}
+
+function _edHiSessEnd(){
+  const s = _edHiSess; _edHiSess = null;
+  if(!s) return;
+  try { if(s.pen && s.pen._hiSess === s) s.pen._hiSess = null; } catch(_e){}
+  for(const c of [s.disp, s.mask, s.t1, s.t2]) if(c){ c.width = 0; c.height = 0; }   // libera la memoria de los lienzos
+}
+
+// Al entrar en la sesión (tras _edDrawInitHistory: ya existen _edTmp y el primer apunte del historial).
+function _edHiSessStart(dl){
+  _edHiSessEnd();
+  if(window._edHiSessOff){ if(dl && dl._hiRes) _edFCL('[Sesión] vista nítida desactivada (window._edHiSessOff)'); return; }
+  try {
+    const hr = dl && dl._hiRes, pen = _edTmp.pen;
+    if(!hr || hr.piece || !hr.B || !hr.H || !pen || !pen._canvas) return;
+    const uW = hr.B.width, uH = hr.B.height;
+    if(!(uW > 0 && uH > 0)) return;
+    // mismo reparto (y mismos topes de memoria) que _edReeditHiResCompose: lo que se ve ES lo que saldrá al dar OK
+    let sx = hr.dx, sy = hr.dy, capped = false;
+    const f = Math.min(1, Math.sqrt(ED_HAND_MAX_PX / (uW * sx * uH * sy)), ED_HAND_MAX_DIM / (uW * sx), ED_HAND_MAX_DIM / (uH * sy));
+    if(f < 1){ sx = Math.max(1, sx * f); sy = Math.max(1, sy * f); capped = true; }
+    const cw = Math.max(1, Math.round(uW * sx)), ch = Math.max(1, Math.round(uH * sy));
+    if(cw <= uW && ch <= uH){ _edFCL('[Sesión] vista nítida no necesaria: con los topes de memoria la tinta no queda más densa que la página'); return; }
+    const disp = document.createElement('canvas'); disp.width = cw; disp.height = ch;
+    const mask = document.createElement('canvas'); mask.width = uW; mask.height = uH;
+    const dctx = disp.getContext('2d'), mctx = mask.getContext('2d');
+    if(!dctx || !mctx){ _edFCL('[Sesión] vista nítida: el navegador no ha podido reservar los lienzos (poca memoria)'); return; }
+    const e = edDrawHistory[edDrawHistoryIdx];
+    const s = { hr, pen, S: pen._canvas, sctx: pen._ctx, x0: hr.bx, y0: hr.by, uW, uH, cw, ch, kx: cw / uW, ky: ch / uH, capped,
+      disp, dctx, mask, mctx, t1: null, t2: null, pend: null, dirtyT: new Set(), refT: new Set(), cols: Math.ceil(pen._canvas.width / ED_HT), full: false, settle: false,
+      grid: (e && e.g) ? e.g.pen : null, broken: false, empty: false, nRefine: 0, nRepaint: 0, nRebuild: 0 };
+    s.empty = !_edHiSessGridInk(s.grid);
+    _edHiSess = s; pen._hiSess = s;
+    _edHiSessPaint(s, 0, 0, cw, ch, null);
+    _edFCL('[Sesión] tinta de alta resolución en pantalla: ' + cw + 'x' + ch + ' (' + s.kx.toFixed(3) + '×' + s.ky.toFixed(3) + ') sobre ' + uW + 'x' + uH + ' px de página' + (capped ? ' · densidad reducida por el tope de memoria' : ''));
+  } catch(e){
+    console.warn('[Sesión] no se pudo preparar la vista nítida de la tinta:', e);
+    _edHiSessEnd();
+  }
+}
+
+// Lienzo auxiliar reutilizable (k = 0 ó 1) de al menos w×h px.
+function _edHiSessScratch(s, k, w, h){
+  let c = k ? s.t2 : s.t1;
+  if(!c){ c = document.createElement('canvas'); c.width = w; c.height = h; }
+  else if(c.width < w || c.height < h){ c.width = Math.max(c.width, w); c.height = Math.max(c.height, h); }
+  if(k) s.t2 = c; else s.t1 = c;
+  return c;
+}
+
+// Rectángulo de página (px del lienzo de trabajo) → región de DISP (px de DISP), recortada a la caja.
+function _edHiSessMap(s, X0, Y0, X1, Y1){
+  const a = Math.max(0, X0 - s.x0), b = Math.max(0, Y0 - s.y0), c = Math.min(s.uW, X1 - s.x0), d = Math.min(s.uH, Y1 - s.y0);
+  return { rx0: Math.floor(a * s.kx), ry0: Math.floor(b * s.ky), rx1: Math.ceil(c * s.kx), ry1: Math.ceil(d * s.ky) };
+}
+
+// Pinta en DISP la región [rx0,rx1)×[ry0,ry1) (px de DISP): la tinta original a densidad nativa y, dentro de la zona mr (también px de DISP; null =
+// ninguna), lo editado de la sesión ampliado EN LUGAR de la original. Es _edReeditHiResCompose acotado a una región: misma colocación de la tinta,
+// misma máscara (los píxeles tocados ampliados a bloques y ensanchados ½ px de página) y mismo filtro para lo editado.
+function _edHiSessPaint(s, rx0, ry0, rx1, ry1, mr){
+  rx0 = Math.max(0, Math.floor(rx0)); ry0 = Math.max(0, Math.floor(ry0)); rx1 = Math.min(s.cw, Math.ceil(rx1)); ry1 = Math.min(s.ch, Math.ceil(ry1));
+  const rw = rx1 - rx0, rh = ry1 - ry0;
+  if(!(rw > 0 && rh > 0)) return;
+  const hr = s.hr, d = s.dctx, kx = s.kx, ky = s.ky;
+  // 1) la tinta original (la región se limpia y se rehace; el recorte es a píxeles enteros de DISP, sin bordes suavizados)
+  d.save();
+  d.setTransform(1, 0, 0, 1, 0, 0); d.globalAlpha = 1; d.globalCompositeOperation = 'source-over';
+  d.clearRect(rx0, ry0, rw, rh);
+  d.beginPath(); d.rect(rx0, ry0, rw, rh); d.clip();
+  d.setTransform(kx, 0, 0, ky, -s.x0 * kx, -s.y0 * ky);
+  if(s.capped || hr.rot) d.imageSmoothingQuality = 'high';
+  if(!hr.rot && Math.abs(s.cw - s.uW * hr.dx) <= 1 && Math.abs(s.ch - s.uH * hr.dy) <= 1) d.imageSmoothingEnabled = false;   // misma regla que el OK
+  d.globalAlpha = hr.op;
+  d.translate(hr.cx, hr.cy); d.rotate(hr.rot * Math.PI / 180);
+  d.drawImage(hr.H, -hr.w / 2, -hr.h / 2, hr.w, hr.h);
+  d.restore();
+  if(!mr) return;
+  // 2) lo retocado: DISP = original·(1 − m) + editado·m (alfa premultiplicado: «destination-out» multiplica por 1 − m, «destination-in» por m, «lighter» suma)
+  const mx0 = Math.max(rx0, Math.floor(mr.rx0)), my0 = Math.max(ry0, Math.floor(mr.ry0)), mx1 = Math.min(rx1, Math.ceil(mr.rx1)), my1 = Math.min(ry1, Math.ceil(mr.ry1));
+  if(!(mx1 > mx0 && my1 > my0)) return;
+  const TW = Math.max(1, Math.min(mx1 - mx0, 2048)), TH = Math.max(1, Math.min(my1 - my0, Math.floor(1.5e6 / TW)));   // baldosas de ≤ 1,5 Mpx
+  const T1 = _edHiSessScratch(s, 0, TW, TH), T2 = _edHiSessScratch(s, 1, TW, TH);
+  const c1 = T1.getContext('2d'), c2 = T2.getContext('2d');
+  c1.imageSmoothingEnabled = false;                                                  // la máscara, a bloques (sin interpolar)
+  for(let ty = my0; ty < my1; ty += TH) for(let tx = mx0; tx < mx1; tx += TW){
+    const tw = Math.min(TW, mx1 - tx), th = Math.min(TH, my1 - ty);
+    c1.setTransform(1, 0, 0, 1, 0, 0); c1.globalCompositeOperation = 'source-over'; c1.globalAlpha = 1; c1.clearRect(0, 0, tw, th);
+    c1.save(); c1.beginPath(); c1.rect(0, 0, tw, th); c1.clip();
+    for(let jy = -1; jy <= 1; jy++) for(let jx = -1; jx <= 1; jx++){                   // 9 copias desplazadas ±½ px de página = ensanchado cuadrado
+      c1.setTransform(kx, 0, 0, ky, -tx + jx * 0.5 * kx, -ty + jy * 0.5 * ky); c1.drawImage(s.mask, 0, 0);
+    }
+    c1.restore();
+    d.save(); d.setTransform(1, 0, 0, 1, 0, 0); d.globalCompositeOperation = 'destination-out'; d.globalAlpha = 1;
+    d.drawImage(T1, 0, 0, tw, th, tx, ty, tw, th); d.restore();                         // quita la original bajo la máscara
+    c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'source-over'; c2.globalAlpha = 1; c2.clearRect(0, 0, tw, th);
+    c2.save(); c2.beginPath(); c2.rect(0, 0, tw, th); c2.clip();
+    c2.setTransform(kx, 0, 0, ky, -s.x0 * kx - tx, -s.y0 * ky - ty); c2.drawImage(s.S, 0, 0);   // lo editado, ampliado con interpolación…
+    c2.restore();
+    c2.save(); c2.setTransform(1, 0, 0, 1, 0, 0); c2.globalCompositeOperation = 'destination-in'; c2.drawImage(T1, 0, 0, tw, th, 0, 0, tw, th); c2.restore();   // …y recortado por la máscara
+    d.save(); d.setTransform(1, 0, 0, 1, 0, 0); d.globalCompositeOperation = 'lighter'; d.globalAlpha = 1;
+    d.drawImage(T2, 0, 0, tw, th, tx, ty, tw, th); d.restore();
+  }
+}
+
+// Compara la sesión (S) con la copia aplanada de entrada (B) en la región {X0,Y0,W,H} (px del lienzo de trabajo, dentro de la caja) y SUSTITUYE la
+// máscara de esa región por el resultado exacto (en bandas, para no leer de golpe una región enorme). → { n, x0, y0, x1, y1 }: nº de píxeles tocados
+// y su caja (px de página; n = 0 → sin caja).
+function _edHiSessDiff(s, X0, Y0, W, H){
+  const Bc = s.hr.B.getContext('2d'), rows = Math.max(1, Math.floor(2e6 / W));
+  let n = 0, mnx = 1e9, mny = 1e9, mxx = -1, mxy = -1;
+  for(let y = 0; y < H; y += rows){
+    const h = Math.min(rows, H - y), N = W * h;
+    const F = s.sctx.getImageData(X0, Y0 + y, W, h).data;
+    const Bd = Bc.getImageData(X0 - s.x0, Y0 + y - s.y0, W, h).data;
+    const T = new Uint8Array(N);
+    const k = _edHiResDiff(F, Bd, T, N);
+    const img = s.mctx.createImageData(W, h), id = img.data;
+    if(k){
+      n += k;
+      for(let yy = 0; yy < h; yy++){
+        const row = yy * W;
+        for(let xx = 0; xx < W; xx++){
+          if(!T[row + xx]) continue;
+          id[(row + xx) * 4 + 3] = 255;
+          if(xx < mnx) mnx = xx; if(xx > mxx) mxx = xx; const gy = y + yy; if(gy < mny) mny = gy; if(gy > mxy) mxy = gy;
+        }
+      }
+    }
+    s.mctx.putImageData(img, X0 - s.x0, Y0 + y - s.y0);                                // sustituye (también con 0 donde ya no hay nada)
+  }
+  return n ? { n, x0: X0 + mnx, y0: Y0 + mny, x1: X0 + mxx + 1, y1: Y0 + mxy + 1 } : { n: 0, x0: 0, y0: 0, x1: 0, y1: 0 };
+}
+
+// Rehace con la máscara EXACTA la zona r {x0,y0,x1,y1} (px del lienzo de trabajo) y su entorno.
+function _edHiSessRefine(s, r){
+  const X0 = Math.max(s.x0, Math.floor(r.x0) - 2), Y0 = Math.max(s.y0, Math.floor(r.y0) - 2);
+  const X1 = Math.min(s.x0 + s.uW, Math.ceil(r.x1) + 2), Y1 = Math.min(s.y0 + s.uH, Math.ceil(r.y1) + 2);
+  if(!(X1 > X0 && Y1 > Y0)) return;
+  _edHiSessDiff(s, X0, Y0, X1 - X0, Y1 - Y0);
+  const g = _edHiSessMap(s, X0, Y0, X1, Y1);
+  _edHiSessPaint(s, g.rx0, g.ry0, g.rx1, g.ry1, g);
+  s.nRefine++;
+}
+
+// Rehace todo DISP con la máscara exacta de toda la caja (tras deshacer/rehacer algo que cambió «todo», o una operación sin zona conocida).
+function _edHiSessRebuild(s){
+  const t0 = performance.now();
+  const m = _edHiSessDiff(s, s.x0, s.y0, s.uW, s.uH);
+  const mr = m.n > 0 ? _edHiSessMap(s, m.x0 - 1, m.y0 - 1, m.x1 + 1, m.y1 + 1) : null;
+  _edHiSessPaint(s, 0, 0, s.cw, s.ch, mr);
+  s.nRebuild++;
+  _edFCL('[Sesión] vista nítida rehecha entera: ' + m.n + ' px tocados · ' + Math.round(performance.now() - t0) + ' ms');
+}
+
+// Anota que el DrawLayer de la tinta va a escribir (o ha escrito) en el rectángulo (px del lienzo de trabajo). precise = la máscara ya la dibuja
+// _edHiSessNoteStroke con el trazado exacto: aquí sólo se registra la zona.
+function _edHiSessNote(s, x0, y0, x1, y1, precise){
+  if(s.broken) return;
+  s.empty = false;                                            // se va a pintar: la tinta deja de estar vacía (se recalcula al soltar, con el historial)
+  try {
+    const X0 = Math.max(x0, s.x0), Y0 = Math.max(y0, s.y0), X1 = Math.min(x1, s.x0 + s.uW), Y1 = Math.min(y1, s.y0 + s.uH);
+    if(!(X1 > X0 && Y1 > Y0)) return;
+    const r = { x0: Math.floor(X0), y0: Math.floor(Y0), x1: Math.ceil(X1), y1: Math.ceil(Y1) };
+    if(!precise){
+      const m = s.mctx; m.fillStyle = '#fff';
+      m.fillRect(r.x0 - s.x0, r.y0 - s.y0, r.x1 - r.x0, r.y1 - r.y0);
+    }
+    s.pend = _edRectUnion(s.pend, r);
+    const ty1 = Math.floor((r.y1 - 1) / ED_HT), tx1 = Math.floor((r.x1 - 1) / ED_HT);
+    for(let ty = Math.floor(r.y0 / ED_HT); ty <= ty1; ty++) for(let tx = Math.floor(r.x0 / ED_HT); tx <= tx1; tx++) s.dirtyT.add(ty * s.cols + tx);
+  } catch(e){ s.broken = true; console.warn('[Sesión]', e); }   // sólo es visualización: si algo falla, se enseña S y el dibujo sigue funcionando
+}
+// El lote b de la tinta/goma (kind 'pen'/'eraser') se repite sobre la máscara con el mismo trazado, 1 px más ancho por cada lado (el antialiasing).
+function _edHiSessNoteStroke(s, b){
+  if(s.broken || !b || !b.path) return;
+  try {
+    const m = s.mctx;
+    m.save();
+    m.setTransform(1, 0, 0, 1, -s.x0, -s.y0);
+    m.globalAlpha = 1; m.globalCompositeOperation = 'source-over'; m.strokeStyle = '#fff';
+    m.lineWidth = b.size + 2; m.lineCap = 'round'; m.lineJoin = 'round';
+    m.stroke(b.path);
+    m.restore();
+  } catch(e){ s.broken = true; console.warn('[Sesión]', e); }
+}
+
+// El punto inicial de un trazo (círculo de radio r) sobre la máscara.
+function _edHiSessNoteDot(s, x, y, r){
+  if(s.broken) return;
+  try {
+    const m = s.mctx;
+    m.save(); m.setTransform(1, 0, 0, 1, -s.x0, -s.y0);
+    m.globalAlpha = 1; m.globalCompositeOperation = 'source-over'; m.fillStyle = '#fff';
+    m.beginPath(); m.arc(x, y, r, 0, Math.PI * 2); m.fill();
+    m.restore();
+  } catch(e){ s.broken = true; console.warn('[Sesión]', e); }
+}
+
+// Rejillas del historial local (_edHtGrid) → añade a `out` (Set) los índices de las baldosas que difieren. Devuelve 'full' si no son comparables.
+// Las baldosas son inmutables y se comparten entre apuntes: «distinta identidad» = «distinto contenido» (alguna vez, de más, por igual contenido).
+function _edHiSessGridTiles(a, b, out){
+  if(a === b) return 0;
+  if(!a || !b || a.W !== b.W || a.H !== b.H || a.t.length !== b.t.length) return 'full';
+  let n = 0;
+  for(let i = 0, len = a.t.length; i < len; i++) if(a.t[i] !== b.t[i]){ out.add(i); n++; }
+  return n;
+}
+// ¿Queda algo de tinta en la rejilla (algún píxel con alfa > 10: el mismo criterio de «vacío» de StrokeLayer._boundingBox con el que _edFreezeDrawLayer decide
+// si la tinta está vacía)? Las baldosas no cambian nunca, así que el resultado de cada una se guarda y el recorrido cuesta ≈ 400 consultas.
+function _edHiSessGridInk(g){
+  if(!g || !g.t) return true;                                 // sin rejilla no se sabe: se supone que hay tinta (no se oculta nada)
+  const sh = _ED_LITTLE_ENDIAN ? 24 : 0;
+  for(let i = 0, n = g.t.length; i < n; i++){
+    const t = g.t[i]; if(!t) continue;
+    let v = _edHiSessTileInk.get(t);
+    if(v === undefined){
+      v = false;
+      if(t.u !== undefined) v = ((t.u >>> sh) & 255) > 10;
+      else { const a = t.u32; for(let k = 0, m = a.length; k < m; k++) if(((a[k] >>> sh) & 255) > 10){ v = true; break; } }
+      _edHiSessTileInk.set(t, v);
+    }
+    if(v) return true;
+  }
+  return false;
+}
+function _edHiSessSync(s, ng){
+  if(!ng){ s.full = true; return; }
+  const r = _edHiSessGridTiles(s.grid, ng, s.refT); s.grid = ng;
+  if(r === 'full') s.full = true;
+  s.empty = !_edHiSessGridInk(ng);                            // vaciar toda la tinta: al dar OK no se conserva NADA de la original (ver _edFreezeDrawLayer, «tinta vacía»). Siempre se recalcula: un trazo sobre lo ya vacío no cambia la rejilla pero sí anotó «se pinta»
+}
+// Al soltar el trazo no siempre hay un redibujado más (el último ya mostró el trazo): si queda algo por afinar, se pide uno.
+function _edHiSessWake(s){
+  if((s.full || s.refT.size || s.dirtyT.size || s.settle) && typeof _edRedrawSoon === 'function') _edRedrawSoon();
+}
+// Tras cada apunte del historial local (_edDrawPushHistory) y tras deshacer/rehacer (_edDrawApplyHistory): qué baldosas de la tinta han cambiado.
+function _edHiSessAfterPush(){
+  const s = _edHiSess; if(!s || s.broken) return;
+  const e = edDrawHistory[edDrawHistoryIdx];
+  if(e && e.g) _edHiSessSync(s, e.g.pen);
+  _edHiSessWake(s);
+}
+function _edHiSessAfterApply(snapshot){
+  const s = _edHiSess; if(!s || s.broken) return;
+  _edHiSessSync(s, snapshot && snapshot.g ? snapshot.g.pen : null);
+  _edHiSessWake(s);
+}
+
+// Afina un conjunto de baldosas del lienzo de trabajo (índices de la rejilla del historial): las baldosas contiguas de una misma fila se juntan en una
+// sola zona, así que el coste es proporcional a lo tocado (un trazo largo y diagonal son unas pocas baldosas, no su caja entera).
+function _edHiSessRefineTiles(s, set){
+  const rows = new Map();
+  for(const id of set){ const ty = (id / s.cols) | 0, tx = id - ty * s.cols; let a = rows.get(ty); if(!a){ a = []; rows.set(ty, a); } a.push(tx); }
+  for(const [ty, txs] of rows){
+    txs.sort((p, q) => p - q);
+    for(let i = 0; i < txs.length; ){
+      let j = i; while(j + 1 < txs.length && txs[j + 1] === txs[j] + 1) j++;
+      _edHiSessRefine(s, { x0: txs[i] * ED_HT, y0: ty * ED_HT, x1: (txs[j] + 1) * ED_HT, y1: (ty + 1) * ED_HT });
+      i = j + 1;
+    }
+  }
+}
+
+// Pone al día DISP con lo pendiente (se llama al pintar, una vez por fotograma como mucho).
+function _edHiSessFlush(s){
+  if(s.full){
+    s.full = false; s.pend = null; s.settle = false; s.refT.clear(); s.dirtyT.clear();
+    _edHiSessRebuild(s);
+    return;
+  }
+  let set = null;
+  if(s.refT.size){ set = s.refT; s.refT = new Set(); }                     // lo que ha cambiado según el historial (trazo soltado, deshacer, rehacer…)
+  if(s.dirtyT.size && (s.settle || !edPainting)){                          // el trazo ha terminado: lo anotado en vivo se sustituye por lo exacto
+    if(!set) set = new Set();
+    for(const t of s.dirtyT) set.add(t);
+    s.dirtyT.clear(); s.pend = null; s.settle = false;
+  }
+  if(set && set.size){
+    const t0 = performance.now();
+    _edHiSessRefineTiles(s, set);
+    const ms = performance.now() - t0;
+    if(ms > 40) _edFCL('[Sesión] vista nítida puesta al día (' + set.size + ' baldosas) · ' + Math.round(ms) + ' ms');
+  }
+  if(s.pend){                                                               // trazo en curso: sólo la zona nueva, con la máscara de lo anotado en vivo
+    const p = s.pend; s.pend = null;
+    const g = _edHiSessMap(s, p.x0 - 1, p.y0 - 1, p.x1 + 1, p.y1 + 1);
+    _edHiSessPaint(s, g.rx0, g.ry0, g.rx1, g.ry1, g);
+    s.nRepaint++;
+  }
+}
+
+// Sustituye a «ctx.drawImage(_edTmp.pen._canvas, 0, 0)» de _edRenderDrawTmp. → true si pintó la tinta de la sesión; false → que la pinte S como siempre.
+function _edHiSessDrawPen(ctx){
+  const s = _edHiSess;
+  if(!s || s.broken || s.pen !== _edTmp.pen || !s.pen._canvas || s.pen._canvas !== s.S) return false;
+  try {
+    _edHiSessFlush(s);
+    if(s.empty) return false;                                 // sin tinta (vaciada del todo): no hay nada que mostrar nítido; lo que quede lo pinta S como siempre
+    const m = ctx.getTransform();
+    if(m.b !== 0 || m.c !== 0 || !(m.a > 0) || !(m.d > 0)) return false;
+    // la caja de la tinta original en píxeles de pantalla ENTEROS (hacia dentro): DISP va dentro, S fuera, sin costura ni solape
+    const X0 = Math.ceil(s.x0 * m.a + m.e), Y0 = Math.ceil(s.y0 * m.d + m.f);
+    const X1 = Math.floor((s.x0 + s.uW) * m.a + m.e), Y1 = Math.floor((s.y0 + s.uH) * m.d + m.f);
+    if(!(X1 > X0 && Y1 > Y0)) return false;
+    const cw = ctx.canvas.width, ch = ctx.canvas.height;
+    ctx.save();
+    try {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath(); ctx.rect(0, 0, cw, ch); ctx.rect(X0, Y0, X1 - X0, Y1 - Y0); ctx.clip('evenodd');
+      ctx.setTransform(m); ctx.globalAlpha = 1; ctx.drawImage(s.S, 0, 0);
+    } finally { ctx.restore(); }
+    ctx.save();
+    try {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath(); ctx.rect(X0, Y0, X1 - X0, Y1 - Y0); ctx.clip();
+      ctx.setTransform(m); ctx.globalAlpha = 1; ctx.drawImage(s.disp, s.x0, s.y0, s.uW, s.uH);
+    } finally { ctx.restore(); }
+    return true;
+  } catch(e){
+    s.broken = true;
+    console.warn('[Sesión] la vista nítida de la tinta falló; se vuelve a la vista normal:', e);
+    try { _edFCL('[Sesión] vista nítida desactivada por un error: ' + (e && e.message)); } catch(_){}
+    return false;
+  }
 }
 
 function _edFreezeDrawLayer(){
