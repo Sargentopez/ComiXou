@@ -784,7 +784,7 @@ const SupabaseClient = (() => {
   // egress cada vez que alguien lee la obra o la abre para editar, y obliga a escribir megas en la base al guardar (el error 57014
   // de la v42.44). R2 no cobra la salida de datos.
   // Cómo (técnica estándar de almacenamiento por contenido: Git LFS, Docker, Figma): el texto de la capa se guarda en R2 con el
-  // nombre = su SHA-256 (ruta /blobs/<sha> del Worker, ver worker/blobs-worker.js) y en layer_data queda SOLO la referencia
+  // nombre = su SHA-256 (ruta /blobs/<sha> del Worker comxow-storage-worker de Cloudflare) y en layer_data queda SOLO la referencia
   // «r2:<sha>:<bytes>» (~75 caracteres). Un archivo así NUNCA cambia: se cachea un año, subirlo dos veces es inocuo y para saber si
   // ya está basta preguntar por el hash. La columna layer_sha de la base (SHA-256 de layer_data) sigue valiendo para la subida
   // diferencial: una capa idéntica produce la misma referencia.
@@ -947,14 +947,16 @@ const SupabaseClient = (() => {
       let j = null; try { j = await r.json(); } catch (_) {}
       step('Subida (PUT → 201)', r.status === 201, 'estado ' + r.status + ' · ' + Math.round(performance.now() - t) + ' ms' + (j && j.error ? ' · ' + j.error : ''));
       r = await fetch(url, { method: 'HEAD' });
-      step('Existe y mide lo mismo (HEAD → 200)', r.status === 200 && +r.headers.get('content-length') === u8.length, 'estado ' + r.status + ' · tamaño ' + r.headers.get('content-length'));
+      // El tamaño solo se enseña: un borde de red puede quitar o recalcular Content-Length en un HEAD si comprime la respuesta. El contenido exacto lo comprueba la lectura de abajo.
+      step('Existe (HEAD → 200)', r.status === 200, 'estado ' + r.status + ' · tamaño ' + (r.headers.get('content-length') || 'no indicado'));
       t = performance.now();
       r = await fetch(url, { cache: 'no-store' });
       const back = new Uint8Array(await r.arrayBuffer());
       const same = back.length === u8.length && (await _sha256HexBytes(back)) === sha;
       step('Se lee idéntico (GET)', r.status === 200 && same, 'estado ' + r.status + ' · ' + Math.round(performance.now() - t) + ' ms');
       const cc = r.headers.get('cache-control') || '';
-      step('Caché de un año, inmutable', /immutable/.test(cc) && /max-age=31536000/.test(cc), cc || 'sin Cache-Control');
+      // Aviso, no condición: sin esa caché R2 funciona igual (cada lectura repetida volvería a pedirse al Worker).
+      lines.push((/immutable/.test(cc) && /max-age=31536000/.test(cc) ? '✓ ' : '⚠ ') + 'Caché de un año, inmutable — ' + (cc || 'sin Cache-Control'));
       r = await fetch(url, { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8 });
       step('Subir otra vez no duplica (PUT → 200 «ya existía»)', r.status === 200, 'estado ' + r.status);
       const badSha = await _sha256HexBytes(new TextEncoder().encode('cx-prueba-hash-' + sha));

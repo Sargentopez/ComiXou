@@ -45,7 +45,7 @@
    admin-r2.js — Pestaña «R2» del panel de administración (v42.45)
 
    Solo la cuenta «admin» ve esta pestaña. Sirve para tres cosas, todas sobre las capas pesadas guardadas en R2 por contenido
-   (ver «CAPAS PESADAS EN R2, POR CONTENIDO» en js/supabase-client.js y worker/blobs-worker.js):
+   (ver «CAPAS PESADAS EN R2, POR CONTENIDO» en js/supabase-client.js; las rutas /blobs viven en el Worker comxow-storage-worker de Cloudflare):
      · PROBAR el Worker real de extremo a extremo (subir, comprobar, leer idéntico, repetir, rechazar un hash que no cuadra);
      · ACTIVAR / DESACTIVAR, en ESTE dispositivo, que al guardar en la nube las capas pesadas vayan a R2 (apagado de serie; no se
        puede activar sin una prueba correcta; leer capas guardadas así funciona siempre, con o sin el interruptor);
