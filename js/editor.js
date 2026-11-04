@@ -4354,7 +4354,8 @@ class StrokeLayer extends BaseLayer {
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(((this.rotation||0) + _edLayerPathRotDeg(this)) * Math.PI/180);
-    ctx.drawImage(this._canvas, -w/2, -h/2, w, h);
+    // v42.43: en el visor interno, la tinta HD se reduce con mipmaps (ver «VISOR INTERNO: LA TINTA HD…»); en el editor, como siempre.
+    ctx.drawImage(_edViewerMode ? _edInkSrc(ctx, this._canvas, w, h) : this._canvas, -w/2, -h/2, w, h);
     ctx.restore();
   }
   // v41.79 — dos radios, igual que DrawLayer.contains(px,py,exactMode):
@@ -38927,6 +38928,7 @@ function _edGifSetPlaying(playing) {
 function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
+  _edVsCur = 0; _edMipFreeAll(); // v42.43: tinta HD — la ventana de lienzos HD empieza en la hoja 0 y la caché de mipmaps en blanco
   if (_edRo) _edRo.init(); // v42.10: giro nativo de la pantalla según la hoja (solo teléfono) — ver «Giro nativo» más arriba; init() vuelve a evaluar teléfono / interruptor en cada apertura
   // BUG CORREGIDO (v38.16 — Alberto: capa CON trayectoria activa, la arrastra,
   // previsualiza sin guardar, al volver al editor aparece en su sitio previo
@@ -39324,6 +39326,34 @@ function _edOpenViewerScroll(navMode) {
     _vsFireBtn(e.clientX, e.clientY);
   }, { passive: true });
 
+  // v42.43 — ventana de lienzos HD (tinta HD con definición, ver «VISOR INTERNO: LA TINTA HD…»): solo la hoja activa y sus contiguas
+  // llevan lienzo a resolución de pantalla (cada uno pesa varios MB). Al llegar a una hoja, las que entran en la ventana suben a HD y
+  // las que salen bajan a 1×; se redibujan como en el render inicial (sin bocadillos secuenciales) y sin tocar nada más del estado.
+  function _vsHiWindow(si) {
+    setTimeout(() => {
+      if (!_viewerScrollMode || edViewerIdx !== si) return;   // ya se ha movido a otra hoja (esa lanzará su propia ventana)
+      const _cnt = $('viewerCounter'), _cntTxt = _cnt ? _cnt.textContent : null;
+      const _ci = edViewerIdx, _cs = edViewerTextStep, _cc = edViewerCanvas, _cx = edViewerCtx;
+      try {
+        for (let j = 0; j < edPages.length; j++) {
+          if (j === si) continue;
+          const pg = edPages[j], cv = _canvases[j];
+          if (!pg || !cv) continue;
+          const orient = pg.orientation || _savedOrient;
+          const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
+          const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+          const want = _edViewerK(pg, pw, ph, parseFloat(cv.style.width) || 0, j) > 1;
+          if (want === (cv.width !== pw)) continue;           // su lienzo ya es el que toca
+          edViewerIdx = j; edViewerTextStep = 0; _activateCanvas(j);
+          edUpdateViewer();
+        }
+      } finally {
+        edViewerIdx = _ci; edViewerTextStep = _cs; edViewerCanvas = _cc; edViewerCtx = _cx;
+        if (_cnt && _cntTxt != null) _cnt.textContent = _cntTxt;
+      }
+    }, 80);
+  }
+
   // ── Scroll nativo: detectar llegada a nuevo slide ──
   let _prevSI = 0, _scrollRaf = null, _settling = false;
   sc.addEventListener('scroll', () => {
@@ -39370,6 +39400,7 @@ function _edOpenViewerScroll(navMode) {
       _edResetPageAnims(_prevSI);   // parar animaciones de la hoja que se deja
       _prevSI      = si;
       edViewerIdx  = si;
+      _edVsCur     = si;   // v42.43: ventana de lienzos HD
       _activateCanvas(si);
       _updateViewerTouchAction();
       _edStartPageAnims(si);        // arrancar animaciones de la nueva hoja desde frame 0
@@ -39387,6 +39418,7 @@ function _edOpenViewerScroll(navMode) {
       }
       edUpdateViewer();
       _updateOverlay();
+      _vsHiWindow(si);
     });
   }, { passive: true });
 
@@ -39462,12 +39494,22 @@ function edUpdateViewerSize(pw, ph){
     pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
     ph = _po==='vertical' ? ED_PAGE_H : ED_PAGE_W;
   }
-  edViewerCanvas.width  = pw;
-  edViewerCanvas.height = ph;
-  edViewerCtx = edViewerCanvas.getContext('2d');
   const scale = Math.min(vw / pw, vh / ph);
   const displayW = Math.round(pw * scale);
   const displayH = Math.round(ph * scale);
+  // v42.43: hoja con tinta HD → el lienzo se crea a la resolución real de pantalla (ver «VISOR INTERNO: LA TINTA HD…» más arriba).
+  // K = 1 (lo normal): exactamente lo de siempre, que reasigna el tamaño (y por tanto limpia el lienzo) en cada llamada.
+  const _K = _edViewerK(edPages[edViewerIdx], pw, ph, displayW);
+  edViewerCanvas._edHiK = _K > 1;
+  if (_K > 1) {
+    const _tw = Math.round(pw * _K), _th = Math.round(ph * _K);
+    if (edViewerCanvas.width !== _tw || edViewerCanvas.height !== _th) { edViewerCanvas.width = _tw; edViewerCanvas.height = _th; }
+    else { const _c0 = edViewerCanvas.getContext('2d'); _c0.setTransform(1, 0, 0, 1, 0, 0); _c0.clearRect(0, 0, _tw, _th); } // mismo tamaño (animaciones): sin reasignar ~MB por fotograma
+  } else {
+    edViewerCanvas.width  = pw;
+    edViewerCanvas.height = ph;
+  }
+  edViewerCtx = edViewerCanvas.getContext('2d');
   edViewerCanvas.style.width  = displayW + 'px';
   edViewerCanvas.style.height = displayH + 'px';
   if (!_viewerScrollMode) {
@@ -39933,6 +39975,7 @@ function edCloseViewer(){
   // Liberar canvas offscreen reutilizable — libera ~16 MB de RAM en Android
   _edViewerFullCanvas = null;
   _edViewerFullCtx    = null;
+  _edMipFreeAll();   // v42.43: mipmaps de la tinta HD (y sus lienzos) fuera de la memoria
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -39945,6 +39988,7 @@ function edCloseViewer(){
   }
   const fc = $('viewerCanvas');
   if (fc) fc.style.display = '';
+  if (fc && fc._edHiK) { fc.width = 1; fc.height = 1; fc._edHiK = false; } // v42.43: suelta el lienzo HD (varios MB) del modo fijo
   _viewerTapBound = false;
 
   if(_vFadeRaf){ cancelAnimationFrame(_vFadeRaf); _vFadeRaf=null; }
@@ -39969,6 +40013,86 @@ function edCloseViewer(){
     _viewerFsFn = null;
   }
 }
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.43 — VISOR INTERNO: LA TINTA HD CONSERVA SU DEFINICIÓN
+   Alberto: «Ahora se ve bien hasta que se hace la previsualización, en el visor interno vuelve a verse rateado». El visor pintaba cada hoja
+   en un lienzo de 1× (pw×ph) que el navegador estiraba por CSS, y StrokeLayer.draw reducía el bitmap HD con un solo drawImage (filtro
+   bilineal SIN prefiltrado: por encima de ~2× de reducción se saltan píxeles → contornos dentados y rayados que se emborronan).
+   Solución estándar (visores de mapas, de imágenes, motores de juego):
+     1) lienzo a la resolución REAL de pantalla (tamaño CSS × devicePixelRatio) solo en las hojas con tinta HD —las demás, EXACTAMENTE
+        como siempre—; las capas solo usan la transformación del contexto, así que se pintan igual a mayor escala;
+     2) mipmaps: el bitmap se reduce por mitades sucesivas hasta quedar a menos de 2× de lo que se va a pintar (cadena en caché mientras el
+        visor está abierto; se libera al abrir y al cerrar).
+   `window._edViewerHiOff = true` lo desactiva todo (A/B y diagnóstico).
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+const ED_VIEWER_MAX_PX = 6e6;   // tope de píxeles del lienzo de una hoja HD (≈ 24 MB); una hoja de 360×780 llega a ×4,6
+const ED_VIEWER_MAX_K  = 4;     // y nunca más de ×4 por lado
+let _edVsCur = 0;               // modo scroll: hoja activa — solo ella y sus contiguas llevan lienzo HD (cada uno pesa varios MB)
+let _edMipGen = 0;              // sube con cada apertura/cierre del visor: invalida la caché de mipmaps
+const _edMipMap = new WeakMap();// lienzo de tinta → { gen, lv: [original, ½, ¼, …] }
+let _edMipAll = [];             // niveles creados (para liberar su memoria de golpe)
+function _edMipFreeAll(){
+  for(const c of _edMipAll){ try { c.width = 0; c.height = 0; } catch(_){} }
+  _edMipAll = [];
+  _edMipGen++;
+}
+// Nivel L de la cadena de mipmaps de `src` (0 = el original). Cada nivel es la mitad del anterior, calculado con un solo drawImage
+// a ½ exacto: el muestreo bilineal cae justo entre 4 píxeles = promedio de área 2×2, sin saltarse ninguno.
+function _edMipLevel(src, L){
+  let e = _edMipMap.get(src);
+  if(!e || e.gen !== _edMipGen){ e = { gen: _edMipGen, lv: [src] }; _edMipMap.set(src, e); }
+  for(let i = e.lv.length; i <= L; i++){
+    const p = e.lv[i - 1];
+    if(!p || !p.width || !p.height) return src;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(p.width / 2));
+    c.height = Math.max(1, Math.round(p.height / 2));
+    const x = c.getContext('2d');
+    x.drawImage(p, 0, 0, p.width, p.height, 0, 0, c.width, c.height);
+    e.lv[i] = c; _edMipAll.push(c);
+  }
+  return e.lv[L] || src;
+}
+// Qué bitmap pasar a drawImage para pintar `cv` en un rectángulo de w×h px de hoja con la transformación actual de `ctx`:
+// el propio `cv` si la reducción es < 2× (filtro bilineal normal, igual que siempre) o el nivel de mipmap que lo deja entre 1× y 2×.
+function _edInkSrc(ctx, cv, w, h){
+  if(window._edViewerHiOff || !cv || !cv.width || !cv.height || !ctx || !ctx.getTransform) return cv;
+  let m; try { m = ctx.getTransform(); } catch(_){ return cv; }
+  const dw = w * Math.hypot(m.a, m.b), dh = h * Math.hypot(m.c, m.d);   // tamaño que tendrá en píxeles del lienzo destino
+  if(!(dw > 0 && dh > 0)) return cv;
+  const L = Math.min(6, Math.floor(Math.log2(Math.max(cv.width / dw, cv.height / dh))));
+  if(!(L >= 1)) return cv;
+  const lv = _edMipLevel(cv, L);
+  if(lv !== cv) ctx.imageSmoothingQuality = 'high';   // el resto de la reducción (<2×) con el mejor filtro que ofrezca el navegador
+  return lv;
+}
+// Densidad de la tinta más fina de la hoja (píxeles de bitmap por píxel de hoja). 1 = nada HD → nada que mejorar.
+function _edViewerInkDensity(page, pw, ph){
+  let d = 1;
+  if(!page || !page.layers) return d;
+  for(const l of page.layers){
+    if(!l || l.type !== 'stroke' || l.hidden || l._canvasUnloaded) continue;
+    const c = l._canvas;
+    if(!c || !c.width || !c.height) continue;
+    const w = l.width * pw, h = l.height * ph;
+    if(!(w > 0 && h > 0)) continue;
+    d = Math.max(d, c.width / w, c.height / h);
+  }
+  return d;
+}
+// Factor de resolución del lienzo del visor para esta hoja: 1 = el de siempre (pw×ph); > 1 = hoja con tinta HD, a resolución de pantalla.
+// cssW = ancho (px CSS) con el que se verá. idx = índice de la hoja (modo scroll: solo la activa y sus contiguas, por memoria).
+function _edViewerK(page, pw, ph, cssW, idx){
+  if(window._edViewerHiOff) return 1;
+  if(_viewerScrollMode && Math.abs((idx == null ? edViewerIdx : idx) - _edVsCur) > 1) return 1;
+  const d = _edViewerInkDensity(page, pw, ph);
+  if(d <= 1.05) return 1;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  let k = Math.min(cssW * dpr / pw, d, ED_VIEWER_MAX_K);
+  k = Math.min(k, Math.sqrt(ED_VIEWER_MAX_PX / (pw * ph)));
+  return k > 1.05 ? k : 1;
+}
+
 // Canvas de trabajo reutilizable para edUpdateViewer — evita crear 2700x2340 en cada frame.
 // Se crea una sola vez y se reutiliza mientras el visor esté abierto (crítico en Android).
 let _edViewerFullCanvas = null;
@@ -40009,16 +40133,27 @@ function edUpdateViewer(){
   const my = (ED_CANVAS_H - ph) / 2;  // margen Y para esta orientación
   // Ajustar canvas del visor para esta hoja
   edUpdateViewerSize(pw, ph);
-  // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
-  if (!_edViewerFullCanvas) {
-    _edViewerFullCanvas = document.createElement('canvas');
-    _edViewerFullCanvas.width  = ED_CANVAS_W;
-    _edViewerFullCanvas.height = ED_CANVAS_H;
-    _edViewerFullCtx = _edViewerFullCanvas.getContext('2d');
+  // v42.43: hoja con tinta HD → el lienzo del visor ya es de resolución de pantalla (kx,ky > 1): se pinta DIRECTAMENTE en él con la
+  // transformación «coordenadas de lienzo de trabajo → píxeles del visor» (las capas solo usan el contexto, así que no se enteran).
+  // Hojas normales (kx = ky = 1): lienzo de trabajo de siempre y copia de la zona de la hoja, sin ningún cambio.
+  const _kx = edViewerCanvas.width / pw, _ky = edViewerCanvas.height / ph;
+  const _hiK = (_kx !== 1 || _ky !== 1);
+  let full, fctx;
+  if (_hiK) {
+    full = edViewerCanvas; fctx = edViewerCtx;
+    fctx.setTransform(_kx, 0, 0, _ky, -mx * _kx, -my * _ky);
+  } else {
+    // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
+    if (!_edViewerFullCanvas) {
+      _edViewerFullCanvas = document.createElement('canvas');
+      _edViewerFullCanvas.width  = ED_CANVAS_W;
+      _edViewerFullCanvas.height = ED_CANVAS_H;
+      _edViewerFullCtx = _edViewerFullCanvas.getContext('2d');
+    }
+    full = _edViewerFullCanvas;
+    fctx = _edViewerFullCtx;
+    fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
   }
-  const full = _edViewerFullCanvas;
-  const fctx = _edViewerFullCtx;
-  fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
   fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
   // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
   // (draw() usa edMarginX/edPageW internamente)
@@ -40047,9 +40182,13 @@ function edUpdateViewer(){
     _edViewerMode = false; // restaurar DESPUÉS de dibujar textos y bocadillos
     // Restaurar antes de manipular el DOM
     edOrientation=_savedOrient;
-    // Copiar zona del lienzo al viewerCanvas
-    edViewerCtx.clearRect(0,0,pw,ph);
-    edViewerCtx.drawImage(full,mx,my,pw,ph,0,0,pw,ph);
+    // Copiar zona del lienzo al viewerCanvas (v42.43: en una hoja HD ya se pintó directamente en él)
+    if (_hiK) {
+      edViewerCtx.setTransform(1, 0, 0, 1, 0, 0);
+    } else {
+      edViewerCtx.clearRect(0,0,pw,ph);
+      edViewerCtx.drawImage(full,mx,my,pw,ph,0,0,pw,ph);
+    }
     // Contador
     const textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
     const isSeq=page.textMode==='sequential';

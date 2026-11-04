@@ -3149,9 +3149,9 @@ function _plSlideShrink(pi) {
 function _plSlideFit(pi) { // → true si estaba encogido y se le ha devuelto su tamaño
   const x = RS.panels[pi] && RS.panels[pi]._scrollCtx;
   if (!x) return false;
-  const { pw, ph } = _panelDims(pi), c = x.canvas;
-  if (c.width === pw && c.height === ph) return false;
-  c.width = pw; c.height = ph;
+  const c = x.canvas, b = _rBacking(pi, parseFloat(c.style.width) || 0); // v42.43: el tamaño que toca es el de _rBacking (hoja con tinta HD: a resolución de pantalla)
+  if (c.width === b.w && c.height === b.h) return false;
+  _rSizeCanvas(c, pi);
   return true;
 }
 function _plSlides(keep) {
@@ -3166,8 +3166,8 @@ function _plSlides(keep) {
 // Un lienzo de slide encogido recupera su tamaño antes de pintar en él (cualquier camino que llegue a _render).
 function _plSlideFitCtx(ctx, pi) {
   if (!RS._scroll || !ctx || !ctx.canvas) return;
-  const { pw, ph } = _panelDims(pi), c = ctx.canvas;
-  if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; }
+  const c = ctx.canvas, b = _rBacking(pi, parseFloat(c.style.width) || 0); // v42.43: ver _plSlideFit
+  if (c.width !== b.w || c.height !== b.h) _rSizeCanvas(c, pi);
 }
 
 // Imágenes de flujo de texto que usan las capas de esta hoja (clave de _tdImgCache).
@@ -3188,6 +3188,7 @@ function _plEvict(panel, pi) {
   _plDisposeSeqs(panel); // v41.78: decodificadores y fotogramas nativos de sus animaciones
   for (const im of (panel.layerImgs || [])) {
     if (!im) continue;
+    _rMipFree(im); // v42.43: mipmaps de la tinta HD (ver «TINTA HD CON DEFINICIÓN»)
     if (im.tagName === 'IMG') { im.onload = im.onerror = null; try { im.removeAttribute('src'); } catch (_) {} }
     else if (im.getContext) { try { im.width = 0; im.height = 0; } catch (_) {} } // lienzo de un GIF/APNG: libera ya su memoria
   }
@@ -5827,6 +5828,115 @@ async function _setupOfflineBtn() {
 
 
 
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// v42.43 — TINTA HD CON DEFINICIÓN (gemelo del visor interno del editor: ver «VISOR INTERNO: LA TINTA HD…» en editor.js)
+// Alberto: la tinta a mano guardada a más resolución que la hoja (p. ej. la de las uniones) se veía «rateada» al previsualizar. El lector
+// tenía el mismo problema: lienzo de 1× (pw×ph) estirado por CSS + drawImage que reduce el bitmap HD con filtro bilineal SIN prefiltrado
+// (por encima de ~2× de reducción se saltan píxeles → contornos dentados y rayados que se emborronan). Solución estándar (visores de
+// mapas, de imágenes, motores de juego):
+//   1) lienzo a la resolución REAL de pantalla (tamaño CSS × devicePixelRatio) solo en las hojas con tinta HD —las demás, EXACTAMENTE como
+//      siempre—; todo el dibujo del lector sigue escrito en píxeles de hoja: el contexto lleva la base setTransform(kx,0,0,ky,0,0);
+//   2) mipmaps: el bitmap se reduce por mitades sucesivas hasta quedar a menos de 2× de lo que se va a pintar (cadena en caché por imagen;
+//      se libera al soltar la hoja de memoria, ver _plEvict).
+// ?rdhi=0 lo desactiva todo (A/B y diagnóstico).
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+const RD_HI_MAX_PX = 6e6;        // tope de píxeles del lienzo de una hoja HD (≈ 24 MB); una hoja de 360×780 llega a ×4,6
+const RD_HI_MAX_K  = 4;          // y nunca más de ×4 por lado
+const _rMipMap = new WeakMap();  // imagen de tinta → { lv: [original, ½, ¼, …] }
+function _rHiOff() { return _PL_QS.get('rdhi') === '0'; }
+
+// Densidad de la tinta más fina de la hoja: píxeles de bitmap por píxel de hoja (1 = nada HD). Se recuerda por juego de imágenes.
+function _rInkDensity(panel, pw, ph) {
+  const imgs = panel.layerImgs, layers = panel.layers;
+  if (!imgs || !imgs.length || !layers) return 1;
+  const key = pw + 'x' + ph;
+  if (panel._inkDImgs === imgs && panel._inkDKey === key) return panel._inkD;
+  let d = 1, pend = false;
+  for (let j = 0; j < layers.length; j++) {
+    const l = layers[j];
+    if (!l || l.hidden || (l.type !== 'stroke' && l.type !== 'draw')) continue;
+    const im = imgs[j];
+    if (!im) continue;
+    const nw = im.naturalWidth || im.width, nh = im.naturalHeight || im.height;
+    if (!nw || !nh) { pend = true; continue; }          // aún sin decodificar: no se recuerda
+    const w = l.type === 'draw' ? pw : (l.width || 1) * pw, h = l.type === 'draw' ? ph : (l.height || 1) * ph;
+    if (w > 0 && h > 0) d = Math.max(d, nw / w, nh / h);
+  }
+  if (!pend) { panel._inkDImgs = imgs; panel._inkDKey = key; panel._inkD = d; }
+  return d;
+}
+// Factor de resolución del lienzo de la hoja pi cuando se ve a cssW px CSS de ancho: 1 = el de siempre (pw×ph); > 1 = hoja con tinta HD.
+function _rPanelK(pi, cssW) {
+  if (_rHiOff()) return 1;
+  const panel = RS.panels[pi];
+  if (!panel || panel.isCredits || (panel._st && panel._st !== 'ready')) return 1;
+  // Modo scroll: cada lienzo HD pesa varios MB, así que solo la hoja que se ve y sus contiguas lo llevan (las demás, 1× como siempre);
+  // al cambiar de hoja, _plSlides (tras cada llegada) sube/baja el tamaño de las que entran/salen de esta ventana.
+  if (RS._scroll && RS._cur != null && Math.abs(pi - RS._cur) > 1) return 1;
+  const { pw, ph } = _panelDims(pi);
+  const d = _rInkDensity(panel, pw, ph);
+  if (d <= 1.05 || !(cssW > 0)) return 1;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  let k = Math.min(cssW * dpr / pw, d, RD_HI_MAX_K);
+  k = Math.min(k, Math.sqrt(RD_HI_MAX_PX / (pw * ph)));
+  return k > 1.05 ? k : 1;
+}
+// Tamaño (px) que debe tener el lienzo de la hoja pi y su escala sobre píxeles de hoja.
+function _rBacking(pi, cssW) {
+  const { pw, ph } = _panelDims(pi);
+  const k = _rPanelK(pi, cssW);
+  if (k === 1) return { w: pw, h: ph, kx: 1, ky: 1 };
+  const w = Math.round(pw * k), h = Math.round(ph * k);
+  return { w, h, kx: w / pw, ky: h / ph };
+}
+// Deja el lienzo c de la hoja pi a su tamaño, con la base de coordenadas en píxeles de hoja si es HD (reasignar width/height deja el
+// contexto en su estado inicial, de ahí que la base se vuelva a poner aquí). cssW: ancho CSS con que se verá (por defecto el de su style).
+function _rSizeCanvas(c, pi, cssW) {
+  const b = _rBacking(pi, cssW != null ? cssW : (parseFloat(c.style.width) || 0));
+  if (c.width !== b.w || c.height !== b.h) { c.width = b.w; c.height = b.h; }
+  if (b.kx !== 1 || b.ky !== 1) c.getContext('2d').setTransform(b.kx, 0, 0, b.ky, 0, 0);
+  return b;
+}
+// Nivel L de la cadena de mipmaps de `src` (0 = el original). Cada nivel es la mitad del anterior con un solo drawImage a ½ exacto: el
+// muestreo bilineal cae justo entre 4 píxeles = promedio de área 2×2, sin saltarse ninguno.
+function _rMipLevel(src, L) {
+  let e = _rMipMap.get(src);
+  if (!e) { e = { lv: [src] }; _rMipMap.set(src, e); }
+  for (let i = e.lv.length; i <= L; i++) {
+    const p = e.lv[i - 1];
+    const sw = p.naturalWidth || p.width, sh = p.naturalHeight || p.height;
+    if (!sw || !sh) return src;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sw / 2)); c.height = Math.max(1, Math.round(sh / 2));
+    c.getContext('2d').drawImage(p, 0, 0, sw, sh, 0, 0, c.width, c.height);
+    e.lv[i] = c;
+  }
+  return e.lv[L] || src;
+}
+function _rMipFree(src) {
+  const e = src && _rMipMap.get(src);
+  if (!e) return;
+  for (let i = 1; i < e.lv.length; i++) { const c = e.lv[i]; if (c) { try { c.width = 0; c.height = 0; } catch (_) {} } }
+  _rMipMap.delete(src);
+}
+// Qué bitmap pasar a drawImage para pintar `img` en un rectángulo de w×h px de hoja con la transformación actual de `ctx`: la propia
+// imagen si la reducción es < 2× (filtro bilineal normal, igual que siempre) o el nivel de mipmap que la deja entre 1× y 2×.
+function _rInkSrc(ctx, img, w, h) {
+  try {
+    if (!ctx.getTransform || _rHiOff()) return img;
+    const nw = img.naturalWidth || img.width, nh = img.naturalHeight || img.height;
+    if (!nw || !nh) return img;
+    const m = ctx.getTransform();
+    const dw = w * Math.hypot(m.a, m.b), dh = h * Math.hypot(m.c, m.d);   // tamaño que tendrá en píxeles del lienzo destino
+    if (!(dw > 0 && dh > 0)) return img;
+    const L = Math.min(6, Math.floor(Math.log2(Math.max(nw / dw, nh / dh))));
+    if (!(L >= 1)) return img;
+    const lv = _rMipLevel(img, L);
+    if (lv !== img) ctx.imageSmoothingQuality = 'high';   // el resto de la reducción (<2×) con el mejor filtro que ofrezca el navegador
+    return lv;
+  } catch (_) { return img; }
+}
+
 // ── TAMAÑO DEL CANVAS ─────────────────────────────────────────
 function _panelDims(idx) {
   const isH = (RS.panels[idx]?.orientation || 'v') === 'h';
@@ -5836,8 +5946,6 @@ function _panelDims(idx) {
 function _resizeCanvas() {
   const panel = RS.panels[RS.idx];
   const { pw, ph } = _panelDims(RS.idx);
-  RS.canvas.width  = pw;
-  RS.canvas.height = ph;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -5855,6 +5963,11 @@ function _resizeCanvas() {
   scale = _capScaleTabletPC(scale, vw, vh);
 
   const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  // v42.43: hoja con tinta HD → lienzo a resolución de pantalla (ver «TINTA HD CON DEFINICIÓN»); las demás, lo de siempre:
+  // reasignar pw×ph (lo que además limpia el lienzo en cada llamada).
+  const _hb = _rBacking(RS.idx, dw);
+  if (_hb.kx === 1 && _hb.ky === 1) { RS.canvas.width = pw; RS.canvas.height = ph; }
+  else _rSizeCanvas(RS.canvas, RS.idx, dw);
   RS.canvas.style.width  = dw + 'px';
   RS.canvas.style.height = dh + 'px';
   RS.canvas.style.left   = Math.round((vw - dw) / 2) + 'px';
@@ -5872,6 +5985,7 @@ function _resizeCanvas() {
 function _render() {
   const panel = RS.panels[RS.idx];
   if (!panel || !RS.ctx) return;
+  if (!_pageNavSuppressUpdate) RS._cur = RS.idx; // v42.43: hoja que de verdad se está viendo (los redibujados de fondo cambian RS.idx un momento; ver _rPanelK)
   _roOnSheet(); // v42.09: acceso a una hoja → comprobar su orientación frente a la de la pantalla (giro nativo, solo teléfono)
   _plSlideFitCtx(RS.ctx, RS.idx); // v41.68: lienzo de slide encogido (hoja lejana, modo scroll) → recupera su tamaño
 
@@ -5896,6 +6010,8 @@ function _render() {
   // (o el aviso de error si ha fallado y reintenta). Se pinta sola al quedar lista — ver _plOnReady.
   if (panel._st && panel._st !== 'ready') { _plDrawPlaceholder(ctx, pw, ph, panel); return; }
 
+  // v42.43: lienzo HD (más grande que la hoja): la base de coordenadas son píxeles de hoja (ver «TINTA HD CON DEFINICIÓN»)
+  if (ctx.canvas.width > pw || ctx.canvas.height > ph) ctx.setTransform(ctx.canvas.width / pw, 0, 0, ctx.canvas.height / ph, 0, 0);
   ctx.clearRect(0, 0, pw, ph);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, pw, ph);
@@ -5963,14 +6079,14 @@ function _render() {
         const rot = (layer.rotation || 0) + _layerPathRotDeg(layer);
         ctx.translate(x, y);
         if (rot) ctx.rotate(rot * Math.PI / 180);
-        ctx.drawImage(img, -w / 2, -h / 2, w, h);
+        ctx.drawImage(type === 'stroke' ? _rInkSrc(ctx, img, w, h) : img, -w / 2, -h / 2, w, h); // v42.43: la tinta a mano HD se reduce con mipmaps
       } else {
         // draw: aplicar offset de motion path si existe
         if (layer._pathCurX != null) {
           ctx.translate((layer._pathCurX - (layer.x||0.5)) * pw,
                         (layer._pathCurY - (layer.y||0.5)) * ph);
         }
-        ctx.drawImage(img, 0, 0, pw, ph);
+        ctx.drawImage(_rInkSrc(ctx, img, pw, ph), 0, 0, pw, ph);   // v42.43: ídem (formato antiguo, hoja entera)
       }
       ctx.restore();
     } else if (type === 'shape') {
