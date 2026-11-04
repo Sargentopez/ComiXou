@@ -80,6 +80,7 @@ const AdminBackup = (() => {
   const CRECE = 4;                                 // la página crece como mucho ×4 cada vez (arranque lento, como en TCP)
   const T_OBJ = 3000;                              // ms: si una llamada tarda más, la siguiente página se reduce en proporción
   const enc = new TextEncoder();
+  const RE_REF_R2 = /"layer_data"\s*:\s*"(r2:[0-9a-f]{64}:\d+)"/;   // v42.48: capa pesada guardada en R2 (ver «resolver» en exportar)
   const T = (k, v) => (typeof I18n !== 'undefined' ? I18n.t(k, v) : k);
   const pad = n => (n < 10 ? '0' : '') + n;
 
@@ -172,7 +173,9 @@ const AdminBackup = (() => {
   const contarLineas = (s) => { let n = 1, i = -1; while ((i = s.indexOf('\n', i + 1)) >= 0) n++; return n; };
 
   /* Exporta todo al `sink` (objeto con write(texto)→bytes, close(), abort()).
-     opts: { rpc, sink, plan?, auth, signal, onProgress(estado), pageBytes, reintentos, appVersion } */
+     opts: { rpc, sink, plan?, auth, signal, onProgress(estado), pageBytes, reintentos, appVersion,
+             resolver?(ref) → Promise<texto> }   resolver (v42.48): trae de R2 el texto de una capa pesada guardada como referencia «r2:…»
+                                                  (si falta, esas filas se copian tal cual, con la referencia) */
   async function exportar(opts) {
     const { rpc, sink, signal, onProgress } = opts;
     const auth = opts.auth !== false;
@@ -227,7 +230,7 @@ const AdminBackup = (() => {
     for (const s of esq.stmts) await w(JSON.stringify(['S', s.k, s.sql]));
 
     const counts = {};
-    let filas = 0, paginas = 0, pesoHecho = 0;
+    let filas = 0, paginas = 0, pesoHecho = 0, r2n = 0, r2bytes = 0;     // r2n / r2bytes: capas pesadas traídas de R2 (v42.48)
     for (let ti = 0; ti < orden.length; ti++) {
       const t = orden[ti];
       const key = t.s + '.' + t.n;
@@ -256,7 +259,34 @@ const AdminBackup = (() => {
         if (!Number.isInteger(n) || n < 0) throw new BkError('format', `${key}: cabecera de página no válida`);
         if (n > 0) {
           if (cuerpo.length === 0 || contarLineas(cuerpo) !== n) throw new BkError('format', `${key}: la página dice ${n} filas y trae otro número`);
-          bytesCrudos += await sink.write(cuerpo + '\n');
+          if (opts.resolver && key === 'public.panel_layers' && cuerpo.indexOf('"r2:') >= 0) {
+            // v42.48 — capas pesadas guardadas en R2: la fila de la base lleva solo la referencia «r2:<huella>:<bytes>». La copia debe llevar el
+            // CONTENIDO (autosuficiente, restaurable sin R2), así que cada referencia se sustituye por su texto, bajado de R2 (su salida es
+            // gratuita) de 4 en 4 y escribiendo según llegan, para no tener nunca una página entera de megas en memoria. Si una no se puede
+            // bajar NO se sigue: una copia con una capa sin contenido sería una copia que parece buena y no lo es.
+            const lineas = cuerpo.split('\n');
+            const idx = [];
+            lineas.forEach((l, i) => { if (RE_REF_R2.test(l)) idx.push(i); });
+            let k = 0;
+            for (let i = 0; i < lineas.length; i++) {
+              if (k < idx.length && idx[k] === i) {
+                const grupo = idx.slice(k, k + 4);
+                let textos;
+                try { textos = await Promise.all(grupo.map(j => opts.resolver(RE_REF_R2.exec(lineas[j])[1]))); }
+                catch (e) { throw new BkError('r2', (e && e.message) || String(e)); }
+                grupo.forEach((j, g) => {
+                  lineas[j] = lineas[j].replace(RE_REF_R2, () => '"layer_data":' + JSON.stringify(textos[g]));
+                  r2n++; r2bytes += enc.encode(textos[g]).length;
+                });
+                // se escriben ya las líneas hasta el final de este grupo (i … último del grupo)
+                const fin = grupo[grupo.length - 1];
+                for (; i <= fin; i++) { bytesCrudos += await sink.write(lineas[i] + '\n'); lineas[i] = null; }
+                i--; k += grupo.length;
+                prog({ fase: 'datos', bytes: bytesCrudos, ms: Date.now() - inicio });
+                parado();
+              } else { bytesCrudos += await sink.write(lineas[i] + '\n'); lineas[i] = null; }
+            }
+          } else bytesCrudos += await sink.write(cuerpo + '\n');
         } else if (cuerpo.length) throw new BkError('format', `${key}: página vacía con contenido`);
         hechasT += n; filas += n;
         // Tamaño de la página siguiente (cab.b = bytes de texto devueltos): las filas que caben en el tope de bytes según el peso medio de
@@ -293,7 +323,7 @@ const AdminBackup = (() => {
     prog({ fase: 'cierre' });
     await w(JSON.stringify(['Z', { finished: new Date().toISOString(), counts, rows: filas, bytes: bytesCrudos, drift: cambios }]));
     const info = await sink.close();
-    return { counts, filas, tablas: orden.length, bytesCrudos, bytesGz: info.bytes, blob: info.blob, cambios, plan, ms: Date.now() - inicio, paginas };
+    return { counts, filas, tablas: orden.length, bytesCrudos, bytesGz: info.bytes, blob: info.blob, cambios, plan, ms: Date.now() - inicio, paginas, r2: { n: r2n, bytes: r2bytes } };
   }
 
   // ───────────── comprobar un archivo ya hecho (el que se acaba de guardar o uno que se elige) ─────────────
@@ -416,6 +446,7 @@ const AdminBackup = (() => {
     if (c === 'server') return T('adminBkErrServer', { msg: m });
     if (c === 'aborted') return T('adminBkAborted');
     if (c === 'save') return T('adminBkErrSave', { msg: m });
+    if (c === 'r2') return T('adminBkErrR2', { msg: m });
     return T('adminBkErrFormat', { msg: m });
   }
 
@@ -469,6 +500,7 @@ const AdminBackup = (() => {
       h += `<p class="bk-p bk-ok"><b>${esc(r.verif && r.verif.ok ? T('adminBkDone') : T('adminBkDoneUnchecked'))}</b></p>`;
       h += `<p class="bk-p">${esc(T('adminBkDoneInfo', { file: r.nombre, size: tam(r.bytesGz), tables: r.tablas, rows: num(r.filas) }))}</p>`;
       h += `<p class="bk-p bk-muted">${esc(r.guardadoEn === 'archivo' ? T('adminBkSavedFile') : T('adminBkSavedDownloads'))}</p>`;
+      if (r.r2 && r.r2.n) h += `<p class="bk-p bk-muted">${esc(T('adminBkDoneR2', { n: num(r.r2.n), mb: mb(r.r2.bytes) }))}</p>`;
       if (r.verif && !r.verif.ok) h += `<p class="bk-p bk-warn">${esc(T('adminBkVerifyBad', { why: r.verif.problemas.slice(0, 3).join('; ') }))}</p>`;
       if (r.cambios && r.cambios.length) h += `<p class="bk-p bk-muted">${esc(T('adminBkDrift', { list: r.cambios.map(c => c.tabla).join(', ') }))}</p>`;
       h += `<p class="bk-p bk-muted">${esc(T('adminBkHow'))}</p>`;
@@ -591,6 +623,7 @@ const AdminBackup = (() => {
       // el plan que se enseñó en la confirmación se reutiliza solo si es reciente (< 10 min); si la pantalla se quedó abierta mucho rato, se vuelve a pedir
       const r = await exportar({
         rpc: rpcApp, sink, plan: (Date.now() - (S.planAt || 0) < 600000 ? S.plan : null), auth: S.auth, signal: S.ctrl.signal, appVersion: (document.querySelector('.app-version') || {}).textContent || '',
+        resolver: (ref) => SupabaseClient.xr.fetchText(ref),     // v42.48: las capas pesadas que viven en R2 entran en la copia con su contenido
         onProgress: (g) => { S.prog = Object.assign({}, S.prog, g); actualizarProgreso(); },
       });
       S.prog = Object.assign({}, S.prog, { fase: 'verificando', fraccion: 1 });
@@ -599,7 +632,7 @@ const AdminBackup = (() => {
       else descargarBlob(r.blob, nombre);
       let verif = null;
       if (archivo) { try { verif = await verificar(archivo); } catch (e) { verif = { ok: false, problemas: [String((e && e.message) || e)], tablas: [] }; } }
-      S.res = { nombre, bytesGz: r.bytesGz, filas: r.filas, tablas: r.tablas, cambios: r.cambios, verif, guardadoEn: handle ? 'archivo' : 'descargas' };
+      S.res = { nombre, bytesGz: r.bytesGz, filas: r.filas, tablas: r.tablas, cambios: r.cambios, verif, guardadoEn: handle ? 'archivo' : 'descargas', r2: r.r2 };
       guardarUltima({ at: new Date().toISOString(), bytes: r.bytesGz, rows: r.filas, tables: r.tablas, name: nombre });
       S.fase = 'hecho';
     } catch (e) {

@@ -43,6 +43,7 @@ transfiere **unos 180 MB ≈ 3,5 % de los 5 GB mensuales** del plan gratuito (el
 tamaño real antes de empezar. El archivo comprimido pesa **≈ 70 % de eso (unos 130 MB)**: casi todo son imágenes en base64, que ya vienen comprimidas.
 
 * Con la cuota agotada (como ahora, hasta que se renueve el periodo ≈ **3-nov-2026**) Supabase responde `402` y la pestaña lo explica; no se guarda nada.
+* **Desde la v42.48:** las capas pesadas que ya viven en R2 (en la base solo queda una referencia `r2:<hash>:<bytes>`) se **leen de R2, que no cobra salida**, y se escriben en la copia con su contenido. Cuantas más capas se muevan a R2 (pestaña **R2**, apartado 4), menos egress de Supabase gasta cada copia: con las ≈ 126 MB de capas pesadas de hoy en R2, la copia pasa de ≈ 180 MB a unos 50-60 MB de egress.
 * No cuesta nada en Cloudflare ni en GitHub. Nada se sube a ninguna parte: el archivo va del navegador a tu disco.
 
 ## 4. Qué contiene y qué no
@@ -53,6 +54,8 @@ tamaño real antes de empezar. El archivo comprimido pesa **≈ 70 % de eso (uno
 | Las cuentas: `auth.users` y `auth.identities` (correo, contraseña **cifrada con bcrypt**, metadatos) | Los **ajustes de Authentication** (URL del sitio, plantillas de correo, SMTP, proveedores), las claves del proyecto, Edge Functions, secretos |
 | La **estructura**: tablas, columnas, claves, índices, funciones, disparadores, políticas RLS, permisos, vistas, publicaciones, secuencias, extensiones, comentarios | Las sesiones abiertas (cada usuario tendrá que iniciar sesión una vez) y las demás tablas internas de `auth` |
 | Los contadores (secuencias), para que los números nuevos no repitan los viejos | Las políticas de Storage y la configuración del Worker de Cloudflare (no están en la base de datos) |
+
+**Capas pesadas en R2 (v42.48):** aunque «los archivos de R2» no entran, **sí entra el texto de las capas pesadas** que la app guarda allí (`panel_layers.layer_data` = `r2:<hash>:<bytes>`): la copia las baja de R2 y las escribe **con su contenido**, de modo que el archivo es autosuficiente y `restaurar-copia.mjs` no necesita acceso a R2. Si un archivo de R2 faltara o no coincidiera con su tamaño, la copia **se detiene con un error claro** en lugar de guardar un hueco. Al restaurar, esas capas vuelven a la base **como texto** (no como referencia); para devolverlas a R2 repite el apartado 4 de la pestaña **R2**.
 
 ## 5. Comprobar un archivo
 
