@@ -54892,8 +54892,9 @@ function _edDrawingQualityLines(rep, L){
     dl.pages.forEach(p => {
       L('  hoja ' + p.order + ': filas ' + p.rows + ' · legibles ' + p.parsed + ' · descartadas ' + p.dropped +
         ' · miniatura de reserva ' + (p.thumbFallback ? '⚠ SÍ (' + (p.rows > 0 ? 'había filas pero ninguna legible' : 'sin filas de capas') + ')' : 'no') +
-        ' · ' + Object.keys(p.types).map(k => k + ' ' + p.types[k]).join(' ') + (p.maxKb ? ' · fila mayor ' + p.maxKb + ' KB' : ''));
+        ' · ' + Object.keys(p.types).map(k => k + ' ' + p.types[k]).join(' ') + (p.maxKb ? ' · fila mayor ' + p.maxKb + ' KB' : '') + (p.r2 ? ' · ' + p.r2 + ' en R2' : ''));
     });
+    if (dl.r2) L('  capas pesadas bajadas de R2: ' + dl.r2.capas + ' (' + dl.r2.kb + ' KB) — no pasaron por Supabase');
   } else L('Última descarga de la nube: (en esta sesión la obra no se ha descargado de la nube)');
   // ── Lectura ──
   const F = rep.flags, list = a => a.map(i => '#' + i).join(' ');
@@ -55917,13 +55918,21 @@ async function _edRunDiag() {
           Math.round(_y.capMin / 1024) + ' KB, al terminar ' + Math.round(_y.cap / 1024) + ' KB');
         (_y.errs || []).forEach(x => L('      fallo a los ' + x.t + ' ms: ' + x.kind + ' · ' + x.rows + ' capa(s) ' + x.kb + ' KB · ' + x.ms + ' ms · ' + x.msg));
       }
+      // v42.45 — capas pesadas en R2 (ver «CAPAS PESADAS EN R2, POR CONTENIDO» en supabase-client.js): interruptor, cuántas capas llevan
+      // referencia, cuántas se subieron ahora / ya estaban, cuántas volvieron a la base por un fallo de R2 y por qué.
+      if (_sb.xr) {
+        const _x = _sb.xr;
+        L('    capas pesadas en R2: interruptor ' + (_x.on ? 'ACTIVADO' : 'apagado') + ' (desde ' + Math.round((_x.min || 0) / 1024) + ' KB) · ' + _x.n + ' con referencia (' + _x.put + ' subidas ahora = ' + (_x.putKB || 0) +
+          ' KB · ' + _x.have + ' ya estaban) · ' + _x.fail + ' vueltas a la base' + (_x.ms ? ' · ' + _x.ms + ' ms sumados' : ''));
+        (_x.errs || []).forEach(e => L('      fallo de R2: ' + e));
+      }
       if (_sb.marks && _sb.marks.length) L('    hitos: ' + _sb.marks.map(x => x[0] + '@' + x[1]).join(' · '));
       (_sb.pages || []).forEach(pg => {
         L('    hoja ' + (pg.i + 1) + ': empezó a los ' + pg.t0 + ' ms · fila ' + (pg.panelMs ?? '—') + ' · capas preparadas ' + (pg.layersBuiltMs ?? '—') +
           (pg.listLayersMs != null ? ' · lista de capas de la nube ' + pg.listLayersMs : '') + (pg.deltaMs != null ? ' · comparación ' + pg.deltaMs : '') +
           ' · borrado capas ' + (pg.delLayersMs ?? '—') + ' · envío capas ' + (pg.layersPostMs ?? '—') + ' · fin ' + (pg.doneMs ?? '—') + ' ms');
         L('      ' + (pg.layers ?? '?') + ' capas: ' + (pg.kept ?? 0) + ' ya estaban en la nube (' + (pg.keptKB ?? 0) + ' KB sin subir) · ' +
-          (pg.sent ?? pg.layers ?? '?') + ' enviadas (' + (pg.kb ?? '?') + ' KB de datos de capa) · modo ' + (pg.mode || '?'));
+          (pg.sent ?? pg.layers ?? '?') + ' enviadas (' + (pg.kb ?? '?') + ' KB de datos de capa a la base' + (pg.xrN ? ' + ' + pg.xrN + ' a R2 = ' + pg.xrKB + ' KB' : '') + ') · modo ' + (pg.mode || '?'));
         // v41.48 — qué capas son (tipo@orden:KB · C=cambiada, N=nueva, B=archivo del bucket)
         if (pg.sentList && pg.sentList.length) L('      reenviadas (de mayor a menor): ' + pg.sentList.join(' · '));
       });

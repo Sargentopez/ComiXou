@@ -430,6 +430,7 @@ const SupabaseClient = (() => {
       layerSha: _layerShaOk === true ? 'activa' : (_layerShaOk === false ? 'no disponible (falta la función SQL layer_sha)' : 'sin probar'),
       marks: rec.marks, pages: rec.pages,
       ly: rec.ly ? Object.assign({}, rec.ly, { cap: _lyCap }) : null, // v42.44: resumen de las capas enviadas en trozos (ver _upsertLayerRows)
+      xr: rec.xr ? Object.assign({}, rec.xr, { errs: (rec.xr.errs || []).slice() }) : null, // v42.45: resumen de las capas pesadas enviadas a R2 (ver _xrFlushRows)
       reqs: rec.reqs.slice().sort((a, b) => b.ms - a.ms).slice(0, 14).map(r => ({ tag: r.tag, t0: r.t0, ms: r.ms, up: r.up, down: r.down, status: r.status })),
     };
     if (_rec === rec) _rec = null;
@@ -776,6 +777,198 @@ const SupabaseClient = (() => {
     });
   }
 
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+  // CAPAS PESADAS EN R2, POR CONTENIDO (v42.45)
+  //
+  // Por qué: una capa con imagen (tinta HD, dibujos, pegados) es un layer_data de megas en base64 dentro de Supabase. Eso gasta
+  // egress cada vez que alguien lee la obra o la abre para editar, y obliga a escribir megas en la base al guardar (el error 57014
+  // de la v42.44). R2 no cobra la salida de datos.
+  // Cómo (técnica estándar de almacenamiento por contenido: Git LFS, Docker, Figma): el texto de la capa se guarda en R2 con el
+  // nombre = su SHA-256 (ruta /blobs/<sha> del Worker, ver worker/blobs-worker.js) y en layer_data queda SOLO la referencia
+  // «r2:<sha>:<bytes>» (~75 caracteres). Un archivo así NUNCA cambia: se cachea un año, subirlo dos veces es inocuo y para saber si
+  // ya está basta preguntar por el hash. La columna layer_sha de la base (SHA-256 de layer_data) sigue valiendo para la subida
+  // diferencial: una capa idéntica produce la misma referencia.
+  //   · LEER (siempre activo): «Editar» y el lector resuelven la referencia bajando el archivo de R2. Si no se puede bajar, la
+  //     descarga FALLA: jamás se omite la capa en silencio (un guardado posterior la habría borrado de la nube).
+  //   · ESCRIBIR (interruptor, apagado de serie; se activa en el panel de administración): _buildLayerRow marca la fila con la
+  //     referencia y _xrFlushRows sube el archivo ANTES de escribir la fila. Si R2 no responde, esa capa se guarda en la base como
+  //     hasta ahora: guardar nunca falla por culpa de R2.
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+  const _XR_MIN   = 32 * 1024;       // desde cuántos caracteres de layer_data una capa va a R2 (con el interruptor activado)
+  const _XR_FLAG  = 'cx_xr_write';   // localStorage: '1' = este dispositivo guarda las capas pesadas en R2 (leerlas va siempre)
+  const _XR_RE    = /^r2:([0-9a-f]{64}):(\d+)$/;
+  const _XR_PAR   = 2;               // subidas a R2 a la vez, entre todas las hojas
+  const _XR_TRIES = 4;
+  const _xrUrl    = sha => `${WORKER}/blobs/${sha}`;
+  let _xrActive = 0;
+  const _xrWait  = [];
+  const _xrKnown = new Set();        // hashes que ya sabemos que están en R2 (esta sesión): no se vuelve a preguntar por ellos
+  const _xrMeta  = new WeakMap();    // fila → { text, sha, len, done }: la fila lleva la referencia; aquí queda el texto hasta subirlo
+  let _xrSt = null;                  // contadores de la subida en curso (los enseña el 🩺 del editor)
+
+  function _xrIsRef(s) { return typeof s === 'string' && s.length < 100 && s.charCodeAt(0) === 114 && _XR_RE.test(s); }
+  // Tamaño REAL (caracteres de texto) de la capa de una fila, aunque su layer_data sea ahora solo la referencia (para el 🩺 y los recuentos).
+  function _xrRowLen(r) { const m = _xrMeta.get(r); return m ? m.len : ((r && typeof r.layer_data === 'string') ? r.layer_data.length : 0); }
+  function _xrWriteOn() {
+    try {
+      if (window._sbXrForce === true) return true;   // _sbXrForce: solo para las pruebas automáticas
+      if (window._sbXrForce === false) return false;
+      return localStorage.getItem(_XR_FLAG) === '1';
+    } catch (_) { return false; }
+  }
+  function _xrSetWrite(on) { try { if (on) localStorage.setItem(_XR_FLAG, '1'); else localStorage.removeItem(_XR_FLAG); } catch (_) {} }
+  function _xrBegin() {
+    _xrSt = { on: _xrWriteOn(), min: _XR_MIN, n: 0, put: 0, have: 0, fail: 0, putKB: 0, ms: 0, errs: [] };
+    if (_rec) _rec.xr = _xrSt;
+  }
+  function _xrAcquire() { if (_xrActive < _XR_PAR) { _xrActive++; return Promise.resolve(); } return new Promise(r => _xrWait.push(r)); }
+  function _xrRelease() { const n = _xrWait.shift(); if (n) n(); else _xrActive--; }
+  async function _sha256HexBytes(u8) {
+    try {
+      if (!_shaCapable()) return null;
+      const b = new Uint8Array(await crypto.subtle.digest('SHA-256', u8));
+      let h = '';
+      for (let i = 0; i < b.length; i++) h += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+      return h;
+    } catch (_) { return null; }
+  }
+  // fetch con tope de tiempo (una subida de megas por una red móvil mala no debe quedarse colgada para siempre)
+  async function _xrFetch(tag, url, init, up, ms) {
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), ms);
+    try { return await _rqFetch(tag, url, Object.assign({ signal: ctl.signal }, init), up); }
+    finally { clearTimeout(tm); }
+  }
+  const _xrBackoff = n => Math.min(6000, 800 * Math.pow(2, n - 1)) + Math.floor(Math.random() * 300);
+
+  // Marca la fila de una capa pesada: layer_data pasa a ser la referencia y el texto original queda aparte hasta subirlo.
+  async function _xrMark(row) {
+    const ld = row && row.layer_data;
+    if (typeof ld !== 'string' || ld.length < _XR_MIN || !_xrWriteOn()) return row;
+    try {
+      const u8 = new TextEncoder().encode(ld);
+      const sha = await _sha256HexBytes(u8);
+      if (!sha) return row;                                  // sin crypto.subtle (http): modo de siempre
+      _xrMeta.set(row, { text: ld, sha, len: u8.length, done: false });
+      row.layer_data = 'r2:' + sha + ':' + u8.length;
+    } catch (_) {}
+    return row;
+  }
+  // Se asegura de que el archivo esté en R2: 'known' (ya visto en esta sesión), 'have' (R2 ya lo tenía) o 'put' (subido ahora).
+  async function _xrEnsure(sha, text) {
+    if (_xrKnown.has(sha)) return 'known';
+    await _xrAcquire();
+    try {
+      const u8 = new TextEncoder().encode(text);
+      const putMs = 30000 + Math.round(u8.length / 1048576) * 10000;
+      let lastErr = null;
+      for (let n = 1; n <= _XR_TRIES; n++) {
+        if (n > 1) await _lySleep(_xrBackoff(n - 1));
+        try {
+          if (window._authTryRefresh) await window._authTryRefresh();
+          if (n === 1) {                                     // ¿ya está? (los archivos son inmutables: si existe, es ese contenido)
+            const h = await _xrFetch('HEAD blob', _xrUrl(sha), { method: 'HEAD' }, 0, 20000);
+            if (h.status === 200) { _xrKnown.add(sha); return 'have'; }
+          }                                                  // 404 o cualquier otra cosa: se intenta subir
+          const r = await _xrFetch('PUT blob', _xrUrl(sha), {
+            method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8,
+          }, u8.length, putMs);
+          if (r.status === 201 || r.status === 200) { _xrKnown.add(sha); return r.status === 201 ? 'put' : 'have'; }
+          let why = ''; try { why = (await r.text()).slice(0, 120); } catch (_) {}
+          lastErr = new Error('R2 ' + r.status + (why ? ' ' + why : ''));
+          // 4xx (salvo tiempo agotado/demasiadas peticiones/sesión caducada) no mejora repitiendo: hash que no cuadra, tamaño…
+          if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429 && r.status !== 401) throw Object.assign(lastErr, { _xrFatal: true });
+        } catch (e) { lastErr = e; if (e && e._xrFatal) throw e; }
+      }
+      throw lastErr || new Error('R2 sin respuesta');
+    } finally { _xrRelease(); }
+  }
+  // Sube a R2 las capas pesadas de `rows` (las que llevan referencia) ANTES de que se escriban sus filas. La que no se pueda subir
+  // vuelve a llevar su texto en la fila, como hasta ahora: guardar nunca falla por R2.
+  async function _xrFlushRows(rows) {
+    const jobs = rows.filter(r => { const m = _xrMeta.get(r); return m && !m.done; });
+    if (!jobs.length) return;
+    const st = _xrSt;
+    await Promise.all(jobs.map(async r => {
+      const m = _xrMeta.get(r), t0 = performance.now();
+      try {
+        const how = await _xrEnsure(m.sha, m.text);
+        m.done = true;
+        if (st) { st.n++; if (how === 'put') { st.put++; st.putKB += Math.round(m.len / 1024); } else st.have++; st.ms += Math.round(performance.now() - t0); }
+      } catch (e) {
+        r.layer_data = m.text; _xrMeta.delete(r);            // vuelta atrás: esta capa va en la base como siempre
+        if (st) { st.fail++; if (st.errs.length < 3) st.errs.push(String((e && e.message) || e).slice(0, 120)); }
+        console.warn('[R2] capa pesada guardada en la base (R2 no respondió):', e);
+      }
+    }));
+  }
+  // LEER: devuelve el texto original de una capa a partir de su referencia. Reintenta; si no se consigue, LANZA.
+  async function _xrFetchText(ref) {
+    const m = _XR_RE.exec(ref);
+    if (!m) throw new Error('Referencia de capa no válida');
+    const sha = m[1], want = +m[2], url = _xrUrl(sha);
+    let lastErr = null;
+    for (let n = 1; n <= _XR_TRIES; n++) {
+      if (n > 1) await _lySleep(_xrBackoff(n - 1));
+      const ctl = new AbortController();
+      const tm = setTimeout(() => ctl.abort(), 30000 + Math.round(want / 1048576) * 8000);
+      try {
+        if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke();
+        const res = await fetch(url, { signal: ctl.signal });   // caché normal del navegador: el archivo es inmutable
+        if (!res.ok) throw new Error('R2 ' + res.status);
+        const buf = _sbDlWatched(res) ? await new Blob(await _sbDlChunks(res)).arrayBuffer() : await res.arrayBuffer();
+        clearTimeout(tm);
+        if (want && buf.byteLength !== want) throw new Error('capa incompleta (' + buf.byteLength + ' de ' + want + ' bytes)');
+        EgressLedger.note(url, buf.byteLength, 'app');
+        return new TextDecoder('utf-8').decode(buf);
+      } catch (e) { clearTimeout(tm); lastErr = e; }
+    }
+    throw new Error('No se pudo bajar una capa pesada de R2 (' + sha.slice(0, 10) + '…): ' + String((lastErr && lastErr.message) || lastErr));
+  }
+  // Prueba completa de extremo a extremo contra el Worker REAL (la usa el panel de administración): sesión, subida, existencia, lectura,
+  // repetición y rechazo de un hash que no corresponde al contenido. Deja en R2 un archivo de prueba de ~48 KB.
+  async function xrSelfTest() {
+    const lines = []; let ok = true; const t0 = performance.now();
+    const step = (name, pass, extra) => { lines.push((pass ? '✓ ' : '✗ ') + name + (extra ? ' — ' + extra : '')); if (!pass) ok = false; return pass; };
+    try {
+      if (!step('Este navegador puede calcular hashes (crypto.subtle)', _shaCapable())) return { ok, lines, ms: 0 };
+      if (window._authTryRefresh) await window._authTryRefresh();
+      const hasSession = /^Bearer\s+eyJ/.test(_hdrsWorker().Authorization || '');
+      if (!step('Hay sesión iniciada (el Worker pide el JWT para subir)', hasSession)) return { ok, lines, ms: 0 };
+      const rnd = new Uint8Array(36 * 1024); crypto.getRandomValues(rnd);
+      let b64 = ''; for (let i = 0; i < rnd.length; i += 3072) b64 += btoa(String.fromCharCode.apply(null, rnd.subarray(i, i + 3072)));
+      const text = JSON.stringify({ cxTest: 'r2', at: new Date().toISOString(), pad: b64 });
+      const u8 = new TextEncoder().encode(text), sha = await _sha256HexBytes(u8), url = _xrUrl(sha);
+      step('Hash de la capa de prueba', !!sha, u8.length + ' bytes · ' + String(sha).slice(0, 12) + '…');
+      let t = performance.now(), r = await fetch(url, { method: 'HEAD' });
+      step('El Worker responde y el archivo aún no existe (HEAD → 404)', r.status === 404, 'estado ' + r.status + ' · ' + Math.round(performance.now() - t) + ' ms');
+      t = performance.now();
+      r = await fetch(url, { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8 });
+      let j = null; try { j = await r.json(); } catch (_) {}
+      step('Subida (PUT → 201)', r.status === 201, 'estado ' + r.status + ' · ' + Math.round(performance.now() - t) + ' ms' + (j && j.error ? ' · ' + j.error : ''));
+      r = await fetch(url, { method: 'HEAD' });
+      step('Existe y mide lo mismo (HEAD → 200)', r.status === 200 && +r.headers.get('content-length') === u8.length, 'estado ' + r.status + ' · tamaño ' + r.headers.get('content-length'));
+      t = performance.now();
+      r = await fetch(url, { cache: 'no-store' });
+      const back = new Uint8Array(await r.arrayBuffer());
+      const same = back.length === u8.length && (await _sha256HexBytes(back)) === sha;
+      step('Se lee idéntico (GET)', r.status === 200 && same, 'estado ' + r.status + ' · ' + Math.round(performance.now() - t) + ' ms');
+      const cc = r.headers.get('cache-control') || '';
+      step('Caché de un año, inmutable', /immutable/.test(cc) && /max-age=31536000/.test(cc), cc || 'sin Cache-Control');
+      r = await fetch(url, { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8 });
+      step('Subir otra vez no duplica (PUT → 200 «ya existía»)', r.status === 200, 'estado ' + r.status);
+      const badSha = await _sha256HexBytes(new TextEncoder().encode('cx-prueba-hash-' + sha));
+      r = await fetch(_xrUrl(badSha), { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8 });
+      step('R2 rechaza un contenido que no corresponde a su hash (PUT → 400)', r.status === 400, 'estado ' + r.status);
+      if (r.status === 201) lines.push('⚠ el Worker NO verifica el hash: no activar el interruptor');
+      r = await fetch(_xrUrl(badSha), { method: 'HEAD' });
+      step('…y ese hash no queda guardado (HEAD → 404)', r.status === 404, 'estado ' + r.status);
+    } catch (e) {
+      step('La prueba terminó sin errores de red', false, String((e && e.message) || e));
+    }
+    return { ok, lines, ms: Math.round(performance.now() - t0) };
+  }
+
   // Prepara la fila panel_layers de UNA capa (y sube sus binarios al bucket si los tiene). Es el cuerpo
   // del bucle que antes vivía dentro de _uploadOnePanel, sin cambios de lógica: solo se ha sacado a una
   // función para poder preparar varias capas a la vez (ver _uploadOnePanel).
@@ -823,7 +1016,7 @@ const SupabaseClient = (() => {
       if (l._buttonAction) _groupData._buttonAction = Object.assign({}, l._buttonAction);
       // No comprimir: el dataUrl PNG ya es binario comprimido internamente
       const _ld = JSON.stringify(_groupData);
-      return { panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null };
+      return await _xrMark({ panel_id: panelId, layer_order: j, layer_type: l.type, layer_data: _ld, gif_url: null, anim_url: null }); // v42.45: capa pesada → referencia a R2 (si el interruptor está activado)
     }
 
     // Serializar la capa — excluir campos de re-edición que el reader no necesita
@@ -923,14 +1116,14 @@ const SupabaseClient = (() => {
     // Comprimir cualquier layer cuyo JSON supere el umbral (fill ya comprimido arriba)
     const _lRaw = JSON.stringify(_lClean);
     const _ld = _lRaw.length >= _CZ_MIN ? await _czCompress(_lRaw) : _lRaw;
-    return {
+    return await _xrMark({ // v42.45: capa pesada → referencia a R2 (si el interruptor está activado)
       panel_id:    panelId,
       layer_order: j,
       layer_type:  l.type,
       layer_data:  _ld,
       gif_url:     gifUrl,
       anim_url:    animUrl,
-    };
+    });
   }
 
   // ── SUBIDA POR CAPAS (v41.46) ─────────────────────────────────────────────────────────────────
@@ -1258,17 +1451,20 @@ const SupabaseClient = (() => {
       if (_delta && _delta.delIds.length <= 60) { // 60 ids caben de sobra en la URL del DELETE
         _toInsert = layerRows.filter(r => !_delta.keepOrders.has(r.layer_order));
         _kept = _delta.keepOrders.size;
-        _keptKB = Math.round(layerRows.reduce((n, r) => n + (_delta.keepOrders.has(r.layer_order) ? r.layer_data.length : 0), 0) / 1024);
+        _keptKB = Math.round(layerRows.reduce((n, r) => n + (_delta.keepOrders.has(r.layer_order) ? _xrRowLen(r) : 0), 0) / 1024);
+        await _xrFlushRows(_toInsert); // v42.45: los archivos de R2 ANTES de borrar nada en la base (si algo falla, aún no se ha tocado)
         if (_delta.delIds.length) {
           _oldRows = await _lyDeleteLayerIds(_delta.delIds); // v42.44: en grupos pequeños y con reintentos (borrar megas de TOAST también tarda)
         }
       } else {
         // Modo de siempre: fuera TODAS las capas de la hoja y se suben todas.
+        await _xrFlushRows(_toInsert); // v42.45: ídem
         _oldRows = (await _lyRetryIdem(() => _delete('panel_layers', `panel_id=eq.${panelId}`, { returning: 'gif_url,anim_url' }))) || [];
       }
     } else if (_delLayersP) {
       _oldRows = (await _delLayersP) || [];
     }
+    await _xrFlushRows(_toInsert); // v42.45: (si ya se subieron arriba, no hace nada) cubre la ruta en que el borrado de las capas antiguas salió antes
     _pm('delLayersMs');
     if (_delTextsP) await _delTextsP;
 
@@ -1322,12 +1518,16 @@ const SupabaseClient = (() => {
       _pg.layers = layerRows.length;
       _pg.sent = _toInsert.length; _pg.kept = _kept; _pg.keptKB = _keptKB; _pg.mode = _rowsP ? (_kept || _layerShaOk ? 'capas' : 'completo') : 'completo';
       _pg.kb = Math.round(_toInsert.reduce((n, r) => n + (r.layer_data ? r.layer_data.length : 0), 0) / 1024);
+      // v42.45: de esas capas, cuántas fueron a R2 (y cuántos KB de texto) — lo que ya no viaja por la base
+      let _xn = 0, _xkb = 0; _toInsert.forEach(r => { const m = _xrMeta.get(r); if (m && m.done) { _xn++; _xkb += m.len / 1024; } });
+      _pg.xrN = _xn; _pg.xrKB = Math.round(_xkb);
       // v41.48 — (solo diagnóstico, no cambia lo que se envía) QUÉ capas se reenvían y por qué, de mayor a menor:
       // tipo@orden:KB y una marca — C = cambiada (en la nube había otra capa en ese orden con distinto contenido),
       // N = nueva (no había ninguna), B = lleva archivo del bucket (GIF/APNG: se reemplaza siempre). Sin marca = modo de siempre.
-      _pg.sentList = _toInsert.slice().sort((a, b) => ((b.layer_data || '').length - (a.layer_data || '').length)).slice(0, 10)
-        .map(r => r.layer_type + '@' + r.layer_order + ':' + Math.round((r.layer_data ? r.layer_data.length : 0) / 1024) + 'KB' +
-          ((r.gif_url || r.anim_url) ? ':B' : (_cloudOrders ? (_cloudOrders.has(r.layer_order) ? ':C' : ':N') : '')));
+      _pg.sentList = _toInsert.slice().sort((a, b) => (_xrRowLen(b) - _xrRowLen(a))).slice(0, 10)
+        .map(r => r.layer_type + '@' + r.layer_order + ':' + Math.round(_xrRowLen(r) / 1024) + 'KB' +
+          ((r.gif_url || r.anim_url) ? ':B' : (_cloudOrders ? (_cloudOrders.has(r.layer_order) ? ':C' : ':N') : '')) +
+          ((_xrMeta.get(r) || {}).done ? ':R2' : ''));   // R2 = va a R2 (v42.45)
     }
     return panelId; // v42.27: para anotar el resumen de navegación de la hoja (ver _syncNav)
   }
@@ -1402,6 +1602,7 @@ const SupabaseClient = (() => {
   // con la escritura de la fila works (antes iba detrás, un viaje de red más en fila).
   async function _uploadPanels(comic, dirtyPageIndices, onProgress, prefetched) {
     _lyBegin(); // v42.44: subida nueva (ver «CAPAS EN TROZOS»): lo que quedara en vuelo de una fallida anterior ya no sigue
+    _xrBegin(); // v42.45: contadores de las capas pesadas que van a R2 en esta subida (ver «CAPAS PESADAS EN R2»)
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
     // Usar editorData.pages como fuente de verdad para las capas
     const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
@@ -1818,14 +2019,20 @@ const SupabaseClient = (() => {
     // memoria en Android. Aun así, 3 en paralelo ya evita la cascada
     // estrictamente secuencial que había antes (capa a capa, página a página).
     const _flatLayers = [];
+    const _xrDl = { n: 0, kb: 0 }; // v42.45: capas pesadas bajadas de R2 en esta descarga (para el 🩺)
     panels.forEach((panel, pi) => {
       (_layerRowsByPanel[pi] || []).forEach((row, li) => _flatLayers.push({ pi, li, row }));
     });
     const _flatResults = await _sbPoolMap(_flatLayers, 3, async ({ pi, li, row }) => {
       let layerObj = null;
       if (typeof _cxLoadOverlayPoke === 'function') _cxLoadOverlayPoke(); // v41.69: capa en marcha = hay progreso
+      // v42.45: capa pesada guardada en R2 (layer_data = «r2:<hash>:<bytes>»). FUERA del try de abajo, a propósito: si no se puede
+      // bajar, la descarga entera FALLA (como las filas de capas, v40.49). Si se descartara como una capa ilegible, el siguiente
+      // guardado la borraría de la nube.
+      let _txt = row.layer_data;
+      if (_xrIsRef(_txt)) { _txt = await _xrFetchText(_txt); _xrDl.n++; _xrDl.kb += _txt.length / 1024; }
       try {
-        const _raw = await _czDecompress(row.layer_data);
+        const _raw = await _czDecompress(_txt);
         layerObj = JSON.parse(_raw);
       } catch(e) {
         console.warn('downloadDraftAsEditorData: capa descartada (no se pudo decodificar)', 'panel', pi, 'layer_order', li, e);
@@ -1948,9 +2155,13 @@ const SupabaseClient = (() => {
       }
       try {
         const _types = {}; layers.forEach(l => { _types[l.type] = (_types[l.type] || 0) + 1; });
-        let _maxLen = 0; (_layerRowsByPanel[pi] || []).forEach(r => { const n = (r && r.layer_data) ? r.layer_data.length : 0; if (n > _maxLen) _maxLen = n; });
+        let _maxLen = 0, _nRef = 0; (_layerRowsByPanel[pi] || []).forEach(r => {
+          let n = (r && r.layer_data) ? r.layer_data.length : 0;
+          if (r && _xrIsRef(r.layer_data)) { _nRef++; n = +_XR_RE.exec(r.layer_data)[2] || n; } // v42.45: capa en R2 → su tamaño real viene en la referencia
+          if (n > _maxLen) _maxLen = n;
+        });
         _dlTrace.pages.push({ order: panel.panel_order, rows: _rowCount, parsed: _parsed, dropped: _rowCount - _parsed,
-          thumbFallback: _parsed === 0 && !!panel.data_url, hasThumb: !!panel.data_url, types: _types, maxKb: Math.round(_maxLen / 1024) });
+          thumbFallback: _parsed === 0 && !!panel.data_url, hasThumb: !!panel.data_url, types: _types, maxKb: Math.round(_maxLen / 1024), r2: _nRef });
         if (_parsed === 0 && _rowCount > 0 && panel.data_url) {
           console.warn('downloadDraftAsEditorData: hoja ' + panel.panel_order + ' sin capas legibles (' + _rowCount + ' fila(s) descartadas) — se usa su miniatura como imagen');
         }
@@ -1965,6 +2176,7 @@ const SupabaseClient = (() => {
       };
     });
 
+    _dlTrace.r2 = { capas: _xrDl.n, kb: Math.round(_xrDl.kb) }; // v42.45: lo que se bajó de R2 en vez de la base
     try { window._sbLastDownloadTrace = _dlTrace; } catch (_te2) {}
     return {
       work,
@@ -3008,5 +3220,7 @@ continue;
     }
   }
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog, adminBackupRpc };
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog, adminBackupRpc,
+      // v42.45 — capas pesadas en R2 (ver «CAPAS PESADAS EN R2, POR CONTENIDO»)
+      xr: { isRef: _xrIsRef, fetchText: _xrFetchText, writeOn: _xrWriteOn, setWrite: _xrSetWrite, selfTest: xrSelfTest, min: _XR_MIN } };
 })();

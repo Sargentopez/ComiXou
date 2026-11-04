@@ -1984,6 +1984,53 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) _egFl
 // ── Descompresión gzip de layer_data (CompressionStream W3C nativo) ──
 const _CZ_PFX = 'gz:';
 
+// ── Capas pesadas en R2 (v42.45) ─────────────────────────────────────────────────────────────────────────────────────────────
+// Una capa pesada ya no lleva su texto en panel_layers.layer_data sino una referencia «r2:<sha256>:<bytes>»; el texto vive en R2
+// con el hash por nombre (ruta /blobs/<sha> del Worker) y NUNCA cambia, así que el navegador lo guarda un año y R2 no cobra la
+// salida de datos. Se resuelve justo al recibir las filas de una hoja (_plFetchRows), antes de guardarlas en la caché de sesión,
+// de modo que el resto del lector sigue viendo el mismo layer_data de siempre. Si una capa no se puede bajar se LANZA el error:
+// la hoja se reintenta como ante cualquier fallo de red; jamás se dibuja con la capa omitida en silencio.
+const _XR_BASE = 'https://comxow-storage-worker.albertobicho.workers.dev/blobs/';
+const _XR_RE = /^r2:([0-9a-f]{64}):(\d+)$/;
+const _XR_PAR = 4;                 // descargas de capas pesadas a la vez
+let _xrActive = 0;
+const _xrWait = [];
+function _xrAcquire() { if (_xrActive < _XR_PAR) { _xrActive++; return Promise.resolve(); } return new Promise(r => _xrWait.push(r)); }
+function _xrRelease() { const n = _xrWait.shift(); if (n) n(); else _xrActive--; }
+function _xrIsRef(s) { return typeof s === 'string' && s.length < 100 && s.charCodeAt(0) === 114 && _XR_RE.test(s); }
+async function _xrFetchText(ref) {
+  const m = _XR_RE.exec(ref);
+  if (!m) throw new Error('Referencia de capa no válida');
+  const sha = m[1], want = +m[2], url = _XR_BASE + sha;
+  let lastErr = null;
+  for (let n = 1; n <= 4; n++) {
+    if (n > 1) await _plSleep(Math.min(6000, 800 * Math.pow(2, n - 2)) + Math.floor(Math.random() * 300));
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), 30000 + Math.round(want / 1048576) * 8000);
+    try {
+      const res = await fetch(url, { signal: ctl.signal });          // caché normal del navegador: el archivo es inmutable
+      if (!res.ok) throw new Error('R2 ' + res.status);
+      const buf = await res.arrayBuffer();
+      clearTimeout(tm);
+      if (want && buf.byteLength !== want) throw new Error('capa incompleta (' + buf.byteLength + ' de ' + want + ' bytes)');
+      _egNote(url, buf.byteLength);                                   // libro de egress: va a «Archivos (R2)»
+      _PL.stats.xr = (_PL.stats.xr || 0) + 1; _PL.stats.xrKB = (_PL.stats.xrKB || 0) + Math.round(buf.byteLength / 1024);
+      return new TextDecoder('utf-8').decode(buf);
+    } catch (e) { clearTimeout(tm); lastErr = e; }
+  }
+  throw new Error('No se pudo bajar una capa pesada (' + sha.slice(0, 10) + '…): ' + String((lastErr && lastErr.message) || lastErr));
+}
+// Sustituye en `rows` (filas de panel_layers de una hoja) las referencias por su texto, varias a la vez.
+async function _xrResolveRows(rows) {
+  const todo = (rows || []).filter(r => r && _xrIsRef(r.layer_data));
+  if (!todo.length) return;
+  await Promise.all(todo.map(async r => {
+    await _xrAcquire();
+    try { r.layer_data = await _xrFetchText(r.layer_data); }
+    finally { _xrRelease(); }
+  }));
+}
+
 // Descarga frames PNG desde bucket 'anims'
 async function _animDownload(animUrl, onProg) {
   if (!animUrl) return null;
@@ -2488,6 +2535,7 @@ function _plFetchRows(panel) {
         f('panel_layers?panel_id=eq.' + id + '&order=layer_order.asc&select=*'),
         f('panel_texts?panel_id=eq.'  + id + '&order=text_order.asc'),
       ]);
+      await _xrResolveRows(rows);   // v42.45: capas pesadas guardadas en R2 → su texto (ver «Capas pesadas en R2»)
       const rec = { layerRows: (rows || []).slice().sort((a, b) => a.layer_order - b.layer_order), texts: texts || [] };
       _PL.stats.netRows++;
       _ssPutRows(id, rec);
@@ -3717,6 +3765,7 @@ function _frSample(tag) {
     res: res.join(','), w: Math.round(w / 1048576), ev: _PL.stats.evicted, sc: _PL.stats.scanned, vis: document.hidden ? 'h' : 'v',
     nat: _PL.stats.native || 0, nf: _PL.stats.nativeFail || 0, gt: _PL.stats.gated || 0, hd: _frHeld(),
     nr: _PL.stats.netRows || 0, hr: _SS.st.hitR || 0, ha: _SS.st.hitA || 0, np: _PL.stats.navPre || 0, sm: _SS.mode || '-',
+    xr: _PL.stats.xr || 0, xk: _PL.stats.xrKB || 0, // v42.45: capas pesadas bajadas de R2 (número y KB)
   };
 }
 function _frPush(tag) {
@@ -3751,7 +3800,8 @@ function _frFmt(s) {
   return s.t + 's ' + s.vis + ' hoja ' + s.idx + '/' + s.n + ' en memoria [' + s.res + '] ≈' + s.w + 'MB · JS ' +
     (s.heap == null ? '-' : s.heap + '/' + s.tot + 'MB') + ' · soltadas ' + s.ev + ' · escaneadas ' + s.sc +
     ' · anim. nativas ' + (s.nat || 0) + '/' + (s.nf || 0) + 'fallos · pasos bloqueados ' + (s.gt || 0) + ' · fotogramas retenidos ' + (s.hd || 0) +
-    ' · hojas pedidas a la nube ' + (s.nr || 0) + ' · servidas de la caché ' + (s.hr || 0) + '+' + (s.ha || 0) + 'anim (' + (s.sm || '-') + ') · navegación precalculada ' + (s.np || 0) + (s.tag ? ' (' + s.tag + ')' : '');
+    ' · hojas pedidas a la nube ' + (s.nr || 0) + ' · servidas de la caché ' + (s.hr || 0) + '+' + (s.ha || 0) + 'anim (' + (s.sm || '-') + ') · navegación precalculada ' + (s.np || 0) +
+    ' · capas pesadas de R2 ' + (s.xr || 0) + ' (' + (s.xk || 0) + ' kB)' + (s.tag ? ' (' + s.tag + ')' : '');
 }
 function _frReport() {
   const out = [];

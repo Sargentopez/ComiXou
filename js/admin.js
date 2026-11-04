@@ -73,6 +73,7 @@ function _adminViewStart() {
   const tabs = document.querySelector('.admin-tabs');
   if (hdr && tabs) tabs.style.top = hdr.getBoundingClientRect().height + 'px';
   _adminBackupTab();
+  _adminR2Tab();
   renderTab('pending');
   setupTabs();
 }
@@ -101,6 +102,28 @@ function _adminBackupTab() {
   } catch (e) { console.warn('[admin] pestaña de copia', e); }
 }
 
+/* v42.45 — Pestaña «R2» (capas pesadas guardadas en R2 por contenido: prueba del Worker, interruptor de este dispositivo y resumen del último
+   guardado). Solo para la cuenta principal «admin», igual que «Copia»; ver js/admin-r2.js. Es una comodidad de la pantalla: el Worker pide la
+   sesión para subir y la lectura es pública por diseño (el contenido se pide por su hash). */
+function _adminR2Tab() {
+  try {
+    const u = Auth.currentUser();
+    if (!Auth.isAdmin() || !u || u.username !== 'admin' || typeof AdminR2 === 'undefined') return;
+    const tabs = document.querySelector('.admin-tabs');
+    if (!tabs || tabs.querySelector('[data-tab="r2"]')) return;
+    const btn = document.createElement('button');
+    btn.className = 'admin-tab';
+    btn.dataset.tab = 'r2';
+    btn.dataset.i18n = 'adminR2Tab';
+    btn.textContent = I18n.t('adminR2Tab');
+    tabs.append(btn);
+    const panel = document.createElement('div');
+    panel.className = 'admin-panel hidden';
+    panel.id = 'tabR2';
+    tabs.parentNode.appendChild(panel);
+  } catch (e) { console.warn('[admin] pestaña R2', e); }
+}
+
 function setupTabs() {
   document.querySelectorAll('.admin-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -122,6 +145,7 @@ function renderTab(tab) {
   if (tab === 'all')       renderAll(panel);
   if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
   if (tab === 'backup' && typeof AdminBackup !== 'undefined') AdminBackup.render(panel);   // v42.29
+  if (tab === 'r2' && typeof AdminR2 !== 'undefined') AdminR2.render(panel);                // v42.45
 }
 
 /* v42.15 — al volver la conexión (evento online) con el panel de administración en pantalla: la pestaña que se quedó en «No se
@@ -338,7 +362,7 @@ function buildAdminRow(comic, mode) {
         lines.push('  panel_layers: ' + layers.length);
         layers.forEach((l, li) => {
           lines.push('  L'+li+' type='+l.layer_type
-            +' layer_data='+(l.layer_data ? l.layer_data.length+'ch' : 'NULL')
+            +' layer_data='+(l.layer_data ? (/^r2:[0-9a-f]{64}:\d+$/.test(l.layer_data) ? 'R2 '+l.layer_data.split(':')[2]+'B' : l.layer_data.length+'ch') : 'NULL') // v42.45: capa pesada guardada en R2 = referencia r2:<hash>:<bytes>
             +' gif_url='+(l.gif_url?'OK':'null')
             +' anim_url='+(l.anim_url?'OK':'null'));
           // Mostrar inicio del layer_data para ver si es JSON o gz:
