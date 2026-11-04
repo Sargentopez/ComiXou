@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.46</footer>
+    <footer class="app-version">v42.47</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -359,7 +359,12 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — OCULTO de nuevo en v41.83 (petición de Alberto), tras revisar un diagnóstico
+        <!-- Botón de diagnóstico — VISIBLE de nuevo en v42.47 (petición de Alberto) para comprobar las capas pesadas
+             en R2: la línea «capas pesadas en R2» (sección «Último guardado en la nube: tiempos») dice si el
+             interruptor estaba activado y cuántas capas llevaron referencia; la línea «capas pesadas bajadas de R2»
+             (sección «Calidad de dibujos», última descarga) cuántas se bajaron al abrir con «Editar». Al cerrar esa
+             investigación se vuelve a comentar la línea del <button> (NO se borra).
+             Antes: OCULTO de nuevo en v41.83 (petición de Alberto), tras revisar un diagnóstico
              sin anomalías. Había estado VISIBLE desde v41.77 para la investigación «los trazos a mano guardados en
              la nube vuelven grises y difusos al reeditar» (sección «CALIDAD DE DIBUJOS» del informe: píxeles,
              colocación, atenuado y pantalla de cada trazo + última descarga de la nube). Para volver a mostrarlo,
@@ -387,7 +392,7 @@ Router.register('editor', {
              encontrar la causa raíz de la investigación v40.80→v40.83.
              El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
              nada ni da error mientras esté oculto. -->
-        <!-- <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button> -->
+        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
