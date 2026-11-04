@@ -429,6 +429,7 @@ const SupabaseClient = (() => {
       requests: rec.reqs.length, upKB: Math.round(up / 1024), downKB: Math.round(down / 1024),
       layerSha: _layerShaOk === true ? 'activa' : (_layerShaOk === false ? 'no disponible (falta la función SQL layer_sha)' : 'sin probar'),
       marks: rec.marks, pages: rec.pages,
+      ly: rec.ly ? Object.assign({}, rec.ly, { cap: _lyCap }) : null, // v42.44: resumen de las capas enviadas en trozos (ver _upsertLayerRows)
       reqs: rec.reqs.slice().sort((a, b) => b.ms - a.ms).slice(0, 14).map(r => ({ tag: r.tag, t0: r.t0, ms: r.ms, up: r.up, down: r.down, status: r.status })),
     };
     if (_rec === rec) _rec = null;
@@ -986,6 +987,181 @@ const SupabaseClient = (() => {
     return { keepOrders, delIds: cloudRows.filter(c => !keepIds.has(c.id)).map(c => c.id) };
   }
 
+  // ── CAPAS EN TROZOS ACOTADOS POR PESO, CON REINTENTOS (v42.44) ────────────────────────────────────────────────
+  // Alberto (4-nov-2026), al subir a la nube una obra que la propia app mide en 37 MB:
+  //   «UPSERT panel_layers: 500 {"code":"57014",…,"message":"canceling statement due to statement timeout"}»
+  // Qué pasaba: todas las capas a subir de UNA hoja iban en UNA sola petición (un INSERT con todas sus filas) y la ruta completa
+  // sube 3 hojas a la vez. Cada capa es un layer_data de megas (PNG en base64: la tinta HD de las uniones pesa varias veces lo de
+  // antes). El rol de la API (`authenticated`) tiene un tope de 8 s POR SENTENCIA —está en la documentación de Supabase y no se
+  // puede cambiar por petición— y esta base escribe despacio (en la copia admin se midió ≈ 3 MB/s): un INSERT de varios MB, con
+  // otros dos a la vez, no cabe en 8 s y la base lo CANCELA entero (por eso el 500 con código 57014).
+  // Técnica estándar (la misma que ya usa bibSync con sus trozos de 4 MB y la copia admin con su tamaño de página adaptable):
+  //   · trocear por PESO, no por número de filas: ninguna sentencia pasa de _LY_CAP_MAX (1 MB de layer_data); una capa más pesada
+  //     que eso va sola (no se puede partir);
+  //   · UNA petición de capas a la vez ENTRE TODAS las hojas (_LY_PAR = 1): el cuello de botella es la escritura de la base, y más
+  //     peticiones simultáneas solo la reparten y alargan cada una (dos capas pesadas a la vez, que por separado caben en 8 s,
+  //     juntas pueden no caber); la CPU de preparar las capas de las otras hojas sí sigue en paralelo, y no hay más viajes de red de
+  //     los que ya había porque los trozos son de ~1 MB;
+  //   · reintento con espera creciente y algo aleatoria (backoff exponencial con jitter). Si un trozo agota el tiempo se PARTE por la
+  //     mitad y el tope de los siguientes baja a ¼ (se recupera ×2 por cada trozo bueno, como el control de congestión de TCP, pero
+  //     no hasta pasado un minuto: cada intento fallido gasta 8 s), así las hojas que quedan ya salen pequeñas sin descubrirlo otra vez;
+  //   · reintentar no duplica: un 57014 deshace la sentencia (no se escribió nada). Ante un fallo AMBIGUO (se cayó la conexión, o
+  //     contestó una pasarela sin cuerpo de PostgREST) se borran antes las filas de esas capas (hoja + orden) y luego se reenvían;
+  //   · con demasiados fallos SEGUIDOS (_LY_STREAK: sin red, base caída) la subida se da por perdida de golpe: el resto de envíos
+  //     pendientes lanza el mismo error en vez de seguir martilleando la base.
+  // Una subida interrumpida no deja nada «a medias» que arreglar: la siguiente compara por hash con lo que HAY en la nube
+  // (_layerDelta) y solo reenvía lo que falte o haya cambiado, así que un fallo tras enviar la mitad se reanuda sin repetirla.
+  const _LY_CAP_MAX = 1024 * 1024;  // bytes de layer_data por petición mientras todo va bien
+  const _LY_CAP_MIN = 128 * 1024;   // …y el mínimo al que baja tras un tiempo agotado
+  const _LY_PAR     = 1;            // peticiones de capas en vuelo a la vez, entre TODAS las hojas (una: ver abajo)
+  const _LY_TRIES   = 4;            // intentos de una petición que ya no se puede partir (una sola capa)
+  const _LY_STREAK  = 5;            // fallos seguidos (de cualquier petición) tras los que se da la subida por perdida
+  const _LY_HOLD_MS = 60000;        // tras un tiempo agotado el tope NO vuelve a subir en este plazo (cada intento fallido cuesta 8 s)
+  const _LY_DEL_IDS = 4;            // ids por DELETE al sustituir capas (borrar también son megas de TOAST)
+  let _lyCap = _LY_CAP_MAX;         // tope vigente de bytes por petición (sobrevive entre subidas: lo aprendido sobre la base no se olvida)
+  let _lyStreak = 0, _lyGen = 0, _lyDead = null, _lyActive = 0, _lyNoteCb = null, _lyNoteOn = false, _lyHoldUntil = 0;
+  const _lyWait = [];
+  const _lySleep = ms => new Promise(r => setTimeout(r, ms * (window._sbLySleepScale > 0 ? window._sbLySleepScale : 1))); // _sbLySleepScale: solo para las pruebas automáticas
+  const _lyBackoff = n => Math.min(6000, 1200 * Math.pow(2, n - 1)) + Math.floor(Math.random() * 400);
+  // Empieza una subida: lo que quedara en vuelo de una subida anterior fallida ya no sigue, y se cuenta desde cero.
+  function _lyBegin() { _lyGen++; _lyStreak = 0; _lyDead = null; _lyNoteOn = false; }
+  function _lyAcquire() { if (_lyActive < _LY_PAR) { _lyActive++; return Promise.resolve(); } return new Promise(r => _lyWait.push(r)); }
+  function _lyRelease() { const n = _lyWait.shift(); if (n) n(); else _lyActive--; } // la plaza pasa directa al siguiente en la cola
+  function _lyWeight(r) { return (r && typeof r.layer_data === 'string' ? r.layer_data.length : 0) + 400; }
+  // Cuántas filas del principio caben en `cap` bytes (siempre al menos una: una capa más pesada que el tope va sola).
+  function _lyFit(rows, cap) { let n = 0, w = 0; for (; n < rows.length; n++) { const x = _lyWeight(rows[n]); if (n > 0 && w + x > cap) break; w += x; } return n; }
+  function _lyCancelled() { const e = new Error('UPSERT panel_layers: subida cancelada (ha empezado otra)'); e._lyFatal = true; return e; }
+  // Aviso a la pantalla de bloqueo del editor («la nube va lenta, reintentando…»); true al fallar un trozo, false al recuperarse.
+  function _lyNote(slow) { if (_lyNoteCb) { try { _lyNoteCb(!!slow); } catch (_) {} } }
+  // Qué pasó con una petición: 'timeout' (la base la canceló por tiempo: no se escribió nada) · 'server' (PostgREST contestó 5xx/408/429
+  // con su cuerpo JSON: la sentencia falló y se deshizo) · 'unsure' (sin respuesta, o contestó una pasarela sin cuerpo de PostgREST:
+  // puede haberse escrito) · 'fatal' (4xx, cancelada, o algo que reintentar no arregla).
+  function _lyKind(e) {
+    if (e && e._lyFatal) return 'fatal';
+    const m = String((e && e.message) || e || '');
+    if (/\b57014\b|canceling statement due to statement timeout/i.test(m)) return 'timeout';
+    const st = /^(?:UPSERT|DELETE|PATCH|GET)\s+\S+:\s*(\d{3})\b/.exec(m);
+    if (st) {
+      const c = +st[1];
+      if (c === 408 || c === 429 || c >= 500) return /"code"\s*:\s*"[^"]+"/.test(m) ? 'server' : 'unsure';
+      return 'fatal';
+    }
+    return /failed to fetch|networkerror|load failed|network|connection|abort|econn|err_|timed? ?out|socket/i.test(m) ? 'unsure' : 'fatal';
+  }
+  // Resumen para el 🩺 (solo mide): peticiones de capas, fallos y divisiones de esta subida.
+  function _lyLog(rows, ms, kind, err, split) {
+    const rc = _rec; if (!rc) return;
+    const y = rc.ly || (rc.ly = { posts: 0, ok: 0, fail: 0, splits: 0, capMin: _lyCap, maxKB: 0, errs: [] });
+    if (split) { y.splits++; return; }
+    y.posts++;
+    const kb = Math.round(rows.reduce((n, r) => n + _lyWeight(r), 0) / 1024);
+    if (kb > y.maxKB) y.maxKB = kb;
+    if (_lyCap < y.capMin) y.capMin = _lyCap;
+    if (kind === 'ok') { y.ok++; return; }
+    y.fail++;
+    if (y.errs.length < 12) y.errs.push({ t: Math.round(performance.now() - rc.t0), ms, kind, rows: rows.length, kb, msg: String((err && err.message) || err).slice(0, 160) });
+  }
+  // Una petición de capas. Toma una plaza de la puerta, pide las filas YA con ella en la mano (así el tope vigente es el de ese
+  // instante, no el de cuando se puso en cola) y la suelta al terminar. → { rows, err, ms }; rows vacío = la cola se vació esperando.
+  async function _lySendOne(take, gen) {
+    await _lyAcquire();
+    let rows = [], err = null, t0 = performance.now();
+    try {
+      if (gen !== _lyGen) throw _lyCancelled();
+      if (_lyDead) throw _lyDead;
+      rows = take();
+      if (rows.length) { t0 = performance.now(); await _upsert('panel_layers', rows, { ret: 'min' }); }
+    } catch (e) { err = e; }
+    // Si la base cortó por tiempo, el tope baja ANTES de soltar la plaza: la hoja que espera en la puerta pide sus filas justo al
+    // soltarla, y si ve todavía el tope antiguo manda un trozo del tamaño que acaba de fallar.
+    if (err && err !== _lyDead && !err._lyFatal && _lyKind(err) === 'timeout') { _lyCap = Math.max(_LY_CAP_MIN, Math.floor(_lyCap / 4)); _lyHoldUntil = Date.now() + _LY_HOLD_MS; }
+    _lyRelease();
+    if (err && (err === _lyDead || err._lyFatal)) throw err;
+    return { rows, err, ms: Math.round(performance.now() - t0) };
+  }
+  function _lyOk(r) {
+    _lyStreak = 0;
+    if (Date.now() >= _lyHoldUntil) _lyCap = Math.min(_LY_CAP_MAX, _lyCap * 2); // se recupera ×2 por trozo bueno, pero no justo después de un tiempo agotado
+    _lyLog(r.rows, r.ms, 'ok');
+    if (_lyNoteOn) { _lyNoteOn = false; _lyNote(false); }
+  }
+  function _lyGiveUp(err, rows, why) {
+    const r = rows[0] || {};
+    const kb = Math.round(rows.reduce((n, x) => n + _lyWeight(x), 0) / 1024);
+    const e = new Error(String((err && err.message) || err) + ' [' + (why || 'capa ' + r.layer_type + '@' + r.layer_order + ', ' + kb + ' KB, ' + _LY_TRIES + ' intentos') + ']');
+    e.cause = err;
+    _lyDead = e; // el resto de envíos pendientes (otras hojas) lanzan este mismo error sin tocar la red
+    return e;
+  }
+  // Una petición de capas ha fallado: decide qué hacer. Vuelve cuando esas filas YA están en la nube; lanza si no hay forma.
+  async function _lyFail(rows, err, ms, gen, tries) {
+    const kind = _lyKind(err);
+    _lyLog(rows, ms, kind, err);
+    if (kind === 'fatal') throw err;                    // 4xx (permisos, columna, JSON): reintentar no lo arregla
+    if (++_lyStreak > _LY_STREAK) throw _lyGiveUp(err, rows, 'demasiados fallos seguidos');
+    if (kind === 'unsure') await _lyClear(rows);        // puede que ya se hubiera escrito: fuera antes de reenviar (no duplicar)
+    _lyNoteOn = true; _lyNote(true);
+    await _lySleep(_lyBackoff(Math.min(_lyStreak, 4)));
+    if (rows.length > 1 && _lyFit(rows, _lyCap) < rows.length) {   // no cabe en el tope vigente (tras un 57014, ¼ del anterior): se vuelve a trocear con él
+      _lyLog(rows, 0, 'split', null, true);
+      for (let a = 0; a < rows.length;) { const n = _lyFit(rows.slice(a), _lyCap); await _lyRetryRows(rows.slice(a, a + n), gen, 1); a += n; }
+      return;
+    }
+    if (rows.length > 1) {                              // ya cabía y falló igual (no por tiempo, o con el tope al mínimo): por la mitad
+      _lyLog(rows, 0, 'split', null, true);
+      const h = Math.ceil(rows.length / 2);
+      await _lyRetryRows(rows.slice(0, h), gen, 1);
+      await _lyRetryRows(rows.slice(h), gen, 1);
+      return;
+    }
+    if (tries >= _LY_TRIES) throw _lyGiveUp(err, rows);
+    await _lyRetryRows(rows, gen, tries + 1);
+  }
+  async function _lyRetryRows(rows, gen, tries) {
+    const r = await _lySendOne(() => rows, gen);
+    if (!r.err) { _lyOk(r); return; }
+    await _lyFail(rows, r.err, r.ms, gen, tries);
+  }
+  // Borra las filas de estas capas (misma hoja, mismos órdenes): antes de reenviarlas tras un fallo ambiguo. Mejor esfuerzo.
+  async function _lyClear(rows) {
+    try {
+      const pid = rows[0] && rows[0].panel_id;
+      const orders = rows.map(r => r.layer_order).filter(n => Number.isInteger(n));
+      if (pid && orders.length) await _delete('panel_layers', `panel_id=eq.${pid}&layer_order=in.(${orders.join(',')})`);
+    } catch (_) { /* si tampoco se puede borrar, el reintento sigue; la siguiente subida rehace lo duplicado (ver _layerDelta) */ }
+  }
+  // Sube las filas de capas de UNA hoja, en trozos por peso, y no vuelve hasta que TODAS están en la nube (o lanza).
+  // Los trozos de una hoja van uno tras otro; el paralelismo (y su tope) lo pone la puerta _lyAcquire entre TODAS las hojas.
+  async function _upsertLayerRows(rows) {
+    const gen = _lyGen, q = rows.slice();
+    const take = () => q.splice(0, _lyFit(q, _lyCap));  // tantas filas como quepan en el tope vigente (una sola si ya lo pasa)
+    while (q.length) {
+      const r = await _lySendOne(take, gen);
+      if (!r.rows.length) break;
+      if (!r.err) _lyOk(r); else await _lyFail(r.rows, r.err, r.ms, gen, 1);
+    }
+  }
+  // Borrado idempotente (repetirlo da el mismo resultado): reintenta ante tiempo agotado, 5xx o sin respuesta.
+  async function _lyRetryIdem(fn) {
+    for (let t = 1; ; t++) {
+      try { return await fn(); }
+      catch (e) {
+        if (_lyKind(e) === 'fatal' || t >= _LY_TRIES) throw e;
+        await _lySleep(_lyBackoff(t));
+      }
+    }
+  }
+  // Borra capas por id en grupos pequeños y devuelve de paso los archivos de bucket que usaban (gif_url, anim_url).
+  async function _lyDeleteLayerIds(ids) {
+    const out = [];
+    for (let a = 0; a < ids.length; a += _LY_DEL_IDS) {
+      const part = ids.slice(a, a + _LY_DEL_IDS);
+      const rows = await _lyRetryIdem(() => _delete('panel_layers', `id=in.(${part.join(',')})`, { returning: 'gif_url,anim_url' }));
+      if (rows && rows.length) out.push(...rows);
+    }
+    return out;
+  }
+
   // Sube/actualiza UNA página: fila panels + sus panel_layers/panel_texts.
   // Compartida entre la ruta completa (existingPanelId=null, siempre inserta
   // fila nueva) y la ruta incremental (existingPanelId= la fila que ya existía
@@ -1032,7 +1208,7 @@ const SupabaseClient = (() => {
         _rowsP = _get(`panel_layers?panel_id=eq.${panelId}&select=id,layer_order,layer_type,layer_sha,gif_url,anim_url`)
           .then(v => ({ ok: true, v }), e => ({ ok: false, e }));
       } else {
-        _delLayersP = _delete('panel_layers', `panel_id=eq.${panelId}`, { returning: 'gif_url,anim_url' });
+        _delLayersP = _lyRetryIdem(() => _delete('panel_layers', `panel_id=eq.${panelId}`, { returning: 'gif_url,anim_url' })); // v42.44: con reintentos (ver _lyRetryIdem)
       }
       _delTextsP  = _delete('panel_texts',  `panel_id=eq.${panelId}`);
       // Si otro paso falla antes de llegar a esperarlos, que no queden como «unhandled rejection»;
@@ -1084,11 +1260,11 @@ const SupabaseClient = (() => {
         _kept = _delta.keepOrders.size;
         _keptKB = Math.round(layerRows.reduce((n, r) => n + (_delta.keepOrders.has(r.layer_order) ? r.layer_data.length : 0), 0) / 1024);
         if (_delta.delIds.length) {
-          _oldRows = (await _delete('panel_layers', `id=in.(${_delta.delIds.join(',')})`, { returning: 'gif_url,anim_url' })) || [];
+          _oldRows = await _lyDeleteLayerIds(_delta.delIds); // v42.44: en grupos pequeños y con reintentos (borrar megas de TOAST también tarda)
         }
       } else {
         // Modo de siempre: fuera TODAS las capas de la hoja y se suben todas.
-        _oldRows = (await _delete('panel_layers', `panel_id=eq.${panelId}`, { returning: 'gif_url,anim_url' })) || [];
+        _oldRows = (await _lyRetryIdem(() => _delete('panel_layers', `panel_id=eq.${panelId}`, { returning: 'gif_url,anim_url' }))) || [];
       }
     } else if (_delLayersP) {
       _oldRows = (await _delLayersP) || [];
@@ -1097,7 +1273,9 @@ const SupabaseClient = (() => {
     if (_delTextsP) await _delTextsP;
 
     const _tasks = [];
-    if (_toInsert.length > 0) _tasks.push(_upsert('panel_layers', _toInsert, { ret: 'min' }).then(v => { _pm('layersPostMs'); return v; }));
+    // v42.44: en trozos acotados por peso y con reintentos (ver «CAPAS EN TROZOS» arriba): antes, UN solo INSERT con todas las capas
+    // de la hoja, que en una obra con tinta HD pasaba de los 8 s que la base da a cada sentencia (error 57014).
+    if (_toInsert.length > 0) _tasks.push(_upsertLayerRows(_toInsert).then(v => { _pm('layersPostMs'); return v; }));
     if (p.texts && p.texts.length > 0) {
       // Textos para el reader (panel_texts sin cambios)
       _tasks.push(_upsert('panel_texts', p.texts.map((t, j) => ({
@@ -1223,6 +1401,7 @@ const SupabaseClient = (() => {
   // la nube — {ok:true, v:[{id,panel_order}…]} o {ok:false, e:error} — que saveDraft lanza EN PARALELO
   // con la escritura de la fila works (antes iba detrás, un viaje de red más en fila).
   async function _uploadPanels(comic, dirtyPageIndices, onProgress, prefetched) {
+    _lyBegin(); // v42.44: subida nueva (ver «CAPAS EN TROZOS»): lo que quedara en vuelo de una fallida anterior ya no sigue
     // comic.panels[] son renders planos (pueden estar vacíos para obras cloudOnly)
     // Usar editorData.pages como fuente de verdad para las capas
     const edPages = (comic.editorData && comic.editorData.pages) ? comic.editorData.pages : [];
@@ -1335,9 +1514,11 @@ const SupabaseClient = (() => {
     // Antes de borrar los panels, recoger las URLs de bucket para limpiar
     // archivos huérfanos. Paralelizado: antes se hacía un GET por panel
     // antiguo y un DELETE por gif/anim, todo secuencial.
+    let _oldPanelIds = null; // v42.44: ids de las hojas que había en la nube (para borrarlas de una en una, ver más abajo)
     try {
       const _oldPanels = await _get(`panels?work_id=eq.${comic.supabaseId}&select=id`);
       if (_oldPanels && _oldPanels.length) {
+        _oldPanelIds = _oldPanels.map(_op => _op && _op.id).filter(Boolean);
         const _oldLayersByPanel = await Promise.all(
           _oldPanels.map(_op => _get(`panel_layers?panel_id=eq.${_op.id}&select=gif_url,anim_url`).catch(() => []))
         );
@@ -1351,7 +1532,13 @@ const SupabaseClient = (() => {
         await Promise.all(_cleanupJobs);
       }
     } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
-    await _delete('panels', `work_id=eq.${comic.supabaseId}`);
+    // v42.44: el borrado en cascada de TODA la obra en una sola sentencia (megas de TOAST de todas sus hojas: con la tinta HD, la
+    // obra de 37 MB entera) se acerca a los 8 s que la base da a cada una; hoja a hoja (cada cascada son unos pocos MB) y con
+    // reintentos. Al final queda el borrado por obra de siempre, que ya solo encuentra lo que no estuviera en la lista (normalmente nada).
+    if (_oldPanelIds && _oldPanelIds.length > 1) {
+      await _sbPoolMap(_oldPanelIds, 2, id => _lyRetryIdem(() => _delete('panels', `id=eq.${id}`)));
+    }
+    await _lyRetryIdem(() => _delete('panels', `work_id=eq.${comic.supabaseId}`));
 
     // Subir cada página en paralelo, con concurrencia acotada a 3.
     // Las páginas son independientes entre sí: panel_order se guarda como
@@ -1386,11 +1573,14 @@ const SupabaseClient = (() => {
   // subida de hojas falle a medias o se cierre la app, este dispositivo sabe que
   // esa revisión de la nube es SUYA (ver WorkStore.setCloudRev) y no la toma por
   // un cambio hecho desde otro dispositivo.
-  async function saveDraft(comic, dirtyPageIndices, onRevision, onProgress) {
+  // onNote (opcional, v42.44): se llama con true cuando la base obliga a reintentar un trozo de capas («la nube va lenta») y con
+  // false cuando se recupera, para que la pantalla de bloqueo del editor lo cuente en vez de parecer colgada.
+  async function saveDraft(comic, dirtyPageIndices, onRevision, onProgress, onNote) {
     const sid = comic.supabaseId;
     if (!sid) throw new Error('Sin supabaseId para guardar borrador');
 
     const _recObj = _recBegin('saveDraft');
+    _lyNoteCb = (typeof onNote === 'function') ? onNote : null;
     try {
     // v41.46: con subida incremental hace falta la lista de hojas que ya hay en la nube (id + orden).
     // Se pide AHORA, a la vez que se escribe la fila works, en vez de esperar a que esta termine
@@ -1435,7 +1625,7 @@ const SupabaseClient = (() => {
     } catch (_e) {
       _recMark('ERROR ' + String((_e && _e.message) || _e).slice(0, 100));
       throw _e;
-    } finally { _recEnd(_recObj); }
+    } finally { _lyNoteCb = null; _recEnd(_recObj); }
   }
 
   async function submitForReview(comic) {

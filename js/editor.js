@@ -34514,12 +34514,21 @@ async function _edCloudSaveInner() {
     // medias o una app cerrada no se toma luego por un cambio hecho desde otro
     // dispositivo) y otra vez al terminar. Ver WorkStore.getCloudRev.
     const _tDraft = performance.now();
+    let _upBase = null; // v42.44: título de la pantalla de bloqueo antes de un aviso «la nube va lenta» (se restituye al recuperarse)
     const _saveRes = await SupabaseClient.saveDraft(comic, _dirtyPageIndices, (_rev) => {
       try { WorkStore.setCloudRev(comic.id, _rev); } catch(_) {}
     }, (_donePages, _totalPages) => {
       // v40.78 — petición de Alberto: mostrar en la pantalla de bloqueo
       // cuántas hojas se están subiendo, no solo el texto genérico fijo.
+      _upBase = null;
       _edSaveOverlayUpdate(I18n.t('ed_uploadingToCloudProgress', { done: _donePages, total: _totalPages }));
+    }, (_slow) => {
+      // v42.44: la base cortó por tiempo (o no contestó) un trozo de capas y se está reintentando: que el contador lo cuente
+      // en vez de parecer colgado. Al recuperarse se vuelve al texto que hubiera (o lo repone el siguiente «hoja X de Y»).
+      const _ovT = document.getElementById('_edSaveOvTitle');
+      if (!_ovT) return;
+      if (_slow) { if (_upBase === null) _upBase = _ovT.textContent; _ovT.textContent = I18n.t('ed_uploadSlowRetry'); }
+      else if (_upBase !== null) { _ovT.textContent = _upBase; _upBase = null; }
     });
     _tmEnd('saveDraft', _tDraft);
     const _tPost = performance.now();
@@ -34693,7 +34702,7 @@ async function _edCloudSaveInner() {
   } catch(err) {
     try { _TM.error = String((err && err.message) || err).slice(0, 160); } catch(_) {}
     _edSaveOverlayHide();
-    edToast('⚠️ ' + (err.message || I18n.t('ed_errSaveCloudGeneric')));
+    edToast('⚠️ ' + (err.message || I18n.t('ed_errSaveCloudGeneric')), 7000); // v42.44: 7 s (antes 2 s): el aviso ahora dice qué capa falló y tras cuántos intentos; con 2 s no daba tiempo a leerlo
     console.error('edCloudSave:', err);
   } finally {
     _edSaveOverlayHide();
@@ -55900,6 +55909,14 @@ async function _edRunDiag() {
       L('    ' + _sb.requests + ' peticiones | subido ' + _sb.upKB + ' KB | bajado ' + _sb.downKB + ' KB' +
         (_sb.totalMs > 0 && _sb.upKB ? ' | ≈ ' + (_sb.upKB * 8 / _sb.totalMs).toFixed(2) + ' Mbps de subida efectiva media' : ''));
       L('    subida por capas (solo se envían las capas que cambian): ' + (_sb.layerSha || '?'));
+      // v42.44 — las capas se envían en trozos acotados por peso (ver «CAPAS EN TROZOS» en supabase-client.js): cuántas peticiones,
+      // cuántos fallos/divisiones y el tope de bytes por petición; y los fallos (tipo, filas, KB, ms y respuesta de la base).
+      if (_sb.ly) {
+        const _y = _sb.ly;
+        L('    capas en trozos: ' + _y.posts + ' peticiones (' + _y.ok + ' bien · ' + _y.fail + ' con fallo · ' + _y.splits + ' divisiones) · la mayor ' + _y.maxKB + ' KB · tope por petición: mínimo ' +
+          Math.round(_y.capMin / 1024) + ' KB, al terminar ' + Math.round(_y.cap / 1024) + ' KB');
+        (_y.errs || []).forEach(x => L('      fallo a los ' + x.t + ' ms: ' + x.kind + ' · ' + x.rows + ' capa(s) ' + x.kb + ' KB · ' + x.ms + ' ms · ' + x.msg));
+      }
       if (_sb.marks && _sb.marks.length) L('    hitos: ' + _sb.marks.map(x => x[0] + '@' + x[1]).join(' · '));
       (_sb.pages || []).forEach(pg => {
         L('    hoja ' + (pg.i + 1) + ': empezó a los ' + pg.t0 + ' ms · fila ' + (pg.panelMs ?? '—') + ' · capas preparadas ' + (pg.layersBuiltMs ?? '—') +
