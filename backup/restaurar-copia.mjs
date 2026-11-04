@@ -8,6 +8,7 @@
  *   ["S", "fase", "sql"]    estructura de la base (tablas, funciones, políticas RLS, permisos, disparadores…)
  *   ["T","esquema","tabla",n]   empieza una tabla (n = filas que había al empezar)
  *   ["R", {...fila...}]     una fila (las columnas tal cual, con los números enormes sin redondear)
+ *   ["F", {k,t,b,h,d}]      (v42.49, opcional) un archivo de R2: ruta, tipo, bytes, SHA-256 y contenido en base64
  *   ["Z", {...}]            cierre: si falta, el archivo está cortado
  *
  * Sin dependencias: solo Node 18 o superior y, para escribir en una base, el programa `psql` (cliente de PostgreSQL).
@@ -17,14 +18,17 @@
  *   node restaurar-copia.mjs copia.ndjson.gz --db "<conexión>" --esquema    proyecto NUEVO y vacío: crea la estructura y carga los datos
  *   node restaurar-copia.mjs copia.ndjson.gz --db "<conexión>"         base que ya tiene la estructura: añade las filas que falten
  *   node restaurar-copia.mjs copia.ndjson.gz --sql salida.sql          no toca ninguna base: escribe el guion para ejecutarlo tú con psql -f
+ *   node restaurar-copia.mjs copia.ndjson.gz --extraer-r2 carpeta      saca a una carpeta los archivos de R2 de la copia (animaciones, GIF y portadas)
  *   (ver todas las opciones con --ayuda y la guía completa en backup/LEEME_COPIA_ADMIN.md)
  */
 import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 
-const VERSION = '42.29';
+const VERSION = '42.50';
 const NL = 10;
 
 // ───────────────────────────────────────────────── opciones ─────────────────────────────────────────────────
@@ -45,6 +49,8 @@ Uso:  node restaurar-copia.mjs <archivo.ndjson.gz> [opciones]
   --solo t1,t2            Restaura solo esas tablas (p. ej. works,panels,panel_layers o public.works).
   --sin-cuentas           No restaura las cuentas (auth.users y auth.identities).
   --probar                Ensayo: hace todo y lo DESHACE al final (comprueba que la copia entra sin errores).
+  --extraer-r2 <carpeta>  Escribe en esa carpeta los archivos de R2 que lleva la copia (anims/…, gifs/…, covers/…), con su estructura de carpetas.
+                          Sirve para volver a subirlos a un bucket de R2 nuevo (rclone, wrangler…) sin depender del panel. Puede ir solo o junto a --db / --sql.
   --lote-mb N             Tamaño aproximado de cada INSERT (por defecto 4).
   --psql <ruta>           Ruta del programa psql si no está en el PATH.
   --si                    No pedir confirmación.
@@ -52,11 +58,12 @@ Uso:  node restaurar-copia.mjs <archivo.ndjson.gz> [opciones]
 `;
 
 function leerOpciones(argv) {
-  const o = { archivo: null, info: false, db: null, sql: null, esquema: false, modo: 'insertar', solo: null, sinCuentas: false, probar: false, loteMb: 4, psql: 'psql', si: false, ayuda: false };
+  const o = { archivo: null, info: false, extraerR2: null, db: null, sql: null, esquema: false, modo: 'insertar', solo: null, sinCuentas: false, probar: false, loteMb: 4, psql: 'psql', si: false, ayuda: false };
   const valor = (i, nombre) => { if (i + 1 >= argv.length) fallar(`Falta el valor de ${nombre}.`, 2); return argv[i + 1]; };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--info') o.info = true;
+    else if (a === '--extraer-r2') { o.extraerR2 = valor(i, a); i++; }
     else if (a === '--db') { o.db = valor(i, a); i++; }
     else if (a === '--sql') { o.sql = valor(i, a); i++; }
     else if (a === '--esquema') o.esquema = true;
@@ -109,7 +116,7 @@ const tipo = l => (l.length > 4 && l[0] === 0x5b && l[1] === 0x22 && l[3] === 0x
 
 // ───────────────────────────────────────── 1.ª pasada: comprobar la integridad ─────────────────────────────────────────
 async function examinar(archivo) {
-  const r = { manifiesto: null, esquema: [], tablas: [], final: null, lineas: 0, bytes: 0, problemas: [] };
+  const r = { manifiesto: null, esquema: [], tablas: [], final: null, lineas: 0, bytes: 0, problemas: [], archivos: { n: 0, bytes: 0 } };
   let cur = null;
   try {
     for await (const l of lineas(archivo)) {
@@ -120,6 +127,12 @@ async function examinar(archivo) {
         if (!cur) r.problemas.push(`Línea ${r.lineas}: una fila fuera de cualquier tabla.`);
         else cur.hay++;
         if (l[5] !== 0x7b || l[l.length - 1] !== 0x5d) r.problemas.push(`Línea ${r.lineas}: fila mal formada.`);
+        continue;
+      }
+      if (t === 'F') {                                                          // v42.49: archivo de R2 — se comprueba entero (base64, tamaño y SHA-256)
+        const f = leerArchivoF(l);
+        if (f.error) r.problemas.push(`Línea ${r.lineas}: ${f.error}`);
+        else { r.archivos.n++; r.archivos.bytes += f.bytes.length; }
         continue;
       }
       let v;
@@ -147,8 +160,58 @@ async function examinar(archivo) {
       if (dice === undefined) r.problemas.push(`${t.clave}: no consta en el cierre.`);
       else if (dice !== t.hay) r.problemas.push(`${t.clave}: el archivo trae ${t.hay} filas pero el cierre dice ${dice}.`);
     }
+    const fz = r.final.files;                                                   // v42.49: ausente = copia hecha sin los archivos de R2
+    if (fz && typeof fz.n === 'number') { if (fz.n !== r.archivos.n) r.problemas.push(`Archivos de R2: el archivo trae ${r.archivos.n} y el cierre dice ${fz.n}.`); }
+    else if (r.archivos.n) r.problemas.push('Hay archivos de R2 en la copia pero el cierre no los cuenta.');
   }
   return r;
+}
+
+// Un registro F: ["F",{"k":ruta,"t":tipo,"b":bytes,"h":sha256,"d":"base64"}]. Devuelve { k, t, bytes } o { error }.
+const RE_F = /^\["F",\{"k":(".*?"),"t":(".*?"),"b":(\d+),"h":(null|".*?"),"d":"/;
+function leerArchivoF(l) {
+  const m = RE_F.exec(l.toString('utf8', 0, Math.min(l.length, 2048)));
+  if (!m) return { error: 'archivo de R2 mal formado.' };
+  let k, h, tmime; const b = Number(m[3]);
+  try { k = JSON.parse(m[1]); tmime = JSON.parse(m[2]); h = JSON.parse(m[4]); } catch (e) { return { error: 'archivo de R2 mal formado.' }; }
+  const ini = Buffer.byteLength(m[0], 'utf8'), fin = l.length - 3;
+  if (fin < ini || l[fin] !== 0x22 || l[fin + 1] !== 0x7d || l[fin + 2] !== 0x5d) return { error: `${k}: el registro del archivo está cortado.` };
+  const b64 = l.toString('latin1', ini, fin);
+  if (b64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(b64)) return { error: `${k}: contenido no válido (base64).` };
+  const bytes = Buffer.from(b64, 'base64');
+  if (bytes.length !== b) return { error: `${k}: trae ${bytes.length} bytes y su cabecera dice ${b}.` };
+  if (h && crypto.createHash('sha256').update(bytes).digest('hex') !== h) return { error: `${k}: el contenido no coincide con su huella (SHA-256).` };
+  return { k, t: tmime, bytes };
+}
+
+// Ruta segura dentro de la carpeta de destino para la clave de un archivo de R2: solo anims/, gifs/ o covers/, sin «..» ni rutas absolutas
+// (una copia manipulada no puede escribir fuera de la carpeta elegida).
+function rutaSegura(base, k) {
+  let key;
+  try { key = decodeURIComponent(k); } catch (_) { return null; }
+  if (!/^(anims|gifs|covers)\/[^\0\\]+$/.test(key) || key.split('/').some(p => p === '' || p === '.' || p === '..')) return null;
+  const dest = path.resolve(base, ...key.split('/'));
+  return dest.startsWith(path.resolve(base) + path.sep) ? dest : null;
+}
+// --extraer-r2: escribe cada archivo de R2 de la copia en <carpeta>/<ruta>, más _tipos.json con el tipo de cada uno.
+async function extraerArchivos(archivo, carpeta) {
+  const base = path.resolve(carpeta);
+  fs.mkdirSync(base, { recursive: true });
+  let n = 0, bytes = 0, omitidos = 0;
+  const tipos = {};
+  for await (const l of lineas(archivo)) {
+    if (!l.length || tipo(l) !== 'F') continue;
+    const f = leerArchivoF(l);
+    if (f.error) fallar(f.error, 1);
+    const dest = rutaSegura(base, f.k);
+    if (!dest) { omitidos++; console.log(`  ⚠ ruta no admitida, se omite: ${limpio(f.k)}`); continue; }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, f.bytes);
+    tipos[decodeURIComponent(f.k)] = f.t;
+    n++; bytes += f.bytes.length;
+  }
+  fs.writeFileSync(path.join(base, '_tipos.json'), JSON.stringify(tipos, null, 1));
+  return { n, bytes, omitidos, base };
 }
 
 function informe(r) {
@@ -160,6 +223,11 @@ function informe(r) {
     out.push(`  Cuentas incluidas: ${m.plan && m.plan.auth ? 'sí (auth.users y auth.identities)' : 'no'}`);
   }
   out.push(`  Estructura:       ${r.esquema.length} sentencias`);
+  if (m && m.files === false) out.push('  Archivos de R2:   no incluidos (copia hecha sin esa casilla)');
+  else if (r.final && r.final.files) {
+    const fz = r.final.files;
+    out.push(`  Archivos de R2:   ${miles(r.archivos.n)} (${mb(r.archivos.bytes)}) — animaciones, GIF y portadas` + (fz.missingN ? `; ${fz.missingN} citados por las obras ya no existían en R2` : '') + (fz.legacy ? `; ${fz.legacy} antiguos en Storage de Supabase no incluidos` : ''));
+  }
   const ancho = Math.max(10, ...r.tablas.map(t => t.clave.length));
   out.push('');
   out.push('  ' + 'Tabla'.padEnd(ancho) + '   ' + 'Filas'.padStart(9) + '   Estado');
@@ -316,7 +384,7 @@ async function main() {
   if (o.ayuda || !o.archivo) { console.log(AYUDA); process.exit(o.ayuda ? 0 : 2); }
   if (!['insertar', 'actualizar'].includes(o.modo)) fallar('--modo debe ser «insertar» o «actualizar».', 2);
   if (!fs.existsSync(o.archivo)) fallar(`No existe el archivo: ${o.archivo}`, 2);
-  if (!o.info && !o.db && !o.sql) fallar('Indica qué hacer: --info (solo mirar), --db "<conexión>" (restaurar) o --sql <archivo> (escribir el guion).\n' + AYUDA, 2);
+  if (!o.info && !o.db && !o.sql && !o.extraerR2) fallar('Indica qué hacer: --info (solo mirar), --db "<conexión>" (restaurar), --sql <archivo> (escribir el guion) o --extraer-r2 <carpeta> (sacar los archivos de R2).\n' + AYUDA, 2);
   if (o.db && o.sql) fallar('Usa --db o --sql, no los dos a la vez.', 2);
 
   console.log(`\nRestaurador de copias de Comxow v${VERSION}\nLeyendo ${o.archivo} …`);
@@ -329,7 +397,14 @@ async function main() {
     process.exit(2);
   }
   console.log(`\n✓ Archivo íntegro (${((Date.now() - t0) / 1000).toFixed(1)} s).`);
-  if (o.info) process.exit(0);
+  if (o.extraerR2) {
+    if (!ex.archivos.n) console.log('\nLa copia no lleva archivos de R2 (se hizo sin esa casilla, o las obras no citan ninguno): no hay nada que extraer.');
+    else {
+      const x = await extraerArchivos(o.archivo, o.extraerR2);
+      console.log(`\n✓ ${miles(x.n)} archivos de R2 (${mb(x.bytes)}) escritos en ${x.base}${x.omitidos ? `\n⚠ ${x.omitidos} omitidos por llevar una ruta no admitida` : ''}\n  Para devolverlos a un bucket de R2 nuevo: la ruta de cada archivo es su clave en R2 (p. ej. con rclone: rclone copy "${x.base}" r2:<bucket> --exclude _tipos.json).`);
+    }
+  }
+  if (o.info || (o.extraerR2 && !o.db && !o.sql)) process.exit(0);
 
   if (o.solo) {
     const ok = ex.tablas.filter(t => elegirTabla(o.solo, t)).map(t => t.clave);

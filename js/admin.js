@@ -73,6 +73,7 @@ function _adminViewStart() {
   const tabs = document.querySelector('.admin-tabs');
   if (hdr && tabs) tabs.style.top = hdr.getBoundingClientRect().height + 'px';
   _adminBackupTab();
+  _adminRestoreTab();
   _adminR2Tab();
   renderTab('pending');
   setupTabs();
@@ -102,6 +103,28 @@ function _adminBackupTab() {
   } catch (e) { console.warn('[admin] pestaña de copia', e); }
 }
 
+/* v42.50 — Pestaña «Restaurar» (restaurar una copia hecha con «Copia», por obras, desde este panel): SOLO para la cuenta principal «admin», igual que
+   «Copia». Es una comodidad de la pantalla: la barrera real está en la función SQL public.admin_restore, que rechaza a cualquier otra cuenta
+   (ver sql/v42_50_restaurar_admin_1_funcion.sql y js/admin-restore.js). */
+function _adminRestoreTab() {
+  try {
+    const u = Auth.currentUser();
+    if (!Auth.isAdmin() || !u || u.username !== 'admin' || typeof AdminRestore === 'undefined') return;
+    const tabs = document.querySelector('.admin-tabs');
+    if (!tabs || tabs.querySelector('[data-tab="restore"]')) return;
+    const btn = document.createElement('button');
+    btn.className = 'admin-tab';
+    btn.dataset.tab = 'restore';
+    btn.dataset.i18n = 'adminRsTab';
+    btn.textContent = I18n.t('adminRsTab');
+    tabs.append(btn);
+    const panel = document.createElement('div');
+    panel.className = 'admin-panel hidden';
+    panel.id = 'tabRestore';
+    tabs.parentNode.appendChild(panel);
+  } catch (e) { console.warn('[admin] pestaña de restauración', e); }
+}
+
 /* v42.45 — Pestaña «R2» (capas pesadas guardadas en R2 por contenido: prueba del Worker, interruptor de este dispositivo y resumen del último
    guardado). Solo para la cuenta principal «admin», igual que «Copia»; ver js/admin-r2.js. Es una comodidad de la pantalla: el Worker pide la
    sesión para subir y la lectura es pública por diseño (el contenido se pide por su hash). */
@@ -129,6 +152,7 @@ function setupTabs() {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
+      try { tab.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (_) {}     // v42.50: en pantallas estrechas la barra de pestañas se desplaza
       renderTab(tab.dataset.tab);
     });
   });
@@ -145,6 +169,7 @@ function renderTab(tab) {
   if (tab === 'all')       renderAll(panel);
   if (tab === 'users')     renderUsers(panel);  // async — se muestra "Cargando…" internamente
   if (tab === 'backup' && typeof AdminBackup !== 'undefined') AdminBackup.render(panel);   // v42.29
+  if (tab === 'restore' && typeof AdminRestore !== 'undefined') AdminRestore.render(panel); // v42.50
   if (tab === 'r2' && typeof AdminR2 !== 'undefined') AdminR2.render(panel);                // v42.45
 }
 

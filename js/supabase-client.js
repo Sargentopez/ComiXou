@@ -790,12 +790,13 @@ const SupabaseClient = (() => {
   // diferencial: una capa idéntica produce la misma referencia.
   //   · LEER (siempre activo): «Editar» y el lector resuelven la referencia bajando el archivo de R2. Si no se puede bajar, la
   //     descarga FALLA: jamás se omite la capa en silencio (un guardado posterior la habría borrado de la nube).
-  //   · ESCRIBIR (interruptor, apagado de serie; se activa en el panel de administración): _buildLayerRow marca la fila con la
-  //     referencia y _xrFlushRows sube el archivo ANTES de escribir la fila. Si R2 no responde, esa capa se guarda en la base como
-  //     hasta ahora: guardar nunca falla por culpa de R2.
+  //   · ESCRIBIR (ACTIVADO DE SERIE en todos los dispositivos desde la v42.49; el panel de administración puede apagarlo en uno):
+  //     _buildLayerRow marca la fila con la referencia y _xrFlushRows sube el archivo ANTES de escribir la fila. Si R2 no responde,
+  //     esa capa se guarda en la base como hasta ahora: guardar nunca falla por culpa de R2. Y si R2 se cae, el CORTACIRCUITOS
+  //     (_xrBrk, más abajo) pausa la escritura en R2 unos minutos para que guardar no se quede esperando capa tras capa.
   // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-  const _XR_MIN   = 32 * 1024;       // desde cuántos caracteres de layer_data una capa va a R2 (con el interruptor activado)
-  const _XR_FLAG  = 'cx_xr_write';   // localStorage: '1' = este dispositivo guarda las capas pesadas en R2 (leerlas va siempre)
+  const _XR_MIN   = 32 * 1024;       // desde cuántos caracteres de layer_data una capa va a R2 (con la escritura activada)
+  const _XR_FLAG  = 'cx_xr_write';   // localStorage: '0' = ESTE dispositivo NO guarda las capas pesadas en R2; ausente (o '1' de la v42.45-48) = SÍ (leerlas va siempre)
   const _XR_RE    = /^r2:([0-9a-f]{64}):(\d+)$/;
   const _XR_PAR   = 2;               // subidas a R2 a la vez, entre todas las hojas
   const _XR_TRIES = 4;
@@ -809,16 +810,54 @@ const SupabaseClient = (() => {
   function _xrIsRef(s) { return typeof s === 'string' && s.length < 100 && s.charCodeAt(0) === 114 && _XR_RE.test(s); }
   // Tamaño REAL (caracteres de texto) de la capa de una fila, aunque su layer_data sea ahora solo la referencia (para el 🩺 y los recuentos).
   function _xrRowLen(r) { const m = _xrMeta.get(r); return m ? m.len : ((r && typeof r.layer_data === 'string') ? r.layer_data.length : 0); }
-  function _xrWriteOn() {
+  // ¿Está el interruptor de ESTE dispositivo en «guardar en R2»? De serie sí (v42.49). Solo se apaga a mano, desde la pestaña «R2» del panel de
+  // administración, y eso queda en localStorage como '0'. Si localStorage no se puede leer (navegador con el almacenamiento bloqueado) vale lo de serie.
+  function _xrSwitchOn() {
     try {
       if (window._sbXrForce === true) return true;   // _sbXrForce: solo para las pruebas automáticas
       if (window._sbXrForce === false) return false;
-      return localStorage.getItem(_XR_FLAG) === '1';
-    } catch (_) { return false; }
+      return localStorage.getItem(_XR_FLAG) !== '0';
+    } catch (_) { return true; }
   }
-  function _xrSetWrite(on) { try { if (on) localStorage.setItem(_XR_FLAG, '1'); else localStorage.removeItem(_XR_FLAG); } catch (_) {} }
+  function _xrSetWrite(on) { try { if (on) localStorage.removeItem(_XR_FLAG); else localStorage.setItem(_XR_FLAG, '0'); } catch (_) {} }
+
+  // ── CORTACIRCUITOS (v42.49) ──────────────────────────────────────────────────────────────────────────────────
+  // Con la escritura en R2 activada de serie en todos los dispositivos, una caída de R2 o del Worker no puede hacer que cada guardado espere capa
+  // tras capa a que se agoten los reintentos (hasta ~2 min por capa). Es el patrón estándar «circuit breaker»: tras _XR_BRK_N intentos de subida
+  // fallidos SEGUIDOS (de cualquier capa; un PUT correcto lo pone a cero) se PAUSA la escritura en R2: las capas pesadas se guardan en la base como
+  // antes de existir R2 (_layerDelta reconoce las que ya son referencia y no las toca). Pasada la pausa se prueba otra vez («semiabierto»): un
+  // fallo la vuelve a abrir al instante, un éxito la cierra. Un rechazo del Worker que repetir no arregla (403, 404, 405…) abre la pausa larga de
+  // golpe; los que son culpa de UNA sola capa (400 hash, 411, 413 demasiado grande) no cuentan. El estado vive en memoria (recargar la página lo
+  // reinicia) y lo enseñan la pestaña «R2» del panel de administración y el 🩺 del editor. Leer capas de R2 NO pasa por aquí.
+  const _XR_BRK_N    = 3;                // intentos fallidos seguidos que abren la pausa
+  const _XR_BRK_SOFT = 3 * 60 * 1000;    // pausa por fallos de red o de servidor (5xx, tiempo agotado, 429, sesión…)
+  const _XR_BRK_HARD = 10 * 60 * 1000;   // pausa por un rechazo del Worker que repetir no arregla
+  const _xrBrk = { fails: 0, until: 0, kind: '', why: '', opened: 0, lastAt: 0 };
+  function _xrBrkOpen() { return _xrBrk.until > Date.now(); }
+  function _xrBrkFail(err, hard) {
+    _xrBrk.fails++; _xrBrk.lastAt = Date.now();
+    _xrBrk.why = String((err && err.message) || err || 'error').slice(0, 120);
+    if (hard || _xrBrk.fails >= _XR_BRK_N) {
+      const was = _xrBrkOpen();
+      _xrBrk.until = Date.now() + (hard ? _XR_BRK_HARD : _XR_BRK_SOFT);
+      _xrBrk.kind = hard ? 'hard' : 'soft';
+      if (!was) { _xrBrk.opened++; console.warn('[R2] cortacircuitos ABIERTO (' + _xrBrk.kind + '): las capas pesadas se guardan en la base unos minutos —', _xrBrk.why); }
+    }
+  }
+  function _xrBrkOk() { _xrBrk.fails = 0; _xrBrk.until = 0; _xrBrk.kind = ''; }
+  function _xrPaused() { return Object.assign(new Error('R2 en pausa tras fallos seguidos' + (_xrBrk.why ? ' (' + _xrBrk.why + ')' : '')), { _xrBrk: true }); }
+  // Estado para la pestaña «R2» y el 🩺 (open = la escritura está en pausa AHORA; until = ms epoch en que se vuelve a probar).
+  function _xrState() {
+    const open = _xrBrkOpen();
+    return { switchOn: _xrSwitchOn(), open, until: open ? _xrBrk.until : 0, kind: open ? _xrBrk.kind : '', fails: _xrBrk.fails,
+      why: (open || _xrBrk.fails) ? _xrBrk.why : '', opened: _xrBrk.opened, lastAt: _xrBrk.lastAt };
+  }
+  function _xrBreakerReset() { _xrBrkOk(); _xrBrk.why = ''; }
+  // ¿Se guardan AHORA las capas pesadas en R2 desde este dispositivo? Interruptor encendido (de serie) y cortacircuitos cerrado.
+  function _xrWriteOn() { return _xrSwitchOn() && !_xrBrkOpen(); }
+
   function _xrBegin() {
-    _xrSt = { on: _xrWriteOn(), min: _XR_MIN, n: 0, put: 0, have: 0, fail: 0, putKB: 0, ms: 0, errs: [] };
+    _xrSt = { on: _xrWriteOn(), sw: _xrSwitchOn(), brk: _xrBrkOpen(), min: _XR_MIN, n: 0, put: 0, have: 0, fail: 0, paused: 0, putKB: 0, ms: 0, errs: [] };
     if (_rec) _rec.xr = _xrSt;
   }
   function _xrAcquire() { if (_xrActive < _XR_PAR) { _xrActive++; return Promise.resolve(); } return new Promise(r => _xrWait.push(r)); }
@@ -855,15 +894,18 @@ const SupabaseClient = (() => {
     return row;
   }
   // Se asegura de que el archivo esté en R2: 'known' (ya visto en esta sesión), 'have' (R2 ya lo tenía) o 'put' (subido ahora).
-  async function _xrEnsure(sha, text) {
-    if (_xrKnown.has(sha)) return 'known';
+  // v42.49: con el cortacircuitos abierto lanza al instante (_xrBrk) y cada intento fallido lo acerca a abrirse (ver «CORTACIRCUITOS»).
+  async function _xrEnsure(sha, text, fresh) {
+    if (!fresh && _xrKnown.has(sha)) return 'known';       // fresh (v42.50, restaurar): sin fiarse de la memoria de esta sesión; se pregunta a R2
+    if (_xrBrkOpen()) throw _xrPaused();
     await _xrAcquire();
     try {
+      if (_xrBrkOpen()) throw _xrPaused();                   // se abrió la pausa mientras esperaba su turno
       const u8 = new TextEncoder().encode(text);
       const putMs = 30000 + Math.round(u8.length / 1048576) * 10000;
       let lastErr = null;
       for (let n = 1; n <= _XR_TRIES; n++) {
-        if (n > 1) await _lySleep(_xrBackoff(n - 1));
+        if (n > 1) { await _lySleep(_xrBackoff(n - 1)); if (_xrBrkOpen()) throw _xrPaused(); }
         try {
           if (window._authTryRefresh) await window._authTryRefresh();
           if (n === 1) {                                     // ¿ya está? (los archivos son inmutables: si existe, es ese contenido)
@@ -873,12 +915,22 @@ const SupabaseClient = (() => {
           const r = await _xrFetch('PUT blob', _xrUrl(sha), {
             method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8,
           }, u8.length, putMs);
-          if (r.status === 201 || r.status === 200) { _xrKnown.add(sha); return r.status === 201 ? 'put' : 'have'; }
+          if (r.status === 201 || r.status === 200) { _xrKnown.add(sha); _xrBrkOk(); return r.status === 201 ? 'put' : 'have'; }
           let why = ''; try { why = (await r.text()).slice(0, 120); } catch (_) {}
           lastErr = new Error('R2 ' + r.status + (why ? ' ' + why : ''));
+          const s = r.status;
           // 4xx (salvo tiempo agotado/demasiadas peticiones/sesión caducada) no mejora repitiendo: hash que no cuadra, tamaño…
-          if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429 && r.status !== 401) throw Object.assign(lastErr, { _xrFatal: true });
-        } catch (e) { lastErr = e; if (e && e._xrFatal) throw e; }
+          if (s >= 400 && s < 500 && s !== 408 && s !== 429 && s !== 401) {
+            if (s !== 400 && s !== 411 && s !== 413) _xrBrkFail(lastErr, true);   // el Worker no admite subidas (403, 404, 405…): pausa larga para todas las capas
+            throw Object.assign(lastErr, { _xrFatal: true });                      // 400 / 411 / 413: culpa de ESTA capa; las demás siguen
+          }
+          _xrBrkFail(lastErr, false);                          // 5xx, 408, 429, 401: cuenta para el cortacircuitos y se reintenta
+        } catch (e) {
+          lastErr = e;
+          if (e && e._xrFatal) throw e;
+          _xrBrkFail(e, false);                                // red caída o tiempo agotado
+        }
+        if (_xrBrkOpen()) throw _xrPaused();
       }
       throw lastErr || new Error('R2 sin respuesta');
     } finally { _xrRelease(); }
@@ -897,10 +949,16 @@ const SupabaseClient = (() => {
         if (st) { st.n++; if (how === 'put') { st.put++; st.putKB += Math.round(m.len / 1024); } else st.have++; st.ms += Math.round(performance.now() - t0); }
       } catch (e) {
         r.layer_data = m.text; _xrMeta.delete(r);            // vuelta atrás: esta capa va en la base como siempre
-        if (st) { st.fail++; if (st.errs.length < 3) st.errs.push(String((e && e.message) || e).slice(0, 120)); }
-        console.warn('[R2] capa pesada guardada en la base (R2 no respondió):', e);
+        const paused = !!(e && e._xrBrk);                    // v42.49: no se intentó (cortacircuitos abierto) frente a «se intentó y falló»
+        if (st) {
+          st.fail++; if (paused) st.paused++;
+          const msg = String((e && e.message) || e).slice(0, 120);
+          if (st.errs.length < 3 && st.errs.indexOf(msg) < 0) st.errs.push(msg);
+        }
+        if (!paused) console.warn('[R2] capa pesada guardada en la base (R2 no respondió):', e);
       }
     }));
+    if (st) st.brkNow = _xrBrkOpen();                        // ¿quedó el cortacircuitos abierto al terminar de subir?
   }
   // LEER: devuelve el texto original de una capa a partir de su referencia. Reintenta; si no se consigue, LANZA.
   async function _xrFetchText(ref) {
@@ -962,316 +1020,14 @@ const SupabaseClient = (() => {
       const badSha = await _sha256HexBytes(new TextEncoder().encode('cx-prueba-hash-' + sha));
       r = await fetch(_xrUrl(badSha), { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': 'text/plain; charset=utf-8' }, body: u8 });
       step('R2 rechaza un contenido que no corresponde a su hash (PUT → 400)', r.status === 400, 'estado ' + r.status);
-      if (r.status === 201) lines.push('⚠ el Worker NO verifica el hash: no activar el interruptor');
+      if (r.status === 201) lines.push('⚠ el Worker NO verifica el hash: vuelve a desplegar el Worker de los documentos del Proyecto');
       r = await fetch(_xrUrl(badSha), { method: 'HEAD' });
       step('…y ese hash no queda guardado (HEAD → 404)', r.status === 404, 'estado ' + r.status);
     } catch (e) {
       step('La prueba terminó sin errores de red', false, String((e && e.message) || e));
     }
+    if (ok) _xrBreakerReset();                               // v42.49: una prueba correcta demuestra que R2 responde: se cierra el cortacircuitos
     return { ok, lines, ms: Math.round(performance.now() - t0) };
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-  // MOVER A R2 LAS CAPAS PESADAS QUE YA ESTÁN EN SUPABASE (v42.48) — herramienta de la cuenta «admin» (pestaña «R2»)
-  //
-  // Hasta la v42.47 solo iban a R2 las capas que se GUARDABAN con el interruptor activado; las que ya estaban dentro de la base seguían
-  // gastando egress en cada lectura (el 92 % del peso de la base son 468 capas de ≥ 32 KB). Esta herramienta las mueve una a una:
-  //   1. SCAN: la función SQL admin_xr_scan (solo lee) da la lista de capas de ≥ 32 KB con su tamaño real en bytes;
-  //   2. por cada capa: se baja su texto de Supabase (el único viaje de megas de toda la migración), se comprueba que pesa lo que decía
-  //      la lista (si no, la capa cambió desde entonces y se salta), se calcula su SHA-256 y se sube a R2 (_xrEnsure: HEAD → PUT; el
-  //      Worker y R2 verifican el hash al guardar, un contenido que no cuadre es rechazado);
-  //   3. SWAP (solo en modo «Real»): admin_xr_swap(id, huella). La propia base comprueba que el texto que tiene AHORA tiene esa huella
-  //      y, en una transacción, lo cambia por la referencia «r2:<huella>:<bytes>» (restaurando panels.nav, que un disparador borra).
-  // Seguridad: el archivo está en R2 (verificado por hash) ANTES de que la base cambie, y la base se niega a cambiar una capa que ya no
-  // es la que se subió. Se puede parar y repetir cuando se quiera: lo ya hecho se salta solo. «Simulacro» hace 1 y 2 y NO toca la base;
-  // apunta lo subido en un manifiesto local (cx_xr_mig), de modo que el modo Real que le sigue no vuelve a bajar nada de Supabase:
-  // comprueba que el archivo sigue en R2 y llama a admin_xr_swap (el manifiesto es solo un atajo: lo que manda es la comprobación de la base).
-  // Comprobación final (xrMigVerify): cada referencia de la base tiene su archivo en R2 (y, «a fondo», con el contenido y el hash exactos).
-  // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
-  const _XRM_KEY = 'cx_xr_mig';            // localStorage: lo ya subido a R2 y pendiente de sustituir en la base
-  const _XRM_MIN = 32 * 1024;              // bytes: la misma frontera que el guardado (_XR_MIN)
-  const _XRM_TTL = 14 * 86400000;          // una entrada del manifiesto caduca a las 2 semanas
-  let _xrmMan = null;
-  const _xrmErr = (code, msg) => Object.assign(new Error(msg || code), { code });
-  function _xrmManifest() {
-    if (_xrmMan) return _xrmMan;
-    let m = null;
-    try { m = JSON.parse(localStorage.getItem(_XRM_KEY) || 'null'); } catch (_) {}
-    if (!m || m.v !== 1 || !m.items || typeof m.items !== 'object') m = { v: 1, items: {} };
-    const now = Date.now();
-    Object.keys(m.items).forEach(k => { const e = m.items[k]; if (!e || !/^[0-9a-f]{64}$/.test(e.s) || !(e.b > 0) || now - (e.t || 0) > _XRM_TTL) delete m.items[k]; });
-    return (_xrmMan = m);
-  }
-  function _xrmSave() { try { localStorage.setItem(_XRM_KEY, JSON.stringify(_xrmManifest())); } catch (_) {} }
-  function _xrmClear() { _xrmMan = { v: 1, items: {} }; try { localStorage.removeItem(_XRM_KEY); } catch (_) {} }
-  function _xrmInfo() { const it = _xrmManifest().items; let kb = 0, n = 0; Object.keys(it).forEach(k => { n++; kb += Math.round(it[k].b / 1024); }); return { n, kb }; }
-
-  // Llama a una función SQL del administrador (POST /rpc/<fn>). Errores con `.code`: quota (402) · auth (401, tras renovar el token una vez)
-  // · forbidden (403: no es la cuenta «admin») · missing (404: falta ejecutar el SQL) · server / network / timeout (se reintentan con
-  // espera creciente) · aborted (cancelado a mano) · bad (otro 4xx). `query` = limit/offset/order que PostgREST aplica al resultado.
-  async function _xrRpc(fn, args, opts) {
-    opts = opts || {};
-    const sig = opts.signal, tries = opts.tries || 3;
-    let refreshed = false;
-    for (let n = 1; ; n++) {
-      if (sig && sig.aborted) throw _xrmErr('aborted', 'cancelado');
-      try {
-        await _ensureFreshToken();
-        const ctrl = new AbortController();
-        let vencio = false;
-        const timer = setTimeout(() => { vencio = true; ctrl.abort(); }, opts.timeoutMs || 60000);
-        const alCancelar = () => ctrl.abort();
-        if (sig) sig.addEventListener('abort', alCancelar, { once: true });
-        let res, txt;
-        try {
-          res = await fetch(`${BASE}/rpc/${fn}${opts.query ? '?' + opts.query : ''}`, { method: 'POST', headers: _hdrsUser(), body: JSON.stringify(args || {}), signal: ctrl.signal, cache: 'no-store' });
-          txt = await _sbResText(res);
-        } catch (e) {
-          if (sig && sig.aborted) throw _xrmErr('aborted', 'cancelado');
-          throw _xrmErr(vencio ? 'timeout' : 'network', (e && e.message) || 'sin conexión');
-        } finally { clearTimeout(timer); if (sig) sig.removeEventListener('abort', alCancelar); }
-        if (res.ok) { try { return JSON.parse(txt); } catch (_) { throw Object.assign(_xrmErr('bad', 'respuesta no válida'), { status: res.status }); } }
-        let msg = '';
-        try { const j = JSON.parse(txt); msg = (j && (j.message || j.hint)) || ''; } catch (_) { msg = String(txt || '').slice(0, 200); }
-        const st = res.status, mk = (c) => Object.assign(_xrmErr(c, msg || ('HTTP ' + st)), { status: st });
-        if (st === 402) throw mk('quota');
-        if (st === 401) throw mk('auth');
-        if (st === 403) throw mk('forbidden');
-        if (st === 404) throw mk('missing');
-        if (st === 408 || st === 429 || st >= 500) throw mk('server');
-        throw mk('bad');
-      } catch (e) {
-        const c = e && e.code;
-        if (c === 'auth' && !refreshed && !(sig && sig.aborted)) {
-          refreshed = true; n--;
-          if (window._authTryRefresh) { try { await window._authTryRefresh(); } catch (_) {} }
-          continue;
-        }
-        if ((c === 'server' || c === 'network' || c === 'timeout') && n < tries) { await _lySleep(_xrBackoff(n)); continue; }
-        throw e;
-      }
-    }
-  }
-
-  // SCAN: lista (solo lectura) de las capas de ≥ min bytes que siguen en Supabase y, con ref = true, también las que ya son una referencia
-  // a R2. Va por páginas de 500 (PostgREST corta cada respuesta en max-rows). Devuelve { rows:[{id, panel, work, po, lo, type, bytes, ref,
-  // title, author, pub}], min, ref, ms }, de mayor a menor peso.
-  async function xrMigScan(opts) {
-    opts = opts || {};
-    const min = Math.max(1024, Math.floor(opts.min || _XRM_MIN)), ref = !!opts.ref, t0 = performance.now();
-    const PAGE = 500, rows = [], seen = new Set();
-    for (let off = 0; off < 50000; off += PAGE) {
-      const part = await _xrRpc('admin_xr_scan', { p_min: min, p_ref: ref }, { signal: opts.signal, query: `limit=${PAGE}&offset=${off}` });
-      if (!Array.isArray(part)) throw _xrmErr('bad', 'respuesta no válida');
-      for (const r of part) {
-        if (!r || !r.r_layer || seen.has(r.r_layer)) continue;
-        seen.add(r.r_layer);
-        rows.push({ id: r.r_layer, panel: r.r_panel, work: r.r_work, po: r.r_panel_order, lo: r.r_layer_order, type: r.r_type, bytes: Number(r.r_bytes) || 0,
-          ref: r.r_ref || null, title: r.r_title || '', author: r.r_author || '', pub: !!r.r_published });
-      }
-      if (part.length < PAGE) break;
-    }
-    return { rows, min, ref, ms: Math.round(performance.now() - t0) };
-  }
-
-  // Baja el texto de UNA capa de Supabase. Propio, no _get: _get corta a los 8 s y aquí una capa puede pesar varios MB.
-  // Devuelve { text } · { gone: true } (la capa ya no existe) · { empty: true } (sin texto).
-  async function _xrmGetLayer(id, bytes, sig) {
-    const url = `${BASE}/panel_layers?id=eq.${encodeURIComponent(id)}&select=layer_data`;
-    const ms = 30000 + Math.round(bytes / 1048576) * 8000;
-    let last = null, refreshed = false;
-    for (let n = 1; n <= _XR_TRIES; n++) {
-      if (sig && sig.aborted) throw _xrmErr('aborted', 'cancelado');
-      if (n > 1) await _lySleep(_xrBackoff(n - 1));
-      await _ensureFreshToken();
-      const ctrl = new AbortController(), tm = setTimeout(() => ctrl.abort(), ms), stop = () => ctrl.abort();
-      if (sig) sig.addEventListener('abort', stop, { once: true });
-      try {
-        const res = await fetch(url, { headers: _hdrsUser(), signal: ctrl.signal, cache: 'no-store' });
-        const txt = await _sbResText(res);
-        if (res.status === 401 && !refreshed) {
-          refreshed = true; n--;
-          if (window._authTryRefresh) { try { await window._authTryRefresh(); } catch (_) {} }
-          continue;
-        }
-        if (res.status === 402) throw _xrmErr('quota', 'egress superado');
-        if (res.status === 401 || res.status === 403) throw _xrmErr('auth', 'HTTP ' + res.status);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const arr = JSON.parse(txt);
-        if (!Array.isArray(arr)) throw new Error('respuesta no válida');
-        if (!arr.length) return { gone: true };
-        const t = arr[0] && arr[0].layer_data;
-        return typeof t === 'string' ? { text: t } : { empty: true };
-      } catch (e) {
-        if (sig && sig.aborted) throw _xrmErr('aborted', 'cancelado');
-        if (e && (e.code === 'quota' || e.code === 'auth')) throw e;
-        last = e;
-      } finally { clearTimeout(tm); if (sig) sig.removeEventListener('abort', stop); }
-    }
-    throw last || new Error('sin respuesta');
-  }
-  // ¿Está el archivo en R2? true / false (404 confirmado dos veces, o sin respuesta clara: en ese caso se vuelve a bajar y subir, más lento pero nunca inseguro).
-  async function _xrmHeadOk(sha, sig) {
-    if (_xrKnown.has(sha)) return true;
-    for (let n = 1; n <= 3; n++) {
-      if (sig && sig.aborted) throw _xrmErr('aborted', 'cancelado');
-      try {
-        const r = await _xrFetch('HEAD blob', _xrUrl(sha), { method: 'HEAD', cache: 'no-store' }, 0, 20000);
-        if (r.status === 200) { _xrKnown.add(sha); return true; }
-        if (r.status === 404 && n >= 2) return false;
-      } catch (_) {}
-      await _lySleep(_xrBackoff(n));
-    }
-    return false;
-  }
-
-  // Mueve a R2 las capas de `opts.items` (filas de xrMigScan). opts: { mode:'sim'|'real', confirm:true (obligatorio en 'real'), signal,
-  // par (1-3, por defecto 2), onProgress(estado) }. Devuelve el informe: { mode, total, done, swapped, ready, putN, putKB, haveN, fromManifest,
-  // readKB, skipped:{already,gone,changed,small,empty}, failed, failedIds, errs, stoppedBy, ms }. `stoppedBy`: null (terminó) · cancel ·
-  // forbidden · missing · quota · auth · fails (5 errores seguidos). Una capa con error NO se toca: se puede repetir y se salta lo hecho.
-  async function xrMigRun(opts) {
-    opts = opts || {};
-    const items = Array.isArray(opts.items) ? opts.items.slice() : [];
-    const real = opts.mode === 'real';
-    if (real && opts.confirm !== true) throw _xrmErr('bad', 'modo real sin confirmar');
-    if (!_shaCapable()) throw _xrmErr('bad', 'este navegador no puede calcular hashes (hace falta https)');
-    const sig = opts.signal, par = Math.max(1, Math.min(3, opts.par || 2));
-    const prog = typeof opts.onProgress === 'function' ? opts.onProgress : () => {};
-    const man = _xrmManifest();
-    const st = {
-      mode: real ? 'real' : 'sim', startedAt: new Date().toISOString(), endedAt: null, ms: 0, total: items.length,
-      bytesTotal: items.reduce((n, it) => n + (it.bytes || 0), 0), done: 0, bytesDone: 0,
-      swapped: 0, swappedKB: 0, ready: 0, fromManifest: 0, putN: 0, putKB: 0, haveN: 0, readKB: 0,
-      skipped: { already: 0, gone: 0, changed: 0, small: 0, empty: 0 }, failed: 0, failedIds: [], errs: [], stoppedBy: null, cur: [],
-    };
-    const t0 = performance.now();
-    let idx = 0, consecutive = 0, lastSave = 0;
-    const stop = (code) => { if (!st.stoppedBy) st.stoppedBy = code; };
-    const note = (m) => { if (st.errs.length < 12) st.errs.push(String(m).slice(0, 220)); };
-    const tick = () => { st.ms = Math.round(performance.now() - t0); try { prog(st); } catch (_) {} };
-
-    async function one(it) {
-      let sha = null;
-      const e = man.items[it.id];
-      if (e && e.b === it.bytes) {                                   // ya subida y comprobada antes (simulacro o ejecución cortada)
-        if (await _xrmHeadOk(e.s, sig)) { sha = e.s; st.fromManifest++; }
-        else delete man.items[it.id];
-      }
-      if (!sha) {
-        const g = await _xrmGetLayer(it.id, it.bytes, sig);
-        if (g.gone) return 'gone';
-        if (g.empty) return 'empty';
-        const text = g.text;
-        if (_xrIsRef(text)) return 'already';
-        const u8 = new TextEncoder().encode(text);
-        st.readKB += Math.round(u8.length / 1024);
-        if (u8.length !== it.bytes) return 'changed';                // no es la capa que vio el scan: se salta (se vuelve a buscar y listo)
-        sha = await _sha256HexBytes(u8);
-        if (!sha) throw _xrmErr('bad', 'no se pudo calcular el hash');
-        const how = await _xrEnsure(sha, text);                      // 'known' | 'have' | 'put'; lanza si R2 no lo acepta
-        if (how === 'put') { st.putN++; st.putKB += Math.round(u8.length / 1024); } else st.haveN++;
-        man.items[it.id] = { s: sha, b: it.bytes, t: Date.now() };
-      }
-      if (!real) return 'ready';
-      const r = await _xrRpc('admin_xr_swap', { p_id: it.id, p_sha: sha }, { signal: sig });
-      delete man.items[it.id];
-      if (r === 'ok' || r === 'already' || r === 'gone' || r === 'changed' || r === 'small' || r === 'empty') return r;
-      throw new Error('respuesta inesperada de admin_xr_swap: ' + String(r).slice(0, 40));
-    }
-    async function worker() {
-      for (;;) {
-        if (sig && sig.aborted) { stop('cancel'); return; }          // parado a mano entre dos capas: se anota (si no, el informe parecería un final normal)
-        if (st.stoppedBy) return;
-        const it = items[idx++];
-        if (!it) return;
-        st.cur.push(it); tick();
-        let counted = true;
-        try {
-          const r = await one(it);
-          consecutive = 0;
-          if (r === 'ok') { st.swapped++; st.swappedKB += Math.round(it.bytes / 1024); }
-          else if (r === 'ready') st.ready++;
-          else st.skipped[r] = (st.skipped[r] || 0) + 1;
-        } catch (e) {
-          const c = e && e.code, m = String((e && e.message) || e);
-          if (c === 'aborted') { stop('cancel'); counted = false; }
-          else if (c === 'forbidden' || c === 'missing' || c === 'quota' || c === 'auth') { stop(c); note(m); counted = false; }
-          else {
-            st.failed++; st.failedIds.push(it.id);
-            note((it.title || '?') + ' · ' + it.type + '@' + it.lo + ' (' + Math.round(it.bytes / 1024) + ' KB): ' + m);
-            if (++consecutive >= 5) stop('fails');
-          }
-        } finally {
-          st.cur = st.cur.filter(x => x !== it);
-          if (counted) { st.done++; st.bytesDone += it.bytes || 0; }
-          const now = performance.now();
-          if (now - lastSave > 1500) { lastSave = now; _xrmSave(); }
-          tick();
-        }
-      }
-    }
-    try { await Promise.all(Array.from({ length: Math.min(par, items.length) }, worker)); }
-    finally { _xrmSave(); st.endedAt = new Date().toISOString(); tick(); }
-    return st;
-  }
-
-  // COMPROBACIÓN: vuelve a leer la base (xrMigScan con ref = true) y mira que CADA referencia tenga su archivo en R2. Rápida: un HEAD por
-  // archivo distinto. «A fondo» (deep): baja cada archivo y comprueba su tamaño y que su SHA-256 es su nombre (R2 no cobra la salida).
-  // Devuelve { ok, aborted, deep, rows, blobs, found, missing:[], bad:[], malformed:[], checkedKB, inlineN, inlineKB, ms }.
-  async function xrMigVerify(opts) {
-    opts = opts || {};
-    const sig = opts.signal, deep = !!opts.deep, prog = typeof opts.onProgress === 'function' ? opts.onProgress : () => {};
-    const t0 = performance.now();
-    const sc = await xrMigScan({ min: _XRM_MIN, ref: true, signal: sig });
-    const blobs = new Map(), res = { ok: false, aborted: false, deep, rows: 0, blobs: 0, found: 0, missing: [], bad: [], malformed: [], checkedKB: 0, inlineN: 0, inlineKB: 0, ms: 0 };
-    sc.rows.forEach(r => {
-      const m = r.ref ? _XR_RE.exec(r.ref) : null;
-      if (m) {
-        res.rows++;
-        const o = blobs.get(m[1]);
-        if (o) o.rows++; else blobs.set(m[1], { sha: m[1], bytes: +m[2], rows: 1, title: r.title, author: r.author });
-      } else if (r.ref) res.malformed.push({ id: r.id, ref: String(r.ref).slice(0, 80), title: r.title });
-      else { res.inlineN++; res.inlineKB += Math.round(r.bytes / 1024); }
-    });
-    const list = Array.from(blobs.values());
-    res.blobs = list.length;
-    let i = 0, done = 0;
-    async function w() {
-      for (;;) {
-        if (sig && sig.aborted) return;
-        const b = list[i++];
-        if (!b) return;
-        const url = _xrUrl(b.sha);
-        let status = 0, why = '';
-        for (let n = 1; n <= 3; n++) {
-          if (sig && sig.aborted) return;
-          why = '';
-          try {
-            const r = await fetch(url, deep ? { cache: 'no-store' } : { method: 'HEAD', cache: 'no-store' });
-            status = r.status;
-            if (status === 200 && deep) {
-              const u8 = new Uint8Array(await r.arrayBuffer());
-              res.checkedKB += Math.round(u8.length / 1024);
-              EgressLedger.note(url, u8.length, 'app');
-              if (u8.length !== b.bytes) why = 'tamaño ' + u8.length + ' en lugar de ' + b.bytes;
-              else if ((await _sha256HexBytes(u8)) !== b.sha) why = 'el contenido no corresponde a su hash';
-            }
-            if (status === 200 || (status === 404 && n >= 2)) break;
-          } catch (e) { status = 0; why = String((e && e.message) || e); }
-          await _lySleep(_xrBackoff(n));
-        }
-        const info = { sha: b.sha.slice(0, 12), bytes: b.bytes, rows: b.rows, title: b.title, author: b.author };
-        if (status === 200 && !why) res.found++;
-        else if (status === 404) res.missing.push(info);
-        else res.bad.push(Object.assign(info, { why: why || ('HTTP ' + status) }));
-        done++; try { prog({ done, total: list.length }); } catch (_) {}
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(4, list.length) }, w));
-    res.aborted = !!(sig && sig.aborted);
-    res.ok = !res.aborted && !res.missing.length && !res.bad.length && !res.malformed.length && res.found === res.blobs;
-    res.ms = Math.round(performance.now() - t0);
-    return res;
   }
 
   // Prepara la fila panel_layers de UNA capa (y sube sus binarios al bucket si los tiene). Es el cuerpo
@@ -3495,7 +3251,9 @@ continue;
   // devuelve la función como una cadena JSON: aquí se desenvuelve y se devuelve el texto tal cual. Los errores llevan `.code`:
   //   quota (402, egress superado) · auth (401) · forbidden (403) · missing (404: falta ejecutar el SQL) · server (429/5xx: se reintenta)
   //   network / timeout (sin conexión o demasiado lento: se reintenta) · aborted (cancelado a mano) · bad (otro error 4xx)
-  async function adminBackupRpc(op, arg, opts) {
+  // v42.50: la misma llamada sirve a la restauración (public.admin_restore): `fn` = nombre de la función SQL; `opts.rawArg` = texto JSON YA
+  // montado del argumento (para mandar filas de la copia tal cual, sin pasarlas por JSON.parse/stringify: así los enteros de 64 bits no se redondean).
+  async function _adminRpc(fn, op, arg, opts) {
     opts = opts || {};
     const sig = opts.signal;
     const mk = (code, msg, status) => Object.assign(new Error(msg || code), { code, status });
@@ -3509,7 +3267,7 @@ continue;
       if (sig) sig.addEventListener('abort', alCancelar, { once: true });
       let res, txt;
       try {
-        res = await fetch(`${BASE}/rpc/admin_backup`, { method: 'POST', headers: _hdrsUser(), body: JSON.stringify({ op, arg: arg || {} }), signal: ctrl.signal, cache: 'no-store' });
+        res = await fetch(`${BASE}/rpc/${fn}`, { method: 'POST', headers: _hdrsUser(), body: (typeof opts.rawArg === 'string' ? '{"op":' + JSON.stringify(op) + ',"arg":' + opts.rawArg + '}' : JSON.stringify({ op, arg: arg || {} })), signal: ctrl.signal, cache: 'no-store' });
         txt = await _sbResText(res);          // anota los bytes en el libro de egress
       } catch (e) {
         if (sig && sig.aborted) throw mk('aborted', 'cancelado');
@@ -3537,10 +3295,28 @@ continue;
       throw e;
     }
   }
+  const adminBackupRpc = (op, arg, opts) => _adminRpc('admin_backup', op, arg, opts);
+  const adminRestoreRpc = (op, arg, opts) => _adminRpc('admin_restore', op, arg, opts);   // v42.50 (sql/v42_50_restaurar_admin_1_funcion.sql)
 
-    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog, adminBackupRpc,
-      // v42.45 — capas pesadas en R2 (ver «CAPAS PESADAS EN R2, POR CONTENIDO»)
+  // v42.50 — Restaurar archivos de R2 (animaciones, GIF y portadas) desde una copia: ¿existe ya? y subirlo con la sesión del administrador.
+  // `path` = «anims/…», «gifs/…» o «covers/…» tal como lo cita la copia (ya codificado en la URL). Devuelven el código HTTP; quien llama decide.
+  async function _xrHeadFile(path, signal) {
+    const r = await fetch(`${WORKER}/${path}`, { method: 'HEAD', signal, cache: 'no-store' });
+    return r.status;
+  }
+  async function _xrPutFile(path, bytes, type, signal) {
+    if (window._authTryRefresh) { try { await window._authTryRefresh(); } catch (_) {} }
+    const r = await fetch(`${WORKER}/${path}`, { method: 'PUT', headers: { ..._hdrsWorker(), 'Content-Type': type || 'application/octet-stream' }, body: bytes, signal });
+    let why = '';
+    if (!r.ok) { try { why = (await r.text()).slice(0, 120); } catch (_) {} }
+    return { status: r.status, why };
+  }
+
+    return { saveDraft, submitForReview, submitForReviewOnly, approveWork, unpublishWork, renameWork, deleteWork, deleteAuthorData, downloadDraftAsEditorData, fetchPendingWorks, fetchPublishedWorks, fetchPublishedWorksPage, fetchPublishedFacets, fetchWorksByIds, fetchWorksByAuthor, bibSync, bibDownload, bibProbe, bibStampGet, bibStampSet, fetchAllUsers, setUserRole, fetchGoogleFont, fetchFontCatalog, adminBackupRpc, adminRestoreRpc,
+      // v42.45 — capas pesadas en R2 (ver «CAPAS PESADAS EN R2, POR CONTENIDO»). v42.49: escritura activada de serie (writeOn / setWrite) y
+      // cortacircuitos (state / breakerReset). La herramienta que movió a R2 las capas que ya estaban en la base (v42.48) está en archivo/migracion-r2-v42-48/.
       xr: { isRef: _xrIsRef, fetchText: _xrFetchText, writeOn: _xrWriteOn, setWrite: _xrSetWrite, selfTest: xrSelfTest, min: _XR_MIN,
-        // v42.48 — mover a R2 las capas pesadas que ya están en Supabase (ver «MOVER A R2 LAS CAPAS PESADAS QUE YA ESTÁN EN SUPABASE»)
-        migScan: xrMigScan, migRun: xrMigRun, migVerify: xrMigVerify, migInfo: _xrmInfo, migClear: _xrmClear } };
+        state: _xrState, breakerReset: _xrBreakerReset,
+        ensure: (sha, text) => _xrEnsure(sha, text, true), headFile: _xrHeadFile, putFile: _xrPutFile,          // v42.50: restaurar capas pesadas y archivos de R2 desde una copia (ensure pregunta siempre a R2)
+        worker: WORKER, storage: STORAGE } };            // v42.49: la copia de seguridad necesita las URL del Worker de R2 y de Storage de Supabase
 })();

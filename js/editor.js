@@ -55920,12 +55920,20 @@ async function _edRunDiag() {
       }
       // v42.45 — capas pesadas en R2 (ver «CAPAS PESADAS EN R2, POR CONTENIDO» en supabase-client.js): interruptor, cuántas capas llevan
       // referencia, cuántas se subieron ahora / ya estaban, cuántas volvieron a la base por un fallo de R2 y por qué.
+      // v42.49: la escritura en R2 va activada de serie; solo se apaga a mano (sw) o la pausa el cortacircuitos (brk al empezar, brkNow al terminar de subir).
       if (_sb.xr) {
         const _x = _sb.xr;
-        L('    capas pesadas en R2: interruptor ' + (_x.on ? 'ACTIVADO' : 'apagado') + ' (desde ' + Math.round((_x.min || 0) / 1024) + ' KB) · ' + _x.n + ' con referencia (' + _x.put + ' subidas ahora = ' + (_x.putKB || 0) +
-          ' KB · ' + _x.have + ' ya estaban) · ' + _x.fail + ' vueltas a la base' + (_x.ms ? ' · ' + _x.ms + ' ms sumados' : ''));
+        const _modo = _x.sw === false ? 'APAGADA a mano en este dispositivo' : (_x.brk ? 'EN PAUSA desde antes de guardar (cortacircuitos abierto)' : 'activada');
+        L('    capas pesadas en R2: escritura ' + _modo + ' (desde ' + Math.round((_x.min || 0) / 1024) + ' KB) · ' + _x.n + ' con referencia (' + _x.put + ' subidas ahora = ' + (_x.putKB || 0) +
+          ' KB · ' + _x.have + ' ya estaban) · ' + _x.fail + ' vueltas a la base' + (_x.paused ? ' (' + _x.paused + ' sin intentar por la pausa)' : '') + (_x.ms ? ' · ' + _x.ms + ' ms sumados' : '') +
+          (_x.brkNow ? ' · el cortacircuitos quedó ABIERTO al terminar' : ''));
         (_x.errs || []).forEach(e => L('      fallo de R2: ' + e));
       }
+      try {
+        const _bs = (typeof SupabaseClient !== 'undefined' && SupabaseClient.xr && SupabaseClient.xr.state) ? SupabaseClient.xr.state() : null;
+        if (_bs) L('    cortacircuitos de R2 ahora: ' + (_bs.open ? 'ABIERTO hasta las ' + new Date(_bs.until).toLocaleTimeString() + ' (' + (_bs.kind === 'hard' ? 'pausa larga: el Worker rechazó la subida' : 'pausa corta: fallos de red o de servidor') + ')' : 'cerrado') +
+          ' · fallos seguidos ' + _bs.fails + ' · abierto ' + _bs.opened + ' vez/veces en esta sesión' + (_bs.why ? ' · último: ' + _bs.why : '') + (_bs.switchOn ? '' : ' · escritura apagada a mano'));
+      } catch (_) {}
       if (_sb.marks && _sb.marks.length) L('    hitos: ' + _sb.marks.map(x => x[0] + '@' + x[1]).join(' · '));
       (_sb.pages || []).forEach(pg => {
         L('    hoja ' + (pg.i + 1) + ': empezó a los ' + pg.t0 + ' ms · fila ' + (pg.panelMs ?? '—') + ' · capas preparadas ' + (pg.layersBuiltMs ?? '—') +

@@ -53,7 +53,10 @@
      · TODAS las filas de TODAS las tablas de «public» (las conozca o no este código) y, si se pide, las cuentas (auth.users y
        auth.identities)                                                                    ["T", esquema, tabla, n] + ["R", fila]…
      · el manifiesto del principio ["M", …] y el cierre ["Z", …] con el recuento de cada tabla (si falta, la descarga se cortó)
-   Se restaura con backup/restaurar-copia.mjs (guía: backup/LEEME_COPIA_ADMIN.md).
+     · (v42.49, casilla activada de serie) los ARCHIVOS de R2 que citan las filas —animaciones APNG, GIF y portadas— uno por línea,
+       ["F",{k,t,b,h,d}]: ruta en R2, tipo, bytes, SHA-256 y contenido en base64. Así la copia basta por sí sola, aunque R2 se perdiera.
+       Las capas pesadas guardadas en R2 por contenido (v42.45) ya entran desde la v42.48 con su texto dentro de la fila.
+   Se restaura con backup/restaurar-copia.mjs (guía: backup/LEEME_COPIA_ADMIN.md) y, desde la v42.50, desde esta misma pantalla.
 
    Cómo se descarga: página a página (≈2 MB por petición, cursor por clave primaria), con reintentos, sin guardar nada en memoria
    (se comprime y se escribe al vuelo en el archivo elegido; sin selector de archivos, se junta en un Blob). Las filas nunca se
@@ -81,6 +84,45 @@ const AdminBackup = (() => {
   const T_OBJ = 3000;                              // ms: si una llamada tarda más, la siguiente página se reduce en proporción
   const enc = new TextEncoder();
   const RE_REF_R2 = /"layer_data"\s*:\s*"(r2:[0-9a-f]{64}:\d+)"/;   // v42.48: capa pesada guardada en R2 (ver «resolver» en exportar)
+  // v42.49 — archivos de R2 dentro de la copia (ver «archivos» en exportar)
+  const F_PARALELO = 4;                            // descargas a la vez
+  const ESC_DB = 0.85;                             // con archivos, las tablas ocupan hasta el 85 % de la barra y los archivos el resto
+  const RE_F = /^\["F",\{"k":(".*?"),"t":(".*?"),"b":(\d+),"h":(null|".*?"),"d":"/;   // cabecera de un registro F (la escribe exportar con este mismo formato)
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  async function sha256Hex(u8) {
+    try {
+      if (!(window.crypto && window.crypto.subtle)) return null;
+      const b = new Uint8Array(await crypto.subtle.digest('SHA-256', u8));
+      let h = ''; for (let i = 0; i < b.length; i++) h += (b[i] < 16 ? '0' : '') + b[i].toString(16);
+      return h;
+    } catch (_) { return null; }
+  }
+  // base64 sin fabricar una cadena gigante: trozos de 24 KB (múltiplo de 3 bytes, así solo el último lleva relleno «=»)
+  function aBase64(u8) {
+    const partes = [];
+    for (let i = 0; i < u8.length; i += 24576) partes.push(btoa(String.fromCharCode.apply(null, u8.subarray(i, Math.min(u8.length, i + 24576)))));
+    return partes.join('');
+  }
+  const B64T = (() => { const t = new Int16Array(256).fill(-1); const a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'; for (let i = 0; i < 64; i++) t[a.charCodeAt(i)] = i; return t; })();
+  // base64 (en bytes ASCII, u8[ini..fin)) → bytes. null si no es base64 válido. Sirve a `verificar` sin pasar por una cadena de megas.
+  function deBase64(u8, ini, fin) {
+    const n = fin - ini;
+    if (n < 0 || n % 4 !== 0) return null;
+    if (n === 0) return new Uint8Array(0);
+    let pad = 0; if (u8[fin - 1] === 61) pad++; if (u8[fin - 2] === 61) pad++;
+    const out = new Uint8Array(n / 4 * 3 - pad);
+    let o = 0;
+    for (let i = ini; i < fin; i += 4) {
+      const c2 = u8[i + 2] === 61, c3 = u8[i + 3] === 61;
+      const a = B64T[u8[i]], b = B64T[u8[i + 1]], c = c2 ? 0 : B64T[u8[i + 2]], d = c3 ? 0 : B64T[u8[i + 3]];
+      if ((a | b | c | d) < 0) return null;
+      const v = (a << 18) | (b << 12) | (c << 6) | d;
+      if (o < out.length) out[o++] = (v >> 16) & 255;
+      if (o < out.length) out[o++] = (v >> 8) & 255;
+      if (o < out.length) out[o++] = v & 255;
+    }
+    return out;
+  }
   const T = (k, v) => (typeof I18n !== 'undefined' ? I18n.t(k, v) : k);
   const pad = n => (n < 10 ? '0' : '') + n;
 
@@ -174,8 +216,12 @@ const AdminBackup = (() => {
 
   /* Exporta todo al `sink` (objeto con write(texto)→bytes, close(), abort()).
      opts: { rpc, sink, plan?, auth, signal, onProgress(estado), pageBytes, reintentos, appVersion,
-             resolver?(ref) → Promise<texto> }   resolver (v42.48): trae de R2 el texto de una capa pesada guardada como referencia «r2:…»
-                                                  (si falta, esas filas se copian tal cual, con la referencia) */
+             resolver?(ref) → Promise<texto>,   resolver (v42.48): trae de R2 el texto de una capa pesada guardada como referencia «r2:…»
+                                                  (si falta, esas filas se copian tal cual, con la referencia)
+             archivos?: { base, legacyBase?, fetch? } }   archivos (v42.49): además de las filas, la copia lleva los archivos de R2 (animaciones,
+                                                  GIF y portadas) que citan. `base` = URL del Worker de R2; `legacyBase` = URL de Storage de Supabase
+                                                  (solo para CONTAR cuántos archivos antiguos quedan allí: no se bajan, gastarían la transferencia
+                                                  de Supabase); `fetch` = sustituto de fetch (pruebas). Sin `archivos`, la copia no lleva ninguno. */
   async function exportar(opts) {
     const { rpc, sink, signal, onProgress } = opts;
     const auth = opts.auth !== false;
@@ -226,7 +272,25 @@ const AdminBackup = (() => {
     let bytesCrudos = 0;
     const w = async (linea) => { bytesCrudos += await sink.write(linea + '\n'); };
 
-    await w(JSON.stringify(['M', { fmt: FMT, app: 'comxow', appVersion: opts.appVersion || '', created: new Date().toISOString(), plan }]));
+    // v42.49 — archivos de R2 / de Storage de Supabase que citan las filas. Se anotan al leer cada página (antes de sustituir las capas
+    // pesadas por su texto: ahí no hay rutas, solo imágenes en base64) con una expresión regular sobre el texto de la página.
+    const arch = opts.archivos && opts.archivos.base ? opts.archivos : null;
+    const escDB = arch ? ESC_DB : 1;
+    const claves = new Set(), antiguas = new Set();
+    let rastro = null;
+    if (arch) {
+      const base = String(arch.base).replace(/\/+$/, '');
+      const reNuevo = new RegExp(reEsc(base) + '/((?:anims|gifs|covers)/[^"\\\\\\s<>]+)', 'g');
+      const reViejo = arch.legacyBase ? new RegExp(reEsc(String(arch.legacyBase).replace(/\/+$/, '')) + '/object/public/((?:anims|gifs)/[^"\\\\\\s<>]+)', 'g') : null;
+      const limpia = (k) => k.replace(/[?#].*$/, '');
+      rastro = (txt) => {
+        let m;
+        if (txt.indexOf(base) >= 0) { reNuevo.lastIndex = 0; while ((m = reNuevo.exec(txt))) claves.add(limpia(m[1])); }
+        if (reViejo && txt.indexOf('/object/public/') >= 0) { reViejo.lastIndex = 0; while ((m = reViejo.exec(txt))) antiguas.add(limpia(m[1])); }
+      };
+    }
+
+    await w(JSON.stringify(['M', { fmt: FMT, app: 'comxow', appVersion: opts.appVersion || '', created: new Date().toISOString(), files: !!arch, plan }]));
     for (const s of esq.stmts) await w(JSON.stringify(['S', s.k, s.sql]));
 
     const counts = {};
@@ -259,6 +323,7 @@ const AdminBackup = (() => {
         if (!Number.isInteger(n) || n < 0) throw new BkError('format', `${key}: cabecera de página no válida`);
         if (n > 0) {
           if (cuerpo.length === 0 || contarLineas(cuerpo) !== n) throw new BkError('format', `${key}: la página dice ${n} filas y trae otro número`);
+          if (rastro) rastro(cuerpo);
           if (opts.resolver && key === 'public.panel_layers' && cuerpo.indexOf('"r2:') >= 0) {
             // v42.48 — capas pesadas guardadas en R2: la fila de la base lleva solo la referencia «r2:<huella>:<bytes>». La copia debe llevar el
             // CONTENIDO (autosuficiente, restaurable sin R2), así que cada referencia se sustituye por su texto, bajado de R2 (su salida es
@@ -305,7 +370,7 @@ const AdminBackup = (() => {
         prog({
           fase: 'datos', tabla: key, tablaIdx: ti + 1, tablas: orden.length, filasTabla: hechasT, filasTablaTotal: t.rows || 0,
           filas, filasPrev, bytes: bytesCrudos, paginas, ms: Date.now() - inicio,
-          fraccion: pesoTotal > 0 ? Math.min(0.999, (pesoHecho + parcial) / pesoTotal) : Math.min(0.999, filas / Math.max(1, filasPrev)),
+          fraccion: escDB * (pesoTotal > 0 ? Math.min(0.999, (pesoHecho + parcial) / pesoTotal) : Math.min(0.999, filas / Math.max(1, filasPrev))),
         });
         const sig = cab.next;
         if (sig === null || sig === undefined) break;
@@ -318,12 +383,61 @@ const AdminBackup = (() => {
       counts[key] = hechasT;
     }
 
+    // v42.49 — los archivos de R2 que citan las filas (una línea ["F",…] por archivo). Un archivo que R2 dice que NO existe (404) se anota en
+    // `faltan` y la copia sigue (la fila cita algo que ya no está; no es culpa de la copia); cualquier otro fallo, tras reintentar, la CORTA:
+    // una copia a la que le faltan archivos sin saberlo parecería buena y no lo sería (igual que con las capas pesadas).
+    let fN = 0, fBytes = 0;
+    const faltan = [];
+    if (arch) {
+      const base = String(arch.base).replace(/\/+$/, '');
+      const fetchF = arch.fetch || ((u, i) => fetch(u, i));
+      const bajar = async (k) => {
+        for (let intento = 0; ; intento++) {
+          parado();
+          try {
+            const res = await fetchF(base + '/' + k, { signal, cache: 'no-store' });
+            if (res.status === 404) return null;
+            if (!res.ok) throw Object.assign(new Error('R2 ' + res.status), { code: 'server' });
+            const bytes = new Uint8Array(await res.arrayBuffer());
+            const cl = +(res.headers && res.headers.get && res.headers.get('content-length')), ce = res.headers && res.headers.get && res.headers.get('content-encoding');
+            if (cl && !ce && bytes.length !== cl) throw Object.assign(new Error('archivo incompleto (' + bytes.length + ' de ' + cl + ' bytes)'), { code: 'network' });
+            return { bytes, type: (res.headers && res.headers.get && res.headers.get('content-type')) || 'application/octet-stream' };
+          } catch (e) {
+            parado();
+            if (intento >= esperas.length) throw new BkError('r2', k + ': ' + ((e && e.message) || String(e)));
+            reintento = { i: intento + 1, de: esperas.length, causa: (e && e.code) || 'network' };
+            prog({ fase: 'reintento', reintento });
+            await dormir(esperas[intento]);
+            reintento = null;
+          }
+        }
+      };
+      const lista = Array.from(claves).sort();
+      prog({ fase: 'archivos', hechos: 0, total: lista.length, bytesF: 0, bytes: bytesCrudos, ms: Date.now() - inicio, fraccion: escDB });
+      for (let i = 0; i < lista.length; i += F_PARALELO) {
+        const grupo = lista.slice(i, i + F_PARALELO);
+        const got = await Promise.all(grupo.map(bajar));
+        for (let g = 0; g < grupo.length; g++) {
+          const x = got[g];
+          if (!x) { faltan.push(grupo[g]); continue; }
+          const h = await sha256Hex(x.bytes);
+          await w('["F",{"k":' + JSON.stringify(grupo[g]) + ',"t":' + JSON.stringify(x.type) + ',"b":' + x.bytes.length + ',"h":' + JSON.stringify(h) + ',"d":"' + aBase64(x.bytes) + '"}]');
+          fN++; fBytes += x.bytes.length;
+        }
+        const hechos = i + grupo.length;
+        prog({ fase: 'archivos', hechos, total: lista.length, bytesF: fBytes, bytes: bytesCrudos, ms: Date.now() - inicio, fraccion: escDB + (0.999 - escDB) * (hechos / lista.length) });
+        parado();
+      }
+    }
+
     // Tablas cuyo número de filas cambió mientras se copiaba (alguien usaba la web): copia «difusa», se avisa pero es válida.
     const cambios = orden.filter(t => counts[t.s + '.' + t.n] !== (t.rows || 0)).map(t => ({ tabla: t.s + '.' + t.n, antes: t.rows || 0, despues: counts[t.s + '.' + t.n] }));
     prog({ fase: 'cierre' });
-    await w(JSON.stringify(['Z', { finished: new Date().toISOString(), counts, rows: filas, bytes: bytesCrudos, drift: cambios }]));
+    const filesZ = arch ? { n: fN, bytes: fBytes, missingN: faltan.length, missing: faltan.slice(0, 200), legacy: antiguas.size } : undefined;
+    await w(JSON.stringify(['Z', { finished: new Date().toISOString(), counts, rows: filas, bytes: bytesCrudos, drift: cambios, files: filesZ }]));
     const info = await sink.close();
-    return { counts, filas, tablas: orden.length, bytesCrudos, bytesGz: info.bytes, blob: info.blob, cambios, plan, ms: Date.now() - inicio, paginas, r2: { n: r2n, bytes: r2bytes } };
+    return { counts, filas, tablas: orden.length, bytesCrudos, bytesGz: info.bytes, blob: info.blob, cambios, plan, ms: Date.now() - inicio, paginas, r2: { n: r2n, bytes: r2bytes },
+      files: arch ? { n: fN, bytes: fBytes, missing: faltan.length, legacy: antiguas.size } : null };
   }
 
   // ───────────── comprobar un archivo ya hecho (el que se acaba de guardar o uno que se elige) ─────────────
@@ -349,18 +463,42 @@ const AdminBackup = (() => {
   }
 
   /* Lee el archivo entero (sin guardar nada en memoria) y devuelve
-     { ok, manifiesto, tablas:[{clave,previstas,hay}], final, filas, lineas, bytes, problemas:[] }.
-     Solo se decodifican las líneas M, S, T y Z; las de datos (R) se cuentan por su forma. */
+     { ok, manifiesto, tablas:[{clave,previstas,hay}], final, filas, lineas, bytes, problemas:[], archivos:{n,bytes}, faltan }.
+     Solo se decodifican las líneas M, S, T y Z; las de datos (R) se cuentan por su forma. Las de archivos de R2 (F, v42.49) se
+     comprueban enteras: base64 válido, tamaño que dice su cabecera y SHA-256. `faltan` = archivos que la fila citaba y R2 ya no tenía. */
   async function verificar(archivo, onProgress) {
-    const r = { ok: false, manifiesto: null, esquema: 0, tablas: [], final: null, filas: 0, lineas: 0, bytes: 0, problemas: [] };
+    const r = { ok: false, manifiesto: null, esquema: 0, tablas: [], final: null, filas: 0, lineas: 0, bytes: 0, problemas: [], archivos: { n: 0, bytes: 0 }, faltan: 0 };
     const dec = new TextDecoder();
     let cur = null;
     // línea en construcción
     let partes = [], len = 0, cab = [], ult = 0, descartar = false;
+    const mal = (txt) => { if (r.problemas.length < 20) r.problemas.push(txt); };
+    // Un registro F entero: ["F",{"k":ruta,"t":tipo,"b":bytes,"h":sha256,"d":"base64"}]. Devuelve una promesa (el SHA-256 es asíncrono).
+    const verifF = async (u8, nlin) => {
+      const m = RE_F.exec(dec.decode(u8.subarray(0, Math.min(u8.length, 2048))));
+      if (!m) { mal(`Línea ${nlin}: archivo de R2 mal formado`); return; }
+      let k, h; const b = +m[3];
+      try { k = JSON.parse(m[1]); h = JSON.parse(m[4]); } catch (e) { mal(`Línea ${nlin}: archivo de R2 mal formado`); return; }
+      const ini = enc.encode(m[0]).length, fin = u8.length - 3;
+      if (fin < ini || u8[fin] !== 0x22 || u8[fin + 1] !== 0x7d || u8[fin + 2] !== 0x5d) { mal(`${k}: el registro del archivo está cortado`); return; }
+      const bytes = deBase64(u8, ini, fin);
+      if (!bytes) { mal(`${k}: contenido no válido (base64)`); return; }
+      if (bytes.length !== b) { mal(`${k}: trae ${bytes.length} bytes y su cabecera dice ${b}`); return; }
+      if (h) { const hh = await sha256Hex(bytes); if (hh && hh !== h) { mal(`${k}: el contenido no coincide con su huella (SHA-256)`); return; } }
+      r.archivos.n++; r.archivos.bytes += b;
+    };
     const finLinea = () => {
       r.lineas++;
       if (len === 0) { partes = []; cab = []; ult = 0; descartar = false; return; }
       const esR = len > 5 && cab[0] === 0x5b && cab[1] === 0x22 && cab[2] === 0x52 && cab[3] === 0x22 && cab[4] === 0x2c;
+      const esF = len > 5 && cab[0] === 0x5b && cab[1] === 0x22 && cab[2] === 0x46 && cab[3] === 0x22 && cab[4] === 0x2c;
+      if (esF) {
+        let u8;
+        if (partes.length === 1) u8 = partes[0]; else { u8 = new Uint8Array(len); let o = 0; for (const p of partes) { u8.set(p, o); o += p.length; } }
+        const nlin = r.lineas;
+        partes = []; len = 0; cab = []; ult = 0; descartar = false;
+        return verifF(u8, nlin);
+      }
       if (esR) {
         if (!cur) r.problemas.push(`Línea ${r.lineas}: una fila fuera de cualquier tabla`);
         else { cur.hay++; r.filas++; }
@@ -397,23 +535,31 @@ const AdminBackup = (() => {
         for (;;) {
           const i = trozo.indexOf(10, ini);
           if (i < 0) break;
-          anadir(trozo.subarray(ini, i)); finLinea();
+          anadir(trozo.subarray(ini, i));
+          const pf = finLinea(); if (pf) await pf;                       // solo las líneas de archivos (F) devuelven promesa
           ini = i + 1;
         }
         if (ini < trozo.length) anadir(trozo.subarray(ini));
         if (onProgress && ++leidos % 20 === 0) onProgress({ filas: r.filas, bytes: r.bytes });
       }
-      if (len) { finLinea(); r.problemas.push('Falta el salto de línea final'); }
+      if (len) { const pf = finLinea(); if (pf) await pf; r.problemas.push('Falta el salto de línea final'); }
     } catch (e) {
       r.problemas.push('El archivo está dañado o cortado (' + ((e && e.message) || e) + ')');
     }
     if (!r.manifiesto) r.problemas.push('Falta el manifiesto: no parece una copia de Comxow');
     else if (r.manifiesto.fmt !== FMT) r.problemas.push('Formato de copia desconocido (' + r.manifiesto.fmt + ')');
     if (!r.final) r.problemas.push('Falta el cierre del archivo: la descarga se cortó antes de terminar');
-    else for (const t of r.tablas) {
-      const dice = r.final.counts ? r.final.counts[t.clave] : undefined;
-      if (dice === undefined) r.problemas.push(`${t.clave}: no consta en el cierre`);
-      else if (dice !== t.hay) r.problemas.push(`${t.clave}: trae ${t.hay} filas y el cierre dice ${dice}`);
+    else {
+      for (const t of r.tablas) {
+        const dice = r.final.counts ? r.final.counts[t.clave] : undefined;
+        if (dice === undefined) r.problemas.push(`${t.clave}: no consta en el cierre`);
+        else if (dice !== t.hay) r.problemas.push(`${t.clave}: trae ${t.hay} filas y el cierre dice ${dice}`);
+      }
+      const fz = r.final.files;                                        // v42.49: archivos de R2 (ausente = copia hecha sin ellos)
+      if (fz && typeof fz.n === 'number') {
+        if (fz.n !== r.archivos.n) r.problemas.push(`Archivos de R2: trae ${r.archivos.n} y el cierre dice ${fz.n}`);
+        r.faltan = fz.missingN || 0;
+      } else if (r.archivos.n) r.problemas.push('Hay archivos de R2 en la copia pero el cierre no los cuenta');
     }
     r.ok = r.problemas.length === 0;
     return r;
@@ -422,7 +568,7 @@ const AdminBackup = (() => {
   // ═════════════════════════════════════════ INTERFAZ (pestaña «Copia») ═════════════════════════════════════════
   const S = {
     fase: 'reposo',        // reposo · preparando · confirmar · ejecutando · hecho · error
-    auth: true, plan: null, planAt: 0, prog: null, res: null, err: null, ctrl: null, panel: null, t0: 0, verif: null, verifBusy: false, verifName: '',
+    auth: true, r2: true, plan: null, planAt: 0, prog: null, res: null, err: null, ctrl: null, panel: null, t0: 0, verif: null, verifBusy: false, verifName: '',
   };
   const esc = (s) => (typeof escHtml === 'function' ? escHtml(String(s)) : String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
   const lang = () => (typeof I18n !== 'undefined' && I18n.getLang ? I18n.getLang() : 'es');
@@ -469,6 +615,8 @@ const AdminBackup = (() => {
       h += `<p class="bk-p bk-muted">${esc(T('adminBkNotIncl'))}</p>`;
       h += `<label class="bk-chk"><input type="checkbox" id="bkAuth" ${S.auth ? 'checked' : ''} ${f === 'preparando' ? 'disabled' : ''}> <span>${esc(T('adminBkAuthChk'))}</span></label>`;
       h += `<p class="bk-p bk-muted bk-hint">${esc(T('adminBkAuthHint'))}</p>`;
+      h += `<label class="bk-chk"><input type="checkbox" id="bkR2" ${S.r2 ? 'checked' : ''} ${f === 'preparando' ? 'disabled' : ''}> <span>${esc(T('adminBkR2Chk'))}</span></label>`;
+      h += `<p class="bk-p bk-muted bk-hint">${esc(T('adminBkR2Hint'))}</p>`;
       h += `<div class="bk-actions"><button class="btn btn-primary bk-go" data-bk="preparar" ${f === 'preparando' ? 'disabled' : ''}>${esc(f === 'preparando' ? T('adminBkPreparing') : T('adminBkGo'))}</button></div>`;
       if (ul && ul.at) {
         const dias = Math.floor((Date.now() - new Date(ul.at).getTime()) / 86400000);
@@ -487,6 +635,7 @@ const AdminBackup = (() => {
       h += `</tbody><tfoot><tr><td>${esc(T('adminBkColTotal'))}</td><td class="bk-n">${num(filas)}</td></tr></tfoot></table></div>`;
       h += `<p class="bk-p">${esc(T('adminBkConfirmSum', { tables: tb.length, rows: num(filas), size: tam(bytes) }))}</p>`;
       h += `<p class="bk-p bk-muted">${esc(T('adminBkConfirmEgress'))}</p>`;
+      if (S.r2) h += `<p class="bk-p bk-muted">${esc(T('adminBkConfirmFiles'))}</p>`;
       if (S.auth) h += `<p class="bk-p bk-warn">${esc(T('adminBkPrivacy'))}</p>`;
       if (pl.unsupported && pl.unsupported.length) h += `<p class="bk-p bk-warn">${esc(T('adminBkUnsupported', { list: pl.unsupported.join(', ') }))}</p>`;
       h += `<div class="bk-actions"><button class="btn btn-primary bk-go" data-bk="empezar">${esc(T('adminBkStart'))}</button><button class="btn" data-bk="volver">${esc(T('cancel'))}</button></div>`;
@@ -501,6 +650,11 @@ const AdminBackup = (() => {
       h += `<p class="bk-p">${esc(T('adminBkDoneInfo', { file: r.nombre, size: tam(r.bytesGz), tables: r.tablas, rows: num(r.filas) }))}</p>`;
       h += `<p class="bk-p bk-muted">${esc(r.guardadoEn === 'archivo' ? T('adminBkSavedFile') : T('adminBkSavedDownloads'))}</p>`;
       if (r.r2 && r.r2.n) h += `<p class="bk-p bk-muted">${esc(T('adminBkDoneR2', { n: num(r.r2.n), mb: mb(r.r2.bytes) }))}</p>`;
+      if (r.files) {                                                       // v42.49: archivos de R2 (animaciones, GIF, portadas)
+        h += `<p class="bk-p bk-muted">${esc(T('adminBkDoneFiles', { n: num(r.files.n), mb: mb(r.files.bytes) }))}</p>`;
+        if (r.files.missing) h += `<p class="bk-p bk-warn">${esc(T('adminBkDoneFilesMissing', { n: num(r.files.missing) }))}</p>`;
+        if (r.files.legacy) h += `<p class="bk-p bk-warn">${esc(T('adminBkDoneFilesLegacy', { n: num(r.files.legacy) }))}</p>`;
+      }
       if (r.verif && !r.verif.ok) h += `<p class="bk-p bk-warn">${esc(T('adminBkVerifyBad', { why: r.verif.problemas.slice(0, 3).join('; ') }))}</p>`;
       if (r.cambios && r.cambios.length) h += `<p class="bk-p bk-muted">${esc(T('adminBkDrift', { list: r.cambios.map(c => c.tabla).join(', ') }))}</p>`;
       h += `<p class="bk-p bk-muted">${esc(T('adminBkHow'))}</p>`;
@@ -520,6 +674,9 @@ const AdminBackup = (() => {
     if (!v) return '';
     let h = `<p class="bk-p ${v.ok ? 'bk-ok' : 'bk-warn'}"><b>${esc(v.ok ? T('adminBkVOk') : T('adminBkVBad'))}</b> <span class="bk-muted">${esc(S.verifName)}</span></p>`;
     if (v.manifiesto) h += `<p class="bk-p bk-muted">${esc(T('adminBkVMade', { when: fechaLarga(v.manifiesto.created), ver: v.manifiesto.appVersion || '?' }))}${v.manifiesto.plan && v.manifiesto.plan.auth === false ? ' · ' + esc(T('adminBkVNoAccounts')) : ''}</p>`;
+    if (v.manifiesto && v.manifiesto.files === false) h += `<p class="bk-p bk-muted">${esc(T('adminBkVNoFiles'))}</p>`;
+    else if (v.archivos && v.archivos.n) h += `<p class="bk-p bk-muted">${esc(T('adminBkVFiles', { n: num(v.archivos.n), mb: mb(v.archivos.bytes) }))}</p>`;
+    if (v.faltan) h += `<p class="bk-p bk-warn">${esc(T('adminBkVFilesMissing', { n: num(v.faltan) }))}</p>`;
     if (v.problemas.length) h += `<ul class="bk-list bk-warn">${v.problemas.slice(0, 8).map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
     if (v.tablas.length) {
       h += `<div class="bk-scroll"><table class="bk-tbl"><thead><tr><th>${esc(T('adminBkColTable'))}</th><th class="bk-n">${esc(T('adminBkColRows'))}</th></tr></thead><tbody>`;
@@ -545,6 +702,12 @@ const AdminBackup = (() => {
     if (g.fase === 'plan' || g.fase === 'estructura') { set('bkL1', T('adminBkStep_schema')); set('bkL2', ''); set('bkL3', ''); return; }
     if (g.fase === 'cierre') { set('bkL1', T('adminBkFinishing')); return; }
     if (g.fase === 'reintento' && g.reintento) { set('bkL3', T('adminBkRetrying', { i: g.reintento.i, n: g.reintento.de })); return; }
+    if (g.fase === 'archivos') {                                           // v42.49: bajando los archivos de R2
+      set('bkL1', T('adminBkProgFiles', { done: num(g.hechos || 0), total: num(g.total || 0) }));
+      set('bkL2', T('adminBkProgFilesMb', { mb: mb(g.bytesF || 0) }));
+      set('bkL3', T('adminBkProgTotal', { mb: mb(g.bytes || 0), time: tiempo(Date.now() - S.t0) }));
+      return;
+    }
     if (g.tabla) {
       set('bkL1', T('adminBkProgTable', { i: g.tablaIdx, n: g.tablas, name: g.tabla.replace(/^public\./, '') }));
       set('bkL2', T('adminBkProgRows', { done: num(g.filasTabla), total: num(g.filasTablaTotal) }));
@@ -555,6 +718,7 @@ const AdminBackup = (() => {
   function alCambiar(e) {
     const t = e.target;
     if (t && t.id === 'bkAuth') S.auth = !!t.checked;
+    if (t && t.id === 'bkR2') S.r2 = !!t.checked;
     if (t && t.id === 'bkFile' && t.files && t.files[0]) comprobarArchivo(t.files[0]);
   }
   function alPulsar(e) {
@@ -572,6 +736,8 @@ const AdminBackup = (() => {
   async function preparar() {
     const chk = S.panel && S.panel.querySelector('#bkAuth');
     if (chk) S.auth = !!chk.checked;
+    const chk2 = S.panel && S.panel.querySelector('#bkR2');
+    if (chk2) S.r2 = !!chk2.checked;
     S.fase = 'preparando'; S.err = null; pintar();
     try {
       S.plan = await obtenerPlan(rpcApp, { auth: S.auth });
@@ -624,6 +790,7 @@ const AdminBackup = (() => {
       const r = await exportar({
         rpc: rpcApp, sink, plan: (Date.now() - (S.planAt || 0) < 600000 ? S.plan : null), auth: S.auth, signal: S.ctrl.signal, appVersion: (document.querySelector('.app-version') || {}).textContent || '',
         resolver: (ref) => SupabaseClient.xr.fetchText(ref),     // v42.48: las capas pesadas que viven en R2 entran en la copia con su contenido
+        archivos: S.r2 ? { base: SupabaseClient.xr.worker, legacyBase: SupabaseClient.xr.storage } : null,   // v42.49: y, si se pide, los archivos de R2
         onProgress: (g) => { S.prog = Object.assign({}, S.prog, g); actualizarProgreso(); },
       });
       S.prog = Object.assign({}, S.prog, { fase: 'verificando', fraccion: 1 });
@@ -632,8 +799,8 @@ const AdminBackup = (() => {
       else descargarBlob(r.blob, nombre);
       let verif = null;
       if (archivo) { try { verif = await verificar(archivo); } catch (e) { verif = { ok: false, problemas: [String((e && e.message) || e)], tablas: [] }; } }
-      S.res = { nombre, bytesGz: r.bytesGz, filas: r.filas, tablas: r.tablas, cambios: r.cambios, verif, guardadoEn: handle ? 'archivo' : 'descargas', r2: r.r2 };
-      guardarUltima({ at: new Date().toISOString(), bytes: r.bytesGz, rows: r.filas, tables: r.tablas, name: nombre });
+      S.res = { nombre, bytesGz: r.bytesGz, filas: r.filas, tablas: r.tablas, cambios: r.cambios, verif, guardadoEn: handle ? 'archivo' : 'descargas', r2: r.r2, files: r.files };
+      guardarUltima({ at: new Date().toISOString(), bytes: r.bytesGz, rows: r.filas, tables: r.tablas, name: nombre, files: r.files ? r.files.n : null });
       S.fase = 'hecho';
     } catch (e) {
       try { if (sink) await sink.abort(e); } catch (_) {}
@@ -656,6 +823,7 @@ const AdminBackup = (() => {
     const out2 = S.panel && S.panel.querySelector('#bkVerif'); if (out2) out2.innerHTML = verifHtml();
   }
 
-  return { render, engine: { exportar, verificar, obtenerPlan, crearSink, ordenar, nombreArchivo, BkError }, _state: S };
+  // util (v42.50): piezas que reutiliza la restauración (js/admin-restore.js) para leer el mismo formato de archivo
+  return { render, engine: { exportar, verificar, obtenerPlan, crearSink, ordenar, nombreArchivo, BkError, util: { deBase64, sha256Hex, RE_F, reEsc, FMT } }, _state: S };
 })();
 if (typeof window !== 'undefined') window.AdminBackup = AdminBackup;

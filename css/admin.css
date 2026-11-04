@@ -48,6 +48,13 @@
   border-bottom: 1.5px solid var(--gray-300);
   padding: 0 14px;
 }
+/* v42.50 — con la pestaña «Restaurar» ya son seis: en pantallas estrechas la barra se desplaza en horizontal (patrón estándar de pestañas con scroll)
+   en vez de ensanchar la página. En escritorio no cambia nada. */
+@media (max-width: 520px) {
+  .admin-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .admin-tabs::-webkit-scrollbar { display: none; }
+  .admin-tab { flex: 1 0 auto; padding: 0 10px; }
+}
 .admin-tab-sep {
   width: 1px; height: 18px;
   background: var(--gray-300); flex-shrink: 0;
@@ -207,3 +214,22 @@
 .bk-list { margin: 4px 0 10px 18px; padding: 0; font-size: 0.82rem; }
 .bk-verif { margin-top: 8px; }
 @media (max-width: 480px) { .bk { padding: 14px 16px 110px; } .bk-go { width: 100%; } }
+
+/* ── v42.50 · Pestaña «Restaurar» (reutiliza las clases .bk-* de «Copia»; solo cuenta admin) ── */
+.rs-mini { margin: 8px 0 6px; }
+.rs-mini .btn { padding: 6px 12px; font-size: 0.8rem; }
+.rs-filtro { width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 0.9rem; border: 1.5px solid var(--gray-300); border-radius: 6px; background: var(--white); color: var(--ink); margin: 0 0 6px; }
+.rs-lista { max-height: 46vh; }
+.rs-obra { padding: 8px 10px; border-bottom: 1px solid var(--gray-200); display: grid; grid-template-columns: 1fr; gap: 3px; }
+.rs-obra:last-child { border-bottom: 0; }
+.rs-obra-t { font-size: 0.88rem; color: var(--ink); overflow-wrap: anywhere; }
+.rs-obra-i { font-size: 0.76rem; }
+.rs-sel { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 0.84rem; border: 1.5px solid var(--gray-300); border-radius: 6px; background: var(--white); color: var(--ink); margin-top: 3px; }
+.rs-chip { display: inline-block; font-size: 0.68rem; font-weight: 800; padding: 1px 7px; border-radius: 9px; vertical-align: 1px; background: var(--gray-200); color: var(--gray-700); }
+.rs-chip.rs-borrada { background: #fde0e0; color: #a01818; }
+.rs-chip.rs-faltan { background: #fff1c2; color: #7a5a00; }
+.rs-chip.rs-ok { background: #dcf3e2; color: #1a7a3a; }
+.rs-vacio { padding: 8px 10px; margin: 0; }
+/* En pantallas estrechas las tablas de resultados caben sin desplazarse (si no, la columna «Con problema», la importante, quedaba fuera de vista) */
+@media (max-width: 480px) { .rs .bk-tbl { font-size: 0.74rem; } .rs .bk-tbl th, .rs .bk-tbl td { padding: 5px 3px; } .rs .bk-tbl th { white-space: normal; } }
+.rs-informe { width: 100%; box-sizing: border-box; min-height: 150px; padding: 8px 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.35; border: 1.5px solid var(--gray-300); border-radius: 6px; background: var(--white); color: var(--ink); margin: 0 0 10px; }
