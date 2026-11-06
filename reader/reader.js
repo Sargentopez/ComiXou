@@ -1037,7 +1037,7 @@ window.AnimNative = (function(){
 
 /* ── AnimProc — animaciones «por instrucciones» (v41.64) ──────────────────────────────────────────────
    Una animación del editor de animaciones es: N objetos (cada uno un bitmap, UNA sola vez) y, por objeto y
-   fotograma, una transformación {x, y, width, height, rotation, opacity, _interp?, _blur?} (o null = ese objeto
+   fotograma, una transformación {x, y, width, height, rotation, opacity, defocus?, _interp?, _blur?} (o null = ese objeto
    no existe en ese fotograma). Eso es justo lo que ya se guardaba para poder reeditarla (_gcpLayersData +
    _gcpFramesData, ≈2 KB de transformaciones). Además se guardaba UN PNG por fotograma ya pintado (IndexedDB
    ×2, APNG en la nube y ≈18 MB decodificados en RAM): una interpolación de 20 fotogramas pesaba 20 imágenes
@@ -1087,15 +1087,21 @@ window.AnimProc = (function(){
   }
 
   // Pinta el objeto con la transformación s (opacidad × mul) — ImageLayer.draw sobre el recorte.
+  // v42.51: s.defocus (0-100, ausente = nítido) desenfoca el objeto con el módulo común CxDefocus (js/defocus.js); los fantasmas del
+  // rastro de movimiento no llevan (s sin defocus → nítidos).
   function drawObj(ctx, S, o, s, mul){
     var w = (s.width || 0) * S.pw, h = (s.height || 0) * S.ph;
-    ctx.save();
-    ctx.globalAlpha = (s.opacity == null ? 1 : s.opacity) * mul;
-    ctx.globalCompositeOperation = o.blend || 'source-over';
-    ctx.translate((s.x || 0) * S.pw - S.ox, (s.y || 0) * S.ph - S.oy);
-    ctx.rotate((s.rotation || 0) * DEG);
-    ctx.drawImage(o.img, -w / 2, -h / 2, w, h);
-    ctx.restore();
+    var go = function(c){
+      c.save();
+      c.globalAlpha = (s.opacity == null ? 1 : s.opacity) * mul;
+      c.globalCompositeOperation = o.blend || 'source-over';
+      c.translate((s.x || 0) * S.pw - S.ox, (s.y || 0) * S.ph - S.oy);
+      c.rotate((s.rotation || 0) * DEG);
+      c.drawImage(o.img, -w / 2, -h / 2, w, h);
+      c.restore();
+    };
+    if (s.defocus > 0 && window.CxDefocus) window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null });
+    else go(ctx);
   }
 
   // Pinta el fotograma i entero en ctx (que debe medir S.w × S.h).
@@ -1202,7 +1208,7 @@ window.AnimProc = (function(){
           // copia de las transformaciones (≈ unos KB): la animación ya preparada no depende de que los datos de la capa
           // se muten después (reedición, duplicado…)
           frames: (fr && fr.length) ? fr.map(function(s){ return s ? Object.assign({}, s) : s; }) : null,
-          base: { x: ld.x, y: ld.y, width: ld.width, height: ld.height, rotation: ld.rotation || 0, opacity: ld.opacity == null ? 1 : ld.opacity }
+          base: { x: ld.x, y: ld.y, width: ld.width, height: ld.height, rotation: ld.rotation || 0, opacity: ld.opacity == null ? 1 : ld.opacity, defocus: ld.defocus > 0 ? ld.defocus : 0 }
         };
       });
     });
@@ -6031,6 +6037,11 @@ function _resizeCanvas() {
 
 }
 
+// ── DESENFOQUE (v42.51) ───────────────────────────────────────
+// layer.defocus = 0…100 (ausente o 0 = nítido), igual que layer.opacity = 0…1. El dibujado lo hace CxDefocus (js/defocus.js): el mismo
+// módulo que el editor y el visor interno, así que todo se ve igual. Los fotogramas de una animación llevan el suyo (_frames[fi].defocus).
+function _rDf(o) { return (o && o.defocus > 0 && window.CxDefocus) ? Math.min(100, +o.defocus) : 0; }
+
 // ── RENDER PRINCIPAL ──────────────────────────────────────────
 function _render() {
   const panel = RS.panels[RS.idx];
@@ -6069,7 +6080,9 @@ function _render() {
   const layers    = panel.layers    || [];
   const layerImgs = panel.layerImgs || [];
 
-  layers.forEach((layer, j) => {
+  // v42.51 — el cuerpo del bucle es ahora una función que recibe el contexto: así una capa con desenfoque (layer.defocus 0-100,
+  // módulo común js/defocus.js, el mismo del editor) se pinta en el contexto que le da CxDefocus.run (el propio o un auxiliar).
+  const _rPaintLayer = (ctx, layer, j) => {
     const type = layer.type;
     if (layer.hidden) return; // capa oculta: no renderizar en el lector
     if (type === 'gif') {
@@ -6206,6 +6219,15 @@ function _render() {
       ctx.restore();
     }
     // bubble/text: siempre gestionado por _drawTexts (forma + texto juntos, con sequential)
+  };
+  layers.forEach((layer, j) => {
+    const _df = layer.hidden ? 0 : _rDf(layer);
+    if (_df > 0 && layer.type !== 'bubble' && layer.type !== 'text') {
+      // forma y línea llevan varios trazos (relleno + contorno): se desenfoca el conjunto UNA vez (igual que en el editor)
+      CxDefocus.run(ctx, _df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null });
+    } else {
+      _rPaintLayer(ctx, layer, j);
+    }
   });
 
   _drawTexts(ctx, panel, pw, ph, panel.layerImgs || []);
@@ -6264,7 +6286,14 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   });
 }
 
+// v42.51 — el desenfoque del bocadillo / texto / hoja de texto está en su capa de panel_layers (t._bubbleLayer; con hoja de texto, t ya es la capa).
+// Forma + texto + cola se desenfocan JUNTOS, de una vez (union), como en el editor.
 function _drawBubble(ctx, t, pw, ph, alpha) {
+  const _df = _rDf(t && (t._bubbleLayer || t));
+  if (_df > 0) return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), { union: true });
+  return _drawBubbleImpl(ctx, t, pw, ph, alpha);
+}
+function _drawBubbleImpl(ctx, t, pw, ph, alpha) {
   // Si tiene bitmap prerenderizado: dibujar forma + texto juntos (respeta sequential)
   if (t._bubbleLayerImg && t._bubbleLayer && t._bubbleLayer.renderDataUrl) {
     const bl = t._bubbleLayer;

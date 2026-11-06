@@ -2999,9 +2999,14 @@ function _tdRenderLayersToImage(items, cb){
         // el dataUrl ya serializado, posicionado con su propia geometría.
         const cx = mx + (la.x ?? 0.5) * pw, cy = my + (la.y ?? 0.5) * ph;
         const w  = (la.width  ?? 1) * pw,   h  = (la.height ?? 1) * ph;
-        offCtx.translate(cx, cy);
-        if(la.rotation) offCtx.rotate(la.rotation * Math.PI / 180);
-        offCtx.drawImage(img, -w/2, -h/2, w, h);
+        // v42.51: el desenfoque del objeto se hornea en la imagen fusionada (ya no habrá objetos sueltos que lo lleven)
+        const _dfT = (la.defocus > 0 && window.CxDefocus) ? la.defocus : 0;
+        const _paintT = c => {
+          c.translate(cx, cy);
+          if(la.rotation) c.rotate(la.rotation * Math.PI / 180);
+          c.drawImage(img, -w/2, -h/2, w, h);
+        };
+        if(_dfT) CxDefocus.run(offCtx, _dfT, _paintT, false); else _paintT(offCtx);
       } else if(la.type === 'image' || la.type === 'gif' || la.type === 'text' || la.type === 'bubble'){
         la.draw(offCtx, off);
       } else {

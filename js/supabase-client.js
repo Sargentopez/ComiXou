@@ -1054,6 +1054,9 @@ const SupabaseClient = (() => {
         _uid: l._uid || null,
         hidden: l.hidden || false,
         opacity: l.opacity,
+        // v42.51 — desenfoque (0-100), como la opacidad; esta lista es CERRADA: sin esta línea el desenfoque del relleno / lápiz /
+        // acuarela de un dibujo a mano se perdería al subirlo (el resto de capas se copian enteras en _lClean)
+        ...(l.defocus > 0 ? { defocus: Math.min(100, +l.defocus) } : {}),
         // Propiedades de posición/tamaño/rotación
         x:        l.x        != null ? l.x        : 0.5,
         y:        l.y        != null ? l.y        : 0.5,

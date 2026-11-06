@@ -45,6 +45,10 @@
    editor-layers.js — Panel de capas v4
    ============================================================ */
 
+// v42.51 — las miniaturas del panel de capas enseñan el OBJETO (nítido): un objeto muy desenfocado sería irreconocible en su miniatura.
+// _edDrawSharp (editor.js) pinta sin aplicar layer.defocus; si no está, se pinta tal cual.
+function _lySharp(l, ctx, a, b) { return (typeof _edDrawSharp === 'function') ? _edDrawSharp(l, ctx, a, b) : l.draw(ctx, a, b); }
+
 let _lyDragIdx  = null;
 let _lyDragOver = null;
 let _lyDragType = null; // 'text' | 'image'
@@ -712,7 +716,7 @@ function _lyDrawGroupCompositeThumb(canvas, members) {
         const ED_H = typeof ED_CANVAS_H!=='undefined'?ED_CANVAS_H:2340;
         const aux = document.createElement('canvas');
         aux.width=ED_W; aux.height=ED_H;
-        l.draw(aux.getContext('2d'));
+        _lySharp(l, aux.getContext('2d'));   // v42.51: miniatura nítida (muestra el objeto, no su desenfoque)
         const cx=_mx+l.x*_pw, cy=_my+l.y*_ph;
         const rot2=(l.rotation||0)*Math.PI/180;
         const cR=Math.abs(Math.cos(rot2)), sR=Math.abs(Math.sin(rot2));
@@ -932,7 +936,7 @@ function _lyBuildFillSubRowOld(la, realIdx) {
     tctx.save();
     // Escala uniforme con centrado — preserva ratio de la página
     tctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
-    if (typeof la.draw === 'function') la.draw(tctx);
+    if (typeof la.draw === 'function') _lySharp(la, tctx);   // v42.51: miniatura nítida
     tctx.restore();
   }
   tctx.strokeStyle = '#93c5fd'; tctx.lineWidth = 2;
@@ -2129,7 +2133,7 @@ function _lyDrawShapeThumb(canvas, la) {
   const my = typeof edMarginY === 'function' ? edMarginY() : (ED_H-ph)/2;
   const aux = document.createElement('canvas');
   aux.width = ED_W; aux.height = ED_H;
-  la.draw(aux.getContext('2d'));
+  _lySharp(la, aux.getContext('2d'));   // v42.51: miniatura nítida
   // Bbox del objeto en coords workspace
   const ocx = mx + la.x*pw, ocy = my + la.y*ph;
   const ohw = la.width*pw/2+4, ohh = la.height*ph/2+4;

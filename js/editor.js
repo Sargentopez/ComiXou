@@ -893,7 +893,7 @@ window.ApngDecoder = (function(){
 
 /* ── AnimProc — animaciones «por instrucciones» (v41.64) ──────────────────────────────────────────────
    Una animación del editor de animaciones es: N objetos (cada uno un bitmap, UNA sola vez) y, por objeto y
-   fotograma, una transformación {x, y, width, height, rotation, opacity, _interp?, _blur?} (o null = ese objeto
+   fotograma, una transformación {x, y, width, height, rotation, opacity, defocus?, _interp?, _blur?} (o null = ese objeto
    no existe en ese fotograma). Eso es justo lo que ya se guardaba para poder reeditarla (_gcpLayersData +
    _gcpFramesData, ≈2 KB de transformaciones). Además se guardaba UN PNG por fotograma ya pintado (IndexedDB
    ×2, APNG en la nube y ≈18 MB decodificados en RAM): una interpolación de 20 fotogramas pesaba 20 imágenes
@@ -943,15 +943,21 @@ window.AnimProc = (function(){
   }
 
   // Pinta el objeto con la transformación s (opacidad × mul) — ImageLayer.draw sobre el recorte.
+  // v42.51: s.defocus (0-100, ausente = nítido) desenfoca el objeto con el módulo común CxDefocus (js/defocus.js); los fantasmas del
+  // rastro de movimiento no llevan (s sin defocus → nítidos).
   function drawObj(ctx, S, o, s, mul){
     var w = (s.width || 0) * S.pw, h = (s.height || 0) * S.ph;
-    ctx.save();
-    ctx.globalAlpha = (s.opacity == null ? 1 : s.opacity) * mul;
-    ctx.globalCompositeOperation = o.blend || 'source-over';
-    ctx.translate((s.x || 0) * S.pw - S.ox, (s.y || 0) * S.ph - S.oy);
-    ctx.rotate((s.rotation || 0) * DEG);
-    ctx.drawImage(o.img, -w / 2, -h / 2, w, h);
-    ctx.restore();
+    var go = function(c){
+      c.save();
+      c.globalAlpha = (s.opacity == null ? 1 : s.opacity) * mul;
+      c.globalCompositeOperation = o.blend || 'source-over';
+      c.translate((s.x || 0) * S.pw - S.ox, (s.y || 0) * S.ph - S.oy);
+      c.rotate((s.rotation || 0) * DEG);
+      c.drawImage(o.img, -w / 2, -h / 2, w, h);
+      c.restore();
+    };
+    if (s.defocus > 0 && window.CxDefocus) window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null });
+    else go(ctx);
   }
 
   // Pinta el fotograma i entero en ctx (que debe medir S.w × S.h).
@@ -1058,7 +1064,7 @@ window.AnimProc = (function(){
           // copia de las transformaciones (≈ unos KB): la animación ya preparada no depende de que los datos de la capa
           // se muten después (reedición, duplicado…)
           frames: (fr && fr.length) ? fr.map(function(s){ return s ? Object.assign({}, s) : s; }) : null,
-          base: { x: ld.x, y: ld.y, width: ld.width, height: ld.height, rotation: ld.rotation || 0, opacity: ld.opacity == null ? 1 : ld.opacity }
+          base: { x: ld.x, y: ld.y, width: ld.width, height: ld.height, rotation: ld.rotation || 0, opacity: ld.opacity == null ? 1 : ld.opacity, defocus: ld.defocus > 0 ? ld.defocus : 0 }
         };
       });
     });
@@ -4528,7 +4534,9 @@ class ShapeLayer extends BaseLayer {
     const w  = this.width  * pw;
     const h  = this.height * ph;
     ctx.save();
-    ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
+    // v42.53: la opacidad del objeto NO se aplica aquí. Antes draw() multiplicaba ctx.globalAlpha por this.opacity y, además, casi todos los que
+    // pintan formas (edRedraw, visor, miniaturas, exportar…) ya fijaban globalAlpha = opacidad antes de llamar: una opacidad de 0,7 se veía como
+    // 0,49 en el editor (y distinta del lector y del SVG). Ahora la fija SOLO quien llama, como con trazos, dibujos y rellenos.
     ctx.translate(cx, cy);
     ctx.rotate(((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180);
     ctx.lineJoin = 'round';
@@ -4708,7 +4716,7 @@ class LineLayer extends BaseLayer {
     const cy = edMarginY() + _lnCurY * ph;
     const rot = ((this.rotation || 0) + _edLayerPathRotDeg(this)) * Math.PI / 180;
     ctx.save();
-    ctx.globalAlpha = ctx.globalAlpha * (this.opacity ?? 1);
+    // v42.53: ver ShapeLayer.draw — la opacidad del objeto la fija quien llama (ya no se multiplica una segunda vez aquí).
     ctx.translate(cx, cy);
     ctx.rotate(rot);
     ctx.lineJoin = 'round';
@@ -4793,15 +4801,15 @@ class LineLayer extends BaseLayer {
         const _gStyles = this.groupedStyles || [];
         // Acumular offset en pts para mapear cornerRadii correctamente por contorno
         let _ptBase = 0; // índice de inicio en pts del contorno actual (incluye nulls previos)
-        const _a0 = ctx.globalAlpha;   // v42.37: opacidad ya compuesta (la del objeto unido); la propia de cada contorno se multiplica encima
+        const _a0 = ctx.globalAlpha;   // v42.37: opacidad ya compuesta (la del objeto unido, fijada por quien llama); la propia de cada contorno se multiplica encima
         _contours.forEach((c, _ci) => {
           const _st = _gStyles[_ci] || {};
-          // v42.37: _st.opacity = opacidad que ese contorno tenía como objeto suelto, RELATIVA a la del objeto unido. Un objeto suelto
-          // con opacidad o se ve con alfa o² (edRedraw/visor/miniaturas/exportar fijan globalAlpha=o y draw() la vuelve a multiplicar);
-          // para que unir no cambie el aspecto, el contorno se compone con el MISMO cuadrado: _a0 * r². (En el horneado para el lector
-          // _a0 = U y el lector multiplica otra vez por U → U²·r² = o²: igual que en pantalla.)
+          // v42.37: _st.opacity = opacidad que ese contorno tenía como objeto suelto, RELATIVA a la del objeto unido.
+          // v42.53: la opacidad se aplica UNA sola vez (antes un objeto suelto con opacidad o se veía con o² y el contorno se componía con el mismo
+          // cuadrado, _a0 * r², para que unir no cambiase el aspecto). Ahora: _a0 * r. En el horneado para el lector _a0 = 1 (el bitmap sale sin
+          // la opacidad del objeto, que el lector aplica una vez al pintarlo): U·r, igual que en pantalla.
           const _rOp = _st.opacity != null ? _st.opacity : 1;
-          ctx.globalAlpha = _a0 * _rOp * _rOp;
+          ctx.globalAlpha = _a0 * _rOp;
           const _fc = _st.fillColor !== undefined ? _st.fillColor : this.fillColor;
           const _fcStyle = _edGradValid(_st.fillGradient) ? _edContourFillStyle(ctx, _st.fillGradient, _fc, c, pw, ph)   // v42.33: degradado propio del contorno
                          : (_st.fillColor !== undefined ? _fc : _edFillStyle(ctx, this, this.width*pw, this.height*ph));
@@ -5006,6 +5014,111 @@ class LineLayer extends BaseLayer {
 }
 
 /* ══════════════════════════════════════════
+   DESENFOQUE DE CAPAS (v42.51) — layer.defocus = 0…100 (0 o ausente = nítido). Módulo común con el lector: js/defocus.js
+   El desenfoque va DENTRO de draw() de cada clase: así todo lo que pinta una capa (lienzo, visor interno, miniaturas,
+   exportaciones, editor de animaciones) lo lleva sin tocar cada sitio de dibujo — igual que la opacidad vive en la capa.
+   Los sitios que HORNEAN un bitmap para guardarlo (renderDataUrl, rasterizar, recortar, texto→dibujo…) pintan con
+   _edDrawSharp(): ahí el bitmap debe salir nítido, porque la capa resultante se vuelve a pintar con su propio grado
+   (si no, el desenfoque quedaría aplicado dos veces).
+   ══════════════════════════════════════════ */
+if (!window.CxDefocus) {   // defensivo: si por lo que sea no cargó js/defocus.js, el editor sigue funcionando (sin desenfoque)
+  window.CxDefocus = { MAX: 100, UNIT: 0.4, clamp: v => (+v > 0 ? Math.min(100, +v) : 0), sigma: () => 0, px: () => 0,
+    supported: () => false, run: (c, d, f) => f(c), suspend: f => f(), isSuspended: () => false, blurCanvas: c => c, _force: () => null };
+}
+const _ED_DEFOCUS_UNION = { shape: 1, line: 1, text: 1, bubble: 1 };   // varios trazos por capa → se desenfoca el conjunto UNA vez
+(function _edInstallDefocus(){
+  [ImageLayer, GifLayer, TextLayer, BubbleLayer, DrawLayer, FillLayer, StrokeLayer, ShapeLayer, LineLayer].forEach(Cls => {
+    const orig = Cls && Cls.prototype && Cls.prototype.draw;
+    if (typeof orig !== 'function' || orig._edDf) return;
+    const wrapped = function(ctx, a, b){
+      const d = this.defocus;
+      if (!(d > 0)) return orig.call(this, ctx, a, b);
+      if (this._drawLayerId && _edDfGroupInEdit(this)) return orig.call(this, ctx, a, b);   // su dibujo se está editando: todo el grupo nítido mientras tanto
+      return CxDefocus.run(ctx, d, c => orig.call(this, c, a, b),
+        { union: !!_ED_DEFOCUS_UNION[this.type], bounds: () => _edDfBounds(this), blend: this._blendMode || null });
+    };
+    wrapped._edDf = true;
+    Cls.prototype.draw = wrapped;
+  });
+})();
+// ¿Se está editando el dibujo al que pertenece esta capa vinculada (relleno / lápiz / acuarela)? Durante «Editar dibujo» y el recorte
+// el trazo pasa a ser un DrawLayer (que nunca lleva desenfoque) y sus capas vinculadas se vuelcan al lienzo de trabajo: se pintan
+// nítidas mientras dura la edición (así se ve lo que se retoca) y recuperan el desenfoque al terminar — sin estado que soltar.
+function _edDfGroupInEdit(sub){
+  try {
+    const pg = edPages[edCurrentPage], ls = (pg && pg.layers) || edLayers, id = sub._drawLayerId;
+    for (const l of ls) if (l && l.type === 'draw' && (l._uid || l._fillLayerId) === id) return true;
+  } catch (e) {}
+  return false;
+}
+// Fotogramas de animación: el desenfoque va junto a la opacidad en cada instantánea (_frames[fi].defocus; ausente = nítido)
+function _edSetDf(l, v){ v = +v; if (v > 0) l.defocus = CxDefocus.clamp(v); else if (l.defocus) delete l.defocus; return l; }
+function _edDfField(l){ return (l && l.defocus > 0) ? { defocus: CxDefocus.clamp(l.defocus) } : {}; }
+// Pinta la capa SIN desenfoque (para hornear bitmaps)
+function _edDrawSharp(l, ctx, a, b){ return CxDefocus.suspend(() => l.draw(ctx, a, b)); }
+// Rectángulo (coordenadas del espacio de trabajo = las de ctx al pintar capas) que la capa ocupa COMO MUCHO, con margen de sobra
+// (giro, grosor de línea, colas de bocadillo…): el desenfoque solo prepara esa zona en vez de todo el lienzo. null = todo el lienzo.
+function _edDfBounds(l){
+  try {
+    if (!l || l._isWorkspaceCanvas) return null;
+    const pw = edPageW(), ph = edPageH(), mx = edMarginX(), my = edMarginY();
+    const w = (l.width || 0) * pw, h = (l.height || 0) * ph;
+    const cx = mx + _edCurX(l) * pw, cy = my + _edCurY(l) * ph;
+    let R = Math.hypot(w, h) / 2;
+    if (l.type === 'line') {                       // los puntos van relativos al centro y pueden salirse de la caja
+      const eat = a => { for (const q of a) if (q) R = Math.max(R, Math.hypot(q.x * pw, q.y * ph)); };
+      if (l.points) eat(l.points);
+      if (l.subPaths) for (const sp of l.subPaths) if (sp) eat(sp);
+    }
+    if (l.type === 'bubble') {                     // la cola sale de la caja: puntos en fracción del tamaño, relativos al centro
+      const qs = [l.tailStart, l.tailEnd, l.thoughtBig, l.thoughtSmall].concat(l.tailStarts || [], l.tailEnds || []);
+      for (const q of qs) if (q) R = Math.max(R, Math.hypot((q.x || 0) * w, (q.y || 0) * h));
+    }
+    R = (R + (+l.lineWidth || 0) * 2 + (+l.borderWidth || 0) * 2 + 24) * 1.15;
+    let x0 = cx - R, y0 = cy - R, x1 = cx + R, y1 = cy + R;
+    if (l.type === 'text' && l.richLines && l.richLines.length) {   // hoja de texto: su marco cubre toda la página
+      x0 = Math.min(x0, mx - 8); y0 = Math.min(y0, my - 8); x1 = Math.max(x1, mx + pw + 8); y1 = Math.max(y1, my + ph + 8);
+    }
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  } catch (e) { return null; }
+}
+// Grado de desenfoque de una capa o de una instantánea de fotograma (0 si no tiene)
+function _edDf(o){ return (o && o.defocus > 0) ? CxDefocus.clamp(o.defocus) : 0; }
+// Copia el desenfoque de src a dst (como se copia la opacidad al crear una capa derivada)
+function _edCopyDf(dst, src){ if (dst && src && src.defocus > 0) dst.defocus = CxDefocus.clamp(src.defocus); else if (dst && dst.defocus) delete dst.defocus; return dst; }
+
+// ── FILA «DESENFOQUE» DE LOS PANELES DE PROPIEDADES ──────────────────────────────────────────────────────────────────────────
+// Punto único de verdad (como _edRotOpacityRowHtml para rotación + opacidad): la fila con el deslizador 0…100 (0 = nítido) que llevan
+// TODOS los paneles de propiedades de un objeto, y la forma de aplicarlo. idp = prefijo de los ids ('pp' objeto · 'pp-grp' grupo).
+function _edDefocusRowHtml(idp, v){
+  v = Math.round(+v || 0);
+  return `
+      <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_defocusLabel')}</span>
+        <span id="${idp}-df-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${v}</span>
+        <input type="range" id="${idp}-df" min="0" max="${CxDefocus.MAX}" value="${v}" title="${I18n.t('op_defocusTitle')}" style="flex:1;accent-color:var(--black)">
+      </div>`;
+}
+// El objeto y sus capas vinculadas (relleno / lápiz / acuarela de un dibujo a mano): el desenfoque, como la opacidad, es del conjunto
+function _edDfTargetsOf(la){
+  const out = [la];
+  const uid = la && (la._uid || la._fillLayerId);
+  if (uid) for (const t of ['fill', 'pencil', 'watercolor']) { const sl = edLayers.find(l => l.type === t && l._drawLayerId === uid); if (sl) out.push(sl); }
+  return out;
+}
+// Conecta el deslizador de una fila. getTargets() = capas a las que se aplica (se pide en cada movimiento: la selección puede haber cambiado).
+// Durante el arrastre solo se repinta; al soltar se apunta UN paso en el historial (igual que la opacidad).
+function _edBindDefocusRow(idp, getTargets){
+  const sl = $(idp + '-df'); if (!sl) return;
+  sl.addEventListener('input', e => {
+    const v = +e.target.value;
+    (getTargets() || []).forEach(l => { if (l) _edSetDf(l, v); });
+    const lab = $(idp + '-df-val'); if (lab) lab.textContent = Math.round(v);
+    edRedraw();
+  });
+  sl.addEventListener('change', () => { edPushHistory(); });
+}
+
+/* ══════════════════════════════════════════
    HISTORIAL UNDO / REDO
    ══════════════════════════════════════════ */
 // movedLayer (opcional): capa, o ARRAY de capas (arrastre de grupo/multi-
@@ -5056,6 +5169,11 @@ function _edLayersSnapshot(movedLayer){
 // Construye el fragmento de snapshot de UNA capa (antes era el cuerpo del
 // .map() de _edLayersSnapshot — extraído para poder cachear su resultado).
 function _edSnapLayerFragment(l){
+  const _f = _edSnapLayerFragmentCore(l);
+  if (_f && l && l.defocus > 0) _f.defocus = CxDefocus.clamp(l.defocus);   // v42.51: el desenfoque también se deshace/rehace
+  return _f;
+}
+function _edSnapLayerFragmentCore(l){
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       // Guardar dataUrl del canvas local (bbox del stroke) con sus propiedades exactas
       return { type:l.type, dataUrl: l.toDataUrl(),
@@ -6425,7 +6543,7 @@ function edApplyHistory(snapshot){
     _liveStrokeUsed.add(c);
     return c;
   };
-  edLayers = raw.map(o => {
+  const _edRebuildLayer = o => {
     let l;
     if     (o.type === 'text')   l = new TextLayer(o.text, o.x, o.y);
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
@@ -6693,6 +6811,13 @@ function edApplyHistory(snapshot){
         }
       }).catch(() => {});
     }
+    return l;
+  };
+  // v42.51: el desenfoque (layer.defocus) viaja en el snapshot como la opacidad; los tipos que salen antes con `return l` no copian
+  // el resto de campos, así que se aplica aquí a todos por igual.
+  edLayers = raw.map(o => {
+    const l = _edRebuildLayer(o);
+    if(l && l !== o && o && o.defocus > 0) l.defocus = CxDefocus.clamp(o.defocus);
     return l;
   });
   if(edPages[snapshot.pageIdx]){
@@ -9994,6 +10119,7 @@ function _edApplyCrop() {
       // las dos, opacidad y «oculto»; solo el resto del original (la pieza de fuera), nombre, botón-acción y bloqueo.
       const _both = {}, _out = {};
       if (_opSave !== undefined && _opSave !== 1) _both.opacity = _opSave;
+      if (la.defocus > 0) _both.defocus = la.defocus;   // v42.51: el desenfoque, como la opacidad, lo conserva cada pieza
       if (la.hidden)        _both.hidden = true;
       if (la.name)          _out.name = la.name;
       if (la._buttonAction) _out._buttonAction = Object.assign({}, la._buttonAction);
@@ -10069,6 +10195,7 @@ function _edApplyCropImage(la, pts, pw, ph, _onDone) {
   const newLayer = new ImageLayer(null, la.x, la.y, la.width);
   newLayer.rotation = la.rotation || 0;
   newLayer.opacity  = la.opacity  ?? 1;
+  _edCopyDf(newLayer, la);   // v42.51
   const bcx = (minX + cw/2) / iw, bcy = (minY + ch/2) / ih;
   const dxL = (bcx - 0.5) * lw, dyL = (bcy - 0.5) * lh;
   newLayer.x = la.x + (dxL * Math.cos(rot) - dyL * Math.sin(rot)) / pw;
@@ -10178,6 +10305,7 @@ function _edApplyCropStroke(la, pts, pw, ph) {
   const newLayer = new StrokeLayer(document.createElement('canvas'));
   newLayer.rotation = la.rotation || 0;
   newLayer.opacity  = la.opacity  ?? 1;
+  _edCopyDf(newLayer, la);   // v42.51
   const bcx2 = (minX + cw2/2) / sw, bcy2 = (minY + ch2/2) / sh;
   const dxL2 = (bcx2 - 0.5) * lw, dyL2 = (bcy2 - 0.5) * lh;
   newLayer.x = la.x + (dxL2 * Math.cos(rot) - dyL2 * Math.sin(rot)) / pw;
@@ -10297,7 +10425,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
       if (!_subLa || !_subLa._canvas) continue;
       const _wsCk = document.createElement('canvas');
       _wsCk.width = W; _wsCk.height = H;
-      _subLa.draw(_wsCk.getContext('2d'));
+      _edDrawSharp(_subLa, _wsCk.getContext('2d'));   // v42.51: se hornea nítido; cada pieza conserva el desenfoque como atributo
       const { inside: _inCk } = _splitCanvas(_wsCk);
       const _dat = _inCk.getContext('2d').getImageData(0, 0, W, H).data;
       for (let i = 3; i < _dat.length; i += 4) { if (_dat[i] > 4) { hasContent = true; break; } }
@@ -10319,7 +10447,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
     if (!la || !la._canvas) return { inside: null, outside: null };
     const _ws = document.createElement('canvas');
     _ws.width = W; _ws.height = H;
-    la.draw(_ws.getContext('2d'));
+    _edDrawSharp(la, _ws.getContext('2d'));   // v42.51: nítido (el desenfoque viaja como atributo de cada pieza)
     return _splitCanvas(_ws);
   };
   let fillInside = null, fillOutside = null;
@@ -10338,6 +10466,7 @@ function _edApplyCropDraw(dl, pts, pw, ph, _onDone) {
   // de capas, opacidad repartida por el deslizador): antes las capas nuevas salían siempre al 100 % y visibles.
   const _carryLayerAttrs = (nl, src) => {
     if (src && src.opacity !== undefined) nl.opacity = src.opacity;
+    if (src && src.defocus > 0) nl.defocus = src.defocus;   // v42.51
     if (src && src.hidden) nl.hidden = true;
   };
   let _uidInV = null, _uidOutV = null;
@@ -11788,12 +11917,16 @@ function _edRenderPageThumb(canvas, page, pageIdx){
     const _lpy = edMarginY() + la.y * ph;
     const _lw  = la.width  * pw;
     const _lh  = la.height * ph;
-    offCtx.save();
-    offCtx.globalAlpha = la.opacity ?? 1;
-    offCtx.translate(_lpx, _lpy);
-    if (la.rotation) offCtx.rotate(la.rotation * Math.PI / 180);
-    offCtx.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
-    offCtx.restore();
+    const _paintG = (c) => {
+      c.save();
+      c.globalAlpha = la.opacity ?? 1;
+      c.translate(_lpx, _lpy);
+      if (la.rotation) c.rotate(la.rotation * Math.PI / 180);
+      c.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
+      c.restore();
+    };
+    if (la.defocus > 0) CxDefocus.run(offCtx, la.defocus, _paintG, false);   // v42.51: desenfoque (esta ruta pinta el lienzo sin pasar por draw())
+    else _paintG(offCtx);
     offCtx.globalAlpha = 1;
   };
   const _textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
@@ -11810,7 +11943,8 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         offCtx.save();
         offCtx.setTransform(1,0,0,1,0,0);
         offCtx.globalAlpha = l.opacity ?? 1;
-        offCtx.drawImage(_gc, 0, 0);
+        if (l.defocus > 0) CxDefocus.run(offCtx, l.defocus, c => c.drawImage(_gc, 0, 0), false);   // v42.51: desenfoque (esta ruta pinta sin pasar por draw())
+        else offCtx.drawImage(_gc, 0, 0);
         offCtx.restore();
         offCtx.setTransform(1,0,0,1,-mx,-my);
       }
@@ -12146,6 +12280,7 @@ function _edDuplicateGroup(gid) {
         cl.width = orig.width; cl.height = orig.height;
         cl.rotation = orig.rotation || 0;
         cl.opacity = orig.opacity ?? 1;
+        _edCopyDf(cl, orig);   // v42.51
         cl.hidden = orig.hidden || false;
         const w = orig._canvas.width, h = orig._canvas.height;
         cl._canvas.width = w; cl._canvas.height = h;
@@ -13290,6 +13425,7 @@ function edMirrorSelected(){
         _nuevo.width = _lnkS.width; _nuevo.height = _lnkS.height;
         _nuevo.rotation = la.rotation;
         _nuevo.opacity = _lnkS.opacity ?? 1;
+        _edCopyDf(_nuevo, _lnkS);   // v42.51
         _nuevo.hidden = _lnkS.hidden || false;
         _nuevo._drawLayerId = _lnkS._drawLayerId;
         _nuevo._uid = _lnkS._uid;
@@ -14794,6 +14930,7 @@ function _edRdpSimplify(pts, eps) {
 // Punto único de verdad para la fila de Rotación+Opacidad — usada por dibujo
 // a mano (draw/stroke), dibujo vectorial (shape/line), imagen y animación/gif.
 // Cambiar aquí afecta a todos esos paneles de propiedades a la vez.
+// v42.51: la fila «Desenfoque» (ver _edDefocusRowHtml) va justo debajo, en los mismos paneles.
 function _edRotOpacityRowHtml(la) {
   return `
       <div class="op-prop-row"><span class="op-prop-label">Rotación</span>
@@ -14801,7 +14938,7 @@ function _edRotOpacityRowHtml(la) {
         <span class="op-prop-label" style="min-width:auto;margin-left:8px">Opacidad</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
-      </div>`;
+      </div>${_edDefocusRowHtml('pp', _edDf(la))}`;
 }
 // ── TRAYECTORIA DE ANIMACIÓN (motion path) ────────────────────────────────────
 // ── Helpers HTML de trayectoria — punto único de verdad ────────────────────────
@@ -15372,6 +15509,7 @@ function _edDissolveJoined(la) {
     sub.lineWidth = st.lineWidth !== undefined ? st.lineWidth : la.lineWidth;
     // v42.37: cada contorno de una unión puede traer su propia opacidad (st.opacity, relativa a la del objeto unido): al separarlo vuelve a ser la suya
     sub.opacity   = (la.opacity ?? 1) * (st.opacity != null ? st.opacity : 1);
+    _edCopyDf(sub, la);   // v42.51: el desenfoque del objeto unido pasa a cada contorno
     sub.rotation  = la.rotation || 0;
     sub.x = la.x; sub.y = la.y;   // mismo origen; _updateBbox los recentrará
     _edCarryMotionPath(la, sub);  // v41.56: cada sub-camino conserva la trayectoria del objeto unido
@@ -19807,6 +19945,7 @@ function _vsSerLayer(l) {
     };
     if (l.hidden) _s.hidden = true;
     if (l.name) _s.name = l.name;
+    if (l.defocus > 0) _s.defocus = CxDefocus.clamp(l.defocus);   // v42.51: el desenfoque también se deshace/rehace dentro de la sesión
     if (l._buttonAction) _s._buttonAction = Object.assign({}, l._buttonAction);
     if (l.grouped) _s.grouped = true;
     if (l.groupedStyles) _s.groupedStyles = _edCloneGroupedStyles(l.groupedStyles);
@@ -19836,6 +19975,7 @@ function _vsSerLayer(l) {
     };
     if (l.hidden) _s.hidden = true;
     if (l.name) _s.name = l.name;
+    if (l.defocus > 0) _s.defocus = CxDefocus.clamp(l.defocus);   // v42.51
     if (l._buttonAction) _s._buttonAction = Object.assign({}, l._buttonAction);
     if (l._motionPath && l._motionPath.length >= 2) _s._motionPath = _edCopyMotionPathPts(l._motionPath);
     if (l._motionPathClosed) _s._motionPathClosed = true;
@@ -20214,6 +20354,7 @@ function _edShapeApplyHistory(snapshot){
   la.fillGradient = _edCloneGrad(d.fillGradient); // undefined = sin degradado (undo de un degradado)
   if(d.lineWidth    !== undefined) la.lineWidth   = d.lineWidth;
   if(d.opacity      !== undefined) la.opacity     = d.opacity;
+  _edSetDf(la, d.defocus);   // v42.51 (ausente en la instantánea = nítido)
   if(d.rotation     !== undefined) la.rotation    = d.rotation;
   if(d.x            !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
   if(d.shape        !== undefined) la.shape       = d.shape;
@@ -21205,7 +21346,7 @@ function edFloodFill(nx, ny){
   // Si no hay temporales, usar el FillLayer/DrawLayer reales (compatibilidad)
   if (!_edTmp.bucket && !_edTmp.pen) {
     const _flFillRef = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-    if (_flFillRef) _flFillRef.draw(_compCtx);
+    if (_flFillRef) _edDrawSharp(_flFillRef, _compCtx);   // v42.51: referencia del bote = píxeles reales, sin desenfoque
     _compCtx.drawImage(dl._canvas, x0, y0, fw, fh, 0, 0, fw, fh);
   }
   const origImageData = _compCtx.getImageData(0, 0, fw, fh);
@@ -21965,7 +22106,7 @@ function _edSmoothFillUnderDeletedInk(la) {
   const inkWs = document.createElement('canvas');
   inkWs.width = ED_CANVAS_W; inkWs.height = ED_CANVAS_H;
   let inkWsCtx;
-  try { inkWsCtx = inkWs.getContext('2d'); la.draw(inkWsCtx); } catch(_e) { return; }
+  try { inkWsCtx = inkWs.getContext('2d'); _edDrawSharp(la, inkWsCtx); } catch(_e) { return; }   // v42.51: se mide la tinta real, nítida
   const inkSnap = _edSnapshotInkAlpha({ _canvas: inkWs, _ctx: inkWsCtx });
   if (!inkSnap) return;
 
@@ -22107,7 +22248,7 @@ function _edApplyFillGradient(nx0, ny0, nx1, ny1) {
   if (_edTmp.pen?._canvas)        cCtx.drawImage(_edTmp.pen._canvas, 0, 0);
   if (!_edTmp.bucket && !_edTmp.pen) {
     const flRef = page.layers.find(l => l.type==='fill' && l._drawLayerId===dl._fillLayerId);
-    if (flRef) flRef.draw(cCtx);
+    if (flRef) _edDrawSharp(flRef, cCtx);   // v42.51
     cCtx.drawImage(dl._canvas, 0, 0);
   }
 
@@ -24496,6 +24637,7 @@ function _edShapeToLineLayer(s) {
   if(_edGradValid(s.fillGradient)) l.fillGradient = _edCloneGrad(s.fillGradient);
   l.lineWidth = s.lineWidth ?? 3;
   l.opacity   = s.opacity   ?? 1;
+  _edCopyDf(l, s);   // v42.51
   l.rotation  = s.rotation  || 0;
   l.x = s.x; l.y = s.y;
   l.width  = s.width;
@@ -24528,6 +24670,18 @@ function _edShapeToLineLayer(s) {
   return l;
 }
 
+// v42.51 — FILA 2 del panel de FORMA en pantallas estrechas (360 px): con el botón «Desenf.» ya no queda sitio para el deslizador que se despliega
+// (Grosor / Op% / Desenf.). Mientras haya uno desplegado, si no le caben ~90 px, se pliega el grupo de la izquierda (tipo de forma + color);
+// al cerrar el deslizador, el grupo vuelve. En pantallas anchas (o si cabe) no cambia nada.
+function _edShapeRowFit(){
+  const left = document.getElementById('op-shape-left'); if (!left) return;
+  left.style.display = '';
+  const open = ['op-size-slider', 'op-opacity-slider', 'op-defocus-slider'].map(id => document.getElementById(id)).find(e => e && e.style.display === 'flex');
+  if (!open) return;
+  if (open.getBoundingClientRect().width < 90) left.style.display = 'none';
+}
+if (!window._edShapeRowFitBound) { window._edShapeRowFitBound = true; window.addEventListener('resize', () => { try { _edShapeRowFit(); } catch (e) {} }); }
+
 function _edActivateShapeTool(isNew, isCreating) {
   const panel=$('edOptionsPanel');
   if(!panel) return;
@@ -24553,6 +24707,7 @@ function _edActivateShapeTool(isNew, isCreating) {
   const _fillSrcS = _sel || _edVecNewStyle;
   const lw      = _sel?.lineWidth ?? edDrawSize ?? 2;
   const opacity = _sel ? Math.round((_sel.opacity??1)*100) : 100;
+  const dfv     = _sel ? Math.round(_edDf(_sel)) : 0;   // v42.51: desenfoque 0-100
   const hasFill = !!(_fillSrcS.fillColor && _fillSrcS.fillColor !== 'none');
 
   panel.innerHTML = `
@@ -24567,12 +24722,14 @@ function _edActivateShapeTool(isNew, isCreating) {
   <div style="height:1px;background:var(--gray-300);width:100%"></div>
   <!-- FILA 2: Tipo de forma + color + grosor + opacidad -->
   <div style="display:flex;flex-direction:row;align-items:center;gap:4px;padding:4px 0;min-height:32px;width:100%">
+    <div id="op-shape-left" style="display:flex;align-items:center;gap:4px;flex-shrink:0">
     <button id="op-shape-rect" style="flex-shrink:0;border:2px solid ${_edShapeType==='rect'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='rect'?'rgba(0,0,0,.08)':'transparent'}">▭</button>
     <button id="op-shape-ellipse" style="flex-shrink:0;border:2px solid ${_edShapeType==='ellipse'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='ellipse'?'rgba(0,0,0,.08)':'transparent'}">◯</button>
     <button id="op-shape-select" style="flex-shrink:0;border:2px solid ${_edShapeType==='select'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 8px;font-size:.82rem;font-weight:900;cursor:pointer;background:${_edShapeType==='select'?'rgba(0,0,0,.08)':'transparent'}"><svg width='16' height='16' viewBox='0 0 18 18' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 3 L3 14 L6.5 10.5 L9 15.5 L11 14.5 L8.5 9.5 L13 9.5 Z' stroke='currentColor' stroke-width='1.8' stroke-linejoin='round' stroke-linecap='round' fill='none'/></svg></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
     <button id="op-shape-color-btn" style="width:26px;height:26px;border-radius:50%;background:${col};border:2px solid var(--gray-300);cursor:pointer;flex-shrink:0;padding:0" title="${I18n.t('ed_borderColor')}"></button>
     <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    </div>
     <button id="op-size-btn" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('ed_thickness')}</button>
     <div id="op-size-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap" style="flex:1;min-width:40px">
@@ -24585,6 +24742,14 @@ function _edActivateShapeTool(isNew, isCreating) {
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap" style="flex:1;min-width:40px">
         <input type="range" id="op-shape-opacity" min="0" max="100" data-suffix="%" value="${opacity}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-defocus-btn" title="${I18n.t('op_defocusTitle')}" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('op_defocusBtn')}</button>
+    <div id="op-defocus-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-shape-defocus" min="0" max="100" data-suffix="" value="${dfv}" style="width:100%;accent-color:var(--black)">
         <span class="ed-slider-bubble"></span>
       </div>
     </div>
@@ -24698,11 +24863,13 @@ function _edActivateShapeTool(isNew, isCreating) {
   _edVecWireColors('shape', _curShape);
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
-    const sl=$('op-size-slider'),ob=$('op-opacity-slider');
+    const sl=$('op-size-slider'),ob=$('op-opacity-slider'),od=$('op-defocus-slider');
     const open=sl.style.display==='none'||sl.style.display==='';
     sl.style.display=open?'flex':'none';
     if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    if(open&&od){od.style.display='none';$('op-defocus-btn').style.background='transparent';}
     $('op-size-btn').style.background=open?'var(--gray-200)':'transparent';
+    _edShapeRowFit();
   });
   $('op-dsize')?.addEventListener('input',e=>{
     const v=+e.target.value; edDrawSize=v;
@@ -24720,12 +24887,14 @@ function _edActivateShapeTool(isNew, isCreating) {
 
   // ── Opacidad ──
   $('op-opacity-btn')?.addEventListener('click',()=>{
-    const slO=$('op-opacity-slider'),sl=$('op-size-slider');
+    const slO=$('op-opacity-slider'),sl=$('op-size-slider'),od=$('op-defocus-slider');
     if(!slO) return;
     const open=slO.style.display==='none'||slO.style.display==='';
     slO.style.display=open?'flex':'none';
     if(open&&sl){sl.style.display='none';$('op-size-btn').style.background='transparent';}
+    if(open&&od){od.style.display='none';$('op-defocus-btn').style.background='transparent';}
     $('op-opacity-btn').style.background=open?'var(--gray-200)':'transparent';
+    _edShapeRowFit();
   });
   $('op-shape-opacity')?.addEventListener('input',e=>{
     const v=+e.target.value;
@@ -24739,6 +24908,23 @@ function _edActivateShapeTool(isNew, isCreating) {
     const s=_curShape(); if(s){s.opacity=v/100;edRedraw();} _updateInfo();
     _edShapePushHistory();
   });
+
+  // ── Desenfoque (v42.51) ── mismo comportamiento que Grosor y Op%: el botón despliega su deslizador (0 = nítido)
+  $('op-defocus-btn')?.addEventListener('click',()=>{
+    const od=$('op-defocus-slider'),sl=$('op-size-slider'),ob=$('op-opacity-slider');
+    if(!od) return;
+    const open=od.style.display==='none'||od.style.display==='';
+    od.style.display=open?'flex':'none';
+    if(open&&sl){sl.style.display='none';$('op-size-btn').style.background='transparent';}
+    if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    $('op-defocus-btn').style.background=open?'var(--gray-200)':'transparent';
+    _edShapeRowFit();
+  });
+  $('op-shape-defocus')?.addEventListener('input',e=>{
+    const v=+e.target.value;
+    const s=_curShape(); if(s){_edSetDf(s,v);edRedraw();}
+  });
+  $('op-shape-defocus')?.addEventListener('change',()=>{ _edShapePushHistory(); });
 
   // ── Relleno ──
   // v41.84: con objeto lo rellena / quita el relleno; sin objeto decide si el SIGUIENTE nace con relleno
@@ -24897,6 +25083,7 @@ function _edActivateLineTool(isNew, isCreating) {
   const col     = _cur?.color    || edDrawColor  || '#000000';
   const lw      = _cur?.lineWidth ?? edDrawSize ?? 2;
   const opacity = _cur ? Math.round((_cur.opacity??1)*100) : 100;
+  const dfv     = _cur ? Math.round(_edDf(_cur)) : 0;   // v42.51: desenfoque 0-100
   const isSelectMode = _edLineType === 'select' && edActiveTool !== 'shape';
   const nPoints = _edLineLayer?.points?.length || 0;
   const isClosed = _cur?.closed || false;
@@ -24943,6 +25130,14 @@ function _edActivateLineTool(isNew, isCreating) {
     <div id="op-opacity-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
       <div class="ed-slider-wrap" style="flex:1;min-width:40px">
         <input type="range" id="op-line-opacity" min="0" max="100" data-suffix="%" value="${opacity}" style="width:100%;accent-color:var(--black)">
+        <span class="ed-slider-bubble"></span>
+      </div>
+    </div>
+    <div style="width:1px;height:18px;background:var(--gray-300);flex-shrink:0"></div>
+    <button id="op-defocus-btn" title="${I18n.t('op_defocusTitle')}" style="flex-shrink:0;border:1px solid var(--gray-300);border-radius:6px;padding:3px 8px;font-family:inherit;font-size:clamp(.68rem,2vw,.8rem);font-weight:900;background:transparent;cursor:pointer;color:var(--gray-700)">${I18n.t('op_defocusBtn')}</button>
+    <div id="op-defocus-slider" style="display:none;flex:1;align-items:center;gap:4px;min-width:0">
+      <div class="ed-slider-wrap" style="flex:1;min-width:40px">
+        <input type="range" id="op-line-defocus" min="0" max="100" data-suffix="" value="${dfv}" style="width:100%;accent-color:var(--black)">
         <span class="ed-slider-bubble"></span>
       </div>
     </div>
@@ -25099,10 +25294,11 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── Grosor ──
   $('op-size-btn')?.addEventListener('click',()=>{
-    const sl=$('op-size-slider'),ob=$('op-opacity-slider');
+    const sl=$('op-size-slider'),ob=$('op-opacity-slider'),od=$('op-defocus-slider');
     const open=sl.style.display==='none'||sl.style.display==='';
     sl.style.display=open?'flex':'none';
     if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    if(open&&od){od.style.display='none';$('op-defocus-btn').style.background='transparent';}
     $('op-size-btn').style.background=open?'var(--gray-200)':'transparent';
   });
   $('op-dsize')?.addEventListener('input',e=>{
@@ -25120,11 +25316,12 @@ function _edActivateLineTool(isNew, isCreating) {
 
   // ── Opacidad ──
   $('op-opacity-btn')?.addEventListener('click',()=>{
-    const slO=$('op-opacity-slider'),sl=$('op-size-slider');
+    const slO=$('op-opacity-slider'),sl=$('op-size-slider'),od=$('op-defocus-slider');
     if(!slO) return;
     const open=slO.style.display==='none'||slO.style.display==='';
     slO.style.display=open?'flex':'none';
     if(open&&sl){sl.style.display='none';$('op-size-btn').style.background='transparent';}
+    if(open&&od){od.style.display='none';$('op-defocus-btn').style.background='transparent';}
     $('op-opacity-btn').style.background=open?'var(--gray-200)':'transparent';
   });
   $('op-line-opacity')?.addEventListener('input',e=>{
@@ -25139,6 +25336,22 @@ function _edActivateLineTool(isNew, isCreating) {
     const l=_curLine(); if(l){l.opacity=v/100;_vsEach(l,p=>{p.opacity=v/100;});edRedraw();} _updateInfo();
     _edShapePushHistory();
   });
+
+  // ── Desenfoque (v42.51) ── mismo comportamiento que Grosor y Op%: el botón despliega su deslizador (0 = nítido)
+  $('op-defocus-btn')?.addEventListener('click',()=>{
+    const od=$('op-defocus-slider'),sl=$('op-size-slider'),ob=$('op-opacity-slider');
+    if(!od) return;
+    const open=od.style.display==='none'||od.style.display==='';
+    od.style.display=open?'flex':'none';
+    if(open&&sl){sl.style.display='none';$('op-size-btn').style.background='transparent';}
+    if(open&&ob){ob.style.display='none';$('op-opacity-btn').style.background='transparent';}
+    $('op-defocus-btn').style.background=open?'var(--gray-200)':'transparent';
+  });
+  $('op-line-defocus')?.addEventListener('input',e=>{
+    const v=+e.target.value;
+    const l=_curLine(); if(l){_edSetDf(l,v);_vsEach(l,p=>{_edSetDf(p,v);});edRedraw();}   // selección múltiple, como la opacidad
+  });
+  $('op-line-defocus')?.addEventListener('change',()=>{ _edShapePushHistory(); });
 
   // ── Cerrar objeto ──
   $('op-line-close-btn')?.addEventListener('click',()=>{
@@ -25202,6 +25415,7 @@ function _edActivateLineTool(isNew, isCreating) {
     if(_edGradValid(_origin.fillGradient) && _origin.fillColor === _newLayer.fillColor) _newLayer.fillGradient = _edCloneGrad(_origin.fillGradient); // el degradado del primer objeto se conserva
     _newLayer.lineWidth = _origin.lineWidth ?? edDrawSize ?? 3;
     _newLayer.opacity  = _origin.opacity ?? 1;
+    _edCopyDf(_newLayer, _origin);   // v42.51: la fusión hereda el desenfoque del primer objeto (como la opacidad)
     _newLayer.rotation = 0; // el nuevo layer no tiene rotación propia
     _newLayer.x = _origin.x;
     _newLayer.y = _origin.y;
@@ -25477,7 +25691,7 @@ function _edTextToDrawing(idx) {
   const wsCanvas = document.createElement('canvas');
   wsCanvas.width  = ED_CANVAS_W;
   wsCanvas.height = ED_CANVAS_H;
-  la.draw(wsCanvas.getContext('2d'), wsCanvas);
+  _edDrawSharp(la, wsCanvas.getContext('2d'), wsCanvas);   // v42.51: se hornea nítido; el desenfoque pasa a las capas nuevas
 
   // ── 2. Calcular bbox del contenido renderizado ────────────────────────────
   const bb = StrokeLayer._boundingBox(wsCanvas);
@@ -25502,6 +25716,7 @@ function _edTextToDrawing(idx) {
   sl.width  = uFw; sl.height = uFh;
   sl.rotation = 0;
   sl.opacity = la.opacity ?? 1;
+  _edCopyDf(sl, la);   // v42.51
   sl._bboxOriginX = uX0; sl._bboxOriginY = uY0;
   if (la.groupId)     sl.groupId     = la.groupId;
   if (la.locked)      sl.locked      = true;
@@ -25524,6 +25739,7 @@ function _edTextToDrawing(idx) {
   fl._bboxOriginX = uX0; fl._bboxOriginY = uY0;
   fl.x = uCx; fl.y = uCy; fl.width = uFw; fl.height = uFh; fl.rotation = 0;
   fl.opacity = la.opacity ?? 1;
+  _edCopyDf(fl, la);   // v42.51
   if (la.groupId) fl.groupId = la.groupId;
 
   // ── 5. PencilLayer vacío recortado ────────────────────────────────────────
@@ -25533,6 +25749,7 @@ function _edTextToDrawing(idx) {
   pl._isWorkspaceCanvas = false;
   pl._bboxOriginX = uX0; pl._bboxOriginY = uY0;
   pl.x = uCx; pl.y = uCy; pl.width = uFw; pl.height = uFh; pl.rotation = 0;
+  _edCopyDf(pl, la);   // v42.51
   if (la.groupId) pl.groupId = la.groupId;
 
   // ── 6. WatercolorLayer vacío recortado ───────────────────────────────────
@@ -25542,6 +25759,7 @@ function _edTextToDrawing(idx) {
   wl._isWorkspaceCanvas = false;
   wl._bboxOriginX = uX0; wl._bboxOriginY = uY0;
   wl.x = uCx; wl.y = uCy; wl.width = uFw; wl.height = uFh; wl.rotation = 0;
+  _edCopyDf(wl, la);   // v42.51
   if (la.groupId) wl.groupId = la.groupId;
 
   // ── 7. Sustituir el texto: orden visual fill→watercolor→pencil→stroke ────
@@ -25582,12 +25800,12 @@ function _edVectorToDrawing(idx) {
     const _hasFill = !!((la.fillColor && la.fillColor !== 'none') ||
                         (_gs && _gs.some(s => s && s.fillColor && s.fillColor !== 'none')));
     penWs = _ws();                                   // contorno (sin relleno) → tinta
-    const _ink = _copy(la); _ink.opacity = 1; _ink.fillColor = 'none';
+    const _ink = _copy(la); _ink.opacity = 1; _ink.defocus = 0; _ink.fillColor = 'none';   // v42.51: la copia se hornea nítida
     if (_gs) _ink.groupedStyles = _gs.map(s => Object.assign({}, s, { fillColor: 'none' }));
     _ink.draw(penWs.getContext('2d'));
     fillWs = _ws();                                  // relleno (sin contorno) → capa de relleno
     if (_hasFill) {
-      const _fil = _copy(la); _fil.opacity = 1; _fil.lineWidth = 0;
+      const _fil = _copy(la); _fil.opacity = 1; _fil.defocus = 0; _fil.lineWidth = 0;
       if (_gs) _fil.groupedStyles = _gs.map(s => Object.assign({}, s, { lineWidth: 0 }));
       _fil.draw(fillWs.getContext('2d'));
     }
@@ -25620,6 +25838,7 @@ function _edVectorToDrawing(idx) {
       l._bboxOriginX = x0; l._bboxOriginY = y0;
       l.x = uCx; l.y = uCy; l.width = uFw; l.height = uFh; l.rotation = 0;
       l.opacity = op;
+      _edCopyDf(l, la);   // v42.51
       if (la.hidden) l.hidden = true;
       if (la.locked) l.locked = true;   // mismo criterio que $('pp-lock'): el bloqueo del trazo baja a sus capas
       return l;
@@ -25634,6 +25853,7 @@ function _edVectorToDrawing(idx) {
     sl.x = uCx; sl.y = uCy; sl.width = uFw; sl.height = uFh; sl.rotation = 0;
     sl._bboxOriginX = x0; sl._bboxOriginY = y0;
     sl.opacity = op;
+    _edCopyDf(sl, la);   // v42.51
     if (la.groupId) sl.groupId = la.groupId;
     if (la.locked)  sl.locked  = true;
     if (la.hidden)  sl.hidden  = true;
@@ -28703,7 +28923,7 @@ function edRenderOptionsPanel(mode){
       <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
-      </div>
+      </div>${_edDefocusRowHtml('pp', _edDf(la))}
       <div class="op-prop-row">
         <button id="pp-tp-edit" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${editLabel}</button>
       </div>
@@ -28731,6 +28951,7 @@ function edRenderOptionsPanel(mode){
       edRedraw();
     });
     $('pp-opacity')?.addEventListener('change',()=>edPushHistory());
+    _edBindDefocusRow('pp', () => { const l = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null; return l ? [l] : []; });   // v42.51: desenfoque
     $('pp-tp-edit')?.addEventListener('click',()=>{ edRenderOptionsPanel('props'); });
     $('pp-text-to-draw')?.addEventListener('click',()=>{ if(edSelectedIdx>=0) _edTextToDrawing(edSelectedIdx); });
     $('pp-btn-action')?.addEventListener('click',()=>{ const _la=edLayers[edSelectedIdx]; if(_la) _edOpenBtnModal(_la); });
@@ -28820,13 +29041,16 @@ function edRenderOptionsPanel(mode){
       // sus sub-capas vinculadas).
       const _grpOpacities = _grpLockIdxs0.map(i => edLayers[i]?.opacity ?? 1);
       const _grpAvgOpacity = _grpOpacities.length ? _grpOpacities.reduce((a,b)=>a+b,0)/_grpOpacities.length : 1;
+      // v42.51: igual con el desenfoque (media de las capas principales; al mover el deslizador se igualan todas)
+      const _grpDfs = _grpLockIdxs0.map(i => _edDf(edLayers[i]));
+      const _grpAvgDf = _grpDfs.length ? _grpDfs.reduce((a,b)=>a+b,0)/_grpDfs.length : 0;
       panel.innerHTML=`
         <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_rotationLabel')}</span>
           <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-grp-rot" value="0" min="-360" max="360"> °
           <span class="op-prop-label" style="min-width:auto;margin-left:8px">${I18n.t('op_opacityLabel')}</span>
           <span id="pp-grp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round(_grpAvgOpacity*100)}%</span>
           <input type="range" id="pp-grp-opacity" min="0" max="100" value="${Math.round(_grpAvgOpacity*100)}" style="flex:1;accent-color:var(--black)">
-        </div>
+        </div>${_edDefocusRowHtml('pp-grp', _grpAvgDf)}
         <div class="op-row" style="margin-top:4px;justify-content:space-between;gap:4px">
 
         ${_edGrpPathRowHtml(la)}
@@ -28891,6 +29115,8 @@ function edRenderOptionsPanel(mode){
         edRedraw();
       });
       $('pp-grp-opacity')?.addEventListener('change', () => { edPushHistory(); });
+      // v42.51: desenfoque de todo el grupo (principales + sub-capas vinculadas), igual que la opacidad
+      _edBindDefocusRow('pp-grp', () => _grpRotAllIdxs().all.map(i => edLayers[i]));
       // Eliminar todo el grupo
       $('pp-grp-del')?.addEventListener('click',()=>{
         edConfirm(I18n.t('ed_confirmDeleteWholeGroup'), ()=>{
@@ -28964,7 +29190,7 @@ function edRenderOptionsPanel(mode){
             _newSl.x=newX; _newSl.y=m.y;
             _newSl.width=m.width; _newSl.height=m.height;
             _newSl.rotation=-(m.rotation||0);
-            _newSl.opacity=m.opacity??1; _newSl.hidden=m.hidden||false;
+            _newSl.opacity=m.opacity??1; _edCopyDf(_newSl, m); _newSl.hidden=m.hidden||false;   // v42.51: y el desenfoque
             _newSl._uid=m._uid; _newSl.groupId=m.groupId; _newSl.locked=m.locked||false;
             _newSl._fillLayerId=m._fillLayerId;
             _newSl._pencilLayerId=m._pencilLayerId;
@@ -28983,7 +29209,7 @@ function edRenderOptionsPanel(mode){
                 _n.x=newX; _n.y=_lnk.y;
                 _n.width=_lnk.width; _n.height=_lnk.height;
                 _n.rotation=_newSl.rotation;
-                _n.opacity=_lnk.opacity??1; _n.hidden=_lnk.hidden||false;
+                _n.opacity=_lnk.opacity??1; _edCopyDf(_n, _lnk); _n.hidden=_lnk.hidden||false;   // v42.51
                 _n._drawLayerId=_lnk._drawLayerId; _n._uid=_lnk._uid;
                 _n._isWorkspaceCanvas=false;
                 const _li=_pg.layers.indexOf(_lnk);
@@ -29228,12 +29454,13 @@ function edRenderOptionsPanel(mode){
           <input type="number" inputmode="numeric" enterkeyhint="done" id="pp-vc" value="${la.voiceCount||1}" min="1" max="5" style="width:48px">
         </div>`;
       }
+      html+=_edDefocusRowHtml('pp', _edDf(la));   // v42.51: desenfoque también en texto, bocadillo y hoja de texto
     } else if(la.type==='draw'){
       html+=`
       <div class="op-prop-row"><span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
         <span id="pp-opacity-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${Math.round((la.opacity??1)*100)}%</span>
         <input type="range" id="pp-opacity" min="0" max="100" value="${Math.round((la.opacity??1)*100)}" style="flex:1;accent-color:var(--black)">
-      </div>
+      </div>${_edDefocusRowHtml('pp', _edDf(la))}
       <div class="op-prop-row">
         <button id="pp-edit-draw" style="flex:1;background:var(--black);color:var(--white);border:none;border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer"><img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="11" height="18" style="display:inline-block;vertical-align:middle;flex-shrink:0"> ${I18n.t('op_editDrawingBtn')}</button>
         <button id="pp-crop" style="flex:1;background:var(--gray-100);border:1px solid var(--gray-300);border-radius:6px;padding:6px 10px;font-weight:900;font-size:.82rem;cursor:pointer">${I18n.t('op_cropBtn')}</button>
@@ -29568,6 +29795,7 @@ function edRenderOptionsPanel(mode){
       const sl=edLayers[edSelectedIdx]; if(!sl||sl.type!=='stroke') return;
       edPushHistory();
       const dl=sl.toDrawLayer();
+      if(sl.defocus > 0) dl._carryAttrs = Object.assign(dl._carryAttrs || {}, { defocus: sl.defocus });   // v42.51: al terminar, el dibujo vuelve a estar desenfocado igual
       // v42.40 — si la tinta es más densa que 1 px/px (v41.77, uniones), se guarda su bitmap original para que reeditar no la baje a 1× (ver _edReeditHiResBegin)
       const _hrEdit = _edReeditHiResBegin(sl, dl);
       if(_hrEdit) dl._hiRes = _hrEdit;
@@ -29727,6 +29955,8 @@ function edRenderOptionsPanel(mode){
       edRedraw();
     });
     $('pp-opacity')?.addEventListener('change',()=>{ edPushHistory(); });
+    // v42.51 — Desenfoque (0…100): como la opacidad, va con el objeto y se aplica también a su relleno / lápiz / acuarela vinculados
+    _edBindDefocusRow('pp', () => { const l = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null; return l ? _edDfTargetsOf(l) : []; });
     // Si el texto es placeholder, seleccionar todo para sobreescribir directamente
     const ppText = $('pp-text');
     if(ppText && (edLayers[edSelectedIdx]?.text === I18n.t('ed_writeHerePlaceholder'))){
@@ -29752,7 +29982,7 @@ function _edExpandGroupLayerToWs(la, drawLayer) {
   la._preEditRot = la.rotation || 0;
   const _exp = document.createElement('canvas');
   _exp.width = ED_CANVAS_W; _exp.height = ED_CANVAS_H;
-  try { la.draw(_exp.getContext('2d')); } catch(e) {}
+  try { _edDrawSharp(la, _exp.getContext('2d')); } catch(e) {}   // v42.51: se vuelca nítida; el desenfoque sigue siendo atributo de la capa
   la._canvas = _exp; la._ctx = _exp.getContext('2d');
   la._isWorkspaceCanvas = true;
   la.x = 0.5; la.y = 0.5; la.width = 1; la.height = 1; la.rotation = 0;
@@ -33177,12 +33407,13 @@ function _edFreezeLineLayer(la, idx) {
   const octx = off.getContext('2d');
   // Aplicar transformación idéntica a edRedraw
   octx.setTransform(1,0,0,1,0,0);
-  la.draw(octx);
+  _edDrawSharp(la, octx);   // v42.51: nítida; el desenfoque pasa como atributo a la capa congelada
 
   // Crear StrokeLayer con el bitmap
   const sl = new StrokeLayer(off);
   // Copiar propiedades comunes
   sl.opacity = la.opacity ?? 1;
+  _edCopyDf(sl, la);   // v42.51
   sl.rotation = la.rotation || 0;
   // Guardar datos geométricos originales para descongelar
   sl._frozenLine = {
@@ -33245,6 +33476,7 @@ function _edUnfreezeLineLayer(la, idx) {
   ll.lineWidth = la.lineWidth || d.lineWidth;
   ll.closed = d.closed;
   ll.opacity = la.opacity ?? d.opacity;
+  _edCopyDf(ll, la);   // v42.51
   ll.rotation = la.rotation || 0;       // usar rotación actual
   // Posición: usar la posición actual del StrokeLayer
   ll.x = la.x; ll.y = la.y;
@@ -33431,7 +33663,7 @@ function edInitShapeBar() {
   document.addEventListener('pointerdown', e => {
     const panel = $('esb-slider-panel');
     if (panel && panel.style.display === 'flex' && !panel.contains(e.target) &&
-        e.target.id !== 'esb-opacity' && e.target.id !== 'esb-curve' && e.target.id !== 'edb-opacity') {
+        e.target.id !== 'esb-opacity' && e.target.id !== 'esb-defocus' && e.target.id !== 'esb-curve' && e.target.id !== 'edb-opacity') {
       // v41.47 — EL SLIDER DE CURVATURA NO SE CIERRA AL TOCAR FUERA. Este cierre (v40.70) está pensado
       // para el slider de OPACIDAD, que es un popup puntual. El de curvatura es parte del MODO NODOS: se
       // abre al activar NODOS y debe quedarse hasta desactivarlo (ver el listener de #esb-curve:
@@ -33472,6 +33704,19 @@ function edInitShapeBar() {
         // Sincronizar slider de opacidad del panel si está abierto
         const _osl=$('op-line-opacity'); if(_osl){ _osl.value=v; _edUpdateBubble(_osl,'%'); }
         const _st=$('op-line-status'); if(_st){ _st.textContent=(l.lineWidth||3)+'px·'+v+'%'; }
+      } },
+      v=>{ _edShapePushHistory(); }
+    );
+  });
+
+  // Desenfoque (v42.51) — slider adjunto a la barra, igual que Opacidad (0 = nítido); también en selección múltiple (_vsEach)
+  $('esb-defocus')?.addEventListener('click', e => {
+    if(_locked) return; e.stopPropagation();
+    const la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
+    _esbShowSlider('defocus', 0, 100, Math.round(_edDf(la)),
+      v=>{ const l=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(l){ _edSetDf(l, v); _vsEach(l, p=>{ _edSetDf(p, v); }); edRedraw();
+        // Sincronizar el deslizador del panel si está abierto
+        const _dsl=$('op-line-defocus')||$('op-shape-defocus'); if(_dsl){ _dsl.value=v; _edUpdateBubble(_dsl,''); }
       } },
       v=>{ _edShapePushHistory(); }
     );
@@ -33544,6 +33789,7 @@ function edInitShapeBar() {
     if(_edGradValid(_origin.fillGradient) && _origin.fillColor === _newLayer.fillColor) _newLayer.fillGradient = _edCloneGrad(_origin.fillGradient); // el degradado del primer objeto se conserva
     _newLayer.lineWidth = _origin.lineWidth ?? edDrawSize ?? 3;
     _newLayer.opacity  = _origin.opacity ?? 1;
+    _edCopyDf(_newLayer, _origin);   // v42.51: la fusión hereda el desenfoque del primer objeto (como la opacidad)
     _newLayer.rotation = 0;
     _newLayer.x = _origin.x;
     _newLayer.y = _origin.y;
@@ -35912,7 +36158,7 @@ function _edRenderLayerToWorkspace(la){
   wc.width  = ED_CANVAS_W;
   wc.height = ED_CANVAS_H;
   const ctx = wc.getContext('2d');
-  la.draw(ctx);
+  _edDrawSharp(la, ctx);   // v42.51: nítida (ver _edDrawSharp)
   return wc;
 }
 
@@ -36079,7 +36325,7 @@ function _edHandFixGrid(src, cvs, ctxs, wts, kx, ky, X0, Y0){
       sx.setTransform(1, 0, 0, 1, 0, 0); sx.clearRect(0, 0, RW, BH);
       sx.save(); sx.setTransform(kx, 0, 0, ky, -X0 * kx - rx0, -Y0 * ky - by);
       if(!_edHandSmooth(src[n], kx, ky)) sx.imageSmoothingEnabled = false;   // misma regla que al componer la tinta
-      sx.globalAlpha = src[n].op; src[n].l.draw(sx); sx.restore();
+      sx.globalAlpha = src[n].op; _edDrawSharp(src[n].l, sx); sx.restore();   // v42.51: la unión se calcula con los píxeles nítidos; el desenfoque pasa al resultado (ver _finishMerge)
       D[n] = sx.getImageData(0, 0, RW, bh).data; any = true;
     }
     if(!any) continue;
@@ -36161,7 +36407,7 @@ function _edHandMergeSlots(mains){
   for(const s of src){
     if(!s.box) continue;
     const cx = ctxs[s.t];
-    cx.save(); cx.translate(-X0, -Y0); cx.globalAlpha = s.op; s.l.draw(cx); cx.restore();
+    cx.save(); cx.translate(-X0, -Y0); cx.globalAlpha = s.op; _edDrawSharp(s.l, cx); cx.restore();
   }
   // 3) lo que en el apilado original tapaba a otra capa que en la unión queda encima
   try { _edHandFixGrid(src, cvs, ctxs, [0, 1, 2, 3], 1, 1, X0, Y0); }
@@ -36219,7 +36465,7 @@ function _edHandInkHiRes(hm, ux0, uy0, uw, uh){
     cx.setTransform(kx, 0, 0, ky, -ux0 * kx, -uy0 * ky);        // coordenadas de página → lienzo
     if(capped) cx.imageSmoothingQuality = 'high';               // si hay que reducir, con el mejor filtro
     if(!_edHandSmooth(s, kx, ky)) cx.imageSmoothingEnabled = false; // bitmap a ~1:1: copia píxel a píxel (ver _edHandSmooth)
-    cx.globalAlpha = s.op; s.l.draw(cx); cx.restore();
+    cx.globalAlpha = s.op; _edDrawSharp(s.l, cx); cx.restore();
   }
   // la misma corrección de solapes que en la composición a 1×, ahora sobre la rejilla de la tinta (solo se escribe la tinta)
   try { _edHandFixGrid(hm.src, [null, null, null, cv], [null, null, null, cx], [3], kx, ky, ux0, uy0); }
@@ -36239,6 +36485,7 @@ function _edBuildUnitedVector(layers){
   newLL.color     = first.color     || '#000000';
   newLL.lineWidth = first.lineWidth || 3;
   newLL.opacity   = first.opacity   ?? 1;   // (se recalcula al final: ver «OPACIDAD POR CONTORNO»)
+  _edCopyDf(newLL, first);                   // v42.51: la unión hereda el desenfoque del primer objeto
   const _fillLayer = layers.find(l => l.fillColor && l.fillColor !== 'none');
   newLL.fillColor = _fillLayer ? _fillLayer.fillColor : (first.fillColor || 'none');
   const _allClosed = layers.every(l => l.type === 'shape' || (l.type === 'line' && l.closed));
@@ -36629,6 +36876,11 @@ function edMergeSelected(){
   /* ── helper: finalizar inserción ── */
   function _finishMerge(newLayer){
     if(!newLayer) return; // caso defensivo — ver mtype==='stroke'/'draw' (v41.06)
+    // v42.51 — el objeto unido hereda el desenfoque del primero (el de más abajo): los dibujos se unen con sus píxeles nítidos y el
+    // desenfoque es un atributo de las capas resultantes (todas, también las vinculadas). Si no eran iguales, se avisa.
+    const _dfU = _edDf(layers[0]);
+    const _dfMixed = layers.some(l => _edDf(l) !== _dfU);
+    if(_dfU){ newLayer.defocus = _dfU; for(const _k of ['_newFill','_newPencil','_newWatercolor']) if(newLayer[_k]) newLayer[_k].defocus = _dfU; }
     // Insertar en la posición de la capa más alta seleccionada
     // para respetar el orden Z respecto a capas intermedias no seleccionadas.
     let insertAt = idxs[idxs.length - 1];
@@ -36662,7 +36914,7 @@ function edMergeSelected(){
     if(edCanvas) edCanvas.className = '';
     $('edMultiSelBtn')?.classList.remove('active');
     edPushHistory(); edRedraw();
-    edToast(I18n.t('ed_objectsUnited'));
+    edToast(I18n.t(_dfMixed ? 'ed_objectsUnitedDf' : 'ed_objectsUnited'));
   }
 
   if(mtype === 'vector'){
@@ -36906,6 +37158,11 @@ function _edCloneLinePoint(p){
 // espacio en disco no se pierde; solo se evita re-comprimir de más antes de
 // que el usuario llegue a guardar nada.
 function edSerLayer(l, skipCompress){
+  const _o = _edSerLayerCore(l, skipCompress);
+  if (_o && l && l.defocus > 0) _o.defocus = CxDefocus.clamp(l.defocus);   // v42.51: desenfoque, como la opacidad
+  return _o;
+}
+function _edSerLayerCore(l, skipCompress){
   const op = l.opacity !== undefined ? {opacity:l.opacity} : {};
   if(l.type==='fill'){
     const _f={type:'fill', dataUrl:l.toDataUrlFull(), _isFull:true,
@@ -37080,7 +37337,7 @@ function edSerLayer(l, skipCompress){
         const _full=document.createElement('canvas');
         _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
         const _fctx=_full.getContext('2d');
-        l.draw(_fctx,_full);
+        _edDrawSharp(l,_fctx,_full);   // v42.51: el bitmap de guardado va nítido; el lector aplica l.defocus al pintarlo
         l.text=_savedText;
 
         // Recortar zona del bocadillo + cola con bbox calculado
@@ -37151,7 +37408,7 @@ function edSerLayer(l, skipCompress){
         const _dx=_bw/2-(edMarginX()+l.x*_pw);
         const _dy=_bh/2-(edMarginY()+l.y*_ph);
         _cctx.translate(_dx,_dy);
-        l.draw(_cctx);
+        _edDrawSharp(l,_cctx);   // v42.51 (ver arriba)
         l.rotation=_savedRot;
         _sobj.renderDataUrl=_crop.toDataURL('image/png');
         _sobj._renderPad=_pad;
@@ -37194,7 +37451,7 @@ function edSerLayer(l, skipCompress){
         const _full=document.createElement('canvas');
         _full.width=ED_CANVAS_W; _full.height=ED_CANVAS_H;
         const _fctx=_full.getContext('2d');
-        l.draw(_fctx);
+        _edDrawSharp(l,_fctx);   // v42.51 (ver arriba)
         l.rotation=_savedRot;
         // Recortar zona del objeto con margen para el trazo
         let _padLw=l.lineWidth||3;                               // v42.33: en una unión ⊕ cada contorno puede tener un grosor distinto
@@ -37282,6 +37539,11 @@ function _edAnimIdbSave(key, frames) {
 // edLoadProject para las hojas que no son la primera; el resto de capas (texto, formas,
 // imágenes, gif…) se deserializan igual que siempre.
 function edDeserLayer(d, pageOrientation, light){
+  const _l = _edDeserLayerCore(d, pageOrientation, light);
+  if (_l && d && d.defocus > 0) _l.defocus = CxDefocus.clamp(d.defocus);   // v42.51: desenfoque, como la opacidad
+  return _l;
+}
+function _edDeserLayerCore(d, pageOrientation, light){
   if(!d) return null;
   if(d.type==='group') return null; // obsoleto
   if(d.type==='fill'){
@@ -43949,20 +44211,6 @@ async function edExportSelectionPNG(format, insertMode) {
   const mx = edMarginX(), my = edMarginY();
   const page = edPages[edCurrentPage]; if(!page) return;
 
-  // Canvas del tamaño exacto del bbox de selección en px
-  const bxPx = Math.ceil(bb.w * pw);
-  const byPx = Math.ceil(bb.h * ph);
-  const off = document.createElement('canvas');
-  off.width  = bxPx;
-  off.height = byPx;
-  const offCtx = off.getContext('2d', { alpha: true });
-
-  if(format === 'jpg'){ offCtx.fillStyle='#ffffff'; offCtx.fillRect(0,0,bxPx,byPx); }
-
-  // Transform: mapear coords workspace al canvas de exportación
-  // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace
-  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
-
   // Capas a exportar: incluir sub-capas (pencil, fill, watercolor) vinculadas a draw/stroke
   const _selBase = edMultiSel.length >= 2
     ? edMultiSel.map(i => edLayers[i]).filter(Boolean)
@@ -43984,6 +44232,22 @@ async function edExportSelectionPNG(format, insertMode) {
   const _selOrdered = edLayers.filter(l => l && selSet.has(l) && !l.hidden);
   const _textLayers = _selOrdered.filter(l => l.type==='text'||l.type==='bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
+
+  // Canvas del tamaño exacto del bbox de selección en px
+  // v42.52: + el halo del desenfoque (0 si ninguna capa está desenfocada → mismo tamaño que siempre)
+  const _dfm = _edDfExportMargin(_selOrdered);
+  const bxPx = Math.ceil(bb.w * pw) + 2 * _dfm;
+  const byPx = Math.ceil(bb.h * ph) + 2 * _dfm;
+  const off = document.createElement('canvas');
+  off.width  = bxPx;
+  off.height = byPx;
+  const offCtx = off.getContext('2d', { alpha: true });
+
+  if(format === 'jpg'){ offCtx.fillStyle='#ffffff'; offCtx.fillRect(0,0,bxPx,byPx); }
+
+  // Transform: mapear coords workspace al canvas de exportación
+  // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace (menos el margen del halo)
+  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw) + _dfm, -(my + bb.y0*ph) + _dfm);
 
   _selOrdered.forEach(l => {
     if(l.type==='text'||l.type==='bubble') return;
@@ -44039,6 +44303,15 @@ async function edExportSelectionPNG(format, insertMode) {
   }, mimeType, quality);
 }
 
+
+// v42.52 — margen (px de hoja) que hay que añadir a la caja de una selección con capas desenfocadas: el desenfoque extiende la capa más allá
+// de su caja (halo de ≈ 3σ, donde la gaussiana ya vale < 0,2 %); sin él, el PNG/SVG exportado cortaría el desenfoque en seco contra el borde.
+// 0 si ninguna capa está desenfocada (las exportaciones sin desenfoque salen exactamente igual que antes).
+function _edDfExportMargin(layers) {
+  let s = 0;
+  for (const l of layers) if (l && l.defocus > 0) s = Math.max(s, CxDefocus.sigma(l.defocus));
+  return s > 0 ? Math.ceil(s * 3) : 0;
+}
 
 // ── Helper: ¿puede esta capa exportarse como SVG vectorial puro? ──────────────
 function _edLayerIsPureVector(la) {
@@ -44324,14 +44597,34 @@ async function edExportSelectionSVG() {
       }
       return m;
     }, 0);
-    const _pad = Math.ceil(_maxHalfSw) + 1; // +1px de margen de seguridad
+    // v42.52: + el halo del desenfoque (0 si ninguna capa está desenfocada → mismo SVG que siempre)
+    const _pad = Math.ceil(_maxHalfSw) + 1 + _edDfExportMargin(_ordered); // +1px de margen de seguridad
     const _svgW = bxPx + 2 * _pad;
     const _svgH = byPx + 2 * _pad;
+    // v42.52 — DESENFOQUE sin perder el vector: la capa sigue siendo forma/trazo y va dentro de <g filter="url(#…)"> con un
+    // <filter><feGaussianBlur/></filter> (estándar SVG / W3C Filter Effects), un filtro por cada desenfoque distinto.
+    //  · stdDeviation en unidades de usuario = px de hoja = CxDefocus.sigma(): si el SVG se escala, el desenfoque escala con él.
+    //  · color-interpolation-filters="sRGB": SVG mezcla por defecto en linearRGB; el desenfoque del lienzo y el de CSS van en sRGB,
+    //    así el SVG se ve igual que en el editor y en el lector.
+    //  · filterUnits="userSpaceOnUse" y región = todo el SVG: la región por defecto (−10 %…120 % de la caja del objeto) cortaría el halo.
+    const _dfFilters = new Map();   // σ → id
+    const _dfWrap = (l, el) => {
+      if (!(l.defocus > 0)) return el;
+      const sg = +CxDefocus.sigma(l.defocus).toFixed(3);
+      if (!(sg > 0)) return el;
+      if (!_dfFilters.has(sg)) _dfFilters.set(sg, 'edblur' + (_dfFilters.size + 1));
+      return `<g filter="url(#${_dfFilters.get(sg)})">${el}</g>`;
+    };
     // Generar elementos SVG reales para cada capa (orden edLayers = fondo→frente)
-    const _svgEls = _ordered.map(l => '  ' + _edLayerToSvgElement(l, bb, pw, ph, _pad)).join('\n');
+    const _svgEls = _ordered.map(l => '  ' + _dfWrap(l, _edLayerToSvgElement(l, bb, pw, ph, _pad))).join('\n');
+    const _svgDefs = _dfFilters.size
+      ? '  <defs>' + [..._dfFilters].map(([sg, id]) =>
+          `<filter id="${id}" filterUnits="userSpaceOnUse" x="0" y="0" width="${_svgW}" height="${_svgH}" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="${sg}"/></filter>`).join('') + '</defs>'
+      : null;
     const svgStr = [
       '<?xml version="1.0" encoding="UTF-8"?>',
       `<svg xmlns="http://www.w3.org/2000/svg" width="${_svgW}" height="${_svgH}" viewBox="0 0 ${_svgW} ${_svgH}">`,
+      ...(_svgDefs ? [_svgDefs] : []),
       _svgEls,
       '</svg>'
     ].join('\n');
@@ -44343,10 +44636,13 @@ async function edExportSelectionSVG() {
   }
 
   // ── 4. Fallback: hay capas raster → PNG embebido en SVG ──────────────────
+  // v42.52: el PNG lleva el desenfoque ya aplicado (l.draw) y el margen del halo, para no cortarlo contra la caja
+  const _dfm = _edDfExportMargin(_ordered);
+  const bxOut = bxPx + 2 * _dfm, byOut = byPx + 2 * _dfm;
   const off = document.createElement('canvas');
-  off.width = bxPx; off.height = byPx;
+  off.width = bxOut; off.height = byOut;
   const offCtx = off.getContext('2d', { alpha: true });
-  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw), -(my + bb.y0*ph));
+  offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw) + _dfm, -(my + bb.y0*ph) + _dfm);
 
   const _textLayers = _ordered.filter(l => l.type==='text'||l.type==='bubble');
   const _textAlpha  = page.textLayerOpacity ?? 1;
@@ -44363,8 +44659,8 @@ async function edExportSelectionSVG() {
   const svgStr = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`,
-    `     width="${bxPx}" height="${byPx}" viewBox="0 0 ${bxPx} ${byPx}">`,
-    `  <image href="${b64}" x="0" y="0" width="${bxPx}" height="${byPx}"/>`,
+    `     width="${bxOut}" height="${byOut}" viewBox="0 0 ${bxOut} ${byOut}">`,
+    `  <image href="${b64}" x="0" y="0" width="${bxOut}" height="${byOut}"/>`,
     '</svg>'
   ].join('\n');
   const blob = new Blob([svgStr], { type: 'image/svg+xml' });
@@ -46007,6 +46303,7 @@ function _bibRenderPanel(panel) {
           _la.y = entryData.fillY != null ? entryData.fillY : newLayer.y;
           _la.width  = _sfW; _la.height = _sfH;
           _la.rotation = entryData.fillRotation || 0;
+          _edCopyDf(_la, newLayer);   // v42.51 — las capas vinculadas llevan el mismo desenfoque que el trazo
           _adaptLayerOrientation(_la);
           const _cW = Math.max(1, Math.round(_la.width  * _pwD));
           const _cH = Math.max(1, Math.round(_la.height * _phD));
@@ -47230,6 +47527,7 @@ function _gcpOpenPropsPanel(la, laIdx) {
   const fi = window._gcpGlobalFrameIdx || 0;
   const rot = Math.round(la.rotation || 0);
   const opPct = Math.round((la.opacity ?? 1) * 100);
+  const dfNow = Math.round(_edDf(la));   // v42.51: desenfoque 0-100 (por fotograma, como la opacidad)
   const pw = edPageW(), ph = edPageH();
 
   // Etiqueta del tipo de objeto
@@ -47260,6 +47558,11 @@ function _gcpOpenPropsPanel(la, laIdx) {
       <span class="op-prop-label">${I18n.t('op_opacityLabel')}</span>
       <span id="gcppp-op-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${opPct}%</span>
       <input type="range" id="gcppp-op" min="0" max="100" value="${opPct}">
+    </div>
+    <div class="op-prop-row">
+      <span class="op-prop-label">${I18n.t('op_defocusLabel')}</span>
+      <span id="gcppp-df-val" style="font-size:.75rem;font-weight:900;min-width:32px;text-align:left">${dfNow}</span>
+      <input type="range" id="gcppp-df" min="0" max="100" value="${dfNow}">
     </div>
     <div class="op-prop-row">
       <span class="op-prop-label">${I18n.t('op_rotationLabel')}</span>
@@ -47294,6 +47597,16 @@ function _gcpOpenPropsPanel(la, laIdx) {
   opSlider?.addEventListener('input', () => {
     la.opacity = parseInt(opSlider.value) / 100;
     opVal.textContent = opSlider.value + '%';
+    _gcpAutoSaveFrame();
+    _gcpRedraw();
+  });
+
+  // v42.51 — Desenfoque (por fotograma, igual que la opacidad: se guarda en el fotograma actual y se interpola entre claves)
+  const dfSlider = document.getElementById('gcppp-df');
+  const dfVal = document.getElementById('gcppp-df-val');
+  dfSlider?.addEventListener('input', () => {
+    _edSetDf(la, +dfSlider.value);
+    dfVal.textContent = dfSlider.value;
     _gcpAutoSaveFrame();
     _gcpRedraw();
   });
@@ -47534,7 +47847,7 @@ function _gcpAutoSaveFrame() {
     if (la._gcpVisible === false) { la._frames[fi] = null; _gcpInvalidateThumb(la, fi); return; }
     la._frames[fi] = {
       x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1, ..._edDfField(la)
     };
     // Invalidar solo esta celda concreta (capa, frame) — no la caché entera.
     // La MUESTRA (miniatura identificadora de la fila) NO se toca aquí: debe
@@ -47871,7 +48184,7 @@ function _gcpHandleUp(e) {
   // El historial registra el estado en vivo (fuera de los frames guardados).
   const newSnap = window._gcpLayers.map(la => ({
     x:la.x, y:la.y, width:la.width, height:la.height,
-    rotation:la.rotation||0, opacity:la.opacity??1
+    rotation:la.rotation||0, opacity:la.opacity??1, ..._edDfField(la)
   }));
   const newJSON = JSON.stringify(newSnap);
   if (window._gcpHistory[window._gcpHistoryIdx] !== newJSON) {
@@ -47972,7 +48285,7 @@ function _gcpPushHistory() {
     cN:  window._gcpCircularInterpN,
     layers: window._gcpLayers.map(la => ({
       x: la.x, y: la.y, width: la.width, height: la.height,
-      rotation: la.rotation || 0, opacity: la.opacity ?? 1,
+      rotation: la.rotation || 0, opacity: la.opacity ?? 1, ..._edDfField(la),
       gcpVisible: la._gcpVisible, gcpName: la._gcpName,
       frames: (la._frames || []).map(f => f ? {...f} : null)
     }))
@@ -48007,7 +48320,7 @@ function _gcpApplyHistorySnap(snap) {
   state.layers.forEach((s, i) => {
     const la = window._gcpLayers[i]; if (!la) return;
     la.x = s.x; la.y = s.y; la.width = s.width; la.height = s.height;
-    la.rotation = s.rotation; la.opacity = s.opacity ?? 1;
+    la.rotation = s.rotation; la.opacity = s.opacity ?? 1; _edSetDf(la, s.defocus);
     la._gcpVisible = s.gcpVisible; la._gcpName = s.gcpName;
     la._frames = (s.frames || []).map(f => f ? {...f} : null);
   });
@@ -48044,7 +48357,7 @@ function _gcpSaveCurrentToFrame() {
   window._gcpLayers.forEach(la => {
     if (!la._frames || fi < 0 || fi >= la._frames.length) return;
     if (la._gcpVisible === false) { la._frames[fi] = null; return; }
-    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)};
   });
 }
 
@@ -48136,7 +48449,7 @@ function _gcpGetKeyFrameGlobalIdx(n) {
 
 // Inicializar _frames de un layer en el frame de inserción
 function _gcpInitLayerFrames(la, startFi) {
-  const _snap = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+  const _snap = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)};
   const total = _gcpGetTotalFrames();
 
   // Sin frames existentes (primer objeto): solo el frame de inserción
@@ -48215,7 +48528,7 @@ function _gcpSaveFrame() {
     while (la._frames.length <= fi) la._frames.push(null);
     if (la._gcpVisible === false) { la._frames[fi] = null; _gcpInvalidateThumb(la, fi); return; }
     la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,
-                  rotation:la.rotation||0,opacity:la.opacity??1};
+                  rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)};
     // Solo esta columna cambió — no hace falta invalidar el resto de frames.
     // La MUESTRA no se toca aquí (ver nota en _gcpAutoSaveFrame): debe quedar
     // fija con el aspecto de la inserción, no con el de este guardado.
@@ -48286,7 +48599,7 @@ function _gcpLerpFrame(a, b, t) {
   // Precisión ampliada a 6 decimales: error máximo ~0.0001% de la página,
   // imperceptible incluso en lienzos de altísima resolución.
   const r = v => Math.round(v * 1e6) / 1e6;
-  return {
+  const o = {
     x:        r(a.x        + (b.x        - a.x)        * t),
     y:        r(a.y        + (b.y        - a.y)        * t),
     width:    r(a.width    + (b.width    - a.width)    * t),
@@ -48295,6 +48608,11 @@ function _gcpLerpFrame(a, b, t) {
     opacity:  Math.round((a.opacity + (b.opacity - a.opacity) * t) * 1000) / 1000,
     _interp:  true,
   };
+  // v42.51: el desenfoque se interpola igual que la opacidad (entre dos claves nítidas no se escribe el campo)
+  const _dA = a.defocus > 0 ? a.defocus : 0, _dB = b.defocus > 0 ? b.defocus : 0;
+  const _dI = Math.round((_dA + (_dB - _dA) * t) * 100) / 100;
+  if (_dI > 0) o.defocus = _dI;
+  return o;
 }
 
 // Cuenta cuántos frames interpolados hay entre fi y el siguiente frame clave
@@ -48952,7 +49270,7 @@ function _gcpApplyFrame(fi) {
     const s = la._frames[fi];
     if (!s) { la._gcpVisible = false; return; } // no existe en este frame
     la.x=s.x; la.y=s.y; la.width=s.width; la.height=s.height;
-    la.rotation=s.rotation; la.opacity=s.opacity??1;
+    la.rotation=s.rotation; la.opacity=s.opacity??1; _edSetDf(la, s.defocus);
     la._gcpVisible = true;
   });
 }
@@ -49078,9 +49396,9 @@ function _gcpLayerSampleThumb(la, S) {
     const octx=off.getContext('2d');
     octx.setTransform(scale,0,0,scale,offX,offY);
     if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
-    else if(la.type==='image'){la.draw(octx,off);}
-    else if(la.type==='draw'){la.draw(octx);}
-    else{octx.globalAlpha=la.opacity??1;la.draw(octx);octx.globalAlpha=1;}
+    else if(la.type==='image'){_edDrawSharp(la,octx,off);}   // v42.51: las miniaturas van siempre nítidas
+    else if(la.type==='draw'){_edDrawSharp(la,octx);}
+    else{octx.globalAlpha=la.opacity??1;_edDrawSharp(la,octx);octx.globalAlpha=1;}
     octx.setTransform(1,0,0,1,0,0);
     const idata=octx.getImageData(0,0,wsW,wsH).data;
     let x0=wsW,y0=wsH,x1=0,y1=0;
@@ -49200,9 +49518,9 @@ function _gcpLayerFrameThumb(la, fi, S) {
     const octx=off.getContext('2d');
     octx.setTransform(scale,0,0,scale,offX,offY);
     if(la.type==='gif'){if(la._oc&&la._ready&&la._oc.width>0){const gx=mx+la.x*pw-(la.width*pw)/2;const gy=my+la.y*ph-(la.height*ph)/2;octx.globalAlpha=la.opacity??1;octx.drawImage(la._oc,gx,gy,la.width*pw,la.height*ph);octx.globalAlpha=1;}}
-    else if(la.type==='image'){la.draw(octx,off);}
-    else if(la.type==='draw'){la.draw(octx);}
-    else{octx.globalAlpha=la.opacity??1;la.draw(octx);octx.globalAlpha=1;}
+    else if(la.type==='image'){_edDrawSharp(la,octx,off);}   // v42.51: las miniaturas van siempre nítidas
+    else if(la.type==='draw'){_edDrawSharp(la,octx);}
+    else{octx.globalAlpha=la.opacity??1;_edDrawSharp(la,octx);octx.globalAlpha=1;}
     octx.setTransform(1,0,0,1,0,0);
     const idata=octx.getImageData(0,0,wsW,wsH).data;
     let x0=wsW,y0=wsH,x1=0,y1=0;
@@ -49335,7 +49653,7 @@ function _gcpFrameThumb(fi, S) {
   const tctx=tc.getContext('2d');
   tctx.fillStyle='#f0f0f0';tctx.fillRect(0,0,S,S);
   if(!window._gcpLayers.length) return tc;
-  const saved=window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,vis:la._gcpVisible}));
+  const saved=window._gcpLayers.map(la=>({x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,df:la.defocus||0,vis:la._gcpVisible}));
   const _savedSel=window._gcpSelIdx; window._gcpSelIdx=-1;
   _gcpApplyFrame(fi);
   _gcpWithEditorContext(()=>{
@@ -49348,9 +49666,9 @@ function _gcpFrameThumb(fi, S) {
       if(!l||typeof l.draw!=='function') return;
       if(l._gcpVisible===false) return;  // mismo guard que _gcpRedraw y renderSnap
       if(l.type==='gif'){if(l._oc&&l._ready&&l._oc.width>0){const gx=mx+l.x*pw-(l.width*pw)/2;const gy=my+l.y*ph-(l.height*ph)/2;octx.globalAlpha=l.opacity??1;octx.drawImage(l._oc,gx,gy,l.width*pw,l.height*ph);octx.globalAlpha=1;}}
-      else if(l.type==='image'){l.draw(octx,off);}
-      else if(l.type==='draw'){l.draw(octx);}
-      else{octx.globalAlpha=l.opacity??1;l.draw(octx);octx.globalAlpha=1;}
+      else if(l.type==='image'){_edDrawSharp(l,octx,off);}   // v42.51: miniaturas nítidas
+      else if(l.type==='draw'){_edDrawSharp(l,octx);}
+      else{octx.globalAlpha=l.opacity??1;_edDrawSharp(l,octx);octx.globalAlpha=1;}
     });
     octx.setTransform(1,0,0,1,0,0);
     const idata=octx.getImageData(0,0,wsW,wsH).data;
@@ -49363,7 +49681,7 @@ function _gcpFrameThumb(fi, S) {
     tctx.drawImage(off,x0,y0,cw,ch,(S-dw)/2,(S-dh)/2,dw,dh);
   });
   window._gcpSelIdx=_savedSel;
-  saved.forEach((s,i)=>{const la=window._gcpLayers[i];if(!la)return;la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity;la._gcpVisible=s.vis;});
+  saved.forEach((s,i)=>{const la=window._gcpLayers[i];if(!la)return;la.x=s.x;la.y=s.y;la.width=s.width;la.height=s.height;la.rotation=s.rotation;la.opacity=s.opacity;_edSetDf(la,s.df);la._gcpVisible=s.vis;});
   return tc;
 }
 
@@ -50515,7 +50833,7 @@ function _gcpUpdateFramesBar() {
           if (!la._frames) la._frames = [];
           while (la._frames.length <= fi) la._frames.push(null);
           const _prev = _gcpFindPrevExistingFrame(la, fi);
-          la._frames[fi] = _prev ? {..._prev} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1};
+          la._frames[fi] = _prev ? {..._prev} : {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)};
           delete la._frames[fi]._interp;
           window._gcpDirty = true;
           // Solo esta celda pasa a existir — el resto de frames de esta y
@@ -51255,10 +51573,17 @@ function _gcpSbDiag() {
 
 // Dibuja un layer GCP en el contexto dado, con un alpha específico
 function _gcpDrawLayerAt(ctx, l, alpha) {
-  // Los métodos draw() de ImageLayer, GifLayer, TextLayer, etc. hacen
-  // ctx.globalAlpha = this.opacity dentro de ctx.save(), ignorando el
-  // ctx.globalAlpha que pongamos antes. Solución: multiplicar l.opacity
-  // por el alpha deseado temporalmente para que draw() use el valor correcto.
+  // Los métodos draw() de ImageLayer y GifLayer hacen ctx.globalAlpha = this.opacity dentro de ctx.save(),
+  // ignorando el ctx.globalAlpha que pongamos antes. Solución: multiplicar l.opacity por el alpha deseado
+  // temporalmente para que draw() use el valor correcto.
+  // v42.53: ShapeLayer/LineLayer ya NO aplican su opacidad dentro de draw() (la fija quien llama, como los trazos y dibujos):
+  // aquí se multiplica ctx.globalAlpha por su opacidad y por el alpha del fantasma, y se restaura al terminar.
+  if (l.type === 'shape' || l.type === 'line') {
+    const _ga = ctx.globalAlpha;
+    ctx.globalAlpha = _ga * (l.opacity ?? 1) * alpha;
+    try { l.draw(ctx, gcpCanvas); } finally { ctx.globalAlpha = _ga; }
+    return;
+  }
   const _savedOp = l.opacity;
   l.opacity = (l.opacity ?? 1) * alpha;
   l.draw(ctx, gcpCanvas);
@@ -51276,7 +51601,8 @@ function _gcpDrawLayerBlurGhost(ctx, l, prevSnap, alpha) {
   l.width = prevSnap.width; l.height = prevSnap.height;
   l.rotation = prevSnap.rotation ?? 0;
   l.opacity = prevSnap.opacity ?? 1;
-  _gcpDrawLayerAt(ctx, l, alpha);
+  // v42.51: los fantasmas del rastro de movimiento se pintan nítidos (hasta 14 desenfoques por fotograma saldrían carísimos y a esa transparencia no se aprecian)
+  CxDefocus.suspend(() => _gcpDrawLayerAt(ctx, l, alpha));
   // Restaurar
   l.x = cx; l.y = cy; l.width = cw2; l.height = ch2; l.rotation = cr; l.opacity = co;
 }
@@ -51684,24 +52010,30 @@ function _gcpMergeLayersToImage(items, cb, opts) {
       octx.globalAlpha = la.opacity ?? 1;
 
       if (!img) {
-        // Capa vectorial (shape, line, text, bubble): draw() es síncrono
+        // Capa vectorial (shape, line, text, bubble): draw() es síncrono (y lleva su propio desenfoque, si lo tiene)
         octx.setTransform(1, 0, 0, 1, offX, offY);
         la.draw(octx);
-      } else if (type === 'draw') {
-        // DrawLayer: dataUrl es la zona de página (pw×ph), se restaura en (mx,my)
-        octx.setTransform(1, 0, 0, 1, offX, offY);
-        octx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
       } else {
-        // StrokeLayer, FillLayer, PencilLayer, WatercolorLayer:
-        // dataUrl es bbox (w*pw × h*ph), centrado en (mx+la.x*pw, my+la.y*ph)
-        const cx = mx + (la.x ?? 0.5) * pw;
-        const cy = my + (la.y ?? 0.5) * ph;
-        const w  = (la.width  ?? 1.0) * pw;
-        const h  = (la.height ?? 1.0) * ph;
+        // v42.51: el desenfoque del objeto se hornea en la imagen fusionada (ya no hay objetos sueltos que lo lleven)
         octx.setTransform(1, 0, 0, 1, offX, offY);
-        octx.translate(cx, cy);
-        if (la.rotation) octx.rotate(la.rotation * Math.PI / 180);
-        octx.drawImage(img, -w/2, -h/2, w, h);
+        CxDefocus.run(octx, _edDf(la), c => {
+          if (type === 'draw') {
+            // DrawLayer: dataUrl es la zona de página (pw×ph), se restaura en (mx,my)
+            c.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, mx, my, pw, ph);
+          } else {
+            // StrokeLayer, FillLayer, PencilLayer, WatercolorLayer:
+            // dataUrl es bbox (w*pw × h*ph), centrado en (mx+la.x*pw, my+la.y*ph)
+            const cx = mx + (la.x ?? 0.5) * pw;
+            const cy = my + (la.y ?? 0.5) * ph;
+            const w  = (la.width  ?? 1.0) * pw;
+            const h  = (la.height ?? 1.0) * ph;
+            c.save();
+            c.translate(cx, cy);
+            if (la.rotation) c.rotate(la.rotation * Math.PI / 180);
+            c.drawImage(img, -w/2, -h/2, w, h);
+            c.restore();
+          }
+        }, false);
       }
       octx.restore();
     });
@@ -51775,7 +52107,7 @@ function _gcpVectorToImage(la, cb) {
   const octx = off.getContext('2d');
   octx.setTransform(1, 0, 0, 1, offX, offY);
   octx.globalAlpha = la.opacity ?? 1;
-  la.draw(octx);
+  _edDrawSharp(la, octx);   // v42.51: nítida; el desenfoque pasa a la imagen resultante como atributo
   octx.globalAlpha = 1;
   octx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -51823,6 +52155,7 @@ function _gcpVectorToImage(la, cb) {
     // La rotación ya quedó horneada en el recorte (la.draw() la aplicó al renderizar sobre
     // el canvas axis-aligned) — volver a asignarla aquí duplicaría el giro.
     imgLayer.opacity = la.opacity ?? 1;
+    _edCopyDf(imgLayer, la);   // v42.51
     imgLayer.src = dataUrl;
     imgLayer._keepSize = true;
     cb(imgLayer);
@@ -51970,7 +52303,7 @@ function gcpInsertFromBib(entry) {
           octx.drawImage(_gcpCanvases.stroke, offX, offY);
         } else {
           octx.setTransform(1,0,0,1,offX,offY);
-          octx.globalAlpha=la.opacity??1; la.draw(octx); octx.globalAlpha=1;
+          octx.globalAlpha=la.opacity??1; _edDrawSharp(la, octx); octx.globalAlpha=1;   // v42.51: nítido; el desenfoque pasa a la imagen
           octx.setTransform(1,0,0,1,0,0);
         }
         // Bbox del contenido combinado
@@ -52006,6 +52339,7 @@ function gcpInsertFromBib(entry) {
           const imgLayer=new ImageLayer(img,_cxFrac,_cyFrac,normW);
           imgLayer.height=normH;
           imgLayer.opacity=la.opacity??1;
+          _edCopyDf(imgLayer, la);   // v42.51
           imgLayer.src=dataUrl;
           imgLayer._keepSize=true;
           doInsert(imgLayer);
@@ -52083,7 +52417,7 @@ function gcpInsertFromBib(entry) {
           _tmpSl._canvas = document.createElement('canvas');
           _tmpSl._canvas.width = _bw; _tmpSl._canvas.height = _bh;
           _tmpSl._canvas.getContext('2d').drawImage(_sImg, 0, 0, _bw, _bh);
-          _gcpWithEditorContext(() => { _tmpSl.draw(_ws.getContext('2d')); });
+          _gcpWithEditorContext(() => { _edDrawSharp(_tmpSl, _ws.getContext('2d')); });
           _gcpCanvases.stroke = _ws;
           _gcpPending--;
           _gcpCheckReady();
@@ -52475,7 +52809,7 @@ async function _gcpCpBuildFromRangeConfirmed(fromIdx, toIdx){
     perFrameLayers.forEach((layersInFrame, fi) => {
       layersInFrame.forEach(la => {
         la._frames = new Array(total).fill(null);
-        la._frames[fi] = { x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1 };
+        la._frames[fi] = { x:la.x, y:la.y, width:la.width, height:la.height, rotation:la.rotation||0, opacity:la.opacity??1, ..._edDfField(la) };
         la._gcpName = la.type === 'gif' ? 'GIF' : la.type === 'image' ? 'Img' : (la.type || 'Obj');
         _gcpPushLayer(la);
       });
@@ -52621,7 +52955,7 @@ function gcpOpen(edLayerIdx) {
           la._frames.forEach(_gcpApplyContainerDelta);
         } else {
           // Compatibilidad con formato antiguo (array de snaps globales)
-          la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1}];
+          la._frames = [{x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)}];
         }
         if (la.type === 'image' && la.img) {
           const prev = la.img.onload;
@@ -53347,9 +53681,10 @@ function _gcpSaveToLib(onDone) {
               const _cx=l.x,_cy=l.y,_cw=l.width,_ch=l.height,_cr=l.rotation,_co=l.opacity;
               l.x=_iSnap.x; l.y=_iSnap.y; l.width=_iSnap.width; l.height=_iSnap.height;
               l.rotation=_iSnap.rotation; l.opacity=(_iSnap.opacity??1)*_alpha;
-              if (l.type==='image'||l.type==='gif') l.draw(fctx, fc);
-              else if (l.type==='text'||l.type==='bubble') l.draw(fctx, fc);
-              else { fctx.globalAlpha=l.opacity; l.draw(fctx); fctx.globalAlpha=1; }
+              // v42.51: fantasmas nítidos (ver _gcpDrawLayerBlurGhost)
+              if (l.type==='image'||l.type==='gif') _edDrawSharp(l, fctx, fc);
+              else if (l.type==='text'||l.type==='bubble') _edDrawSharp(l, fctx, fc);
+              else { fctx.globalAlpha=l.opacity; _edDrawSharp(l, fctx); fctx.globalAlpha=1; }
               l.x=_cx; l.y=_cy; l.width=_cw; l.height=_ch; l.rotation=_cr; l.opacity=_co;
             }
           }
@@ -53494,6 +53829,7 @@ function _gcpSaveToLib(onDone) {
       _converted.height   = existingLayer.height;
       _converted.rotation = existingLayer.rotation || 0;
       _converted.opacity  = existingLayer.opacity ?? 1;
+      _edCopyDf(_converted, existingLayer);   // v42.51
       _converted.hidden   = existingLayer.hidden;
       _converted.locked   = existingLayer.locked;
       _converted.name     = existingLayer.name;

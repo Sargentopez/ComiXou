@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.50</footer>
+    <footer class="app-version">v42.53</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -786,6 +786,7 @@ Router.register('editor', {
           <div class="edb-sep"></div>
           <button id="esb-size"     class="edb-tool edb-sizebtn-fix" data-i18n-title="ed_thickness" title="Grosor"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="12" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.1" fill="currentColor"/></svg></button>
           <button id="esb-opacity"  class="edb-tool"    data-i18n-title="ed_opacityTool" title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
+          <button id="esb-defocus"  class="edb-tool"    data-i18n-title="op_defocusTitle" title="Desenfocar el objeto (0 = nítido)"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="pointer-events:none"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="2.2 2.6" opacity=".75"/></svg></button>
           <div class="edb-sep"></div>
           <button id="esb-curve"    class="edb-tool" data-i18n-title="ed_convertToCurve" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900" data-i18n="ed_nodesLabel">NODOS</button>
           <div class="edb-sep"></div>

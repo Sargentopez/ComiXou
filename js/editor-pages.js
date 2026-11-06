@@ -514,12 +514,16 @@ function _pgRenderThumbLive(canvas, page, full) {
     const _lw  = la.width  * pw;
     const _lh  = la.height * ph;
     const _rotG = (la.rotation || 0) + ((_acsG && _acsG.px != null && !la._isWorkspaceCanvas) ? (_acsG.rot || 0) : 0);
-    offCtx.save();
-    offCtx.globalAlpha = la.opacity ?? 1;
-    offCtx.translate(_lpx, _lpy);
-    if (_rotG) offCtx.rotate(_rotG * Math.PI / 180);
-    offCtx.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
-    offCtx.restore();
+    const _paintG = (c) => {
+      c.save();
+      c.globalAlpha = la.opacity ?? 1;
+      c.translate(_lpx, _lpy);
+      if (_rotG) c.rotate(_rotG * Math.PI / 180);
+      c.drawImage(_src, -_lw/2, -_lh/2, _lw, _lh);
+      c.restore();
+    };
+    if (la.defocus > 0) CxDefocus.run(offCtx, la.defocus, _paintG, false);   // v42.51: desenfoque (esta ruta pinta el lienzo sin pasar por draw())
+    else _paintG(offCtx);
     offCtx.globalAlpha = 1;
   };
 
