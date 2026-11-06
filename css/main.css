@@ -960,3 +960,8 @@ body.editor-page { padding-top: 0; }
 #creditsModal .cr-license:last-child { margin-bottom: 0; }
 #creditsModal .cr-license a { color: var(--blue); font-weight: 600; }
 
+
+/* ── v42.54 · Botones de diagnóstico ────────────────────────────────────────────────────────────────────────────
+   Todo botón de diagnóstico (🩺 del editor, del editor de textos y de la matriz de animación…) lleva la clase «cx-diag-only» y solo se ve si
+   este dispositivo tiene el diagnóstico activado (Administración → Diagnóstico; js/diag.js pone la clase «cx-diag-on» en <html>). Apagado de serie. */
+html:not(.cx-diag-on) .cx-diag-only { display: none !important; }

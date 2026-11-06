@@ -451,6 +451,25 @@ const TRANSLATIONS = {
     adminR2BrkOpenSoft:   "Cortacircuitos ABIERTO: la escritura en R2 está en pausa hasta las {time} (faltan {left}). Mientras tanto las capas pesadas se guardan en la base, como antes. Último fallo: {why}.",
     adminR2BrkOpenHard:   "Cortacircuitos ABIERTO por un rechazo del Worker: la escritura en R2 está en pausa hasta las {time} (faltan {left}). Mientras tanto las capas pesadas se guardan en la base, como antes. Motivo: {why}. Esto no se arregla solo: comprueba el Worker de Cloudflare.",
     adminR2BrkResume:     "Reanudar ahora",
+    // Admin — diagnóstico de este dispositivo (js/admin.js + js/diag.js, v42.54). Solo la cuenta «admin».
+    adminDgTab:           "Diagnóstico",
+    adminDgTitle:         "Diagnóstico en este dispositivo",
+    adminDgIntro:         "Los botones de diagnóstico (el 🩺 del editor, del editor de textos y de la matriz; el 📊 «Consumo de datos» y el 🔍 de «Mis obras»; el «Diag BD» de cada obra en este panel) están ocultos de serie en todos los dispositivos. Mientras lo estén, la aplicación y el lector no guardan ningún dato de diagnóstico: ni el libro de consumo de datos, ni los incidentes del editor, ni la grabadora del lector, ni los registros en memoria, ni el monitor de rendimiento del editor. Este botón cambia SOLO este dispositivo: no se guarda en la nube y los demás no se enteran.",
+    adminDgState:         "Estado en este dispositivo: {state}",
+    adminDgStateOn:       "ACTIVADO",
+    adminDgStateOff:      "DESACTIVADO",
+    adminDgShow:          "Mostrar los botones de diagnóstico en este dispositivo",
+    adminDgHide:          "Ocultar los botones y borrar los datos de este dispositivo",
+    adminDgHintOff:       "Al activarlo aparecen los botones y los datos de diagnóstico empiezan a acumularse en este dispositivo, cada uno en su sitio de siempre. La página se recargará para que el monitor de rendimiento del editor arranque desde el principio.",
+    adminDgHintOn:        "Al desactivarlo se ocultan los botones, se borra todo lo que se hubiera acumulado en este dispositivo y deja de guardarse. La página se recargará.",
+    adminDgStoredH:       "Datos de diagnóstico guardados en este dispositivo",
+    adminDgStoredNone:    "Todavía no hay datos de diagnóstico guardados en este dispositivo.",
+    adminDgKEgress:       "Consumo de datos (aplicación y lector)",
+    adminDgKInc:          "Incidentes del editor",
+    adminDgKFlight:       "Grabadora del lector",
+    adminDgTotal:         "Total",
+    adminDgPurge:         "Borrar estos datos",
+    adminDgApplying:      "Aplicando…",
 
 
     // Home — home.js (ampliación)
@@ -1916,6 +1935,25 @@ const TRANSLATIONS = {
     adminR2BrkOpenSoft:   "Circuit breaker OPEN: writing to R2 is paused until {time} ({left} left). Meanwhile heavy layers are stored in the database, as before. Last failure: {why}.",
     adminR2BrkOpenHard:   "Circuit breaker OPEN because the Worker rejected an upload: writing to R2 is paused until {time} ({left} left). Meanwhile heavy layers are stored in the database, as before. Reason: {why}. This will not fix itself: check the Cloudflare Worker.",
     adminR2BrkResume:     "Resume now",
+    // Admin — diagnostics on this device (js/admin.js + js/diag.js, v42.54). «admin» account only.
+    adminDgTab:           "Diagnostics",
+    adminDgTitle:         "Diagnostics on this device",
+    adminDgIntro:         "The diagnostic buttons (the 🩺 of the editor, of the text editor and of the matrix; the 📊 “Data usage” and the 🔍 of “My works”; the “Diag BD” of each work in this panel) are hidden by default on every device. While they are hidden, the app and the reader store no diagnostic data at all: no data-usage ledger, no editor incidents, no reader recorder, no in-memory logs, no editor performance monitor. This button changes THIS device only: it is not saved in the cloud and no other device is affected.",
+    adminDgState:         "State on this device: {state}",
+    adminDgStateOn:       "ON",
+    adminDgStateOff:      "OFF",
+    adminDgShow:          "Show the diagnostic buttons on this device",
+    adminDgHide:          "Hide the buttons and delete this device's data",
+    adminDgHintOff:       "Turning it on shows the buttons and diagnostic data starts to build up on this device, each in its usual place. The page will reload so the editor's performance monitor starts from the beginning.",
+    adminDgHintOn:        "Turning it off hides the buttons, deletes everything that had built up on this device and stops storing it. The page will reload.",
+    adminDgStoredH:       "Diagnostic data stored on this device",
+    adminDgStoredNone:    "No diagnostic data is stored on this device yet.",
+    adminDgKEgress:       "Data usage (app and reader)",
+    adminDgKInc:          "Editor incidents",
+    adminDgKFlight:       "Reader recorder",
+    adminDgTotal:         "Total",
+    adminDgPurge:         "Delete this data",
+    adminDgApplying:      "Applying…",
 
 
     // Home — home.js (expansion)

@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.53</footer>
+    <footer class="app-version">v42.55</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -359,7 +359,10 @@ Router.register('editor', {
         </div>
         <button class="ed-top-action" id="edFsBtn" data-i18n-title="header_fullscreenTitle" title="Pantalla completa" aria-pressed="false">⛶</button>
         <button class="ed-top-action" id="edPreviewBtn" data-i18n-title="ed_previewTitle" title="Vista previa">▶</button>
-        <!-- Botón de diagnóstico — VISIBLE de nuevo en v42.47 (petición de Alberto) para comprobar las capas pesadas
+        <!-- v42.54 (petición de Alberto): el botón ya NO se comenta y descomenta según la investigación. Lleva la clase «cx-diag-only»
+             y solo se ve en los dispositivos donde se activó Administración → Diagnóstico (js/diag.js, css/main.css); en los demás no se ve
+             y el editor tampoco registra nada para él. Lo que sigue es la historia de cuándo estuvo oculto o visible.
+             Botón de diagnóstico — VISIBLE de nuevo en v42.47 (petición de Alberto) para comprobar las capas pesadas
              en R2: la línea «capas pesadas en R2» (sección «Último guardado en la nube: tiempos») dice si el
              interruptor estaba activado y cuántas capas llevaron referencia; la línea «capas pesadas bajadas de R2»
              (sección «Calidad de dibujos», última descarga) cuántas se bajaron al abrir con «Editar». Al cerrar esa
@@ -392,7 +395,7 @@ Router.register('editor', {
              encontrar la causa raíz de la investigación v40.80→v40.83.
              El listener de editor.js usa $('edDiagBtn')?. — sin el botón no hace
              nada ni da error mientras esté oculto. -->
-        <button class="ed-top-action" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
+        <button class="ed-top-action cx-diag-only" id="edDiagBtn" title="Diagnóstico guardado">🩺</button>
         <button class="ed-top-action" id="edSaveBtn" data-i18n-title="ed_saveTitle" title="Guardar">💾</button>
       </div>
 
@@ -1224,12 +1227,10 @@ Router.register('editor', {
           <button class="ed-menu-btn" id="gcpSaveFrameBtn" data-i18n-title="gcp_saveCurrentFrameTitle" title="Guardar frame actual" style="font-weight:700">💾 Frame</button>
           <button class="ed-menu-btn" id="gcpAddFrameBtn" style="font-weight:900;font-size:1.5rem;line-height:1;padding:0 14px;min-height:36px">＋</button>
           <div class="ed-menu-sep"></div>
-          <!-- Botón de diagnóstico oculto de nuevo (T31) — se reactivó temporalmente
-               para depurar el bug de subir/bajar capas en la Matriz, ya resuelto y
-               confirmado por Alberto. Para volver a mostrarlo, descomentar la línea
-               siguiente.
-          <button class="ed-undo-redo-btn" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
-          -->
+          <!-- Botón de diagnóstico de la Matriz. Estuvo comentado desde T31 (se reactivó temporalmente para depurar el bug de
+               subir/bajar capas, ya resuelto y confirmado por Alberto). v42.54: vuelve a estar en el DOM pero con «cx-diag-only»:
+               solo se ve en los dispositivos con el diagnóstico activado (Administración → Diagnóstico). -->
+          <button class="ed-undo-redo-btn cx-diag-only" id="gcpSbDiagBtn" title="Diagnóstico scrollbars">🩺</button>
           <div class="ed-menu-sep"></div>
           <!-- Matriz (antes "Frames") — al tocar, elegir modo primero (petición
                de Alberto) en vez de abrir directamente. Mismo patrón visual
@@ -1429,7 +1430,10 @@ Router.register('editor', {
              md). Para volver a mostrarlo, descomentar la línea siguiente;
              toda la instrumentación (window._tdBreakLog, window._tdImgLog)
              sigue activa en editor-textdoc.js aunque el botón esté oculto. -->
-        <!-- <button class="ed-top-action" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button> -->
+        <!-- v42.54: ya no va comentado; «cx-diag-only» lo muestra solo en los dispositivos con el diagnóstico activado (Administración →
+             Diagnóstico). Lo dicho arriba de que la instrumentación «sigue activa aunque el botón esté oculto» ya no vale: desde la v42.54
+             window._tdBreakLog, _tdImgLog, _tdImeLog, _tdApplyLog y _tdScrollLog solo registran con el diagnóstico activado. -->
+        <button class="ed-top-action cx-diag-only" id="tdDiagBtn" title="Diagnóstico acentos/IME/imágenes">🩺</button>
         <button id="tdCloseBtn" data-i18n-title="td_backToEditor" title="Volver al editor">✕</button>
       </div>
       <div id="tdMenuBar">

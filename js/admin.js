@@ -75,8 +75,13 @@ function _adminViewStart() {
   _adminBackupTab();
   _adminRestoreTab();
   _adminR2Tab();
-  renderTab('pending');
+  _adminDiagTab();
+  // v42.54: cambiar el interruptor de diagnóstico recarga la página (ver renderDiag); al volver se reabre su pestaña en vez de «Pendientes».
+  let _want = null;
+  try { _want = sessionStorage.getItem('cx_admin_tab'); sessionStorage.removeItem('cx_admin_tab'); } catch (_) {}
   setupTabs();
+  const _wantBtn = _want ? document.querySelector('.admin-tab[data-tab="' + _want + '"]') : null;
+  if (_wantBtn) _wantBtn.click(); else renderTab('pending');
 }
 
 /* v42.29 — Pestaña «Copia» (copia de seguridad de toda la base de datos): SOLO para la cuenta principal «admin». Otros administradores
@@ -147,6 +152,66 @@ function _adminR2Tab() {
   } catch (e) { console.warn('[admin] pestaña R2', e); }
 }
 
+/* v42.54 — Pestaña «Diagnóstico» (petición de Alberto): el interruptor de diagnóstico de ESTE dispositivo (js/diag.js). Con él apagado —de serie en
+   todos los dispositivos— no se ve ningún botón de diagnóstico y la app y el lector no guardan ningún dato de diagnóstico; encendido, aparecen los botones
+   y los registros se acumulan donde siempre. SOLO cuenta «admin», igual que Copia/Restaurar/R2. El interruptor es de cada dispositivo (localStorage): no
+   se guarda en la nube. */
+function _adminDiagTab() {
+  try {
+    const u = Auth.currentUser();
+    if (!Auth.isAdmin() || !u || u.username !== 'admin' || typeof CxDiag === 'undefined') return;
+    const tabs = document.querySelector('.admin-tabs');
+    if (!tabs || tabs.querySelector('[data-tab="diag"]')) return;
+    const btn = document.createElement('button');
+    btn.className = 'admin-tab';
+    btn.dataset.tab = 'diag';
+    btn.dataset.i18n = 'adminDgTab';
+    btn.textContent = I18n.t('adminDgTab');
+    tabs.append(btn);
+    const panel = document.createElement('div');
+    panel.className = 'admin-panel hidden';
+    panel.id = 'tabDiag';
+    tabs.parentNode.appendChild(panel);
+  } catch (e) { console.warn('[admin] pestaña de diagnóstico', e); }
+}
+
+function renderDiag(panel) {
+  if (typeof CxDiag === 'undefined') { panel.innerHTML = '<p class="admin-empty">CxDiag no disponible</p>'; return; }
+  const T = (k, v) => I18n.t(k, v);
+  const on = CxDiag.on();
+  const st = CxDiag.stored();
+  const kb = n => (n / 1024).toFixed(1) + ' KB';
+  const rows = [['cx_egress_v1', 'adminDgKEgress'], ['_edFCIncidents', 'adminDgKInc'], ['cx_rd_flight', 'adminDgKFlight']].filter(r => st[r[0]] != null);
+  let h = '<div class="bk"><h2 class="bk-title">' + escHtml(T('adminDgTitle')) + '</h2>';
+  h += '<p class="bk-p">' + escHtml(T('adminDgIntro')) + '</p>';
+  h += '<p class="bk-p"><b>' + escHtml(T('adminDgState', { state: T(on ? 'adminDgStateOn' : 'adminDgStateOff') })) + '</b></p>';
+  h += '<div class="bk-actions"><button class="btn' + (on ? '' : ' btn-primary') + ' bk-go" data-dg="toggle">' + escHtml(T(on ? 'adminDgHide' : 'adminDgShow')) + '</button></div>';
+  h += '<p class="bk-p bk-muted bk-hint">' + escHtml(T(on ? 'adminDgHintOn' : 'adminDgHintOff')) + '</p>';
+  if (on) {
+    h += '<hr class="bk-hr"><h3 class="bk-sub">' + escHtml(T('adminDgStoredH')) + '</h3>';
+    if (rows.length) {
+      h += '<table class="bk-tbl"><tbody>' + rows.map(r => '<tr><td>' + escHtml(T(r[1])) + '</td><td class="bk-n">' + kb(st[r[0]]) + '</td></tr>').join('') + '</tbody>'
+        + '<tfoot><tr><td>' + escHtml(T('adminDgTotal')) + '</td><td class="bk-n">' + kb(st.total) + '</td></tr></tfoot></table>';
+      h += '<div class="bk-actions"><button class="btn" data-dg="purge">' + escHtml(T('adminDgPurge')) + '</button></div>';
+    } else {
+      h += '<p class="bk-p bk-muted">' + escHtml(T('adminDgStoredNone')) + '</p>';
+    }
+  }
+  panel.innerHTML = h + '</div>';
+  panel.onclick = (e) => {
+    const b = e.target.closest && e.target.closest('[data-dg]');
+    if (!b || b.disabled) return;
+    if (b.dataset.dg === 'purge') { CxDiag.purge(); renderDiag(panel); return; }
+    if (b.dataset.dg === 'toggle') {
+      // Cambiar el interruptor y recargar: el monitor de rendimiento del editor se instala (o no) al arrancar la página.
+      b.disabled = true; b.textContent = T('adminDgApplying');
+      CxDiag.set(!CxDiag.on());
+      try { sessionStorage.setItem('cx_admin_tab', 'diag'); } catch (_) {}
+      setTimeout(() => { location.reload(); }, 350);
+    }
+  };
+}
+
 function setupTabs() {
   document.querySelectorAll('.admin-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -171,6 +236,7 @@ function renderTab(tab) {
   if (tab === 'backup' && typeof AdminBackup !== 'undefined') AdminBackup.render(panel);   // v42.29
   if (tab === 'restore' && typeof AdminRestore !== 'undefined') AdminRestore.render(panel); // v42.50
   if (tab === 'r2' && typeof AdminR2 !== 'undefined') AdminR2.render(panel);                // v42.45
+  if (tab === 'diag') renderDiag(panel);                                                     // v42.54
 }
 
 /* v42.15 — al volver la conexión (evento online) con el panel de administración en pantalla: la pestaña que se quedó en «No se
@@ -346,9 +412,9 @@ function buildAdminRow(comic, mode) {
     </div>
     <div class="admin-row-actions">
       ${comic.supabaseId ? `<button class="admin-btn admin-btn-read" id="read_${comic.id}">👁 ${I18n.t('read')}</button>` : ''}
-      <!-- Botón de diagnóstico oculto a petición de Alberto (no borrar):
-           para volver a mostrarlo, descomentar la línea de abajo. -->
-      <!-- ${comic.supabaseId ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''} -->
+      <!-- Botón de diagnóstico «Diag BD»: estuvo oculto a petición de Alberto (comentado). Desde la v42.54 solo se pinta en los dispositivos con el
+           diagnóstico activado (pestaña Diagnóstico de este panel; js/diag.js). -->
+      ${(comic.supabaseId && typeof CxDiag !== 'undefined' && CxDiag.on()) ? `<button class="admin-btn" id="diag_${comic.id}" style="background:#ff0;color:#000;font-weight:700">🔍 Diag BD</button>` : ''}
       ${mode === 'pending'   ? `<button class="admin-btn admin-btn-ok"   id="approve_${comic.id}">${I18n.t('approve')}</button>`  : ''}
       ${mode === 'published' ? `<button class="admin-btn admin-btn-warn" id="unpub_${comic.id}">${I18n.t('unpublishAdmin')}</button>`      : ''}
       <button class="admin-btn admin-btn-del" id="del_${comic.id}">${I18n.t('deleteAdmin')}</button>

@@ -211,9 +211,14 @@ async function _sbPoolMap(items, limit, worker) {
 // dispositivo (la app y el lector comparten el libro); los bytes son los del texto recibido ya descomprimido, así que son una
 // cota por arriba de lo que cuenta Supabase en la red. Lo de R2 (animaciones, portadas) se apunta aparte: no es egress de Supabase.
 // Se escribe agrupando (cada ~4 s y al irse) y mezclando con lo que haya guardado, para que dos pestañas no se pisen.
+//
+// v42.54 (petición de Alberto: «no quiero que vaya acumulando datos infinitamente»): el libro SOLO anota en los dispositivos con el diagnóstico
+// activado (Administración → Diagnóstico, js/diag.js). Apagado de serie: note() no hace nada, no se guarda ni se pide nada, y al arrancar
+// js/diag.js borra el cx_egress_v1 que dejaran las versiones anteriores. El botón «📊 Consumo de datos» de «Mis obras» tampoco se ve.
 // ══════════════════════════════════════════════════════════════════════════
 const EgressLedger = (() => {
   const KEY = 'cx_egress_v1', KEEP_DAYS = 21;
+  const diagOn = () => !!(typeof window !== 'undefined' && window.CxDiag && window.CxDiag.on());
   let pend = {}, timer = 0;
   const pad = n => (n < 10 ? '0' : '') + n;
   const dayOf = (t) => { const d = new Date(t || Date.now()); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
@@ -235,7 +240,7 @@ const EgressLedger = (() => {
   function flush() {
     clearTimeout(timer); timer = 0;
     const p = pend; pend = {};
-    if (!Object.keys(p).length) return;
+    if (!diagOn() || !Object.keys(p).length) return;
     try {
       const o = read();
       for (const day in p) {
@@ -252,6 +257,7 @@ const EgressLedger = (() => {
   }
   // src: 'app' (la aplicación) o 'rd' (el lector). bytes: tamaño del cuerpo recibido.
   function note(url, bytes, src) {
+    if (!diagOn()) return;   // v42.54: diagnóstico apagado en este dispositivo → no se anota nada
     try {
       const b = +bytes; if (!(b >= 0)) return;
       const day = dayOf(), s = src || 'app', k = kindOf(url);
@@ -280,6 +286,7 @@ const EgressLedger = (() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+    if (window.CxDiag) window.CxDiag.onOff(reset);   // v42.54: al apagar/borrar el diagnóstico se vacía también lo pendiente de escribir
   }
   return { note, flush, days, reset, fmt, kindOf, isSupabase };
 })();

@@ -1261,8 +1261,13 @@ function _mcRenderList() {
       <button onclick="Router.go('login')" style="background:#fff;color:var(--blue);border:none;border-radius:8px;padding:5px 12px;font-weight:700;cursor:pointer;font-size:.82rem">${I18n.t('pageLogin')}</button>
     </div>` : '';
   const _banners = _loginBanner + _deviceBanner + _offlineBanner;
-  // v42.27: pie discreto con el informe de consumo de datos (solo lectura, ver _mcShowEgress). No es el 🔍 de diagnóstico, que sigue oculto.
-  const _egressFoot = `<div style="text-align:center;padding:14px 8px 26px"><button type="button" onclick="_mcShowEgress()" style="font-size:.72rem;padding:4px 12px;background:transparent;border:1px solid var(--gray-300);border-radius:8px;color:var(--gray-500);cursor:pointer">${I18n.t('mc_egLink')}</button></div>`;
+  // v42.27: pie discreto con el informe de consumo de datos (solo lectura, ver _mcShowEgress).
+  // v42.54 (petición de Alberto: «que no vaya acumulando datos infinitamente»): el pie SOLO existe en los dispositivos con el diagnóstico
+  // activado (Administración → Diagnóstico, js/diag.js). Apagado de serie: no hay botón y EgressLedger tampoco anota nada. Activado, lleva
+  // además el 🔍 de la biblioteca (_mcRunDiag), que estaba comentado más abajo.
+  const _egressFoot = (window.CxDiag && CxDiag.on())
+    ? `<div style="text-align:center;padding:14px 8px 26px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button type="button" onclick="_mcShowEgress()" style="font-size:.72rem;padding:4px 12px;background:transparent;border:1px solid var(--gray-300);border-radius:8px;color:var(--gray-500);cursor:pointer">${I18n.t('mc_egLink')}</button><button type="button" onclick="_mcRunDiag()" style="font-size:.72rem;padding:4px 12px;background:transparent;border:1px solid var(--gray-300);border-radius:8px;color:var(--gray-500);cursor:pointer">🔍 Diagnóstico</button></div>`
+    : '';
 
   if (!comics.length) {
     wrap.innerHTML = _banners + `
@@ -1334,21 +1339,8 @@ function _mcRenderList() {
     </div>`;
   }).join('') + _egressFoot;
 
-  // Botón de diagnóstico oculto a petición de Alberto (no borrar):
-  // para volver a mostrarlo, descomentar el bloque de abajo.
-  /*
-  {
-    let _diagDiv = document.getElementById('_mcDiagBtn');
-    if (!_diagDiv) {
-      _diagDiv = document.createElement('div');
-      _diagDiv.id = '_mcDiagBtn';
-      _diagDiv.style.cssText = 'text-align:center;padding:8px;margin-top:4px';
-      _diagDiv.innerHTML = '<button style="font-size:.7rem;padding:3px 10px;background:transparent;border:1px solid var(--gray-400);border-radius:8px;color:var(--gray-500);cursor:pointer">🔍 Diagnóstico</button>';
-      _diagDiv.querySelector('button').onclick = _mcRunDiag;
-      wrap.appendChild(_diagDiv);
-    }
-  }
-  */
+  // Botón de diagnóstico «🔍 Diagnóstico» (biblioteca): estuvo oculto a petición de Alberto en un bloque comentado que lo añadía aquí. Desde la v42.54
+  // va en el pie de arriba (_egressFoot), que solo existe con el diagnóstico activado en este dispositivo (Administración → Diagnóstico).
 
   // Cargar miniaturas lazy (local y/o nube, con respaldo entre ellas) — ver «MINIATURAS DE MIS OBRAS»
   _mcObserveThumbs(wrap);

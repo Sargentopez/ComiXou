@@ -1107,13 +1107,23 @@ window.AnimProc = (function(){
 
 /* ── ESTADO ── */
 
+// v42.54 (petición de Alberto): TODO el diagnóstico del editor (el 🩺, sus registros en memoria, los incidentes guardados en el dispositivo y el
+// monitor de rendimiento de abajo) solo existe en los dispositivos que lo tienen activado desde Administración → Diagnóstico (js/diag.js,
+// CxDiag). Apagado de serie: sin botón, sin registros, sin gasto de memoria ni de proceso. Esta función es la pregunta, en un solo sitio.
+function _edDgOn(){ return !!(window.CxDiag && window.CxDiag.on()); }
+
 // ── MONITOR DE RENDIMIENTO EN SEGUNDO PLANO (diagnóstico) ──────────────────
 // Instalado lo antes posible para cubrir TODO uso posterior de RAF/setInterval.
 // Objetivo: detectar acumulación (bucles que no se cancelan) y frames largos
 // (jank) de forma continua, no solo durante un arrastre — para que también
 // se vea si algo se degrada mientras solo se hace scroll de la UI, etc.
 // No cambia ningún comportamiento: solo cuenta y registra.
+// v42.54: SOLO se instala con el diagnóstico activado en este dispositivo. Antes se instalaba siempre, en todos los dispositivos: envolvía
+// requestAnimationFrame/cancelAnimationFrame/setInterval/clearInterval de toda la página, sacaba la pila de llamadas (new Error().stack) en CADA
+// requestAnimationFrame y mantenía un bucle de «jank» que no paraba nunca. Se instala al arrancar, por eso Administración recarga la página al
+// activar o desactivar el diagnóstico.
 (function _edInstallPerfMonitor(){
+  if (!_edDgOn()) return;
   window._edPerfMonStart = performance.now();
   window._edStrokeCount = 0; // trazos de dibujo/borrador iniciados esta sesión
 
@@ -1557,6 +1567,7 @@ let _edInkBaselineAlpha = null;
 window._edFCLog = window._edFCLog || [];
 window._edFCT0 = window._edFCT0 || Date.now();
 function _edFCL(msg){
+  if (!_edDgOn()) return;   // v42.54: sin diagnóstico activado en este dispositivo no se registra nada
   try { window._edFCLog.push('+' + String(Date.now() - window._edFCT0).padStart(6) + 'ms  ' + msg); }
   catch(_e) {}
 }
@@ -1591,6 +1602,7 @@ function _edFCOpaqueCount(c, ctx){
 // Alberto note nada ni abra el diagnóstico justo después. Cap de 8 incidentes
 // (los más recientes) para no crecer sin límite.
 function _edFCFlagIncident(reason){
+  if (!_edDgOn()) return;   // v42.54: los incidentes se guardan en el dispositivo (localStorage) SOLO con el diagnóstico activado
   try {
     const _incident = { reason, at: new Date().toISOString(), log: (window._edFCLog || []).slice() };
     let _list = [];
@@ -1930,6 +1942,17 @@ let _edLastNodeTapTime = 0, _edLastNodeTapIdx = -1; // doble tap sobre nodo/segm
 let _edTouchMoved = false; // true si el dedo se movió durante el toque actual
 let edHistory = [], edHistoryIdx = -1;
 window._edHistDiag = []; // log de edPushHistory para diagnóstico
+// v42.54: todas las anotaciones pasan por aquí. Antes la matriz crecía sin tope en cada edición (y la línea «push» hacía además un
+// JSON.parse de la instantánea ENTERA de las capas solo para contar cuántas eran). Ahora: solo con el diagnóstico activado en este dispositivo,
+// con tope de 300 líneas y el texto se calcula solo si se va a guardar (msg puede ser una función).
+function _edHistDiagPush(msg){
+  if (!_edDgOn()) return;
+  try {
+    const a = window._edHistDiag || (window._edHistDiag = []);
+    a.push(typeof msg === 'function' ? msg() : msg);
+    if (a.length > 300) a.shift();
+  } catch(_) {}
+}
 let _edSavedHistoryIdx = -1; // historyIdx en el último guardado explícito con 💾
 let _edCloudSaving = false;  // true mientras edCloudSave() está en curso
 // En Android (táctil) reducir el historial a 5 para limitar el consumo de RAM.
@@ -2002,6 +2025,7 @@ const $ = id => document.getElementById(id);
 window._edDragPerfLog = [];
 window._edDragPerfLast = 0;
 function _edDragPerfMark(label, redrawMs){
+  if (!_edDgOn()) return;   // v42.54
   const now = performance.now();
   const prev = window._edDragPerfLast || now;
   window._edDragPerfLog.push({
@@ -2028,6 +2052,7 @@ function _edDragPerfMark(label, redrawMs){
 // diagnóstico (🩺, ya visible en la topbar del editor).
 window._edFollowLog = [];
 function _edFollowMark(source, camYBefore, camYAfter, screenBottom, freeTop, freeBottom, rawKb, stableKb) {
+  if (!_edDgOn()) return;   // v42.54
   window._edFollowLog.push({
     t: Math.round(performance.now()),
     source,
@@ -5023,7 +5048,8 @@ class LineLayer extends BaseLayer {
    ══════════════════════════════════════════ */
 if (!window.CxDefocus) {   // defensivo: si por lo que sea no cargó js/defocus.js, el editor sigue funcionando (sin desenfoque)
   window.CxDefocus = { MAX: 100, UNIT: 0.4, clamp: v => (+v > 0 ? Math.min(100, +v) : 0), sigma: () => 0, px: () => 0,
-    supported: () => false, run: (c, d, f) => f(c), suspend: f => f(), isSuspended: () => false, blurCanvas: c => c, _force: () => null };
+    supported: () => false, run: (c, d, f) => f(c), suspend: f => f(), isSuspended: () => false, blurCanvas: c => c, _force: () => null,
+    cacheStats: () => null, cacheClear: () => {}, setCache: () => false };
 }
 const _ED_DEFOCUS_UNION = { shape: 1, line: 1, text: 1, bubble: 1 };   // varios trazos por capa → se desenfoca el conjunto UNA vez
 (function _edInstallDefocus(){
@@ -5035,7 +5061,7 @@ const _ED_DEFOCUS_UNION = { shape: 1, line: 1, text: 1, bubble: 1 };   // varios
       if (!(d > 0)) return orig.call(this, ctx, a, b);
       if (this._drawLayerId && _edDfGroupInEdit(this)) return orig.call(this, ctx, a, b);   // su dibujo se está editando: todo el grupo nítido mientras tanto
       return CxDefocus.run(ctx, d, c => orig.call(this, c, a, b),
-        { union: !!_ED_DEFOCUS_UNION[this.type], bounds: () => _edDfBounds(this), blend: this._blendMode || null });
+        { union: !!_ED_DEFOCUS_UNION[this.type], bounds: () => _edDfBounds(this), blend: this._blendMode || null, cache: _edDfPlan(this) });
     };
     wrapped._edDf = true;
     Cls.prototype.draw = wrapped;
@@ -5080,6 +5106,44 @@ function _edDfBounds(l){
       x0 = Math.min(x0, mx - 8); y0 = Math.min(y0, my - 8); x1 = Math.max(x1, mx + pw + 8); y1 = Math.max(y1, my + ph + 8);
     }
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  } catch (e) { return null; }
+}
+// v42.55 — CACHÉ DE DESENFOQUES DEL VISOR INTERNO (js/defocus.js). El visor repinta el lienzo de trabajo ENTERO (2700×2340) en cada
+// fotograma de cualquier animación, y el filtro nativo cuesta según el área del lienzo, así que cada capa desenfocada costaba decenas de
+// ms por repintado. CxDefocus guarda la capa desenfocada como bitmap (a menor resolución, con tope de memoria) y la reutiliza mientras no
+// cambie nada salvo su posición/giro (trayectoria): aquí se dice dónde está el pivote, el giro, la opacidad y el «contenido» de cada capa.
+// SOLO dentro del visor (_edViewerMode: nada se edita mientras está abierto; al abrirlo y cerrarlo se vacía la caché) y SOLO capas de
+// contenido fijo: imagen estática, trazo, forma y línea. GIF, animaciones, dibujo del espacio de trabajo, rellenos vinculados y textos
+// (fuentes web que cargan sobre la marcha, hojas de texto maquetadas…) siguen por el camino de siempre. null = sin caché.
+function _edDfPlan(l){
+  try {
+    if (!_edViewerMode || !window.CxDefocus || !CxDefocus.cacheStats || !l || l._isWorkspaceCanvas) return null;
+    const t = l.type;
+    if (t !== 'image' && t !== 'stroke' && t !== 'shape' && t !== 'line') return null;
+    const pw = edPageW(), ph = edPageH();
+    const w = (l.width || 0) * pw, h = (l.height || 0) * ph;
+    const x = edMarginX() + _edCurX(l) * pw, y = edMarginY() + _edCurY(l) * ph;
+    const rot = (l.rotation || 0) + _edLayerPathRotDeg(l);
+    let sig, src = null, alpha;
+    if (t === 'image') {
+      if (l._oc || l._animReady || (typeof _edACS === 'function' && _edACS(l))) return null;     // animada: fotograma a fotograma, sin caché
+      const im = l.img;
+      if (!im || !im.complete || !im.naturalWidth) return null;
+      src = im; sig = 'i|' + w + 'x' + h;
+      alpha = l._animFadeOpacity != null ? l._animFadeOpacity : (l.opacity ?? 1);
+    } else if (t === 'stroke') {
+      const cv = l._canvas;
+      if (!cv || !cv.width) return null;
+      src = cv; sig = 's|' + w + 'x' + h + '|' + cv.width + 'x' + cv.height;
+    } else if (t === 'shape') {
+      sig = 'sh|' + w + 'x' + h + '|' + l.shape + '|' + l.fillColor + '|' + l.color + '|' + l.lineWidth + '|' + (l.cornerRadius || 0) + '|' +
+            (l.cornerRadii ? l.cornerRadii.join() : '') + '|' + (l.fillGradient ? JSON.stringify(l.fillGradient) : '');
+    } else {
+      if (!l.points || l.points.length < 2) return null;
+      sig = 'ln|' + w + 'x' + h + '|' + l.points.length + '|' + !!l.closed + '|' + l.fillColor + '|' + l.color + '|' + l.lineWidth + '|' +
+            (l.cornerRadii ? JSON.stringify(l.cornerRadii) : '') + '|' + (l.fillGradient ? JSON.stringify(l.fillGradient) : '');
+    }
+    return { key: l, sig, src, alpha, x, y, rot };
   } catch (e) { return null; }
 }
 // Grado de desenfoque de una capa o de una instantánea de fotograma (0 si no tiene)
@@ -5821,15 +5885,17 @@ function _edInteractionTick(e) {
   // diagnóstico, _edRunDiag). Cola corta (últimos 30): cada entrada anota
   // el elemento que SÍ contó (no está en _ED_TICK_EXCLUDE_SELECTOR) y sobre
   // qué página. No se guarda en disco, solo en memoria de esta sesión.
-  window._edTickLog = window._edTickLog || [];
-  window._edTickLog.push({
-    t: Date.now(),
-    page: edCurrentPage,
-    tag: _target.tagName || '?',
-    id: _target.id || '',
-    cls: (typeof _target.className === 'string' ? _target.className : '').slice(0, 60),
-  });
-  if (window._edTickLog.length > 30) window._edTickLog.shift();
+  if (_edDgOn()) {   // v42.54: el registro solo con el diagnóstico activado en este dispositivo (el conteo de abajo es funcional y no cambia)
+    window._edTickLog = window._edTickLog || [];
+    window._edTickLog.push({
+      t: Date.now(),
+      page: edCurrentPage,
+      tag: _target.tagName || '?',
+      id: _target.id || '',
+      cls: (typeof _target.className === 'string' ? _target.className : '').slice(0, 60),
+    });
+    if (window._edTickLog.length > 30) window._edTickLog.shift();
+  }
   p._dirtyCountLocal = (p._dirtyCountLocal || 0) + 1;
   p._dirtyCountCloud = (p._dirtyCountCloud || 0) + 1;
 }
@@ -5991,6 +6057,7 @@ let _edBounceTotal = 0, _edBounceFallbacks = 0; // solo para el diagnóstico �
 
 // Registro corto de lo que ha hecho el atrás (lo enseña el diagnóstico 🩺): como mucho 14 líneas.
 function _edBackLog(txt) {
+  if (!_edDgOn()) return;   // v42.54
   try {
     const l = (window._edBackLogLines = window._edBackLogLines || []);
     const ce = window.navigation && window.navigation.currentEntry;
@@ -6396,8 +6463,7 @@ function edPushHistory(force, movedLayer){
   // Durante una sesión de dibujo a mano activa, bloquear push global (salvo force=true).
   // La flag _edDrawSessionActive se activa en _edDrawInitHistory y se desactiva al congelar.
   if(!force && window._edDrawSessionActive){
-    window._edHistDiag = window._edHistDiag||[];
-    window._edHistDiag.push('BLOCKED_DRAW_SESSION');
+    _edHistDiagPush('BLOCKED_DRAW_SESSION');
     return;
   }
   // Durante una sesión vectorial activa, bloquear push al historial global.
@@ -6436,14 +6502,14 @@ function edPushHistory(force, movedLayer){
   if(_vsHistory.length > 0){
     if(_edVecSessionOpen()){
       const _vsRec = _vsPushIfChanged();
-      window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('LOCAL_VS vsLen='+_vsHistory.length+(_vsRec?' (apuntado)':' (sin cambios)'));
+      _edHistDiagPush('LOCAL_VS vsLen='+_vsHistory.length+(_vsRec?' (apuntado)':' (sin cambios)'));
       edUpdateUndoRedoBtns(); return;
     }
     _vsHistory=[]; _vsHistIdx=-1; // sesión vectorial huérfana (sin panel ni barra): limpiar y dejar pasar el push
   }
   const layersJSON = _edLayersSnapshot(movedLayer);
   // DIAG: registrar cada push
-  if(window._edHistDiag) window._edHistDiag.push('push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
+  _edHistDiagPush(() => 'push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
   // NOTA: edHistory ya no puede contener entradas de otra página — el
   // cambio de hoja reinicia el historial por completo (ver edLoadPage), así
@@ -6456,7 +6522,7 @@ function edPushHistory(force, movedLayer){
   // otra hoja que aplicar.
   if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON){ window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
+    if(last.layersJSON === layersJSON){ _edHistDiagPush('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
   }
 
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
@@ -7812,8 +7878,8 @@ function _edRenderFrameInner(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') 
   // v41.77 — foto del estado de ATENUADO de este render completo, para el diagnóstico «Calidad de dibujos»
   // (🩺): qué capas se pintan al 50 % y por qué, tal y como las vio el usuario (no recalculado después).
   // Solo en el render 'inline' completo (el de pantalla), nunca en las cachés ('before' / capa excluida).
-  // Coste: asignar unos campos por fotograma.
-  if(drawTmpMode === 'inline' && excludeLayerIdx < 0){
+  // Coste: asignar unos campos por fotograma. v42.54: solo con el diagnóstico activado en este dispositivo (retiene además referencias a las capas).
+  if(drawTmpMode === 'inline' && excludeLayerIdx < 0 && _edDgOn()){
     const _R = window._edLastRender || (window._edLastRender = {});
     _R.isDimmed = _isDimmed; _R.lift = _liftSet; _R.anyEditing = _anyEditing; _R.editingDraw = _editingDraw;
     _R.editingShape = _editingShape; _R.editingProps = _editingProps; _R.manipulating = _manipulating;
@@ -8790,6 +8856,7 @@ function _edStableKbH() {
 // window._edRestoreLog. Se lee desde el botón de diagnóstico (🩺).
 window._edRestoreLog = [];
 function _edRestoreMark(step, extra) {
+  if (!_edDgOn()) return;   // v42.54: registro de diagnóstico, solo con el diagnóstico activado en este dispositivo
   window._edRestoreLog.push({ t: Math.round(performance.now()), step, ...(extra||{}) });
   if (window._edRestoreLog.length > 150) window._edRestoreLog.shift();
 }
@@ -8803,6 +8870,7 @@ function _edRectStr(r) {
 
 window._edHideCheckLog = [];
 function _edHideCheckMark(reason, extra) {
+  if (!_edDgOn()) return;   // v42.54
   window._edHideCheckLog.push({ t: Math.round(performance.now()), reason, ...extra });
   if (window._edHideCheckLog.length > 150) window._edHideCheckLog.shift();
 }
@@ -8823,6 +8891,7 @@ function _edCallers(skip) {
   } catch (_) { return '?'; }
 }
 function _edRotateMark(ev, extra) {
+  if (!_edDgOn()) return;   // v42.54: además de registrar, medía rectángulos del DOM (fuerza el cálculo de la maquetación) en cada giro/redimensión
   try {
     const panel = document.getElementById('edOptionsPanel');
     const pr = panel ? panel.getBoundingClientRect() : null;
@@ -14053,7 +14122,9 @@ function _edHideHTMLScrollbars(){
 
 // ── Panel de diagnóstico scrollbar (temporal) ──────────────────────────────
 let _edSbLogLines = [];
+if (window.CxDiag) window.CxDiag.onOff(() => { _edSbLogLines = []; });   // v42.54: al apagar/borrar el diagnóstico también se vacía este registro
 function _edSbLog(msg) {
+  if (!_edDgOn()) return;   // v42.54
   _edSbLogLines.push(new Date().toISOString().slice(11,23) + ' ' + msg);
   if (_edSbLogLines.length > 60) _edSbLogLines.shift();
   const el = document.getElementById('_edSbDiagTA');
@@ -15907,7 +15978,7 @@ function _edVecHealOrphans() {
   if (!edMinimized && (_mdm || window._edMinimizedCollapsed)) { window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false; _what.push('modo minimizado'); }
   if (!_what.length) return false;
   // Registro para el 🩺: si algún día vuelve a pasar, se sabe QUÉ resto era y con qué herramienta
-  try { const _lg = window._edVecHealLog || (window._edVecHealLog = []); _lg.push({ at: new Date().toLocaleTimeString(), what: _what.join(' + '), tool: edActiveTool }); if (_lg.length > 12) _lg.shift(); } catch (_) {}
+  if (_edDgOn()) { try { const _lg = window._edVecHealLog || (window._edVecHealLog = []); _lg.push({ at: new Date().toLocaleTimeString(), what: _what.join(' + '), tool: edActiveTool }); if (_lg.length > 12) _lg.shift(); } catch (_) {} }   // v42.54: solo con el diagnóstico activado
   try { edRedraw(); } catch (_) {}
   return true;
 }
@@ -19784,8 +19855,7 @@ function edOnEnd(e){
     return;
   }
   if(wasDragging && (window._edMoved || edIsTailDragging)){
-    window._edHistDiag=window._edHistDiag||[];
-    window._edHistDiag.push('DRAG_END selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length+' histLen='+edHistory.length+' histIdx='+edHistoryIdx);
+    _edHistDiagPush('DRAG_END selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length+' histLen='+edHistory.length+' histIdx='+edHistoryIdx);
     // Pre-externalizar animaciones sin clave IDB antes del snapshot
     const _preExport = [];
     (edLayers||[]).forEach(l => {
@@ -19835,7 +19905,7 @@ function edOnEnd(e){
     else _doPush();
   }
   if(wasDragging && !window._edMoved && !edIsTailDragging){
-    window._edHistDiag=window._edHistDiag||[]; window._edHistDiag.push('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length);
+    _edHistDiagPush('DRAG_END_NO_MOVE selIdx='+edSelectedIdx+' _vsLen='+_vsHistory.length);
     // Segundo toque (fuera de doble tap) sobre un objeto YA seleccionado,
     // sin arrastre real → menú contextual (petición de Alberto). Sin
     // "return": el resto de esta función sigue con su limpieza normal de
@@ -39200,6 +39270,7 @@ function edOpenViewer(){
   edHideGearIcon();
   edViewerIdx=0;
   _edVsCur = 0; _edMipFreeAll(); // v42.43: tinta HD — la ventana de lienzos HD empieza en la hoja 0 y la caché de mipmaps en blanco
+  try { CxDefocus.cacheClear(); } catch (e) {}   // v42.55: caché de desenfoques del visor (js/defocus.js) en blanco: puede haberse editado la obra desde la última vez
   if (_edRo) _edRo.init(); // v42.10: giro nativo de la pantalla según la hoja (solo teléfono) — ver «Giro nativo» más arriba; init() vuelve a evaluar teléfono / interruptor en cada apertura
   // BUG CORREGIDO (v38.16 — Alberto: capa CON trayectoria activa, la arrastra,
   // previsualiza sin guardar, al volver al editor aparece en su sitio previo
@@ -40247,6 +40318,7 @@ function edCloseViewer(){
   _edViewerFullCanvas = null;
   _edViewerFullCtx    = null;
   _edMipFreeAll();   // v42.43: mipmaps de la tinta HD (y sus lienzos) fuera de la memoria
+  try { CxDefocus.cacheClear(); } catch (e) {}   // v42.55: y los bitmaps de la caché de desenfoques del visor
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -50075,17 +50147,19 @@ function _gcpAnimatedSwap(idxA, idxB) {
   _gcpRedraw();
   _gcpUpdateFramesBar();
 
-  const _after = _uids();
-  if (!window._gcpSwapLog) window._gcpSwapLog = [];
-  window._gcpSwapLog.push({
-    t: new Date().toISOString().slice(11, 19),
-    idxA, idxB,
-    before: _before.join(','),
-    after: _after.join(','),
-    scrollBefore: _scrollLeftBefore + ',' + _scrollTopBefore,
-    scrollRightAfterRebuild: window._gcpFramesScrollLeft + ',' + window._gcpFramesScrollTop,
-  });
-  if (window._gcpSwapLog.length > 20) window._gcpSwapLog.shift();
+  if (_edDgOn()) {   // v42.54: el registro es solo para el 🩺 de la Matriz → solo con el diagnóstico activado en este dispositivo
+    const _after = _uids();
+    if (!window._gcpSwapLog) window._gcpSwapLog = [];
+    window._gcpSwapLog.push({
+      t: new Date().toISOString().slice(11, 19),
+      idxA, idxB,
+      before: _before.join(','),
+      after: _after.join(','),
+      scrollBefore: _scrollLeftBefore + ',' + _scrollTopBefore,
+      scrollRightAfterRebuild: window._gcpFramesScrollLeft + ',' + window._gcpFramesScrollTop,
+    });
+    if (window._gcpSwapLog.length > 20) window._gcpSwapLog.shift();
+  }
 
   if (snapBefore.size === 0) return; // primera reconstrucción de la sesión: nada que animar
 
@@ -55254,6 +55328,7 @@ function _edDrawingQualityLines(rep, L){
 // muestre cómo estaban los trazos en esos momentos aunque se pulse el botón más tarde. Diferida y acotada
 // (≤ 3 Mpx leídos y ≤ 12 muestreos de pantalla) para no notarse; nunca lanza.
 function _edQualityCapture(tag){
+  if (!_edDgOn()) return;   // v42.54: leía hasta 3 Mpx de píxeles y guardaba el resumen solo para el 🩺 → solo con el diagnóstico activado en este dispositivo
   setTimeout(() => {
     try {
       const rep = _edDrawingQualityReport({ budgetPx: 3e6, maxScreen: 12 });

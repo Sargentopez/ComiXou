@@ -174,6 +174,8 @@ const OrientLock = (() => {
     let ac = null, offSense = null;
 
     function log(m) {
+      // v42.54: el registro solo sirve al informe de diagnóstico; sin el diagnóstico activado en este dispositivo (js/diag.js) no se apunta nada.
+      if (!(window.CxDiag && window.CxDiag.on())) return;
       const o = window.screen && screen.orientation;
       S.log.push(((performance.now() - S.t0) / 1000).toFixed(1) + 's ' + tag + m + ' [pantalla ' + (o ? o.type + '/' + o.angle : '?') +
         ' · ventana ' + window.innerWidth + 'x' + window.innerHeight + ' · pantalla completa ' + (fsOn() ? 'sí' : 'no') + ']');

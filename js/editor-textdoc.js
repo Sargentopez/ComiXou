@@ -767,10 +767,12 @@ function _tdInitOnce(){
   if(editorEl && !window._tdCaptureLoggerBound){
     window._tdCaptureLoggerBound = true;
     document.addEventListener('beforeinput', e => {
+      if(!_tdDgOn()) return;   // v42.54
       if(!editorEl.contains(e.target) && e.target !== editorEl) return;
       _tdLogIme('(CAPTURA) beforeinput', 'inputType=' + e.inputType + ' data=' + JSON.stringify(e.data));
     }, true);
     document.addEventListener('keydown', e => {
+      if(!_tdDgOn()) return;   // v42.54
       if(!editorEl.contains(e.target) && e.target !== editorEl) return;
       _tdLogIme('(CAPTURA) keydown', 'key=' + e.key + ' keyCode=' + e.keyCode + ' isComposing=' + e.isComposing);
     }, true);
@@ -1221,8 +1223,12 @@ let _tdComposing = false;
 // Alberto: "pon un icono en el editor de textos para diagnóstico, mira cómo
 // se hace en otros diagnósticos ocultos como comentarios" (mismo patrón que
 // _edRunDiag en editor.js / botón 🩺 edDiagBtn).
+// v42.54 (petición de Alberto): los cinco registros del editor de textos (_tdImeLog, _tdApplyLog, _tdImgLog, _tdScrollLog y _tdBreakLog) solo
+// registran en los dispositivos con el diagnóstico activado (Administración → Diagnóstico; js/diag.js). Apagado de serie: no se anota ni se guarda nada.
+function _tdDgOn(){ return !!(window.CxDiag && window.CxDiag.on()); }
 window._tdImeLog = window._tdImeLog || [];
 function _tdLogIme(kind, detail){
+  if(!_tdDgOn()) return;
   const t = new Date();
   const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
         ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
@@ -1278,6 +1284,7 @@ function _tdShowKeyboardIfNeeded(reason){
 // "Aplicar al lienzo" no hacía nada con un párrafo alineado de más de una línea.
 window._tdApplyLog = window._tdApplyLog || [];
 function _tdLogApply(kind, detail){
+  if(!_tdDgOn()) return;   // v42.54
   const t = new Date();
   const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
         ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
@@ -2419,6 +2426,7 @@ function _tdSyncLineHeightMenuActive(){
 // en qué paso se detiene el proceso.
 window._tdImgLog = window._tdImgLog || [];
 function _tdLogImg(kind, detail){
+  if(!_tdDgOn()) return;   // v42.54
   const t = new Date();
   const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
         ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
@@ -4371,6 +4379,7 @@ let _tdPendingNavUntil = 0;
 // arreglar a ciegas el que parezca más sospechoso.
 window._tdScrollLog = window._tdScrollLog || [];
 function _tdLogScroll(kind, detail){
+  if(!_tdDgOn()) return;   // v42.54
   const t = new Date();
   const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'),
         ss = String(t.getSeconds()).padStart(2, '0'), ms = String(t.getMilliseconds()).padStart(3, '0');
@@ -5181,7 +5190,7 @@ function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakCha
     // duplicación, debe verse aquí como el mismo texto apareciendo tanto en
     // "últimaLineaHojaCerrada" de un salto como en "primeraLineaHojaNueva"
     // del siguiente.
-    if(window._tdBreakLog){
+    if(window._tdBreakLog && _tdDgOn()){   // v42.54: solo con el diagnóstico activado en este dispositivo
       const lastLine = curLines.length ? curLines[curLines.length-1] : null;
       window._tdBreakLog.push({
         pageIdx: pages.length, reason,

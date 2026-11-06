@@ -1943,7 +1943,12 @@ async function _startFromOfflineSnapshot(snapshot, opts) {
 // Misma anotación que EgressLedger (js/supabase-client.js): mismo localStorage 'cx_egress_v1', mismo formato { d: { día: { origen:
 // { tipo: [peticiones, bytes] } } } }, origen 'rd' (lector). Cada lectura que baja datos de la nube lo apunta y «Mis obras» lo enseña.
 // Se agrupa y se mezcla con lo guardado al escribir (dos pestañas no se pisan).
+//
+// v42.54 (petición de Alberto): igual que EgressLedger, el lector SOLO anota si este dispositivo tiene el diagnóstico activado (Administración →
+// Diagnóstico de la app; js/diag.js, que el lector comparte por ser del mismo origen). Apagado de serie: _egNote no hace nada.
 const _EG = { pend: {}, timer: 0 };
+const _cxDiagOn = () => !!(window.CxDiag && window.CxDiag.on());
+if (window.CxDiag) window.CxDiag.onOff(() => { _EG.pend = {}; clearTimeout(_EG.timer); _EG.timer = 0; });
 function _egKind(url) {
   const u = String(url || '');
   const m = u.match(/supabase\.co\/rest\/v1\/([a-z_]+(?:\/[a-z_]+)?)/i);
@@ -1957,7 +1962,7 @@ function _egKind(url) {
 function _egFlush() {
   clearTimeout(_EG.timer); _EG.timer = 0;
   const p = _EG.pend; _EG.pend = {};
-  if (!Object.keys(p).length) return;
+  if (!_cxDiagOn() || !Object.keys(p).length) return;
   try {
     let o = null;
     try { o = JSON.parse(localStorage.getItem('cx_egress_v1') || 'null'); } catch (_) {}
@@ -1975,6 +1980,7 @@ function _egFlush() {
   } catch (_) {}
 }
 function _egNote(url, bytes) {
+  if (!_cxDiagOn()) return;   // v42.54: diagnóstico apagado en este dispositivo → no se anota nada
   try {
     const b = +bytes; if (!(b >= 0)) return;
     const d = new Date(), day = d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
@@ -3741,6 +3747,8 @@ function _plStartBackground() {
 // ve y si la pestaña estaba visible. Al cerrar con normalidad (pagehide) se marca la sesión como terminada; si al abrir
 // de nuevo la anterior NO está marcada, terminó de forma inesperada y sus últimas muestras dicen cómo estaba.
 // Se ve añadiendo ?diag=1 al enlace del lector (queda activado en ese dispositivo; ?diag=0 lo quita).
+// v42.54: todo esto (la grabadora y el informe) SOLO existe en los dispositivos con el diagnóstico activado desde Administración → Diagnóstico de la
+// app (js/diag.js); en los demás el lector no graba nada ni guarda cx_rd_flight. ?diag=1 solo abre el informe si ese interruptor está activado.
 // ══════════════════════════════════════════════════════════════════════════
 const _FR_KEY = 'cx_rd_flight', _FR_MAX = 36, _FR_EVERY = 5000;
 const _FR = { rec: null, prev: null, timer: null, on: false, box: null, boxTimer: null };
@@ -3775,13 +3783,15 @@ function _frSample(tag) {
   };
 }
 function _frPush(tag) {
-  const r = _FR.rec; if (!r) return;
+  const r = _FR.rec; if (!r || !_cxDiagOn()) return;   // v42.54: sin diagnóstico activado en este dispositivo no se guarda ninguna muestra
   r.samples.push(_frSample(tag)); if (r.samples.length > _FR_MAX) r.samples.shift();
   r.last = Date.now();
   try { localStorage.setItem(_FR_KEY, JSON.stringify(r)); } catch (_) {}
 }
 function _frStart() {
-  if (_FR.on) return; _FR.on = true;
+  // v42.54 (petición de Alberto): la grabadora SOLO funciona en los dispositivos con el diagnóstico activado (Administración → Diagnóstico de la
+  // app; js/diag.js). Apagado de serie: ni muestras cada 5 s, ni escritura en localStorage, ni informe ?diag=1. Antes grababa en TODOS los dispositivos.
+  if (_FR.on || !_cxDiagOn()) return; _FR.on = true;
   try { const s = localStorage.getItem(_FR_KEY); _FR.prev = s ? JSON.parse(s) : null; } catch (_) { _FR.prev = null; }
   _FR.rec = { v: 1, sid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), start: Date.now(), work: RS._workId || '',
     mode: RS.navMode || 'fixed', dm: navigator.deviceMemory || null, dpr: window.devicePixelRatio || 1,
@@ -3795,6 +3805,7 @@ function _frStart() {
   if (_frDiagWanted()) _frDiagOpen();
 }
 function _frDiagWanted() {
+  if (!_cxDiagOn()) return false;   // v42.54: el informe ?diag=1 también necesita el diagnóstico activado en este dispositivo
   const q = _PL_QS.get('diag');
   try {
     if (q === '1') { localStorage.setItem('cx_rd_diag', '1'); return true; }
@@ -3852,6 +3863,10 @@ function _frDiagClose() {
   _FR.box = null;
   try { localStorage.removeItem('cx_rd_diag'); } catch (_) {}
 }
+// v42.54: si otra pestaña apaga el diagnóstico de este dispositivo mientras el lector está abierto, la grabadora se detiene y el informe se cierra.
+if (window.CxDiag) window.CxDiag.onOff(() => {
+  try { if (_FR.timer) clearInterval(_FR.timer); _FR.timer = null; _FR.rec = null; _FR.prev = null; if (_FR.box) _frDiagClose(); } catch (_) {}
+});
 
 // ══════════════════════════════════════════════════════════════════════════
 // RETOMAR LA LECTURA (v42.17)
@@ -6220,11 +6235,76 @@ function _render() {
     }
     // bubble/text: siempre gestionado por _drawTexts (forma + texto juntos, con sequential)
   };
+  // v42.55 — CACHÉ DE DESENFOQUES. Cada repintado de la hoja (uno por fotograma de cualquier animación) volvía a desenfocar todas las
+  // capas desenfocadas; CxDefocus las guarda como bitmap (a menor resolución, con tope de memoria; ver js/defocus.js) y solo las
+  // rehace si cambia algo que no sea posición/giro. Aquí se dice, por tipo de capa, dónde está su pivote y giro (los MISMOS cálculos que
+  // _rPaintLayer: posición con _pathCurX/Y de la trayectoria, tamaño, giro + giro de trayectoria), cuál es su opacidad, qué fotograma/imagen
+  // tiene y qué rectángulo ocupa como máximo. null = esa capa no se guarda (se pinta como siempre).
+  const _rOk = im => !!im && (im.naturalWidth === undefined || (im.complete && im.naturalWidth > 0)) ? 1 : 0;
+  const _rCirc = (x, y, w, h, extra) => { const r = Math.hypot(w, h) / 2 + extra; return { x: x - r, y: y - r, w: 2 * r, h: 2 * r }; };
+  const _rDfPlan = (layer, j) => {
+    const type = layer.type, opa = layer.opacity !== undefined ? layer.opacity : 1, pr = _layerPathRotDeg(layer);
+    const cx = layer._pathCurX, cy = layer._pathCurY;
+    let x, y, w, h, rot = 0, a = opa, sig, src = null, bounds;
+    if (type === 'gif') {
+      if (!layer._gifReady || !layer._gifOc) return null;
+      x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
+      w = (layer.width || 0.5) * pw; h = (layer.height || 0.5) * ph;
+      rot = (layer.rotation || 0) + pr; src = layer._gifOc; sig = 'g' + layer._gifIdx + '|' + w + 'x' + h;
+      bounds = _rCirc(x, y, w, h, 2);
+    } else if (type === 'fill' || type === 'pencil' || type === 'watercolor') {
+      const img = layerImgs[j]; if (!img) return null;
+      x = (cx != null ? cx : (layer.x != null ? layer.x : 0.5)) * pw; y = (cy != null ? cy : (layer.y != null ? layer.y : 0.5)) * ph;
+      w = (layer.width != null ? layer.width : 1) * pw; h = (layer.height != null ? layer.height : 1) * ph;
+      rot = (layer.rotation || 0) + pr; src = img; sig = 'f' + _rOk(img) + '|' + w + 'x' + h;
+      bounds = _rCirc(x, y, w, h, 2);
+    } else if (type === 'image' && layer._animReady && layer._animOc) {          // APNG / animación por instrucciones
+      x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
+      w = (layer.width || 1) * pw; h = (layer.height || 1) * ph;
+      rot = (layer.rotation || 0) + pr; src = layer._animOc; sig = 'a' + layer._animIdx + '|' + w + 'x' + h;
+      if (layer._animFadeOpacity != null) a = layer._animFadeOpacity;
+      bounds = _rCirc(x, y, w, h, 2);
+    } else if (type === 'image' || type === 'stroke') {
+      const img = layerImgs[j]; if (!img) return null;
+      x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
+      w = (layer.width || 1) * pw; h = (layer.height || 1) * ph;
+      rot = (layer.rotation || 0) + pr; src = img; sig = 'i' + _rOk(img) + '|' + w + 'x' + h;
+      bounds = _rCirc(x, y, w, h, 2);
+    } else if (type === 'draw') {                                                 // tinta de hoja entera (formato antiguo): solo se desplaza
+      const img = layerImgs[j]; if (!img) return null;
+      x = cx != null ? (cx - (layer.x || 0.5)) * pw : 0; y = cx != null ? (cy - (layer.y || 0.5)) * ph : 0;
+      src = img; sig = 'd' + _rOk(img);
+      bounds = { x: x - 2, y: y - 2, w: pw + 4, h: ph + 4 };
+    } else if (type === 'shape') {
+      x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
+      w = (layer.width || 0.3) * pw; h = (layer.height || 0.2) * ph;
+      rot = (layer.rotation || 0) + pr;
+      const bm = layer.renderDataUrl && layerImgs[j], pad = bm ? (layer._renderPad || 0) : 0;
+      src = bm ? layerImgs[j] : null; sig = 'sh' + (bm ? _rOk(bm) : 'v') + '|' + w + 'x' + h;
+      bounds = _rCirc(x, y, w + 2 * pad, h + 2 * pad, (layer.lineWidth || 0) + 4);
+    } else if (type === 'line' && layer.points && layer.points.length >= 2) {
+      x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
+      w = (layer.width || 0.3) * pw; h = (layer.height || 0.2) * ph;
+      rot = (layer.rotation || 0) + pr;
+      const bm = layer.renderDataUrl && layerImgs[j];
+      if (bm) {
+        const pad = layer._renderPad || 0;
+        src = bm; sig = 'lb' + _rOk(bm) + '|' + w + 'x' + h;
+        bounds = _rCirc(x, y, w + 2 * pad, h + 2 * pad, 4);
+      } else {                                                                  // puntos sueltos, en fracciones de hoja, bajo el pivote
+        let m = 0; for (const q of layer.points) if (q) { const d = Math.hypot(q.x * pw, q.y * ph); if (d > m) m = d; }
+        sig = 'lp' + layer.points.length + '|' + w + 'x' + h;
+        bounds = { x: x - m - (layer.lineWidth || 0) - 4, y: y - m - (layer.lineWidth || 0) - 4, w: 2 * (m + (layer.lineWidth || 0) + 4), h: 2 * (m + (layer.lineWidth || 0) + 4) };
+      }
+    } else return null;
+    return { bounds, cache: { key: layer, sig, src, alpha: a, x, y, rot } };
+  };
   layers.forEach((layer, j) => {
     const _df = layer.hidden ? 0 : _rDf(layer);
     if (_df > 0 && layer.type !== 'bubble' && layer.type !== 'text') {
       // forma y línea llevan varios trazos (relleno + contorno): se desenfoca el conjunto UNA vez (igual que en el editor)
-      CxDefocus.run(ctx, _df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null });
+      const pl = _rDfPlan(layer, j);
+      CxDefocus.run(ctx, _df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
     } else {
       _rPaintLayer(ctx, layer, j);
     }
@@ -6290,7 +6370,30 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
 // Forma + texto + cola se desenfocan JUNTOS, de una vez (union), como en el editor.
 function _drawBubble(ctx, t, pw, ph, alpha) {
   const _df = _rDf(t && (t._bubbleLayer || t));
-  if (_df > 0) return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), { union: true });
+  if (_df > 0) {
+    // v42.55 — caché de desenfoques (js/defocus.js): solo bocadillos/textos QUE NO SE MUEVEN (sin trayectoria), sin hoja de texto maquetada
+    // (richLines) y con su fuente YA cargada: las fuentes web se cargan la primera vez que se usan, y un bitmap guardado con la fuente de
+    // sustitución quedaría así para siempre (document.fonts.check es falso mientras la cara está «unloaded/loading»; sin fuente declarada es verdadero).
+    // Sin límites no es rígida: cualquier cambio rehace.
+    const L = t._bubbleLayer || t;
+    const mv = t._pathCurX != null || t._pathCurY != null || L._pathCurX != null || L._pathCurY != null || _layerPathRotDeg(t) || _layerPathRotDeg(L);
+    const rich = (L.richLines && L.richLines.length) || (t.richLines && t.richLines.length);
+    let cache = null;
+    if (!mv && !rich) {
+      let fontsOk = false;
+      try {
+        // familias que puede usar _drawBubbleImpl: la del propio texto (o 'Patrick Hand') y la de su capa (bitmap + texto encima); en negrita/cursiva si toca
+        const bold = !!(t.font_bold ?? t.fontBold ?? L.fontBold), ital = !!(t.font_italic ?? t.fontItalic ?? L.fontItalic), pre = (ital ? 'italic ' : '') + (bold ? 'bold ' : '') + '20px ';
+        fontsOk = !document.fonts || (document.fonts.check(pre + (t.font_family || t.fontFamily || 'Patrick Hand')) && (!L.fontFamily || document.fonts.check(pre + L.fontFamily)));
+      } catch (_) { fontsOk = false; }
+      if (fontsOk) {
+        const im = t._bubbleLayerImg || t._renderImg || null;
+        cache = { key: t, sig: 'b' + (im ? (im.naturalWidth === undefined || (im.complete && im.naturalWidth > 0) ? 1 : 0) : 'x') + '|' + pw + 'x' + ph,
+                  src: im, alpha: alpha, rigid: false };
+      }
+    }
+    return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), cache ? { union: true, cache } : { union: true });
+  }
   return _drawBubbleImpl(ctx, t, pw, ph, alpha);
 }
 function _drawBubbleImpl(ctx, t, pw, ph, alpha) {
