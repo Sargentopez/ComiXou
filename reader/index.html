@@ -125,7 +125,7 @@
     // vieja; en cualquier otro caso (coincide, no aplica, o falla la
     // comprobación) si se llama, para no dejar la pantalla en blanco.
     (function () {
-      var READER_BUILD = '42.55';
+      var READER_BUILD = '42.56';
       var RETRY_KEY = 'cxReaderCacheRetry';
       if (/[?&]_cb=/.test(location.search)) {
         var clean = location.href.replace(/([?&])_cb=[^&]*&?/, '$1').replace(/[?&]$/, '');
@@ -269,15 +269,15 @@
 
   <!-- v42.54: interruptor de diagnóstico de ESTE dispositivo (el mismo de la app: mismo origen, mismo localStorage). Apagado de
        serie: sin él el lector no guarda libro de consumo de datos ni grabadora de vuelo. Antes de orient-lock.js y reader.js. -->
-  <script src="../js/diag.js?v=42.55"></script>
+  <script src="../js/diag.js?v=42.56"></script>
   <script src="../js/pako.min.js?v=42.10"></script>
   <script src="../js/UPNG.js?v=42.10"></script>
   <script src="../js/fullscreen.js?v=42.10"></script>
   <script src="../js/logo-data.js?v=42.10"></script>
   <script src="../js/icon-data.js?v=42.10"></script>
   <script src="../js/anim-clock.js?v=42.27"></script>
-  <script src="../js/defocus.js?v=42.55"></script>
-  <script src="../js/orient-lock.js?v=42.55"></script>
-  <script src="reader.js?v=42.55"></script>
+  <script src="../js/defocus.js?v=42.56"></script>
+  <script src="../js/orient-lock.js?v=42.56"></script>
+  <script src="reader.js?v=42.56"></script>
 </body>
 </html>

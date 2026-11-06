@@ -40,16 +40,31 @@
    lo que lleva 4 s sin usarse se libera; al ocultarse la página se libera todo. No hay temporizadores permanentes.
    Solo se activa si quien llama lo pide (opt.cache): el editor y las exportaciones siguen pintando a resolución completa.
 
+   PRECALENTADO (v42.56) — «el desenfoque, si lo hay, debe estar listo antes de que se vea la hoja». Con la caché sola, el primer
+   fotograma —y cada fotograma NUEVO de una animación cuyo desenfoque cambia de un fotograma a otro— seguía pagando el cálculo en pleno
+   movimiento. CxDefocus.warm(fn): dentro de fn, run() NO pinta nada: solo prepara la entrada de la caché (si falta) y vuelve. El lector lo
+   llama al cargar cada hoja y sus contiguas, ANTES de marcarla «lista» (js: reader/reader.js, _plWarmBlur): durante la reproducción no
+   queda ningún desenfoque por calcular. Las entradas llevan `group` (la hoja): no caducan por tiempo mientras la hoja esté en la ventana
+   de memoria del lector y se sueltan todas juntas con release(group). El tope de memoria de arriba sigue mandando: lo que no cabe se
+   calcula al pintar, como antes.
+   OPACIDAD — si quien llama da cache.neutral(c) (pinta la capa con opacidad 1), el bitmap se guarda SIN opacidad y esta se aplica al
+   pintarlo (blur(α·L) = α·blur(L): exacto en capas de un solo trazo). Así un fundido, o la opacidad de un objeto de animación que cambia
+   en cada fotograma, no obliga a rehacer el bitmap.
+
    USO — CxDefocus.run(ctx, grado, function (c) { …pintar en c… }, union)
-         CxDefocus.run(ctx, grado, drawFn, { union, bounds, blend, cache: { key, sig, alpha, x, y, rot, rigid } })
+         CxDefocus.run(ctx, grado, drawFn, { union, bounds, blend, cache: { key, sig, src, alpha, x, y, rot, rigid, group, neutral } })
              cache.key   objeto que identifica la capa (WeakMap: no se retiene)
              cache.sig   texto con TODO lo que cambia los píxeles salvo posición/giro (fotograma, tamaño, imagen lista…)
              cache.src   imagen/lienzo de origen: su identidad va en la firma (por si se sustituye)
-             cache.alpha opacidad con la que drawFn pinta (va en la firma; cuantizada a 1/64)
+             cache.alpha opacidad con la que drawFn pinta (sin neutral va en la firma, cuantizada a 1/64; con neutral se aplica al pintar)
              cache.x/y/rot  pivote (px de usuario) y giro (grados) de la capa: sus cambios se aplican al bitmap, sin rehacerlo
              cache.rigid false → x/y/rot van a la firma (cualquier cambio rehace); sin opt.bounds también es así
+             cache.group objeto (la hoja) al que pertenece la entrada: sin caducidad por tiempo, se suelta con release(group)
+             cache.neutral función(c) que pinta la capa con opacidad 1 (ver OPACIDAD)
              opt.bounds  rectángulo de usuario que MÁS ocupa la capa (si se mueve, hace falta)
-         CxDefocus.suspend(function () { …horneado de un bitmap que luego se pintará con su propio desenfoque… })
+         CxDefocus.warm(function () { …run() con las mismas llamadas de siempre: solo preparan la caché… })  ·  warmCtx(w, h, a, d)
+             contexto «de mentira» (lienzo w×h y transformación a,d) para precalentar sin reservar un lienzo de verdad
+         CxDefocus.release(group) · suspend(function () { …horneado de un bitmap que luego se pintará con su propio desenfoque… })
          CxDefocus.cacheStats() · cacheClear() · setCache(false) · ?dfcache=0 en la dirección (interruptor de emergencia)
    ============================================================ */
 (function (root) {
@@ -74,14 +89,16 @@
   var T_RECENT    = 400;     // ms: una entrada usada hace menos no se expulsa (forma parte del conjunto de trabajo)
   var T_STALE     = 4000;    // ms sin usarse → se libera
   var T_TIMER     = 5000;    // revisión de entradas viejas (solo mientras haya entradas; no hay temporizador permanente)
-  var PER_KEY     = 48;      // entradas como máximo por capa (fotogramas de un GIF, pasos de un fundido…)
-  var MAX_ENTRIES = 96;
+  var PER_KEY     = 240;     // entradas como máximo por capa (fotogramas de un GIF, un desenfoque distinto por fotograma de una animación…)
+  var MAX_ENTRIES = 480;
   var MAX_SIDE    = 4096;
   var _cacheOn    = true;    // interruptor de emergencia (setCache / ?dfcache=0)
   var _pause      = false;   // pruebas: la caché se salta (sin vaciarse) para pintar la referencia a resolución completa
+  var _warm       = 0;       // >0: dentro de warm(fn) — run() solo prepara la caché, no pinta
   var _budgetB    = 0;       // tope en bytes (0 = sin calcular)
   var _used       = 0;
   var _live       = [];      // entradas vivas (sin referencia a la capa)
+  var _nUng       = 0;       // cuántas de ellas NO llevan grupo (las únicas que caducan por tiempo)
   var _recs       = (typeof WeakMap === 'function') ? new WeakMap() : null;   // capa → Map(firma → entrada)
   var _ids        = (typeof WeakMap === 'function') ? new WeakMap() : null;
   var _idN        = 0;
@@ -89,7 +106,7 @@
   var _lastSweep  = 0;
   var _spool      = [];      // lienzos de trabajo (nítido a baja resolución) por profundidad
   var _tpool      = [];      // ídem para las pasadas que no se guardan
-  var _st = { hits: 0, misses: 0, transient: 0, refused: 0, evicted: 0, swept: 0, builds: 0, buildMs: 0, maxBuildMs: 0 };
+  var _st = { hits: 0, misses: 0, transient: 0, refused: 0, evicted: 0, swept: 0, builds: 0, buildMs: 0, maxBuildMs: 0, primed: 0 };
   try { if (/[?&]dfcache=0(?:&|$)/.test(String(root.location && root.location.search || ''))) _cacheOn = false; } catch (e) {}
 
   function clamp(v) {
@@ -357,43 +374,59 @@
     if (i >= 0) _live.splice(i, 1);
     if (e.map && e.map.get(e.sig) === e) e.map.delete(e.sig);
     _used -= e.bytes;
+    if (!e.grp) _nUng--;
     freeCv(e.cv); e.cv = null; e.map = null;
   }
   function cacheClear() {
     while (_live.length) drop(_live[_live.length - 1]);
-    _used = 0;
+    _used = 0; _nUng = 0;
     for (var i = 0; i < _spool.length; i++) if (_spool[i]) freeCv(_spool[i]);
     for (i = 0; i < _tpool.length; i++) if (_tpool[i]) freeCv(_tpool[i]);
     _spool = []; _tpool = [];
     if (_timer) { clearTimeout(_timer); _timer = 0; }
   }
+  // Suelta todo lo que pertenece a un grupo (la hoja que sale de la ventana de memoria). Devuelve cuántas entradas.
+  function release(group) {
+    var n = 0;
+    if (!group) return 0;
+    for (var i = _live.length - 1; i >= 0; i--) {
+      if (_live[i].grp === group) { drop(_live[i]); n++; }
+    }
+    return n;
+  }
+  // Solo caducan por tiempo las entradas SIN grupo (las que no tienen dueño que las suelte).
   function sweep(now) {
     _lastSweep = now;
     for (var i = _live.length - 1; i >= 0; i--) {
-      if (now - _live[i].last > T_STALE) { drop(_live[i]); _st.swept++; }
+      if (!_live[i].grp && now - _live[i].last > T_STALE) { drop(_live[i]); _st.swept++; }
     }
   }
+  // Un solo aviso a los 5 s de la última construcción: caduca lo viejo y libera los lienzos de trabajo. Solo se vuelve a armar mientras
+  // quede algo que pueda caducar (entradas sin grupo); no hay temporizadores permanentes.
   function arm() {
-    if (_timer || !_live.length || typeof setTimeout !== 'function') return;
+    if (_timer || typeof setTimeout !== 'function') return;
     _timer = setTimeout(function () {
       _timer = 0;
       sweep(root.performance.now());
-      if (_live.length) arm();
+      if (_nUng > 0) arm();
       else { _spool = []; _tpool = []; }
     }, T_TIMER);
   }
-  // Hace sitio para `bytes`: expulsa las menos usadas, pero NUNCA una usada hace menos de T_RECENT (conjunto de trabajo actual).
-  // false → no cabe sin pisar el conjunto de trabajo: la pasada se pinta sin guardar.
-  function admit(bytes, now) {
+  // Hace sitio para `bytes`: expulsa las menos usadas, pero NUNCA una usada hace menos de T_RECENT (conjunto de trabajo actual) ni
+  // otra de la MISMA capa (`protect`: su mapa): una animación que recorre cíclicamente más fotogramas de los que caben, con «la menos usada
+  // primero» fallaría el 100 % de las veces; así se quedan los primeros y el resto se calcula al pintar.
+  // false → no cabe sin pisar eso: la pasada se pinta sin guardar.
+  function admit(bytes, now, protect) {
     var cap = budget();
-    if (_live.length >= MAX_ENTRIES && !evictOne(now)) return false;
-    while (_used + bytes > cap) { if (!evictOne(now)) return false; }
+    if (_live.length >= MAX_ENTRIES && !evictOne(now, protect)) return false;
+    while (_used + bytes > cap) { if (!evictOne(now, protect)) return false; }
     return true;
   }
-  function evictOne(now) {
+  function evictOne(now, protect) {
     var v = null;
     for (var i = 0; i < _live.length; i++) {
       var e = _live[i];
+      if (protect && e.map === protect) continue;
       if (now - e.last > T_RECENT && (!v || e.last < v.last)) v = e;
     }
     if (!v) return false;
@@ -441,8 +474,10 @@
     if (cw * ch > 1e6) { freeCv(sc); _spool[_depth] = null; }
   }
 
-  // Pinta una entrada con la matriz M (px de la región origen → px del destino actual).
-  function blitEntry(ctx, e, M, blend) {
+  // Pinta una entrada con la matriz M (px de la región origen → px del destino actual). alpha: opacidad al pintarla (1 salvo en las
+  // entradas «neutral», que se guardan sin opacidad).
+  function blitEntry(ctx, e, M, blend, alpha) {
+    if (alpha == null || alpha !== alpha) alpha = 1;
     var dw = e.cw * e.f, dh = e.ch * e.f, W = ctx.canvas.width, H = ctx.canvas.height;
     var xs = [e.x0, e.x0 + dw], ys = [e.y0, e.y0 + dh], mnx = 1e18, mny = 1e18, mxx = -1e18, mxy = -1e18;
     for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) {
@@ -450,10 +485,11 @@
       if (X < mnx) mnx = X; if (X > mxx) mxx = X; if (Y < mny) mny = Y; if (Y > mxy) mxy = Y;
     }
     if (mxx < 0 || mxy < 0 || mnx > W || mny > H) return;       // fuera del lienzo: nada que pintar
+    if (alpha <= 0) return;                                      // opacidad 0: invisible
     ctx.save();
     try {
       ctx.setTransform(M[0], M[1], M[2], M[3], M[4], M[5]);
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = alpha > 1 ? 1 : alpha;
       if (blend) ctx.globalCompositeOperation = blend;
       ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'low';
       ctx.drawImage(e.cv, 0, 0, e.cw, e.ch, e.x0, e.y0, dw, dh);
@@ -462,7 +498,9 @@
 
   // Camino con caché. Devuelve true si ha pintado la capa (con la caché o en una pasada sin guardar); false → quien llama usa el
   // camino de siempre (a resolución completa). Nunca deja la capa a medias: solo devuelve false antes de llamar a drawFn.
-  function runCached(ctx, p, drawFn, union, bounds, blend, C) {
+  // prime (precalentado, dentro de warm()): no pinta nada en ctx; solo se asegura de que la entrada exista. true → ya existe (o se ha
+  // construido y guardado); false → no se puede guardar (sin hueco, demasiado grande, no cacheable): se calculará al pintar.
+  function runCached(ctx, p, drawFn, union, bounds, blend, C, prime) {
     if (!_cacheOn || _pause || !_recs || !C || !C.key || (typeof C.key !== 'object' && typeof C.key !== 'function')) return false;
     var T = ctx.getTransform();
     if (!similar(T)) return false;
@@ -471,10 +509,12 @@
     if (now - _lastSweep > 1000) sweep(now);
 
     var rigid = C.rigid !== false && !!bounds;                    // sin límites de la capa no se puede mover el bitmap
+    var neutral = (typeof C.neutral === 'function') ? C.neutral : null;   // bitmap sin opacidad: esta se aplica al pintarlo
     var f = 1; while (f < F_MAX && p / (f * 2) >= SIG_MIN) f *= 2;
     var galpha = ctx.globalAlpha, ca = C.alpha == null ? 1 : +C.alpha;
     var sg = (C.sig == null ? '' : String(C.sig)) + '|' + idOf(C.src) + '|' + T.a.toFixed(3) + ',' + T.b.toFixed(3) + ',' + T.c.toFixed(3) + ',' + T.d.toFixed(3) +
-             '|' + p.toFixed(2) + '|' + (union ? 'u' : 's') + (native ? 'n' : 'j') + '|' + Math.round(ca * 64) + ',' + Math.round(galpha * 64);
+             '|' + p.toFixed(2) + '|' + (union ? 'u' : 's') + (native ? 'n' : 'j') + (neutral ? '|o' : '|' + Math.round(ca * 64) + ',' + Math.round(galpha * 64));
+    var bAlpha = neutral ? galpha * ca : 1;                       // opacidad al pintar la entrada
     var x1 = +C.x || 0, y1 = +C.y || 0, r1 = +C.rot || 0;
     if (!rigid) sg += '|' + Math.round(x1 * 8) + ',' + Math.round(y1 * 8) + ',' + Math.round(r1 * 8);
 
@@ -492,8 +532,10 @@
     }
 
     if (e) {                                                      // ACIERTO: solo un desplazamiento/giro del bitmap
-      e.last = now; _st.hits++;
-      blitEntry(ctx, e, pose(e), blend);
+      e.last = now;
+      if (prime) return true;
+      _st.hits++;
+      blitEntry(ctx, e, pose(e), blend, bAlpha);
       return true;
     }
 
@@ -517,40 +559,52 @@
     if (cw > MAX_SIDE || ch > MAX_SIDE || bytes > budget() / 4) { _st.refused++; return false; }   // demasiado grande para guardarse
 
     var t0 = root.performance.now();
-    var keep = admit(bytes, now);
+    var keep = (!map || map.size < PER_KEY) && admit(bytes, now, map);   // una capa no acumula más de PER_KEY entradas
+    if (prime && !keep) { _st.refused++; return false; }          // precalentar es guardar: sin hueco no se hace nada (se calculará al pintar)
     if (!keep && f < 2) { _st.refused++; return false; }          // sin hueco y sin ganancia por reducir: camino de siempre
+    var bfn = neutral ? function (c) { neutral(c); } : drawFn, bga = neutral ? 1 : galpha;
     var ent;
     if (keep) {
       var cv = mkCanvas(cw, ch);
-      buildLow(T, f, sp, R, cw, ch, native, galpha, drawFn, cv);
-      ent = { cv: cv, cw: cw, ch: ch, f: f, x0: R.x0, y0: R.y0, T: T1, px: x1, py: y1, rot: r1, bytes: bytes, last: now, sig: sg, map: null };
+      buildLow(T, f, sp, R, cw, ch, native, bga, bfn, cv);
+      ent = { cv: cv, cw: cw, ch: ch, f: f, x0: R.x0, y0: R.y0, T: T1, px: x1, py: y1, rot: r1, bytes: bytes, last: now, sig: sg, map: null, grp: C.group || null };
       if (!map) { map = new Map(); _recs.set(C.key, map); }
-      if (map.size >= PER_KEY) {                                  // la entrada más vieja de ESTA capa
-        var old = null; map.forEach(function (v) { if (!old || v.last < old.last) old = v; });
-        if (old) drop(old);
-      }
       ent.map = map; map.set(sg, ent); _live.push(ent); _used += bytes;
-      _st.misses++;
+      if (!ent.grp) _nUng++;
+      if (prime) _st.primed++; else _st.misses++;
       arm();
     } else {                                                      // pasada sin guardar: lienzo de trabajo, no retenido
       var tc = work(_tpool, _depth, cw, ch);
-      buildLow(T, f, sp, R, cw, ch, native, galpha, drawFn, tc);
+      buildLow(T, f, sp, R, cw, ch, native, bga, bfn, tc);
       ent = { cv: tc, cw: cw, ch: ch, f: f, x0: R.x0, y0: R.y0, T: T1, px: x1, py: y1, rot: r1 };
       _st.transient++;
     }
     var dt = root.performance.now() - t0;
     _st.builds++; _st.buildMs += dt; if (dt > _st.maxBuildMs) _st.maxBuildMs = dt;
-    blitEntry(ctx, ent, pose(ent), blend);
+    if (prime) return true;
+    blitEntry(ctx, ent, pose(ent), blend, bAlpha);
     if (!keep && cw * ch > 1e6) { freeCv(tc); _tpool[_depth] = null; }
     return true;
   }
 
   function cacheStats() {
     return {
-      on: _cacheOn, budgetMB: +(budget() / MB).toFixed(1), usedKB: Math.round(_used / 1024), entries: _live.length,
-      hits: _st.hits, misses: _st.misses, transient: _st.transient, refused: _st.refused, evicted: _st.evicted, swept: _st.swept,
+      on: _cacheOn, budgetMB: +(budget() / MB).toFixed(1), usedKB: Math.round(_used / 1024), entries: _live.length, pinned: _live.length - _nUng,
+      hits: _st.hits, misses: _st.misses, primed: _st.primed, transient: _st.transient, refused: _st.refused, evicted: _st.evicted, swept: _st.swept,
       builds: _st.builds, buildMs: +_st.buildMs.toFixed(1), maxBuildMs: +_st.maxBuildMs.toFixed(1)
     };
+  }
+  // Precalentado (ver la cabecera): dentro de fn, run() solo prepara la entrada de la caché. fn debe ser SÍNCRONA (un contador global
+  // no puede abarcar un await sin afectar a lo que se pinte entretanto). Devuelve lo que devuelva fn.
+  function warm(fn) {
+    _warm++;
+    try { return fn(); } finally { _warm--; }
+  }
+  // Contexto «de mentira» para precalentar sin reservar un lienzo de verdad: solo lo que lee la caché (tamaño del lienzo, transformación
+  // —semejanza de escala a, d—, opacidad y filtro). NO sirve para pintar.
+  function warmCtx(w, h, a, d) {
+    var m = { a: a || 1, b: 0, c: 0, d: d || a || 1, e: 0, f: 0 };
+    return { canvas: { width: Math.max(1, w | 0), height: Math.max(1, h | 0) }, globalAlpha: 1, filter: 'none', getTransform: function () { return m; } };
   }
   function setCache(on) {
     _cacheOn = !!on;
@@ -568,9 +622,16 @@
   // o un auxiliar con la misma transformación). `opt` = true (capa de varios trazos: forma, línea, texto, bocadillo → «union») o
   // un objeto { union, bounds, blend }:  bounds = {x,y,w,h} (o función que lo da) en coordenadas de usuario de ctx con el
   // rectángulo que como MUCHO ocupa la capa (si no se da, se prepara todo el lienzo);  blend = modo de fusión de la capa;
-  // cache = { key, sig, alpha, x, y, rot, rigid } → reproducción con caché de bitmaps (ver la cabecera). drawFn recibe un 2.º
-  // argumento = true cuando se pinta para la caché (a 1/f de resolución).
+  // cache = { key, sig, src, alpha, x, y, rot, rigid, group, neutral } → reproducción con caché de bitmaps (ver la cabecera). drawFn
+  // recibe un 2.º argumento = true cuando se pinta para la caché (a 1/f de resolución).
+  // Dentro de warm(): no pinta nada; solo asegura la entrada de la caché y devuelve true (existe) / false (no cacheable o sin hueco).
   function run(ctx, deg, drawFn, opt) {
+    if (_warm > 0) {
+      if (_off > 0 || !opt || !opt.cache) return false;
+      var pw = px(ctx, deg);
+      if (!pw) return false;
+      return runCached(ctx, pw, drawFn, !!(opt === true || opt.union), opt.bounds, opt.blend, opt.cache, true);
+    }
     if (_off > 0) return drawFn(ctx);
     var p = px(ctx, deg);
     if (!p) return drawFn(ctx);
@@ -603,6 +664,7 @@
     isSuspended: function () { return _off > 0; },
     blurCanvas: blurCanvas,
     cacheStats: cacheStats, cacheClear: cacheClear, setCache: setCache,
+    warm: warm, warmCtx: warmCtx, release: release, isWarming: function () { return _warm > 0; },
     // solo para pruebas: tope de la caché en bytes (0 = el que toque por dispositivo) y vaciado de contadores
     _budget: function (b) { _budgetB = b > 0 ? +b : 0; return budget(); },
     _pause: function (on) { _pause = !!on; return _pause; },

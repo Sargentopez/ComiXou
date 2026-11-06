@@ -1086,6 +1086,33 @@ window.AnimProc = (function(){
     return s;
   }
 
+  // v42.56 — CACHÉ DEL DESENFOQUE POR OBJETO (js/defocus.js). Cada fotograma pintado volvía a desenfocar cada objeto con desenfoque
+  // (medido: 8 ms por fotograma en un PC, 35 ms con la CPU ÷4 y 130 ms con un recorte grande: el filtro cuesta según el área del lienzo
+  // de la animación, no según el radio), así que una animación con desenfoque —sobre todo si cambia de un fotograma a otro— frenaba
+  // la reproducción. Ahora el objeto desenfocado se guarda como bitmap (a menor resolución, con tope de memoria) y se reutiliza mientras
+  // no cambien su tamaño ni su desenfoque: posición, giro y opacidad se aplican al pintarlo (cache.neutral = sin opacidad). Con
+  // S.warm() el lector lo precalcula TODO al cargar la hoja, antes de que se vea. Caja del objeto: rectángulo girado, más 2 px.
+  function dfPlan(S, o, s, w, h, mul){
+    var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
+    var th = rot * DEG, ca = Math.abs(Math.cos(th)), sa = Math.abs(Math.sin(th));
+    var ex = (Math.abs(w) * ca + Math.abs(h) * sa) / 2 + 2, ey = (Math.abs(w) * sa + Math.abs(h) * ca) / 2 + 2;
+    return {
+      bounds: { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey },
+      cache: {
+        key: o, group: S.group || null, src: o.img, sig: 'ap|' + w.toFixed(2) + 'x' + h.toFixed(2),
+        alpha: (s.opacity == null ? 1 : s.opacity) * mul, x: x, y: y, rot: rot,
+        neutral: function(c){
+          c.save();
+          c.globalCompositeOperation = 'source-over';
+          c.translate(x, y);
+          c.rotate(rot * DEG);
+          c.drawImage(o.img, -w / 2, -h / 2, w, h);
+          c.restore();
+        }
+      }
+    };
+  }
+
   // Pinta el objeto con la transformación s (opacidad × mul) — ImageLayer.draw sobre el recorte.
   // v42.51: s.defocus (0-100, ausente = nítido) desenfoca el objeto con el módulo común CxDefocus (js/defocus.js); los fantasmas del
   // rastro de movimiento no llevan (s sin defocus → nítidos).
@@ -1100,8 +1127,11 @@ window.AnimProc = (function(){
       c.drawImage(o.img, -w / 2, -h / 2, w, h);
       c.restore();
     };
-    if (s.defocus > 0 && window.CxDefocus) window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null });
-    else go(ctx);
+    if (s.defocus > 0 && window.CxDefocus) {
+      var pl = window.CxDefocus.warm ? dfPlan(S, o, s, w, h, mul) : null;      // módulo con caché (v42.56)
+      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+    }
+    go(ctx);
   }
 
   // Pinta el fotograma i entero en ctx (que debe medir S.w × S.h).
@@ -1158,6 +1188,36 @@ window.AnimProc = (function(){
     this._lru = []; this._sc = null; this._sx = null;
   }
   Source.prototype.paint = function(i, ctx){ paint(this, i, ctx); };
+  // ¿Algún objeto lleva desenfoque (el suyo base o el de algún fotograma)? Se calcula una vez.
+  Source.prototype.hasDf = function(){
+    if (this._hasDf != null) return this._hasDf;
+    var yes = false;
+    for (var k = 0; k < this.objs.length && !yes; k++) {
+      var o = this.objs[k];
+      if (o.base && o.base.defocus > 0) yes = true;
+      else if (o.frames) for (var i = 0; i < o.frames.length; i++) { if (o.frames[i] && o.frames[i].defocus > 0) { yes = true; break; } }
+    }
+    return (this._hasDf = yes);
+  };
+  // Precalentado (v42.56): prepara en la caché de js/defocus.js el desenfoque de los objetos de los fotogramas [i0, i1) SIN pintar nada
+  // (los objetos nítidos se saltan). Devuelve cuántas veces ha pedido uno (los que ya estaban cuestan una búsqueda).
+  Source.prototype.warm = function(i0, i1){
+    var D = window.CxDefocus, n = 0, S = this;
+    if (!D || !D.warm || !this.hasDf()) return 0;
+    var ctx = D.warmCtx(this.w, this.h, 1, 1);
+    D.warm(function(){
+      for (var i = i0; i < i1 && i < S.total; i++) {
+        for (var k = 0; k < S.objs.length; k++) {
+          var o = S.objs[k];
+          if (o.hidden || !o.img) continue;
+          var s = snapAt(o, i);
+          if (!s || !(s.defocus > 0)) continue;
+          drawObj(ctx, S, o, s, 1); n++;
+        }
+      }
+    });
+    return n;
+  };
   // Fotograma como ImageData (para quien lo pida): se pinta en un lienzo propio; se recuerdan los últimos LRU_MAX.
   Source.prototype.imageData = function(i){
     var L = this._lru;
@@ -2193,7 +2253,7 @@ const _PL = {
   allWaiters: [],
   keep: null,         // v41.68 — índices de hoja que pueden estar en memoria (ventana, ver _plKeepSet); null = sin límite
   scanBusy: false,    // v41.68 — escaneo de botones «ir a hoja» de una hoja fuera de la ventana en curso (ver _plStartScan)
-  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, native: 0, nativeFail: 0, gated: 0, paused: {}, netRows: 0, navPre: 0 },
+  stats: { fetched: 0, prepared: 0, retries: 0, errors: 0, evicted: 0, scanned: 0, native: 0, nativeFail: 0, gated: 0, paused: {}, netRows: 0, navPre: 0, warmed: 0, warmJobs: 0, warmMs: 0, warmCut: 0 },
   nativeErr:  '',     // v41.78 — último motivo por el que AnimNative recurrió a UPNG (diagnóstico)
 };
 // Interruptores de la ventana de memoria (v41.68), solo para pruebas y diagnóstico:
@@ -2742,6 +2802,9 @@ async function _plDecode(panel) {
       return AnimProc.load(layer, _pDelay)
         .then(function(result) {
           layer._animFrames    = result.frames;
+          // v42.56: la fuente de fotogramas y la hoja dueña (grupo de su caché de desenfoques): el precalentado y la suelta de memoria las usan.
+          // Las hojas «de usar y tirar» de la descarga offline no dejan nada retenido: sin grupo, lo suyo caduca solo.
+          if (result.proc) { layer._animProc = result.proc; result.proc.group = panel._turbo ? null : _rGrpOf(panel); }
           layer._animIdx       = 0;
           layer._animLastTick  = 0;
           layer._animPlayCount = 0;
@@ -2923,6 +2986,138 @@ async function _plFonts(panel) {
   try { await _ensureFontsLoaded([panel]); } catch (_) {}
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// DESENFOQUE LISTO ANTES DE VER LA HOJA (v42.56)
+//
+// Alberto: «El desenfoque sigue ralentizando mucho las animaciones, hay que hacer que igual que se carga cada hoja y sus adyacentes
+// completamente antes de que se pueda acceder a ellas, el desenfoque, si lo hay, debe estar listo antes de que se visualice la hoja,
+// aunque se tarde algo más en cargar».
+// Hasta v42.55 el desenfoque se calculaba al pintar (la caché de js/defocus.js se llenaba con el uso): la primera vuelta de cada
+// animación, cada fotograma nuevo de un GIF o de un enfoque que cambia (animación por instrucciones con «rack focus»), cada fundido…
+// pagaban el filtro en pleno fotograma. AHORA, antes de marcar una hoja como «lista» —la actual y sus contiguas, a las que el lector no
+// puede pasar hasta entonces (ver _plGateClosed)—, se deja preparada esa caché con TODO lo desenfocado que se va a ver:
+//   · capas con desenfoque (imagen, trazo, relleno, forma, línea…) y bocadillos / textos que no se mueven;
+//   · cada fotograma de los GIF / animaciones con desenfoque en la capa;
+//   · el desenfoque de cada objeto en cada fotograma de las animaciones por instrucciones (AnimProc), cambie o no de un fotograma a otro.
+// No se pinta nada: CxDefocus.warm() solo construye los bitmaps (a menor resolución, con el tope de memoria del dispositivo; ver
+// js/defocus.js) sobre un contexto de mentira con la MISMA escala que tendrá el lienzo de la hoja. El trabajo se reparte en trozos de
+// ≈12 ms (_plStep: la hoja actual y las contiguas no esperan a que haya calma; las demás, sí) y no pasa de _RW.capMs por hoja: lo que no
+// llegue se desenfoca al pintar, como en v42.55. Una hoja sin desenfoque no paga nada. ?rdwarm=0 lo desactiva (A/B y diagnóstico).
+// Al ocultarse la página la caché se vacía (memoria en móviles): al volver se rehace para la hoja actual y sus contiguas (_plWarmWindow).
+// ══════════════════════════════════════════════════════════════════════════
+const _RW = { capMs: 6000, maxFrames: 240 };   // tiempo máximo por hoja · fotogramas como máximo por animación (= entradas por capa de la caché)
+
+// ¿Hay algo desenfocado que merezca precalentar? Barato: se mira antes de reservar nada.
+function _plWarmNeeded(panel) {
+  for (const l of (panel.layers || [])) {
+    if (!l || l.hidden) continue;
+    if (_rDf(l) > 0) return true;
+    if (l._animProc && l._animProc.hasDf && l._animProc.hasDf()) return true;
+  }
+  return false;
+}
+// Lienzo con el que se verá la hoja pi (tamaño en píxeles y escala del contexto, que forma parte de la firma de la caché).
+function _rWarmGeom(panel, pi) {
+  const { pw, ph } = _panelDims(pi);
+  let cssW = 0;
+  if (RS._scroll && panel._scrollCtx && panel._scrollCtx.canvas) cssW = parseFloat(panel._scrollCtx.canvas.style.width) || 0;
+  else cssW = _rDisplayDims(pi).dw;
+  const b = _rBacking(pi, cssW, true);
+  return { pw, ph, w: b.w, h: b.h, kx: b.kx, ky: b.ky };
+}
+async function _plWarmBlur(panel) {
+  const D = window.CxDefocus;
+  if (!D || !D.warm || !D.warmCtx || panel._turbo || panel.isCredits || panel._warming || _PL_QS.get('rdwarm') === '0' || document.hidden) return;
+  const cleanups = [];
+  try {
+    if (!_plWarmNeeded(panel)) return;
+    const pi = RS.panels.indexOf(panel);
+    if (pi < 0) return;
+    panel._warming = true;
+    const layers = panel.layers || [], texts = panel.texts || [];
+    const g = _rWarmGeom(panel, pi);
+    const stub = D.warmCtx(g.w, g.h, g.kx, g.ky);
+    const kit = _rLayerKit(panel, g.pw, g.ph);
+    const jobs = [];
+    // GIF / animación con desenfoque en la propia capa: un trabajo por fotograma. Se pinta cada fotograma en un lienzo PROPIO que, solo
+    // durante ese trabajo (síncrono), ocupa el lugar del de la capa: el reloj de animaciones no llega a ver nunca un estado a medias.
+    const frameJobs = (layer, j, df) => {
+      const gif = layer.type === 'gif' && layer._gifReady && layer._gifFrames && layer._gifOc;
+      const anim = !gif && layer.type === 'image' && layer._animReady && layer._animFrames && layer._animOc && !layer._animSeq;
+      if (!gif && !anim) return null;
+      const fr = gif ? layer._gifFrames : layer._animFrames, ocK = gif ? '_gifOc' : '_animOc', ixK = gif ? '_gifIdx' : '_animIdx';
+      const n = Math.min(fr.length, _RW.maxFrames);
+      if (n < 2) return null;
+      let tmp = null;
+      cleanups.push(() => { if (tmp) { tmp.width = 0; tmp.height = 0; tmp = null; } });
+      const out = [];
+      for (let k = 0; k < n; k++) out.push(() => {
+        const oc0 = layer[ocK], i0 = layer[ixK];
+        if (!tmp) { tmp = document.createElement('canvas'); tmp.width = oc0.width; tmp.height = oc0.height; }
+        if (gif) tmp.getContext('2d').putImageData(fr[k].imageData, 0, 0); else AnimProc.blit(fr[k], tmp);
+        layer[ocK] = tmp; layer[ixK] = k;
+        try { D.warm(() => kit.run(stub, layer, j, df)); }
+        finally { layer[ocK] = oc0; layer[ixK] = i0; }
+      });
+      return out;
+    };
+    layers.forEach((layer, j) => {
+      if (!layer || layer.hidden) return;
+      // 1) animación por instrucciones: el desenfoque de cada OBJETO en cada fotograma (cambie o no de uno a otro)
+      const pr = layer._animProc;
+      if (pr && pr.hasDf && pr.hasDf()) {
+        const n = Math.min(pr.total || 0, _RW.maxFrames);
+        for (let i = 0; i < n; i++) jobs.push(() => pr.warm(i, i + 1));
+      }
+      // 2) el desenfoque de la capa entera
+      const df = _rDf(layer);
+      if (!(df > 0) || layer.type === 'bubble' || layer.type === 'text') return;
+      const fj = frameJobs(layer, j, df);
+      if (fj) fj.forEach(f => jobs.push(f));
+      else jobs.push(() => D.warm(() => kit.run(stub, layer, j, df)));
+    });
+    // 3) bocadillos y textos con desenfoque que no se mueven (revelados con el texto secuencial: se dejan todos preparados)
+    if (texts.length) {
+      _bindTexts(panel, panel.layerImgs);
+      const grp = _rGrpOf(panel);
+      texts.forEach(t => {
+        const u = (t._bubbleLayer && Array.isArray(t._bubbleLayer.richLines) && t._bubbleLayer.richLines.length) ? t._bubbleLayer : t;   // como _pick
+        const df = _rDf(u._bubbleLayer || u);
+        if (!(df > 0)) return;
+        const cache = _bubbleDfCache(u, g.pw, g.ph, 1, grp, true);
+        if (!cache) return;
+        jobs.push(() => D.warm(() => D.run(stub, df, c => _drawBubbleImpl(c, u, g.pw, g.ph, 1), { union: true, cache })));
+      });
+    }
+    if (!jobs.length) return;
+    const t0 = performance.now(), n = jobs.length;
+    let done = 0;
+    for (const job of jobs) {
+      if (panel.layers !== layers || (panel._st !== 'preparing' && panel._st !== 'ready') || document.hidden) break;
+      if (performance.now() - t0 > _RW.capMs) { _PL.stats.warmCut++; break; }
+      try { job(); } catch (e) { /* un fallo aislado no impide ver la hoja: se desenfocará al pintar, como siempre */ }
+      done++;
+      if ((done & 7) === 0) _plProg(panel, 0.95 + 0.04 * done / n);
+      await _plStep(panel);
+    }
+    _PL.stats.warmed++; _PL.stats.warmJobs += done; _PL.stats.warmMs += performance.now() - t0;
+  } catch (e) {
+    console.warn('[reader] precalentado del desenfoque:', e);
+  } finally {
+    for (const f of cleanups) { try { f(); } catch (_) {} }
+    panel._warming = false;
+  }
+}
+// Tras volver a la página (la caché se vació al ocultarla): se rehace la de la hoja actual y la de sus contiguas, ya listas.
+function _plWarmWindow() {
+  if (!window.CxDefocus || !CxDefocus.warm) return;
+  const cur = _plCursor();
+  for (const i of [cur, cur + 1, cur - 1]) {
+    const p = RS.panels[i];
+    if (p && !p.isCredits && p._st === 'ready') _plWarmBlur(p).catch(() => {});
+  }
+}
+
 // Carga una hoja «ya», sin planificador y con un reintento (la hoja 1 antes de abrir el lector, y todas
 // las de una copia offline). Si falla, la excepción sube a loadWork/loadDraft, que recurren a la copia
 // offline si la hay. onStage('fetched'|'decoded') alimenta la barra de progreso de la pantalla de carga.
@@ -2936,6 +3131,7 @@ async function _plLoadNow(panel, onStage) {
       await _plPrepareData(panel);
       stage('decoded');
       await _plFonts(panel);
+      await _plWarmBlur(panel);   // v42.56: el desenfoque, listo antes de que la hoja se vea
       panel._st = 'ready';
       return;
     } catch (e) {
@@ -3246,6 +3442,7 @@ function _plRichSrcs(panel) {
 function _plEvict(panel, pi) {
   const mine = _plRichSrcs(panel);
   _plDisposeSeqs(panel); // v41.78: decodificadores y fotogramas nativos de sus animaciones
+  try { if (panel._dfGrp && window.CxDefocus && CxDefocus.release) CxDefocus.release(panel._dfGrp); } catch (_) {} // v42.56: sus desenfoques precalculados
   for (const im of (panel.layerImgs || [])) {
     if (!im) continue;
     _rMipFree(im); // v42.43: mipmaps de la tinta HD (ver «TINTA HD CON DEFINICIÓN»)
@@ -3395,6 +3592,7 @@ async function _plStartPrepare(panel) {
   finally { _PL.cpuActive--; _plSchedule(); }
   if (!ok) return;
   await _plFonts(panel);
+  await _plWarmBlur(panel);   // v42.56: el desenfoque, listo antes de que la hoja se vea (la actual y sus contiguas no se abren hasta entonces)
   panel._st = 'ready'; panel._tries = 0; _PL.stats.prepared++;
   panel._pg = 1; panel._ltAt = 0;
   try { _plOnReady(panel); } catch (e) { console.error('[reader] hoja lista:', e); }
@@ -3717,7 +3915,7 @@ function _plWatchInput() {
   window.addEventListener('scroll', () => { const t = performance.now(); _PL.scrollUntil = t + 250; _PL.lastScroll = t; if (RS._scroll) _ensureGifLoop(); }, o);
   // Al volver a la pestaña, el segundo plano sigue sin esperar al temporizador; al ocultarla, la ventana de memoria
   // se encoge (ver _plLimits) para que Android tenga menos motivos para matar el proceso en segundo plano.
-  document.addEventListener('visibilitychange', () => { _plSchedule(); });
+  document.addEventListener('visibilitychange', () => { _plSchedule(); if (!document.hidden) _plWarmWindow(); }); // v42.56: y rehace los desenfoques precalculados (la caché se vacía al ocultarse)
   // Al volver la red, las hojas rendidas se reintentan.
   window.addEventListener('online', () => {
     for (const p of RS.panels) { if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; p._retryAt = 0; } }
@@ -5937,10 +6135,10 @@ function _rInkDensity(panel, pw, ph) {
   return d;
 }
 // Factor de resolución del lienzo de la hoja pi cuando se ve a cssW px CSS de ancho: 1 = el de siempre (pw×ph); > 1 = hoja con tinta HD.
-function _rPanelK(pi, cssW) {
+function _rPanelK(pi, cssW, anySt) {   // anySt (v42.56): también para una hoja que aún se prepara (el precalentado del desenfoque necesita saber qué lienzo tendrá)
   if (_rHiOff()) return 1;
   const panel = RS.panels[pi];
-  if (!panel || panel.isCredits || (panel._st && panel._st !== 'ready')) return 1;
+  if (!panel || panel.isCredits || (!anySt && panel._st && panel._st !== 'ready')) return 1;
   // Modo scroll: cada lienzo HD pesa varios MB, así que solo la hoja que se ve y sus contiguas lo llevan (las demás, 1× como siempre);
   // al cambiar de hoja, _plSlides (tras cada llegada) sube/baja el tamaño de las que entran/salen de esta ventana.
   if (RS._scroll && RS._cur != null && Math.abs(pi - RS._cur) > 1) return 1;
@@ -5953,9 +6151,9 @@ function _rPanelK(pi, cssW) {
   return k > 1.05 ? k : 1;
 }
 // Tamaño (px) que debe tener el lienzo de la hoja pi y su escala sobre píxeles de hoja.
-function _rBacking(pi, cssW) {
+function _rBacking(pi, cssW, anySt) {
   const { pw, ph } = _panelDims(pi);
-  const k = _rPanelK(pi, cssW);
+  const k = _rPanelK(pi, cssW, anySt);
   if (k === 1) return { w: pw, h: ph, kx: 1, ky: 1 };
   const w = Math.round(pw * k), h = Math.round(ph * k);
   return { w, h, kx: w / pw, ky: h / ph };
@@ -6014,9 +6212,11 @@ function _panelDims(idx) {
   return { pw: isH ? ED_PAGE_H : ED_PAGE_W, ph: isH ? ED_PAGE_W : ED_PAGE_H };
 }
 
-function _resizeCanvas() {
-  const panel = RS.panels[RS.idx];
-  const { pw, ph } = _panelDims(RS.idx);
+// Tamaño con que se ve la hoja pi (px CSS) y medidas de la ventana. v42.56: sacado de _resizeCanvas, sin cambiar ni una cuenta, para que
+// el precalentado del desenfoque sepa qué lienzo (y qué escala del contexto) tendrá una hoja antes de mostrarla.
+function _rDisplayDims(pi) {
+  const panel = RS.panels[pi];
+  const { pw, ph } = _panelDims(pi);
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -6033,7 +6233,11 @@ function _resizeCanvas() {
   }
   scale = _capScaleTabletPC(scale, vw, vh);
 
-  const dw = Math.round(pw * scale), dh = Math.round(ph * scale);
+  return { pw, ph, vw, vh, dw: Math.round(pw * scale), dh: Math.round(ph * scale) };
+}
+
+function _resizeCanvas() {
+  const { pw, ph, vw, vh, dw, dh } = _rDisplayDims(RS.idx);
   // v42.43: hoja con tinta HD → lienzo a resolución de pantalla (ver «TINTA HD CON DEFINICIÓN»); las demás, lo de siempre:
   // reasignar pw×ph (lo que además limpia el lienzo en cada llamada).
   const _hb = _rBacking(RS.idx, dw);
@@ -6057,44 +6261,16 @@ function _resizeCanvas() {
 // módulo que el editor y el visor interno, así que todo se ve igual. Los fotogramas de una animación llevan el suyo (_frames[fi].defocus).
 function _rDf(o) { return (o && o.defocus > 0 && window.CxDefocus) ? Math.min(100, +o.defocus) : 0; }
 
-// ── RENDER PRINCIPAL ──────────────────────────────────────────
-function _render() {
-  const panel = RS.panels[RS.idx];
-  if (!panel || !RS.ctx) return;
-  if (!_pageNavSuppressUpdate) RS._cur = RS.idx; // v42.43: hoja que de verdad se está viendo (los redibujados de fondo cambian RS.idx un momento; ver _rPanelK)
-  _roOnSheet(); // v42.09: acceso a una hoja → comprobar su orientación frente a la de la pantalla (giro nativo, solo teléfono)
-  _plSlideFitCtx(RS.ctx, RS.idx); // v41.68: lienzo de slide encogido (hoja lejana, modo scroll) → recupera su tamaño
+// Grupo de la caché de desenfoques (js/defocus.js) al que pertenece una hoja: un objeto propio (no la hoja misma, para no crear ciclos
+// en nada que serialice la hoja o sus capas). Todo lo que se guarda de ella se suelta junto con CxDefocus.release (ver _plEvict).
+function _rGrpOf(panel) { return panel._dfGrp || (panel._dfGrp = {}); }
 
-  // Mantener el contador de hoja (botón inferior izquierdo + barra, si está
-  // abierta) siempre al día, sea cual sea la vía de navegación (swipe,
-  // teclado, botones "ir a hoja" dentro de la obra, o la propia barra).
-  _pageNavUpdate();
-
-  // Panel de créditos — redibujar y remontar botones cada vez que se navega a él
-  if (panel.isCredits) {
-    _showCredits();
-    return;
-  }
-
-  // Si venimos de los créditos, limpiar siempre al salir
-  if (RS.isCredits) _resetCredits();
-
-  const { pw, ph } = _panelDims(RS.idx);
-  const ctx = RS.ctx;
-
-  // v41.52 (carga progresiva): hoja que aún no está lista → página en blanco con «Cargando hoja N…»
-  // (o el aviso de error si ha fallado y reintenta). Se pinta sola al quedar lista — ver _plOnReady.
-  if (panel._st && panel._st !== 'ready') { _plDrawPlaceholder(ctx, pw, ph, panel); return; }
-
-  // v42.43: lienzo HD (más grande que la hoja): la base de coordenadas son píxeles de hoja (ver «TINTA HD CON DEFINICIÓN»)
-  if (ctx.canvas.width > pw || ctx.canvas.height > ph) ctx.setTransform(ctx.canvas.width / pw, 0, 0, ctx.canvas.height / ph, 0, 0);
-  ctx.clearRect(0, 0, pw, ph);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, pw, ph);
-  // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
-  const layers    = panel.layers    || [];
+// ── PINTADO DE UNA CAPA + PLAN DE SU CACHÉ DE DESENFOQUE (v42.56) ──────────────────────────────────────────────
+// Antes eran cerraduras dentro de _render(). Ahora son una función de módulo para poder usarlas también desde el precalentado del
+// desenfoque (_plWarmBlur), que "pinta" en un contexto de mentira (CxDefocus.warmCtx) solo para dejar lista la caché antes de que la hoja
+// se vea. pw×ph: tamaño de la hoja en píxeles de hoja. Devuelve { paint(ctx, layer, j), plan(layer, j), run(ctx, layer, j, df) }.
+function _rLayerKit(panel, pw, ph) {
   const layerImgs = panel.layerImgs || [];
-
   // v42.51 — el cuerpo del bucle es ahora una función que recibe el contexto: así una capa con desenfoque (layer.defocus 0-100,
   // módulo común js/defocus.js, el mismo del editor) se pinta en el contexto que le da CxDefocus.run (el propio o un auxiliar).
   const _rPaintLayer = (ctx, layer, j) => {
@@ -6240,41 +6416,66 @@ function _render() {
   // rehace si cambia algo que no sea posición/giro. Aquí se dice, por tipo de capa, dónde está su pivote y giro (los MISMOS cálculos que
   // _rPaintLayer: posición con _pathCurX/Y de la trayectoria, tamaño, giro + giro de trayectoria), cuál es su opacidad, qué fotograma/imagen
   // tiene y qué rectángulo ocupa como máximo. null = esa capa no se guarda (se pinta como siempre).
+  // v42.56 — (1) group: la hoja dueña; las entradas no caducan por tiempo y se sueltan juntas al soltar la hoja (_plEvict).
+  //          (2) neutral: en las capas de UN solo dibujo (imagen, fotograma, trazo…) el bitmap se guarda sin opacidad y esta se aplica al
+  //              pintarlo (desenfocar α·L = α·desenfocar L): un fundido ya no obliga a desenfocar en cada fotograma. Formas y líneas llevan
+  //              varios trazos con su opacidad cada uno y siguen guardando la opacidad dentro.
+  //          (3) GIF / animación: la clave de imagen es la lista de fotogramas (no el lienzo, que se reutiliza) y el fotograma va en la firma,
+  //              así que el precalentado (_plWarmBlur) puede dejar listos todos los fotogramas antes de que se vea la hoja. Los APNG nativos
+  //              (_animSeq: fotogramas que pueden llegar tarde, con el lienzo por detrás de _animIdx) no se guardan.
+  //          (4) cajas ajustadas al rectángulo girado (antes el círculo que lo envuelve: bitmaps hasta ~2,6× más grandes).
   const _rOk = im => !!im && (im.naturalWidth === undefined || (im.complete && im.naturalWidth > 0)) ? 1 : 0;
   const _rCirc = (x, y, w, h, extra) => { const r = Math.hypot(w, h) / 2 + extra; return { x: x - r, y: y - r, w: 2 * r, h: 2 * r }; };
+  const _rBox = (x, y, w, h, rotDeg, extra) => {
+    const th = (rotDeg || 0) * Math.PI / 180, ca = Math.abs(Math.cos(th)), sa = Math.abs(Math.sin(th));
+    const ex = (Math.abs(w) * ca + Math.abs(h) * sa) / 2 + extra, ey = (Math.abs(w) * sa + Math.abs(h) * ca) / 2 + extra;
+    return { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey };
+  };
+  // Pinta la capa SIN su opacidad (ni la de un fundido): lo que se guarda en la caché de las capas de un solo dibujo.
+  const _rNeutral = (layer, j) => c => {
+    const hO = Object.prototype.hasOwnProperty.call(layer, 'opacity'), o = layer.opacity;
+    const hF = Object.prototype.hasOwnProperty.call(layer, '_animFadeOpacity'), f = layer._animFadeOpacity;
+    layer.opacity = 1; layer._animFadeOpacity = null;
+    try { _rPaintLayer(c, layer, j); }
+    finally {
+      if (hO) layer.opacity = o; else delete layer.opacity;
+      if (hF) layer._animFadeOpacity = f; else delete layer._animFadeOpacity;
+    }
+  };
   const _rDfPlan = (layer, j) => {
     const type = layer.type, opa = layer.opacity !== undefined ? layer.opacity : 1, pr = _layerPathRotDeg(layer);
     const cx = layer._pathCurX, cy = layer._pathCurY;
-    let x, y, w, h, rot = 0, a = opa, sig, src = null, bounds;
+    let x, y, w, h, rot = 0, a = opa, sig, src = null, bounds, one = false;
     if (type === 'gif') {
-      if (!layer._gifReady || !layer._gifOc) return null;
+      if (!layer._gifReady || !layer._gifOc || !layer._gifFrames) return null;
       x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
       w = (layer.width || 0.5) * pw; h = (layer.height || 0.5) * ph;
-      rot = (layer.rotation || 0) + pr; src = layer._gifOc; sig = 'g' + layer._gifIdx + '|' + w + 'x' + h;
-      bounds = _rCirc(x, y, w, h, 2);
+      rot = (layer.rotation || 0) + pr; src = layer._gifFrames; sig = 'g' + layer._gifIdx + '|' + w + 'x' + h;
+      bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'fill' || type === 'pencil' || type === 'watercolor') {
       const img = layerImgs[j]; if (!img) return null;
       x = (cx != null ? cx : (layer.x != null ? layer.x : 0.5)) * pw; y = (cy != null ? cy : (layer.y != null ? layer.y : 0.5)) * ph;
       w = (layer.width != null ? layer.width : 1) * pw; h = (layer.height != null ? layer.height : 1) * ph;
       rot = (layer.rotation || 0) + pr; src = img; sig = 'f' + _rOk(img) + '|' + w + 'x' + h;
-      bounds = _rCirc(x, y, w, h, 2);
+      bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'image' && layer._animReady && layer._animOc) {          // APNG / animación por instrucciones
+      if (layer._animSeq || !layer._animFrames) return null;
       x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
       w = (layer.width || 1) * pw; h = (layer.height || 1) * ph;
-      rot = (layer.rotation || 0) + pr; src = layer._animOc; sig = 'a' + layer._animIdx + '|' + w + 'x' + h;
+      rot = (layer.rotation || 0) + pr; src = layer._animFrames; sig = 'a' + layer._animIdx + '|' + w + 'x' + h;
       if (layer._animFadeOpacity != null) a = layer._animFadeOpacity;
-      bounds = _rCirc(x, y, w, h, 2);
+      bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'image' || type === 'stroke') {
       const img = layerImgs[j]; if (!img) return null;
       x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
       w = (layer.width || 1) * pw; h = (layer.height || 1) * ph;
       rot = (layer.rotation || 0) + pr; src = img; sig = 'i' + _rOk(img) + '|' + w + 'x' + h;
-      bounds = _rCirc(x, y, w, h, 2);
+      bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'draw') {                                                 // tinta de hoja entera (formato antiguo): solo se desplaza
       const img = layerImgs[j]; if (!img) return null;
       x = cx != null ? (cx - (layer.x || 0.5)) * pw : 0; y = cx != null ? (cy - (layer.y || 0.5)) * ph : 0;
       src = img; sig = 'd' + _rOk(img);
-      bounds = { x: x - 2, y: y - 2, w: pw + 4, h: ph + 4 };
+      bounds = { x: x - 2, y: y - 2, w: pw + 4, h: ph + 4 }; one = true;
     } else if (type === 'shape') {
       x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
       w = (layer.width || 0.3) * pw; h = (layer.height || 0.2) * ph;
@@ -6297,16 +6498,63 @@ function _render() {
         bounds = { x: x - m - (layer.lineWidth || 0) - 4, y: y - m - (layer.lineWidth || 0) - 4, w: 2 * (m + (layer.lineWidth || 0) + 4), h: 2 * (m + (layer.lineWidth || 0) + 4) };
       }
     } else return null;
-    return { bounds, cache: { key: layer, sig, src, alpha: a, x, y, rot } };
+    return { bounds, cache: { key: layer, group: _rGrpOf(panel), sig, src, alpha: a, x, y, rot, neutral: one ? _rNeutral(layer, j) : undefined } };
   };
+  // Pinta la capa j con su desenfoque df (0-100): CxDefocus.run con la caché del plan. Dentro de CxDefocus.warm() no pinta, solo prepara la caché.
+  const _rRun = (ctx, layer, j, df) => {
+    const pl = _rDfPlan(layer, j);
+    // forma y línea llevan varios trazos (relleno + contorno): se desenfoca el conjunto UNA vez (igual que en el editor)
+    return CxDefocus.run(ctx, df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+  };
+  return { paint: _rPaintLayer, plan: _rDfPlan, run: _rRun };
+}
+
+// ── RENDER PRINCIPAL ──────────────────────────────────────────
+function _render() {
+  const panel = RS.panels[RS.idx];
+  if (!panel || !RS.ctx) return;
+  if (!_pageNavSuppressUpdate) RS._cur = RS.idx; // v42.43: hoja que de verdad se está viendo (los redibujados de fondo cambian RS.idx un momento; ver _rPanelK)
+  _roOnSheet(); // v42.09: acceso a una hoja → comprobar su orientación frente a la de la pantalla (giro nativo, solo teléfono)
+  _plSlideFitCtx(RS.ctx, RS.idx); // v41.68: lienzo de slide encogido (hoja lejana, modo scroll) → recupera su tamaño
+
+  // Mantener el contador de hoja (botón inferior izquierdo + barra, si está
+  // abierta) siempre al día, sea cual sea la vía de navegación (swipe,
+  // teclado, botones "ir a hoja" dentro de la obra, o la propia barra).
+  _pageNavUpdate();
+
+  // Panel de créditos — redibujar y remontar botones cada vez que se navega a él
+  if (panel.isCredits) {
+    _showCredits();
+    return;
+  }
+
+  // Si venimos de los créditos, limpiar siempre al salir
+  if (RS.isCredits) _resetCredits();
+
+  const { pw, ph } = _panelDims(RS.idx);
+  const ctx = RS.ctx;
+
+  // v41.52 (carga progresiva): hoja que aún no está lista → página en blanco con «Cargando hoja N…»
+  // (o el aviso de error si ha fallado y reintenta). Se pinta sola al quedar lista — ver _plOnReady.
+  if (panel._st && panel._st !== 'ready') { _plDrawPlaceholder(ctx, pw, ph, panel); return; }
+
+  // v42.43: lienzo HD (más grande que la hoja): la base de coordenadas son píxeles de hoja (ver «TINTA HD CON DEFINICIÓN»)
+  if (ctx.canvas.width > pw || ctx.canvas.height > ph) ctx.setTransform(ctx.canvas.width / pw, 0, 0, ctx.canvas.height / ph, 0, 0);
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, pw, ph);
+  // Dibujar capas en orden: image/draw/stroke primero, bubble/text al final (via _drawTexts)
+  const layers    = panel.layers    || [];
+
+  // v42.56 — el pintado de cada capa y el plan de su caché de desenfoque están ahora en _rLayerKit (los usa también el precalentado)
+  const kit = _rLayerKit(panel, pw, ph);
   layers.forEach((layer, j) => {
     const _df = layer.hidden ? 0 : _rDf(layer);
     if (_df > 0 && layer.type !== 'bubble' && layer.type !== 'text') {
       // forma y línea llevan varios trazos (relleno + contorno): se desenfoca el conjunto UNA vez (igual que en el editor)
-      const pl = _rDfPlan(layer, j);
-      CxDefocus.run(ctx, _df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+      kit.run(ctx, layer, j, _df);
     } else {
-      _rPaintLayer(ctx, layer, j);
+      kit.paint(ctx, layer, j);
     }
   });
 
@@ -6315,10 +6563,11 @@ function _render() {
 }
 
 // ── TEXTOS / BOCADILLOS ───────────────────────────────────────
-function _drawTexts(ctx, panel, pw, ph, layerImgs) {
+// Asocia cada panel_text con su capa (solo layers bubble/text que tienen texto: panel_texts filtra los que no) y con su layerImg. Estaba
+// al principio de _drawTexts; v42.56: aparte para que el precalentado del desenfoque (_plWarmBlur) lo haga antes del primer dibujado.
+function _bindTexts(panel, layerImgs) {
   const texts = panel.texts || [];
   if (!texts.length) return;
-  // Asociar cada panel_text con su layerImg (solo layers bubble/text)
   const layers = panel.layers || [];
   const allLayerImgs = layerImgs || panel.layerImgs || [];
   // Solo capas bubble/text que tienen texto (sincronizado con panel_texts que filtra sin texto)
@@ -6334,6 +6583,12 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
     t._bubbleLayerImg = (bubbleLayerGlobalIdx2[i] !== undefined) ? allLayerImgs[bubbleLayerGlobalIdx2[i]] : null;
     t._bubbleLayer    = bubbleLayersWithText2[i] || null;
   });
+}
+function _drawTexts(ctx, panel, pw, ph, layerImgs) {
+  const texts = panel.texts || [];
+  if (!texts.length) return;
+  _bindTexts(panel, layerImgs);   // asocia cada panel_text con su capa y su layerImg
+  const grp = _rGrpOf(panel);     // v42.56: grupo de la caché de desenfoques
 
   // Hoja de texto paginada (Editor de textos): el resumen de panel_texts no lleva
   // richLines (serían filas enormes en una tabla pensada para ser ligera) — para
@@ -6343,7 +6598,7 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
 
   const isSeq = (panel.text_mode || 'sequential') === 'sequential';
   if (!isSeq) {
-    texts.forEach(t => _drawBubble(ctx, _pick(t), pw, ph, 1));
+    texts.forEach(t => _drawBubble(ctx, _pick(t), pw, ph, 1, grp));
     return;
   }
   // Modo sequential — replica exacta del visor interno del editor (edUpdateViewer):
@@ -6352,14 +6607,14 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
   const toShow = texts.slice(0, RS.textStep);
   toShow.forEach((t, vi) => {
     if (t.type === 'text') {
-      _drawBubble(ctx, _pick(t), pw, ph, 1);
+      _drawBubble(ctx, _pick(t), pw, ph, 1, grp);
     } else {
       const isCurrent  = vi === toShow.length - 1;
       const isPrevious = vi === toShow.length - 2;
       if (isCurrent) {
-        _drawBubble(ctx, t, pw, ph, 1);
+        _drawBubble(ctx, t, pw, ph, 1, grp);
       } else if (isPrevious && RS.fadeAlpha > 0) {
-        _drawBubble(ctx, t, pw, ph, RS.fadeAlpha);
+        _drawBubble(ctx, t, pw, ph, RS.fadeAlpha, grp);
       }
       // Bocadillos más antiguos: ya desaparecieron
     }
@@ -6368,33 +6623,35 @@ function _drawTexts(ctx, panel, pw, ph, layerImgs) {
 
 // v42.51 — el desenfoque del bocadillo / texto / hoja de texto está en su capa de panel_layers (t._bubbleLayer; con hoja de texto, t ya es la capa).
 // Forma + texto + cola se desenfocan JUNTOS, de una vez (union), como en el editor.
-function _drawBubble(ctx, t, pw, ph, alpha) {
+function _drawBubble(ctx, t, pw, ph, alpha, grp) {
   const _df = _rDf(t && (t._bubbleLayer || t));
   if (_df > 0) {
-    // v42.55 — caché de desenfoques (js/defocus.js): solo bocadillos/textos QUE NO SE MUEVEN (sin trayectoria), sin hoja de texto maquetada
-    // (richLines) y con su fuente YA cargada: las fuentes web se cargan la primera vez que se usan, y un bitmap guardado con la fuente de
-    // sustitución quedaría así para siempre (document.fonts.check es falso mientras la cara está «unloaded/loading»; sin fuente declarada es verdadero).
-    // Sin límites no es rígida: cualquier cambio rehace.
-    const L = t._bubbleLayer || t;
-    const mv = t._pathCurX != null || t._pathCurY != null || L._pathCurX != null || L._pathCurY != null || _layerPathRotDeg(t) || _layerPathRotDeg(L);
-    const rich = (L.richLines && L.richLines.length) || (t.richLines && t.richLines.length);
-    let cache = null;
-    if (!mv && !rich) {
-      let fontsOk = false;
-      try {
-        // familias que puede usar _drawBubbleImpl: la del propio texto (o 'Patrick Hand') y la de su capa (bitmap + texto encima); en negrita/cursiva si toca
-        const bold = !!(t.font_bold ?? t.fontBold ?? L.fontBold), ital = !!(t.font_italic ?? t.fontItalic ?? L.fontItalic), pre = (ital ? 'italic ' : '') + (bold ? 'bold ' : '') + '20px ';
-        fontsOk = !document.fonts || (document.fonts.check(pre + (t.font_family || t.fontFamily || 'Patrick Hand')) && (!L.fontFamily || document.fonts.check(pre + L.fontFamily)));
-      } catch (_) { fontsOk = false; }
-      if (fontsOk) {
-        const im = t._bubbleLayerImg || t._renderImg || null;
-        cache = { key: t, sig: 'b' + (im ? (im.naturalWidth === undefined || (im.complete && im.naturalWidth > 0) ? 1 : 0) : 'x') + '|' + pw + 'x' + ph,
-                  src: im, alpha: alpha, rigid: false };
-      }
-    }
+    const cache = _bubbleDfCache(t, pw, ph, alpha, grp, false);
     return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), cache ? { union: true, cache } : { union: true });
   }
   return _drawBubbleImpl(ctx, t, pw, ph, alpha);
+}
+// v42.55 — caché de desenfoques (js/defocus.js): solo bocadillos/textos QUE NO SE MUEVEN (sin trayectoria), sin hoja de texto maquetada
+// (richLines) y con su fuente YA cargada: las fuentes web se cargan la primera vez que se usan, y un bitmap guardado con la fuente de
+// sustitución quedaría así para siempre (document.fonts.check es falso mientras la cara está «unloaded/loading»; sin fuente declarada es verdadero).
+// Sin límites no es rígida: cualquier cambio rehace. Devuelve el descriptor de la caché o null (no se guarda). v42.56: lo comparten el dibujado
+// y el precalentado (warm = true: aún no se ha movido nada —_pathCurX sin poner—, así que una capa con trayectoria se reconoce por su _motionPath).
+function _bubbleDfCache(t, pw, ph, alpha, grp, warm) {
+  const L = t._bubbleLayer || t;
+  const mv = t._pathCurX != null || t._pathCurY != null || L._pathCurX != null || L._pathCurY != null || _layerPathRotDeg(t) || _layerPathRotDeg(L) ||
+             (warm && ((L._motionPath && L._motionPath.length >= 2) || (t._motionPath && t._motionPath.length >= 2)));
+  const rich = (L.richLines && L.richLines.length) || (t.richLines && t.richLines.length);
+  if (mv || rich) return null;
+  let fontsOk = false;
+  try {
+    // familias que puede usar _drawBubbleImpl: la del propio texto (o 'Patrick Hand') y la de su capa (bitmap + texto encima); en negrita/cursiva si toca
+    const bold = !!(t.font_bold ?? t.fontBold ?? L.fontBold), ital = !!(t.font_italic ?? t.fontItalic ?? L.fontItalic), pre = (ital ? 'italic ' : '') + (bold ? 'bold ' : '') + '20px ';
+    fontsOk = !document.fonts || (document.fonts.check(pre + (t.font_family || t.fontFamily || 'Patrick Hand')) && (!L.fontFamily || document.fonts.check(pre + L.fontFamily)));
+  } catch (_) { fontsOk = false; }
+  if (!fontsOk) return null;
+  const im = t._bubbleLayerImg || t._renderImg || null;
+  return { key: t, group: grp || null, sig: 'b' + (im ? (im.naturalWidth === undefined || (im.complete && im.naturalWidth > 0) ? 1 : 0) : 'x') + '|' + pw + 'x' + ph,
+           src: im, alpha: alpha, rigid: false };
 }
 function _drawBubbleImpl(ctx, t, pw, ph, alpha) {
   // Si tiene bitmap prerenderizado: dibujar forma + texto juntos (respeta sequential)

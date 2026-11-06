@@ -942,6 +942,33 @@ window.AnimProc = (function(){
     return s;
   }
 
+  // v42.56 — CACHÉ DEL DESENFOQUE POR OBJETO (js/defocus.js). Cada fotograma pintado volvía a desenfocar cada objeto con desenfoque
+  // (medido: 8 ms por fotograma en un PC, 35 ms con la CPU ÷4 y 130 ms con un recorte grande: el filtro cuesta según el área del lienzo
+  // de la animación, no según el radio), así que una animación con desenfoque —sobre todo si cambia de un fotograma a otro— frenaba
+  // la reproducción. Ahora el objeto desenfocado se guarda como bitmap (a menor resolución, con tope de memoria) y se reutiliza mientras
+  // no cambien su tamaño ni su desenfoque: posición, giro y opacidad se aplican al pintarlo (cache.neutral = sin opacidad). Con
+  // S.warm() el lector lo precalcula TODO al cargar la hoja, antes de que se vea. Caja del objeto: rectángulo girado, más 2 px.
+  function dfPlan(S, o, s, w, h, mul){
+    var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
+    var th = rot * DEG, ca = Math.abs(Math.cos(th)), sa = Math.abs(Math.sin(th));
+    var ex = (Math.abs(w) * ca + Math.abs(h) * sa) / 2 + 2, ey = (Math.abs(w) * sa + Math.abs(h) * ca) / 2 + 2;
+    return {
+      bounds: { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey },
+      cache: {
+        key: o, group: S.group || null, src: o.img, sig: 'ap|' + w.toFixed(2) + 'x' + h.toFixed(2),
+        alpha: (s.opacity == null ? 1 : s.opacity) * mul, x: x, y: y, rot: rot,
+        neutral: function(c){
+          c.save();
+          c.globalCompositeOperation = 'source-over';
+          c.translate(x, y);
+          c.rotate(rot * DEG);
+          c.drawImage(o.img, -w / 2, -h / 2, w, h);
+          c.restore();
+        }
+      }
+    };
+  }
+
   // Pinta el objeto con la transformación s (opacidad × mul) — ImageLayer.draw sobre el recorte.
   // v42.51: s.defocus (0-100, ausente = nítido) desenfoca el objeto con el módulo común CxDefocus (js/defocus.js); los fantasmas del
   // rastro de movimiento no llevan (s sin defocus → nítidos).
@@ -956,8 +983,11 @@ window.AnimProc = (function(){
       c.drawImage(o.img, -w / 2, -h / 2, w, h);
       c.restore();
     };
-    if (s.defocus > 0 && window.CxDefocus) window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null });
-    else go(ctx);
+    if (s.defocus > 0 && window.CxDefocus) {
+      var pl = window.CxDefocus.warm ? dfPlan(S, o, s, w, h, mul) : null;      // módulo con caché (v42.56)
+      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+    }
+    go(ctx);
   }
 
   // Pinta el fotograma i entero en ctx (que debe medir S.w × S.h).
@@ -1014,6 +1044,36 @@ window.AnimProc = (function(){
     this._lru = []; this._sc = null; this._sx = null;
   }
   Source.prototype.paint = function(i, ctx){ paint(this, i, ctx); };
+  // ¿Algún objeto lleva desenfoque (el suyo base o el de algún fotograma)? Se calcula una vez.
+  Source.prototype.hasDf = function(){
+    if (this._hasDf != null) return this._hasDf;
+    var yes = false;
+    for (var k = 0; k < this.objs.length && !yes; k++) {
+      var o = this.objs[k];
+      if (o.base && o.base.defocus > 0) yes = true;
+      else if (o.frames) for (var i = 0; i < o.frames.length; i++) { if (o.frames[i] && o.frames[i].defocus > 0) { yes = true; break; } }
+    }
+    return (this._hasDf = yes);
+  };
+  // Precalentado (v42.56): prepara en la caché de js/defocus.js el desenfoque de los objetos de los fotogramas [i0, i1) SIN pintar nada
+  // (los objetos nítidos se saltan). Devuelve cuántas veces ha pedido uno (los que ya estaban cuestan una búsqueda).
+  Source.prototype.warm = function(i0, i1){
+    var D = window.CxDefocus, n = 0, S = this;
+    if (!D || !D.warm || !this.hasDf()) return 0;
+    var ctx = D.warmCtx(this.w, this.h, 1, 1);
+    D.warm(function(){
+      for (var i = i0; i < i1 && i < S.total; i++) {
+        for (var k = 0; k < S.objs.length; k++) {
+          var o = S.objs[k];
+          if (o.hidden || !o.img) continue;
+          var s = snapAt(o, i);
+          if (!s || !(s.defocus > 0)) continue;
+          drawObj(ctx, S, o, s, 1); n++;
+        }
+      }
+    });
+    return n;
+  };
   // Fotograma como ImageData (para quien lo pida): se pinta en un lienzo propio; se recuerdan los últimos LRU_MAX.
   Source.prototype.imageData = function(i){
     var L = this._lru;
@@ -2418,6 +2478,7 @@ class ImageLayer extends BaseLayer {
         this._procWait = null;
         this._animFrames = result.frames;
         this._procFor = fd;
+        this._animProc = result.proc || null;        // v42.56: la fuente de fotogramas (para precalentar el desenfoque de sus objetos en el visor)
         this._fIdx = 0;
         this._oc = document.createElement('canvas');
         this._oc.width = result.width;
@@ -5108,29 +5169,52 @@ function _edDfBounds(l){
     return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
   } catch (e) { return null; }
 }
+// v42.56 — estado del precalentado del desenfoque del visor (ver «DESENFOQUE LISTO ANTES DE VER LA HOJA» más abajo). Declarado antes que
+// _edDfPlan, que lee _edVwCurGrp.
+const _EDVW = { capMs: 6000, maxFrames: 240, sliceMs: 12, hintMs: 400 };   // tiempo máximo por hoja · fotogramas como máximo por animación · trozo de trabajo · retraso del aviso
+const _edVwStats = { pages: 0, jobs: 0, ms: 0, cut: 0, held: 0 };
+let   _edVwSess = 0;                       // sube al abrir y al cerrar el visor: un precalentado de otra apertura se abandona
+let   _edVwGrps = new WeakMap();           // hoja (objeto de edPages) → grupo de la caché de desenfoques
+let   _edVwDone = new WeakSet();           // hojas ya precalentadas en esta apertura
+const _edVwHeld = new Set();               // hojas que se están precalentando: edUpdateViewer no las pinta ni corre su reloj de trayectorias
+let   _edVwCur  = 0;                       // hoja del visor a la que se ha llegado por última vez (la ventana de memoria es ella y sus contiguas)
+let   _edVwCurGrp = null;                  // grupo de la hoja que se pinta / precalienta (lo lee _edDfPlan)
+const _edVwOn = (() => { try { return new URLSearchParams(location.search).get('vwwarm') !== '0'; } catch (_) { return true; } })();   // ?vwwarm=0 lo desactiva
 // v42.55 — CACHÉ DE DESENFOQUES DEL VISOR INTERNO (js/defocus.js). El visor repinta el lienzo de trabajo ENTERO (2700×2340) en cada
 // fotograma de cualquier animación, y el filtro nativo cuesta según el área del lienzo, así que cada capa desenfocada costaba decenas de
 // ms por repintado. CxDefocus guarda la capa desenfocada como bitmap (a menor resolución, con tope de memoria) y la reutiliza mientras no
 // cambie nada salvo su posición/giro (trayectoria): aquí se dice dónde está el pivote, el giro, la opacidad y el «contenido» de cada capa.
 // SOLO dentro del visor (_edViewerMode: nada se edita mientras está abierto; al abrirlo y cerrarlo se vacía la caché) y SOLO capas de
-// contenido fijo: imagen estática, trazo, forma y línea. GIF, animaciones, dibujo del espacio de trabajo, rellenos vinculados y textos
-// (fuentes web que cargan sobre la marcha, hojas de texto maquetadas…) siguen por el camino de siempre. null = sin caché.
+// contenido fijo —imagen estática, trazo, forma y línea— o de fotogramas conocidos (v42.56: GIF y animaciones, con el fotograma en la
+// firma). Dibujo del espacio de trabajo, rellenos vinculados y textos (fuentes web que cargan sobre la marcha, hojas de texto
+// maquetadas…) siguen por el camino de siempre. null = sin caché.
+// v42.56 — group: la hoja a la que pertenece la entrada (_edVwCurGrp): no caduca por tiempo y se suelta con la hoja (ver «DESENFOQUE
+// LISTO ANTES DE VER LA HOJA» más abajo). GIF / animación: la clave de imagen es la LISTA de fotogramas (el lienzo _oc se reutiliza) y
+// el fotograma va en la firma, así que el precalentado puede dejar listo cada fotograma antes de que se vea la hoja.
 function _edDfPlan(l){
   try {
     if (!_edViewerMode || !window.CxDefocus || !CxDefocus.cacheStats || !l || l._isWorkspaceCanvas) return null;
     const t = l.type;
-    if (t !== 'image' && t !== 'stroke' && t !== 'shape' && t !== 'line') return null;
+    if (t !== 'image' && t !== 'stroke' && t !== 'shape' && t !== 'line' && t !== 'gif') return null;
     const pw = edPageW(), ph = edPageH();
     const w = (l.width || 0) * pw, h = (l.height || 0) * ph;
     const x = edMarginX() + _edCurX(l) * pw, y = edMarginY() + _edCurY(l) * ph;
     const rot = (l.rotation || 0) + _edLayerPathRotDeg(l);
     let sig, src = null, alpha;
     if (t === 'image') {
-      if (l._oc || l._animReady || (typeof _edACS === 'function' && _edACS(l))) return null;     // animada: fotograma a fotograma, sin caché
-      const im = l.img;
-      if (!im || !im.complete || !im.naturalWidth) return null;
-      src = im; sig = 'i|' + w + 'x' + h;
+      if (typeof _edACS === 'function' && _edACS(l)) return null;                                 // «Ver control de animaciones»: fotograma del instante elegido
+      if (l._oc || l._animReady) {                                                                // animada (APNG / por instrucciones): un bitmap por fotograma
+        if (!l._animReady || !l._oc || !l._animFrames || !l._animFrames.length) return null;
+        src = l._animFrames; sig = 'a' + (l._fIdx | 0) + '|' + w + 'x' + h;
+      } else {
+        const im = l.img;
+        if (!im || !im.complete || !im.naturalWidth) return null;
+        src = im; sig = 'i|' + w + 'x' + h;
+      }
       alpha = l._animFadeOpacity != null ? l._animFadeOpacity : (l.opacity ?? 1);
+    } else if (t === 'gif') {
+      if (!l._ready || !l._oc || !l._frames || !l._frames.length || (typeof _edACS === 'function' && _edACS(l))) return null;
+      src = l._frames; sig = 'g' + (l._fIdx | 0) + '|' + w + 'x' + h;
     } else if (t === 'stroke') {
       const cv = l._canvas;
       if (!cv || !cv.width) return null;
@@ -5143,9 +5227,202 @@ function _edDfPlan(l){
       sig = 'ln|' + w + 'x' + h + '|' + l.points.length + '|' + !!l.closed + '|' + l.fillColor + '|' + l.color + '|' + l.lineWidth + '|' +
             (l.cornerRadii ? JSON.stringify(l.cornerRadii) : '') + '|' + (l.fillGradient ? JSON.stringify(l.fillGradient) : '');
     }
-    return { key: l, sig, src, alpha, x, y, rot };
+    return { key: l, sig, src, alpha, x, y, rot, group: _edVwCurGrp };
   } catch (e) { return null; }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// DESENFOQUE LISTO ANTES DE VER LA HOJA (v42.56) — visor interno
+//
+// Alberto: «El desenfoque sigue ralentizando mucho las animaciones, … el desenfoque, si lo hay, debe estar listo antes de que se
+// visualice la hoja, aunque se tarde algo más en cargar». El lector externo lo hace al cargar cada hoja y sus contiguas (reader/reader.js,
+// _plWarmBlur); el visor interno, al ENTRAR en una hoja (abrir el visor, avanzar, retroceder, saltar; ver _edStartPageAnims):
+//   1) si la hoja tiene algo desenfocado, se RETIENE su primer pintado (edUpdateViewer no la pinta, y su reloj de trayectorias espera) y
+//      el arranque de sus animaciones;
+//   2) se deja preparada la caché de js/defocus.js con todo lo que se va a ver: cada capa fija con desenfoque, cada fotograma de los GIF /
+//      animaciones con desenfoque en la capa y el desenfoque de cada objeto en cada fotograma de las animaciones por instrucciones;
+//   3) se pinta la hoja y arrancan sus animaciones: durante la reproducción no queda ningún desenfoque por calcular.
+// No se pinta nada mientras se precalienta (CxDefocus.warm sobre un contexto de mentira con la MISMA escala que el lienzo del visor).
+// El trabajo se reparte en trozos de ≈12 ms para que la página no se congele (con un aviso si pasa de 0,4 s) y no pasa de 6 s por hoja:
+// lo que no llegue se desenfoca al pintar, como en v42.55. Una hoja sin desenfoque no paga nada. Las entradas llevan el grupo de su hoja
+// (sin caducidad por tiempo): se mantienen la hoja actual y sus contiguas, se sueltan las demás y al cerrar el visor se vacía todo.
+// Fuera de este precalentado no cambia nada: textos y bocadillos con desenfoque siguen pintándose como siempre.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+function _edVwGrp(page){ let g = _edVwGrps.get(page); if (!g) { g = {}; _edVwGrps.set(page, g); } return g; }
+// Grupo de la caché para la hoja pi: solo la hoja actual y sus contiguas lo llevan (en modo scroll el visor pinta TODAS las hojas al abrirse:
+// las lejanas siguen caducando por tiempo, como en v42.55).
+function _edVwGrpFor(pi){ const pg = edPages[pi]; return (pg && Math.abs(pi - _edVwCur) <= 1) ? _edVwGrp(pg) : null; }
+// Ejecuta fn con el estado que tiene edUpdateViewer al pintar la hoja `page` (modo visor, orientación de la hoja, grupo de la caché).
+function _edVwAs(page, grp, fn){
+  const sm = _edViewerMode, so = edOrientation, sg = _edVwCurGrp;
+  _edViewerMode = true; edOrientation = page.orientation || edOrientation; _edVwCurGrp = grp;
+  try { return fn(); } finally { _edViewerMode = sm; edOrientation = so; _edVwCurGrp = sg; }
+}
+// La fuente de fotogramas de una animación por instrucciones YA cargada (null si no lo es, aún no está cargada o es la de antes de reeditarla).
+function _edVwProcOf(l){
+  const pr = l && l._animProc;
+  return (pr && l._animReady && l._animFrames && l._animFrames[0] && l._animFrames[0]._s === pr) ? pr : null;
+}
+// ¿Algún objeto de la animación por instrucciones lleva desenfoque (el suyo base o el de algún fotograma)? Cargada o no.
+function _edVwProcHasDf(l){
+  const pr = _edVwProcOf(l);
+  if (pr) return pr.hasDf();
+  if (!_edIsProcAnim(l)) return false;
+  const ld = l._gcpLayersData || [], fd = l._gcpFramesData || [];
+  for (let k = 0; k < ld.length; k++) {
+    if (ld[k] && ld[k].defocus > 0) return true;
+    const fr = fd[k];
+    if (fr && fr.length) for (let i = 0; i < fr.length; i++) if (fr[i] && fr[i].defocus > 0) return true;
+  }
+  return false;
+}
+// Capas cuyo desenfoque guarda _edDfPlan (las demás se pintan como siempre)
+function _edVwCacheable(l){ const t = l.type; return t === 'image' || t === 'stroke' || t === 'shape' || t === 'line' || t === 'gif'; }
+function _edVwNeeded(page){
+  if (!_edVwOn || !page || !page.layers || !window.CxDefocus || !CxDefocus.warm || !CxDefocus.warmCtx) return false;
+  for (const l of page.layers) {
+    if (!l || l.hidden) continue;
+    if (l.defocus > 0 && _edVwCacheable(l) && !l._isWorkspaceCanvas) return true;
+    if (_edVwProcHasDf(l)) return true;
+  }
+  return false;
+}
+// Aviso «Preparando el desenfoque…» (el mismo pastillita de arriba que usa el giro nativo): solo si la espera pasa de 0,4 s.
+function _edVwHint(on){
+  const el = $('viewerRotHint'); if (!el) return;
+  const msg = I18n.t('vw_blurPrep');
+  if (on) { if (!el.classList.contains('show')) { el.textContent = msg; el.classList.add('show'); } }
+  else if (el.classList.contains('show') && el.textContent === msg) el.classList.remove('show');
+}
+// Espera a p, pero como mucho ms (una carga que no llega no puede dejar una hoja retenida para siempre).
+function _edVwWait(p, ms){ let t; return Promise.race([p, new Promise(r => { t = setTimeout(r, ms); })]).finally(() => clearTimeout(t)); }
+async function _edVwRun(page, pageIdx, sess){
+  const D = window.CxDefocus, grp = _edVwGrp(page);
+  // (cerrar el visor sube _edVwSess, así que no hace falta mirar la clase «open»: al abrirse, la primera pasada corre antes de añadirla)
+  const alive = () => sess === _edVwSess && edPages[pageIdx] === page && edViewerIdx === pageIdx;
+  // 0) lienzos pesados descargados de la hoja (memoria): se reconstruyen ya, como haría el primer pintado
+  if (page.layers.some(l => l && l._canvasUnloaded)) {
+    try { await _edVwWait(_edLoadPageCanvases(pageIdx), 5000); } catch (e) { /* edUpdateViewer lo reintentará */ }
+    if (!alive()) return false;
+  }
+  const layers = page.layers.filter(l => l && !l.hidden);
+  // 1) animaciones por instrucciones con desenfoque en sus objetos que aún no están cargadas: se cargan ya (lo mismo que hará el arranque)
+  for (const l of layers) {
+    if (!_edIsProcAnim(l) || _edVwProcOf(l) || !_edVwProcHasDf(l)) continue;
+    await _edVwWait(new Promise(res => { try { l.loadAnim(_edAnimSrc(l), res); } catch (e) { res(); } }), 5000);
+    if (!alive()) return false;
+  }
+  // 2) lienzo con el que se verá la hoja (ver edUpdateViewer): el de trabajo, o el de pantalla en una hoja con tinta HD
+  const orient = page.orientation || edOrientation;
+  const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H, ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
+  const K = _edViewerK(page, pw, ph, Math.round(pw * Math.min(window.innerWidth / pw, window.innerHeight / ph)), pageIdx);
+  const tw = Math.round(pw * K), th = Math.round(ph * K);
+  const stub = K > 1 ? D.warmCtx(tw, th, tw / pw, th / ph) : D.warmCtx(ED_CANVAS_W, ED_CANVAS_H, 1, 1);
+  const full = _edViewerFullCanvas || null;                       // ImageLayer.draw lo ignora; se pasa por fidelidad con edUpdateViewer
+  const warmLayer = l => _edVwAs(page, grp, () => {
+    stub.globalAlpha = l.opacity ?? 1;                            // como edUpdateViewer, que lo fija antes de l.draw()
+    try { D.warm(() => l.draw(stub, full)); } finally { stub.globalAlpha = 1; }
+  });
+  // 3) trabajos
+  const jobs = [], cleanups = [];
+  for (const l of layers) {
+    // 3a) animación por instrucciones: el desenfoque de cada OBJETO en cada fotograma (cambie o no de un fotograma a otro)
+    const pr = _edVwProcOf(l);
+    if (pr && pr.hasDf()) {
+      pr.group = grp;
+      const n = Math.min(pr.total || 0, _EDVW.maxFrames);
+      for (let i = 0; i < n; i++) jobs.push(() => pr.warm(i, i + 1));
+    }
+    // 3b) el desenfoque de la capa entera
+    if (!(l.defocus > 0) || !_edVwCacheable(l) || l._isWorkspaceCanvas) continue;
+    const gif = l.type === 'gif' && l._ready && l._oc && l._frames && l._frames.length > 1;
+    const anim = !gif && l.type === 'image' && l._animReady && l._oc && l._animFrames && l._animFrames.length > 1;
+    if (gif || anim) {
+      // un trabajo por fotograma: se pinta en un lienzo PROPIO que, solo durante ese trabajo (síncrono), ocupa el lugar del de la capa
+      const fr = gif ? l._frames : l._animFrames, n = Math.min(fr.length, _EDVW.maxFrames);
+      let tmp = null;
+      cleanups.push(() => { if (tmp) { tmp.width = 0; tmp.height = 0; tmp = null; } });
+      for (let k = 0; k < n; k++) jobs.push(() => {
+        const oc0 = l._oc, i0 = l._fIdx;
+        if (!tmp) { tmp = document.createElement('canvas'); tmp.width = oc0.width; tmp.height = oc0.height; }
+        if (gif) tmp.getContext('2d').putImageData(fr[k].imageData, 0, 0); else AnimProc.blit(fr[k], tmp);
+        l._oc = tmp; l._fIdx = k;
+        try { warmLayer(l); } finally { l._oc = oc0; l._fIdx = i0; }
+      });
+    } else {
+      jobs.push(() => warmLayer(l));
+    }
+  }
+  if (!jobs.length) return true;
+  // 4) a trozos de _EDVW.sliceMs, con tope de _EDVW.capMs por hoja
+  const t0 = performance.now();
+  let sliceT = t0, done = 0;
+  try {
+    for (const job of jobs) {
+      if (!alive()) return false;
+      if (performance.now() - t0 > _EDVW.capMs) { _edVwStats.cut++; break; }
+      try { job(); } catch (e) { /* un fallo aislado no impide ver la hoja: se desenfocará al pintar, como siempre */ }
+      done++;
+      if (performance.now() - sliceT > _EDVW.sliceMs) { await new Promise(r => setTimeout(r, 0)); sliceT = performance.now(); }
+    }
+  } finally {
+    for (const f of cleanups) { try { f(); } catch (_) {} }
+    _edVwStats.pages++; _edVwStats.jobs += done; _edVwStats.ms += performance.now() - t0;
+  }
+  return true;
+}
+// Llegada a la hoja pageIdx: null = nada que esperar; si no, una promesa que se cumple cuando la hoja puede pintarse y animarse.
+function _edVwStart(pageIdx){
+  const page = edPages[pageIdx];
+  try {
+    if (!page || _edVwDone.has(page) || _edVwHeld.has(page) || !_edVwNeeded(page)) return null;
+    const sess = _edVwSess;
+    _edVwHeld.add(page); _edVwStats.held++;
+    const hintT = setTimeout(() => { if (sess === _edVwSess && _edVwHeld.has(page)) _edVwHint(true); }, _EDVW.hintMs);
+    return _edVwRun(page, pageIdx, sess).catch(e => { console.warn('[visor] precalentado del desenfoque:', e); return true; }).then(ok => {
+      clearTimeout(hintT);
+      if (sess !== _edVwSess) return;                              // el visor se cerró (y quizá se reabrió) mientras tanto: nada que hacer
+      _edVwHeld.delete(page);
+      if (!_edVwHeld.size) _edVwHint(false);
+      if (ok) _edVwDone.add(page);
+      if (ok && $('editorViewer')?.classList.contains('open') && edPages[edViewerIdx] === page) { try { edUpdateViewer(); } catch (e) { /* se repintará con la animación */ } }
+    });
+  } catch (e) {
+    try { _edVwHeld.delete(page); } catch (_) {}
+    return null;
+  }
+}
+// Al llegar a una hoja: la ventana de memoria es ella y sus contiguas; las demás sueltan sus bitmaps.
+function _edVwTrim(pageIdx){
+  _edVwCur = pageIdx;
+  if (!window.CxDefocus || !CxDefocus.release) return;
+  for (let i = 0; i < edPages.length; i++) {
+    if (Math.abs(i - pageIdx) <= 1) continue;
+    const pg = edPages[i], g = pg && _edVwGrps.get(pg);
+    if (!g) continue;
+    try { CxDefocus.release(g); } catch (e) {}
+    _edVwGrps.delete(pg); _edVwDone.delete(pg);
+    for (const l of (pg.layers || [])) if (l && l._animProc) l._animProc.group = null;
+  }
+}
+// Al volver a la página tras ocultarla la caché está vacía (js/defocus.js la libera al ocultarse, por la memoria de los móviles): se rehace
+// el desenfoque de la hoja visible —retención corta; sus animaciones siguen su curso por debajo— y el de las demás al llegar a ellas.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !_edVwOn) return;
+  try {
+    if (!$('editorViewer')?.classList.contains('open')) return;
+    _edVwDone = new WeakSet();
+    _edVwStart(edViewerIdx);
+  } catch (e) { /* se desenfocará al pintar, como siempre */ }
+});
+// Al abrir y al cerrar el visor: todo en blanco (la caché de CxDefocus se vacía aparte con cacheClear()).
+function _edVwReset(){
+  _edVwSess++;
+  _edVwHeld.clear(); _edVwGrps = new WeakMap(); _edVwDone = new WeakSet(); _edVwCur = 0; _edVwCurGrp = null;
+  try { edPages.forEach(pg => (pg.layers || []).forEach(l => { if (l && l._animProc) l._animProc.group = null; })); } catch (e) {}
+  _edVwHint(false);
+}
+
 // Grado de desenfoque de una capa o de una instantánea de fotograma (0 si no tiene)
 function _edDf(o){ return (o && o.defocus > 0) ? CxDefocus.clamp(o.defocus) : 0; }
 // Copia el desenfoque de src a dst (como se copia la opacidad al crear una capa derivada)
@@ -14510,6 +14787,8 @@ function _edViewerMpTick() {
 
   const page = edPages[edViewerIdx];
   if (!page) { _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick); return; }
+  // v42.56: la hoja visible está preparando su desenfoque (no se ve todavía): las trayectorias no corren hasta que se vea, para que empiecen desde el principio
+  if (_edVwHeld.size && _edVwHeld.has(page)) { _edViewerMpRaf = requestAnimationFrame(_edViewerMpTick); return; }
 
   const now = Date.now();
   // Dimensiones del lienzo para la página visible en el viewer
@@ -39271,6 +39550,7 @@ function edOpenViewer(){
   edViewerIdx=0;
   _edVsCur = 0; _edMipFreeAll(); // v42.43: tinta HD — la ventana de lienzos HD empieza en la hoja 0 y la caché de mipmaps en blanco
   try { CxDefocus.cacheClear(); } catch (e) {}   // v42.55: caché de desenfoques del visor (js/defocus.js) en blanco: puede haberse editado la obra desde la última vez
+  try { _edVwReset(); } catch (e) {}              // v42.56: y el estado del precalentado (hojas hechas, grupos, retenciones)
   if (_edRo) _edRo.init(); // v42.10: giro nativo de la pantalla según la hoja (solo teléfono) — ver «Giro nativo» más arriba; init() vuelve a evaluar teléfono / interruptor en cada apertura
   // BUG CORREGIDO (v38.16 — Alberto: capa CON trayectoria activa, la arrastra,
   // previsualiza sin guardar, al volver al editor aparece en su sitio previo
@@ -39805,6 +40085,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   fctx.fillRect(mx, my, pw, ph);
 
   _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY
+  _edVwCurGrp = _edVwGrpFor(pageIdx);   // v42.56: grupo de la caché de desenfoques de esta hoja
   page.layers.forEach(l => {
     if (l.type==='text' || l.type==='bubble') return;
     if (l.hidden) return; // capa oculta: no renderizar en visor
@@ -39814,6 +40095,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   });
   _edViewerDrawTextsOnCtx(page, fctx, full);
   _edViewerMode = false;
+  _edVwCurGrp = null;
   ctx.clearRect(0, 0, pw, ph);
   ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
 
@@ -39994,6 +40276,7 @@ const _edDeferredLoadPromises = {};
 
 // Arrancar animaciones de una hoja desde frame 0 — llamar al entrar a cada hoja del visor
 function _edStartPageAnims(pageIdx) {
+  try { _edVwTrim(pageIdx); } catch (e) {}   // v42.56: ventana de memoria de los desenfoques precalculados (la hoja y sus contiguas)
   // v42.10 — llegada a la hoja visible del visor: giro nativo de la pantalla y espera de animaciones hasta que el usuario gira
   // el teléfono (solo teléfono; ver el bloque «Giro nativo» más arriba y js/orient-lock.js). Si hay giro pendiente la hoja
   // queda en su primer fotograma y las animaciones/trayectorias arrancan al soltarse la espera (onHold(false) vuelve aquí).
@@ -40052,6 +40335,19 @@ function _edStartPageAnims(pageIdx) {
       _edStartPageAnims(pageIdx);
     });
     return;
+  }
+  // v42.56 — el desenfoque, listo antes de ver la hoja y de arrancar sus animaciones (ver «DESENFOQUE LISTO ANTES DE VER LA HOJA»).
+  // Sin nada desenfocado no hay espera (null). Con él, la hoja no se pinta ni se anima hasta que su caché esté preparada; entonces se
+  // vuelve a entrar aquí (igual que con la carga diferida de arriba) y esta vez sigue de largo.
+  {
+    const _vwS = _edVwSess, _vwP = _edVwStart(pageIdx);
+    if (_vwP) {
+      _edDeferredLoadPromises[pageIdx] = _vwP.then(() => {
+        delete _edDeferredLoadPromises[pageIdx];
+        if (_vwS === _edVwSess && edViewerIdx === pageIdx && $('editorViewer')?.classList.contains('open')) _edStartPageAnims(pageIdx);
+      });
+      return;
+    }
   }
   page.layers.forEach(function(l) {
     try {
@@ -40319,6 +40615,7 @@ function edCloseViewer(){
   _edViewerFullCtx    = null;
   _edMipFreeAll();   // v42.43: mipmaps de la tinta HD (y sus lienzos) fuera de la memoria
   try { CxDefocus.cacheClear(); } catch (e) {}   // v42.55: y los bitmaps de la caché de desenfoques del visor
+  try { _edVwReset(); } catch (e) {}              // v42.56: y el estado del precalentado (un precalentado en curso se abandona)
   // Limpiar modo scroll si estaba activo
   _viewerScrollMode = false;
   const sc = $('viewerScroll');
@@ -40444,6 +40741,7 @@ let _edViewerFullCtx    = null;
 function edUpdateViewer(){
   if(!$('editorViewer')?.classList.contains('open')) return;
   const page=edPages[edViewerIdx];if(!page||!edViewerCanvas)return;
+  if(_edVwHeld.size && _edVwHeld.has(page)) return;   // v42.56: hoja a la que se está preparando el desenfoque: se pinta (y se anima) cuando esté lista
   // Si esta página tiene canvas pesados descargados (memoria liberada al no
   // estar activa en el editor — ver _edUnloadPageCanvases), reconstruirlos
   // primero y reintentar. Mismo patrón que _edStartPageAnims con animaciones
@@ -40468,6 +40766,7 @@ function edUpdateViewer(){
     return;
   }
   _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY si está disponible
+  _edVwCurGrp = _edVwGrpFor(edViewerIdx);   // v42.56: grupo de la caché de desenfoques de esta hoja (null = caduca por tiempo)
   // Calcular dimensiones de ESTA hoja directamente, sin tocar edOrientation global
   const _po = page.orientation || edOrientation;
   const pw = _po==='vertical' ? ED_PAGE_W : ED_PAGE_H;
@@ -40523,6 +40822,7 @@ function edUpdateViewer(){
   const _finishViewer = () => {
     _edViewerDrawTextsOnCtx(page, fctx, full);
     _edViewerMode = false; // restaurar DESPUÉS de dibujar textos y bocadillos
+    _edVwCurGrp = null;
     // Restaurar antes de manipular el DOM
     edOrientation=_savedOrient;
     // Copiar zona del lienzo al viewerCanvas (v42.43: en una hoja HD ya se pintó directamente en él)
