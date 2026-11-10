@@ -51,8 +51,25 @@
    pintarlo (blur(α·L) = α·blur(L): exacto en capas de un solo trazo). Así un fundido, o la opacidad de un objeto de animación que cambia
    en cada fotograma, no obliga a rehacer el bitmap.
 
+   SOLO LO QUE SE VE (v42.57) — Alberto: «sigue existiendo demasiado lag cuando hay desenfoque, especialmente en móvil… que no se calcule el
+   desenfoque de las partes de los objetos que no se vean en pantalla». MEDIDO (Chromium): el filtro nativo (ctx.filter) se aplica sobre TODA la
+   zona de recorte del lienzo destino, se vea o no lo que se pinta: un objeto desenfocado FUERA de la hoja cuesta lo mismo que uno dentro (en el
+   visor interno, cuyo lienzo de trabajo mide 2700×2340 aunque la hoja sea de 360×780: ≈100 ms por objeto y repintado; con la CPU ÷4, ≈500 ms),
+   y recortar el dibujo (ctx.clip) a lo que se va a ver lo deja en ≈3 ms. Es lo que hacen los motores gráficos (Pixi: el área del filtro se ajusta
+   a la pantalla; Skia: la capa del filtro nace recortada al clip). Aquí, si quien llama lo pide (opt.cull) y da opt.bounds:
+     · la capa cuyo rectángulo + margen del desenfoque (3σ) cae del todo FUERA de la zona visible no se desenfoca ni se pinta (salida inmediata);
+     · si se ve, el desenfoque «en vivo» se recorta a ese rectángulo ∩ zona visible (el filtro solo trabaja ahí; el margen de 3σ garantiza el mismo
+       resultado dentro) y el lienzo auxiliar de «union» y el respaldo JS (Safari/iPhone) se preparan solo para esa zona;
+     · la caché (v42.55/56) no se toca: guarda la capa ENTERA porque, al moverse, partes que hoy no se ven aparecerán; un acierto fuera de pantalla ya
+       costaba 0 (blitEntry), y un fallo de una capa invisible no se construye hasta que se vea.
+   La zona visible es el lienzo entero, o —si quien llama lo dice con CxDefocus.view(lienzo, {x,y,w,h})— solo ese rectángulo (el visor interno
+   registra la hoja dentro de su lienzo de trabajo). `CxDefocus.visible(ctx, grado, bounds)` contesta si el desenfoque de una capa llega a verse
+   (el precalentado de las animaciones lo usa para no preparar fotogramas en los que el objeto está fuera). Sin opt.cull todo sigue como antes
+   (editor, exportaciones, horneados), salvo que el compuesto de «union» ya no filtra todo el lienzo destino sino solo su propia región.
+   Interruptor de emergencia: ?dfcull=0 en la dirección o CxDefocus.setCull(false).
+
    USO — CxDefocus.run(ctx, grado, function (c) { …pintar en c… }, union)
-         CxDefocus.run(ctx, grado, drawFn, { union, bounds, blend, cache: { key, sig, src, alpha, x, y, rot, rigid, group, neutral } })
+         CxDefocus.run(ctx, grado, drawFn, { union, bounds, blend, cull, cache: { key, sig, src, alpha, x, y, rot, rigid, group, neutral } })
              cache.key   objeto que identifica la capa (WeakMap: no se retiene)
              cache.sig   texto con TODO lo que cambia los píxeles salvo posición/giro (fotograma, tamaño, imagen lista…)
              cache.src   imagen/lienzo de origen: su identidad va en la firma (por si se sustituye)
@@ -62,9 +79,11 @@
              cache.group objeto (la hoja) al que pertenece la entrada: sin caducidad por tiempo, se suelta con release(group)
              cache.neutral función(c) que pinta la capa con opacidad 1 (ver OPACIDAD)
              opt.bounds  rectángulo de usuario que MÁS ocupa la capa (si se mueve, hace falta)
+             opt.cull    true → «solo lo que se ve» (ver arriba; necesita opt.bounds fiables: si se quedan cortos, se recorta contenido)
          CxDefocus.warm(function () { …run() con las mismas llamadas de siempre: solo preparan la caché… })  ·  warmCtx(w, h, a, d)
              contexto «de mentira» (lienzo w×h y transformación a,d) para precalentar sin reservar un lienzo de verdad
          CxDefocus.release(group) · suspend(function () { …horneado de un bitmap que luego se pintará con su propio desenfoque… })
+         CxDefocus.view(lienzo, {x,y,w,h} | null) · visible(ctx, grado, bounds) · setCull(false) · cullOn() · ?dfcull=0
          CxDefocus.cacheStats() · cacheClear() · setCache(false) · ?dfcache=0 en la dirección (interruptor de emergencia)
    ============================================================ */
 (function (root) {
@@ -93,6 +112,8 @@
   var MAX_ENTRIES = 480;
   var MAX_SIDE    = 4096;
   var _cacheOn    = true;    // interruptor de emergencia (setCache / ?dfcache=0)
+  var _cullOn     = true;    // interruptor de emergencia de «solo lo que se ve» (setCull / ?dfcull=0)
+  var _views      = (typeof WeakMap === 'function') ? new WeakMap() : null;   // lienzo → zona visible {x0,y0,x1,y1} en px del lienzo (v42.57)
   var _pause      = false;   // pruebas: la caché se salta (sin vaciarse) para pintar la referencia a resolución completa
   var _warm       = 0;       // >0: dentro de warm(fn) — run() solo prepara la caché, no pinta
   var _budgetB    = 0;       // tope en bytes (0 = sin calcular)
@@ -106,8 +127,9 @@
   var _lastSweep  = 0;
   var _spool      = [];      // lienzos de trabajo (nítido a baja resolución) por profundidad
   var _tpool      = [];      // ídem para las pasadas que no se guardan
-  var _st = { hits: 0, misses: 0, transient: 0, refused: 0, evicted: 0, swept: 0, builds: 0, buildMs: 0, maxBuildMs: 0, primed: 0 };
+  var _st = { hits: 0, misses: 0, transient: 0, refused: 0, evicted: 0, swept: 0, builds: 0, buildMs: 0, maxBuildMs: 0, primed: 0, culled: 0, clipped: 0 };
   try { if (/[?&]dfcache=0(?:&|$)/.test(String(root.location && root.location.search || ''))) _cacheOn = false; } catch (e) {}
+  try { if (/[?&]dfcull=0(?:&|$)/.test(String(root.location && root.location.search || ''))) _cullOn = false; } catch (e) {}
 
   function clamp(v) {
     v = +v;
@@ -278,9 +300,13 @@
   // Región del lienzo destino (en píxeles de bitmap) que hay que preparar: todo el lienzo + margen, o —si quien llama conoce el
   // rectángulo que ocupa la capa— solo ese rectángulo + margen. Sin esto, en un lienzo grande (el espacio de trabajo de 2700×2340
   // al exportar) cada capa desenfocada reservaría y desenfocaría ~10 Mpx aunque la capa mida 100×100.
-  function region(ctx, pad, bounds) {
+  function region(ctx, pad, bounds, V) {
     var W = ctx.canvas.width, H = ctx.canvas.height;
     var r = { x0: -pad, y0: -pad, x1: W + pad, y1: H + pad };
+    if (V) {                                             // v42.57: solo la zona visible + margen (lo de fuera aporta al desenfoque, pero no se ve)
+      r.x0 = Math.max(r.x0, Math.floor(V.x0 - pad)); r.y0 = Math.max(r.y0, Math.floor(V.y0 - pad));
+      r.x1 = Math.min(r.x1, Math.ceil(V.x1 + pad));  r.y1 = Math.min(r.y1, Math.ceil(V.y1 + pad));
+    }
     var b = (typeof bounds === 'function') ? bounds() : bounds;
     if (b && b.w >= 0 && b.h >= 0) {
       var T = ctx.getTransform(), xs = [], ys = [], k, q;
@@ -294,14 +320,73 @@
     return r;
   }
 
+  // ── SOLO LO QUE SE VE (v42.57) — ver la cabecera ───────────────────────────────────────────────────────────
+  // Zona visible del lienzo de ctx en px del lienzo: todo él, o el rectángulo que quien llama registró con view().
+  function visOf(ctx) {
+    var cv = ctx.canvas, W = cv.width, H = cv.height, v = _views && _views.get(cv);
+    if (!v) return { x0: 0, y0: 0, x1: W, y1: H };
+    return { x0: Math.max(0, v.x0), y0: Math.max(0, v.y0), x1: Math.min(W, v.x1), y1: Math.min(H, v.y1) };
+  }
+  // Caja (px del lienzo destino, alineada con los ejes) que ocupa el rectángulo de usuario b con la transformación actual de ctx. null = inválido.
+  function boxOf(ctx, b) {
+    if (typeof b === 'function') b = b();
+    if (!b || !(b.w >= 0) || !(b.h >= 0)) return null;
+    var T = ctx.getTransform(), mnx = 1e18, mny = 1e18, mxx = -1e18, mxy = -1e18;
+    for (var k = 0; k < 4; k++) {
+      var qx = b.x + ((k & 1) ? b.w : 0), qy = b.y + ((k & 2) ? b.h : 0);
+      var X = T.a * qx + T.c * qy + T.e, Y = T.b * qx + T.d * qy + T.f;
+      if (X < mnx) mnx = X; if (X > mxx) mxx = X; if (Y < mny) mny = Y; if (Y > mxy) mxy = Y;
+    }
+    return { x0: mnx, y0: mny, x1: mxx, y1: mxy };
+  }
+  // Zona de trabajo de una capa con desenfoque p (px): su caja + 3σ de margen ∩ zona visible, en píxeles enteros. null = no se ve nada.
+  // La gaussiana de Skia/W3C llega como mucho a 3σ del objeto; +2 px de holgura por el redondeo.
+  function liveBox(ctx, p, bounds) {
+    var B = boxOf(ctx, bounds);
+    if (!B) return undefined;                            // sin límites fiables: no se puede decidir
+    var V = visOf(ctx), m = Math.ceil(p * 3) + 2;
+    var x0 = Math.max(V.x0, Math.floor(B.x0 - m)), y0 = Math.max(V.y0, Math.floor(B.y0 - m));
+    var x1 = Math.min(V.x1, Math.ceil(B.x1 + m)),  y1 = Math.min(V.y1, Math.ceil(B.y1 + m));
+    return (x1 > x0 && y1 > y0) ? { x0: x0, y0: y0, x1: x1, y1: y1 } : null;
+  }
+  // ¿Llega a verse el desenfoque de una capa con esos límites? (true también si no se puede saber). Para quien precalienta por fotogramas.
+  function visible(ctx, deg, bounds) {
+    if (!_cullOn) return true;                           // interruptor de emergencia (?dfcull=0): se prepara todo, como en la v42.56
+    var p = px(ctx, deg);
+    if (!p || !bounds) return true;
+    var lb;
+    try { lb = liveBox(ctx, p, bounds); } catch (e) { return true; }
+    return lb !== null;
+  }
+  // Recorta (en espacio del lienzo, no de usuario) el resto del dibujo de ctx a la caja B; ctx.save()/restore() de quien llama lo deshace.
+  function clipTo(ctx, B) {
+    var T = ctx.getTransform(), P, x0 = Math.floor(B.x0), y0 = Math.floor(B.y0), w = Math.ceil(B.x1) - x0, h = Math.ceil(B.y1) - y0;   // enteros: sin bordes suavizados
+    if (typeof Path2D === 'function') { P = new Path2D(); P.rect(x0, y0, w, h); }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (P) ctx.clip(P); else { ctx.beginPath(); ctx.rect(x0, y0, w, h); ctx.clip(); }
+    ctx.setTransform(T.a, T.b, T.c, T.d, T.e, T.f);
+    _st.clipped++;
+  }
+  function view(canvas, r) {
+    if (!_views || !canvas || (typeof canvas !== 'object' && typeof canvas !== 'function')) return;
+    if (!r || !(r.w > 0) || !(r.h > 0)) _views['delete'](canvas);
+    else _views.set(canvas, { x0: +r.x || 0, y0: +r.y || 0, x1: (+r.x || 0) + r.w, y1: (+r.y || 0) + r.h });
+  }
+
   // Pinta con desenfoque mediante lienzo auxiliar: drawFn recibe un contexto con la MISMA transformación y alfa que ctx
   // (desplazada al origen de la región), y después el resultado se desenfoca UNA vez y se compone sobre ctx.
-  function runAux(ctx, p, drawFn, native, bounds, blend) {
+  // V (v42.57): zona visible a la que limitarse (la región del lienzo auxiliar y el compuesto); sin ella, el lienzo entero.
+  function runAux(ctx, p, drawFn, native, bounds, blend, V) {
     var pad = Math.min(PAD_MAX, Math.ceil(p * 3));
     pad = Math.ceil(pad / 16) * 16;                      // cuantizado: arrastrar el deslizador no realoca el lienzo cada vez
-    var R = region(ctx, pad, bounds);
+    var R = region(ctx, pad, bounds, V);
     var rw = R.x1 - R.x0, rh = R.y1 - R.y0;
     if (rw < 1 || rh < 1) return drawFn(ctx);            // la capa cae fuera del lienzo: se pinta sin más (no se ve; así conserva sus efectos secundarios)
+    // v42.57: zona donde se compone el resultado = la región preparada (∩ lo visible, si se pidió). El filtro nativo trabaja sobre TODA la zona
+    // de recorte del destino (medido: ≈100 ms en el lienzo de trabajo de 2700×2340 aunque la capa mida 100×100), así que se recorta a ella. Sin
+    // pérdida: lo desenfocado nunca sale de la región (lleva 3σ de margen) y fuera de ella el lienzo auxiliar no tiene nada.
+    var cx0 = V ? Math.max(R.x0, V.x0) : R.x0, cy0 = V ? Math.max(R.y0, V.y0) : R.y0, cx1 = V ? Math.min(R.x1, V.x1) : R.x1, cy1 = V ? Math.min(R.y1, V.y1) : R.y1;
+    if (!(cx1 > cx0 && cy1 > cy0)) return;               // no llega a la zona visible: nada que desenfocar ni componer
     var sc = aux(_depth, rw, rh);
     var sx = sc.getContext('2d');
     var T = ctx.getTransform();
@@ -320,11 +405,13 @@
       ctx.globalAlpha = 1;
       if (blend) ctx.globalCompositeOperation = blend;   // el modo de fusión de la capa (la imagen lo fija dentro de su draw, que aquí pinta sobre vacío)
       if (native) {
+        clipTo(ctx, { x0: cx0, y0: cy0, x1: cx1, y1: cy1 });
         var prev = ctx.filter;
         ctx.filter = (prev && prev !== 'none' ? prev + ' ' : '') + 'blur(' + p.toFixed(2) + 'px)';
         ctx.drawImage(sc, R.x0, R.y0);
       } else {
         blurCanvas(sc, p);
+        clipTo(ctx, { x0: cx0, y0: cy0, x1: cx1, y1: cy1 });
         ctx.drawImage(sc, R.x0, R.y0);
       }
     } finally { ctx.restore(); }
@@ -478,13 +565,13 @@
   // entradas «neutral», que se guardan sin opacidad).
   function blitEntry(ctx, e, M, blend, alpha) {
     if (alpha == null || alpha !== alpha) alpha = 1;
-    var dw = e.cw * e.f, dh = e.ch * e.f, W = ctx.canvas.width, H = ctx.canvas.height;
+    var dw = e.cw * e.f, dh = e.ch * e.f, V = visOf(ctx);
     var xs = [e.x0, e.x0 + dw], ys = [e.y0, e.y0 + dh], mnx = 1e18, mny = 1e18, mxx = -1e18, mxy = -1e18;
     for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) {
       var X = M[0] * xs[i] + M[2] * ys[j] + M[4], Y = M[1] * xs[i] + M[3] * ys[j] + M[5];
       if (X < mnx) mnx = X; if (X > mxx) mxx = X; if (Y < mny) mny = Y; if (Y > mxy) mxy = Y;
     }
-    if (mxx < 0 || mxy < 0 || mnx > W || mny > H) return;       // fuera del lienzo: nada que pintar
+    if (mxx <= V.x0 || mxy <= V.y0 || mnx >= V.x1 || mny >= V.y1) return;       // fuera de lo visible (v42.57; antes: del lienzo): nada que pintar
     if (alpha <= 0) return;                                      // opacidad 0: invisible
     ctx.save();
     try {
@@ -591,7 +678,7 @@
     return {
       on: _cacheOn, budgetMB: +(budget() / MB).toFixed(1), usedKB: Math.round(_used / 1024), entries: _live.length, pinned: _live.length - _nUng,
       hits: _st.hits, misses: _st.misses, primed: _st.primed, transient: _st.transient, refused: _st.refused, evicted: _st.evicted, swept: _st.swept,
-      builds: _st.builds, buildMs: +_st.buildMs.toFixed(1), maxBuildMs: +_st.maxBuildMs.toFixed(1)
+      builds: _st.builds, buildMs: +_st.buildMs.toFixed(1), maxBuildMs: +_st.maxBuildMs.toFixed(1), culled: _st.culled, clipped: _st.clipped
     };
   }
   // Precalentado (ver la cabecera): dentro de fn, run() solo prepara la entrada de la caché. fn debe ser SÍNCRONA (un contador global
@@ -611,6 +698,7 @@
     if (!_cacheOn) cacheClear();
     return _cacheOn;
   }
+  function setCull(on) { _cullOn = !!on; return _cullOn; }
   // Al ocultarse la página no se retiene nada (memoria en móviles: una pestaña en segundo plano no debe costar bitmaps).
   try {
     if (root.document && root.document.addEventListener) {
@@ -636,17 +724,29 @@
     var p = px(ctx, deg);
     if (!p) return drawFn(ctx);
     var union = !!(opt === true || (opt && opt.union)), bounds = opt && opt.bounds, blend = opt && opt.blend;
+    // v42.57 — SOLO LO QUE SE VE (ver la cabecera). V = zona visible; LB = lo que ocupa esta capa (+3σ) dentro de ella.
+    var V = null, LB = null;
+    if (opt && opt.cull && _cullOn && ctx.canvas) {
+      V = visOf(ctx);
+      var lb;
+      if (bounds) {
+        try { lb = liveBox(ctx, p, bounds); } catch (e) { lb = undefined; }
+        if (lb === null) { _st.culled++; return; }       // ni el desenfoque llega a la zona visible: no se desenfoca ni se pinta
+        LB = lb || null;                                 // undefined = límites no válidos → sin recorte propio
+      } else if (_views && _views.has(ctx.canvas)) LB = V;   // sin límites, pero con zona visible registrada (visor interno): al menos esa
+    }
     if (opt && opt.cache && runCached(ctx, p, drawFn, union, bounds, blend, opt.cache)) return;
     if (supported()) {
-      if (union) return runAux(ctx, p, drawFn, true, bounds, blend);
+      if (union) return runAux(ctx, p, drawFn, true, bounds, blend, V);
       ctx.save();
       try {
+        if (LB) clipTo(ctx, LB);                         // el filtro nativo solo trabaja en esa zona
         var prev = ctx.filter;
         ctx.filter = (prev && prev !== 'none' ? prev + ' ' : '') + 'blur(' + p.toFixed(2) + 'px)';
         return drawFn(ctx);
       } finally { ctx.restore(); }
     }
-    return runAux(ctx, p, drawFn, false, bounds, blend);
+    return runAux(ctx, p, drawFn, false, bounds, blend, V);
   }
 
   // Dentro de fn() nada se desenfoca: para hornear un bitmap (renderDataUrl, rasterizar, texto a dibujo…) que luego se pinta
@@ -665,6 +765,7 @@
     blurCanvas: blurCanvas,
     cacheStats: cacheStats, cacheClear: cacheClear, setCache: setCache,
     warm: warm, warmCtx: warmCtx, release: release, isWarming: function () { return _warm > 0; },
+    view: view, visible: visible, setCull: setCull, cullOn: function () { return _cullOn; },
     // solo para pruebas: tope de la caché en bytes (0 = el que toque por dispositivo) y vaciado de contadores
     _budget: function (b) { _budgetB = b > 0 ? +b : 0; return budget(); },
     _pause: function (on) { _pause = !!on; return _pause; },

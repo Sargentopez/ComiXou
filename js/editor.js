@@ -948,12 +948,17 @@ window.AnimProc = (function(){
   // la reproducción. Ahora el objeto desenfocado se guarda como bitmap (a menor resolución, con tope de memoria) y se reutiliza mientras
   // no cambien su tamaño ni su desenfoque: posición, giro y opacidad se aplican al pintarlo (cache.neutral = sin opacidad). Con
   // S.warm() el lector lo precalcula TODO al cargar la hoja, antes de que se vea. Caja del objeto: rectángulo girado, más 2 px.
-  function dfPlan(S, o, s, w, h, mul){
+  // v42.57: la caja del objeto (rectángulo girado + 2 px) sale aparte: la usan el plan de la caché, el recorte a lo visible y el precalentado.
+  function dfBox(S, s, w, h){
     var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
     var th = rot * DEG, ca = Math.abs(Math.cos(th)), sa = Math.abs(Math.sin(th));
     var ex = (Math.abs(w) * ca + Math.abs(h) * sa) / 2 + 2, ey = (Math.abs(w) * sa + Math.abs(h) * ca) / 2 + 2;
+    return { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey };
+  }
+  function dfPlan(S, o, s, w, h, mul){
+    var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
     return {
-      bounds: { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey },
+      bounds: dfBox(S, s, w, h),
       cache: {
         key: o, group: S.group || null, src: o.img, sig: 'ap|' + w.toFixed(2) + 'x' + h.toFixed(2),
         alpha: (s.opacity == null ? 1 : s.opacity) * mul, x: x, y: y, rot: rot,
@@ -985,7 +990,8 @@ window.AnimProc = (function(){
     };
     if (s.defocus > 0 && window.CxDefocus) {
       var pl = window.CxDefocus.warm ? dfPlan(S, o, s, w, h, mul) : null;      // módulo con caché (v42.56)
-      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+      // v42.57: cull = «solo lo que se ve»: un objeto cuyo desenfoque cae fuera del lienzo de la animación no se desenfoca ni se pinta (js/defocus.js)
+      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache, cull: true });
     }
     go(ctx);
   }
@@ -1068,6 +1074,9 @@ window.AnimProc = (function(){
           if (o.hidden || !o.img) continue;
           var s = snapAt(o, i);
           if (!s || !(s.defocus > 0)) continue;
+          // v42.57: un objeto que en ese fotograma está del todo fuera del lienzo de la animación (con el margen del desenfoque) no se ve: su
+          // bitmap no hace falta. Si otro fotograma con el mismo tamaño y desenfoque sí lo ve, ese lo prepara (la entrada no depende de la posición).
+          if (D.visible && !D.visible(ctx, s.defocus, dfBox(S, s, (s.width || 0) * S.pw, (s.height || 0) * S.ph))) continue;
           drawObj(ctx, S, o, s, 1); n++;
         }
       }
@@ -5121,13 +5130,17 @@ const _ED_DEFOCUS_UNION = { shape: 1, line: 1, text: 1, bubble: 1 };   // varios
       const d = this.defocus;
       if (!(d > 0)) return orig.call(this, ctx, a, b);
       if (this._drawLayerId && _edDfGroupInEdit(this)) return orig.call(this, ctx, a, b);   // su dibujo se está editando: todo el grupo nítido mientras tanto
+      // v42.57: en el visor interno (_edViewerMode) «solo lo que se ve»: una capa cuyo desenfoque cae fuera de la hoja no se desenfoca ni se pinta, y la
+      // que se ve recorta el filtro a su caja ∩ la hoja (el lienzo de trabajo mide 2700×2340 y la hoja 360×780). Ver js/defocus.js. El editor no cambia.
       return CxDefocus.run(ctx, d, c => orig.call(this, c, a, b),
-        { union: !!_ED_DEFOCUS_UNION[this.type], bounds: () => _edDfBounds(this), blend: this._blendMode || null, cache: _edDfPlan(this) });
+        { union: !!_ED_DEFOCUS_UNION[this.type], bounds: () => _edDfBounds(this), blend: this._blendMode || null, cache: _edDfPlan(this), cull: !!_edViewerMode });
     };
     wrapped._edDf = true;
     Cls.prototype.draw = wrapped;
   });
 })();
+// v42.57 — zona visible de un lienzo de trabajo del visor (la hoja dentro de los 2700×2340): js/defocus.js la usa para no desenfocar lo que no se ve.
+function _edVwView(cv, r){ try { if (window.CxDefocus && CxDefocus.view) CxDefocus.view(cv, r); } catch (e) {} }
 // ¿Se está editando el dibujo al que pertenece esta capa vinculada (relleno / lápiz / acuarela)? Durante «Editar dibujo» y el recorte
 // el trazo pasa a ser un DrawLayer (que nunca lleva desenfoque) y sus capas vinculadas se vuelcan al lienzo de trabajo: se pintan
 // nítidas mientras dura la edición (así se ve lo que se retoca) y recuperan el desenfoque al terminar — sin estado que soltar.
@@ -40083,6 +40096,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   const my = (ED_CANVAS_H - ph) / 2;
   fctx.fillStyle = '#fff';
   fctx.fillRect(mx, my, pw, ph);
+  _edVwView(full, { x: mx, y: my, w: pw, h: ph });   // v42.57: solo la hoja se ve (el resto del lienzo de trabajo no se copia)
 
   _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY
   _edVwCurGrp = _edVwGrpFor(pageIdx);   // v42.56: grupo de la caché de desenfoques de esta hoja
@@ -40096,6 +40110,7 @@ function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
   _edViewerDrawTextsOnCtx(page, fctx, full);
   _edViewerMode = false;
   _edVwCurGrp = null;
+  _edVwView(full, null);
   ctx.clearRect(0, 0, pw, ph);
   ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
 
@@ -40784,6 +40799,7 @@ function edUpdateViewer(){
   if (_hiK) {
     full = edViewerCanvas; fctx = edViewerCtx;
     fctx.setTransform(_kx, 0, 0, _ky, -mx * _kx, -my * _ky);
+    _edVwView(full, null);   // v42.57: el lienzo del visor ES la hoja
   } else {
     // Canvas de trabajo reutilizable — nunca crear uno nuevo por frame en Android
     if (!_edViewerFullCanvas) {
@@ -40795,6 +40811,7 @@ function edUpdateViewer(){
     full = _edViewerFullCanvas;
     fctx = _edViewerFullCtx;
     fctx.clearRect(0, 0, ED_CANVAS_W, ED_CANVAS_H);
+    _edVwView(full, { x: mx, y: my, w: pw, h: ph });   // v42.57: solo la hoja se ve (se copia mx,my,pw,ph): el desenfoque no trabaja en el resto
   }
   fctx.fillStyle='#fff'; fctx.fillRect(mx,my,pw,ph);
   // Renderizar capas: temporalmente setear edOrientation para que draw() funcione
@@ -40821,6 +40838,7 @@ function edUpdateViewer(){
   });
   const _finishViewer = () => {
     _edViewerDrawTextsOnCtx(page, fctx, full);
+    _edVwView(full, null);
     _edViewerMode = false; // restaurar DESPUÉS de dibujar textos y bocadillos
     _edVwCurGrp = null;
     // Restaurar antes de manipular el DOM

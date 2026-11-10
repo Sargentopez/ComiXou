@@ -1092,12 +1092,17 @@ window.AnimProc = (function(){
   // la reproducción. Ahora el objeto desenfocado se guarda como bitmap (a menor resolución, con tope de memoria) y se reutiliza mientras
   // no cambien su tamaño ni su desenfoque: posición, giro y opacidad se aplican al pintarlo (cache.neutral = sin opacidad). Con
   // S.warm() el lector lo precalcula TODO al cargar la hoja, antes de que se vea. Caja del objeto: rectángulo girado, más 2 px.
-  function dfPlan(S, o, s, w, h, mul){
+  // v42.57: la caja del objeto (rectángulo girado + 2 px) sale aparte: la usan el plan de la caché, el recorte a lo visible y el precalentado.
+  function dfBox(S, s, w, h){
     var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
     var th = rot * DEG, ca = Math.abs(Math.cos(th)), sa = Math.abs(Math.sin(th));
     var ex = (Math.abs(w) * ca + Math.abs(h) * sa) / 2 + 2, ey = (Math.abs(w) * sa + Math.abs(h) * ca) / 2 + 2;
+    return { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey };
+  }
+  function dfPlan(S, o, s, w, h, mul){
+    var x = (s.x || 0) * S.pw - S.ox, y = (s.y || 0) * S.ph - S.oy, rot = s.rotation || 0;
     return {
-      bounds: { x: x - ex, y: y - ey, w: 2 * ex, h: 2 * ey },
+      bounds: dfBox(S, s, w, h),
       cache: {
         key: o, group: S.group || null, src: o.img, sig: 'ap|' + w.toFixed(2) + 'x' + h.toFixed(2),
         alpha: (s.opacity == null ? 1 : s.opacity) * mul, x: x, y: y, rot: rot,
@@ -1129,7 +1134,8 @@ window.AnimProc = (function(){
     };
     if (s.defocus > 0 && window.CxDefocus) {
       var pl = window.CxDefocus.warm ? dfPlan(S, o, s, w, h, mul) : null;      // módulo con caché (v42.56)
-      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+      // v42.57: cull = «solo lo que se ve»: un objeto cuyo desenfoque cae fuera del lienzo de la animación no se desenfoca ni se pinta (js/defocus.js)
+      return window.CxDefocus.run(ctx, s.defocus, go, { blend: o.blend || null, bounds: pl && pl.bounds, cache: pl && pl.cache, cull: true });
     }
     go(ctx);
   }
@@ -1212,6 +1218,9 @@ window.AnimProc = (function(){
           if (o.hidden || !o.img) continue;
           var s = snapAt(o, i);
           if (!s || !(s.defocus > 0)) continue;
+          // v42.57: un objeto que en ese fotograma está del todo fuera del lienzo de la animación (con el margen del desenfoque) no se ve: su
+          // bitmap no hace falta. Si otro fotograma con el mismo tamaño y desenfoque sí lo ve, ese lo prepara (la entrada no depende de la posición).
+          if (D.visible && !D.visible(ctx, s.defocus, dfBox(S, s, (s.width || 0) * S.pw, (s.height || 0) * S.ph))) continue;
           drawObj(ctx, S, o, s, 1); n++;
         }
       }
@@ -3086,7 +3095,10 @@ async function _plWarmBlur(panel) {
         if (!(df > 0)) return;
         const cache = _bubbleDfCache(u, g.pw, g.ph, 1, grp, true);
         if (!cache) return;
-        jobs.push(() => D.warm(() => D.run(stub, df, c => _drawBubbleImpl(c, u, g.pw, g.ph, 1), { union: true, cache })));
+        jobs.push(() => D.warm(() => {
+          const bounds = _rBubbleBounds(u, g.pw, g.ph);       // v42.57: la misma caja que usa _drawBubble (la entrada solo cubre esa zona)
+          D.run(stub, df, c => _drawBubbleImpl(c, u, g.pw, g.ph, 1), bounds ? { union: true, bounds, cache } : { union: true, cache });
+        }));
       });
     }
     if (!jobs.length) return;
@@ -6459,10 +6471,12 @@ function _rLayerKit(panel, pw, ph) {
       rot = (layer.rotation || 0) + pr; src = img; sig = 'f' + _rOk(img) + '|' + w + 'x' + h;
       bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'image' && layer._animReady && layer._animOc) {          // APNG / animación por instrucciones
-      if (layer._animSeq || !layer._animFrames) return null;
       x = (cx != null ? cx : (layer.x || 0.5)) * pw; y = (cy != null ? cy : (layer.y || 0.5)) * ph;
       w = (layer.width || 1) * pw; h = (layer.height || 1) * ph;
-      rot = (layer.rotation || 0) + pr; src = layer._animFrames; sig = 'a' + layer._animIdx + '|' + w + 'x' + h;
+      rot = (layer.rotation || 0) + pr;
+      // v42.57: el APNG por secuencia (_animSeq) sigue sin caché, pero sí lleva su caja: el desenfoque «en vivo» solo trabaja en su zona y no hace nada fuera de la hoja
+      if (layer._animSeq || !layer._animFrames) return { bounds: _rBox(x, y, w, h, rot, 2), cache: null };
+      src = layer._animFrames; sig = 'a' + layer._animIdx + '|' + w + 'x' + h;
       if (layer._animFadeOpacity != null) a = layer._animFadeOpacity;
       bounds = _rBox(x, y, w, h, rot, 2); one = true;
     } else if (type === 'image' || type === 'stroke') {
@@ -6504,7 +6518,9 @@ function _rLayerKit(panel, pw, ph) {
   const _rRun = (ctx, layer, j, df) => {
     const pl = _rDfPlan(layer, j);
     // forma y línea llevan varios trazos (relleno + contorno): se desenfoca el conjunto UNA vez (igual que en el editor)
-    return CxDefocus.run(ctx, df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null, bounds: pl && pl.bounds, cache: pl && pl.cache });
+    // v42.57: cull = «solo lo que se ve» (js/defocus.js): una capa cuyo desenfoque cae fuera de la hoja no se desenfoca ni se pinta, y el filtro
+    // «en vivo» se recorta a su caja ∩ hoja. Dentro de CxDefocus.warm() no tiene efecto (el precalentado prepara la caché sin mirar dónde está hoy).
+    return CxDefocus.run(ctx, df, c => _rPaintLayer(c, layer, j), { union: layer.type === 'shape' || layer.type === 'line', blend: layer._blendMode || null, bounds: pl && pl.bounds, cache: pl && pl.cache, cull: !!pl });
   };
   return { paint: _rPaintLayer, plan: _rDfPlan, run: _rRun };
 }
@@ -6627,9 +6643,95 @@ function _drawBubble(ctx, t, pw, ph, alpha, grp) {
   const _df = _rDf(t && (t._bubbleLayer || t));
   if (_df > 0) {
     const cache = _bubbleDfCache(t, pw, ph, alpha, grp, false);
-    return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), cache ? { union: true, cache } : { union: true });
+    // v42.57 — «solo lo que se ve»: con la caja del objeto, CxDefocus solo prepara esa zona (no la hoja entera) y no hace nada si queda fuera de la hoja
+    const bounds = _rBubbleBounds(t, pw, ph), opt = { union: true };
+    if (bounds) { opt.bounds = bounds; opt.cull = true; }
+    if (cache) opt.cache = cache;
+    return CxDefocus.run(ctx, _df, c => _drawBubbleImpl(c, t, pw, ph, alpha), opt);
   }
   return _drawBubbleImpl(ctx, t, pw, ph, alpha);
+}
+// v42.57 — caja (px de hoja) que ocupa COMO MUCHO un bocadillo / texto: forma, cola, contorno y texto, con margen de sobra (mismo criterio que
+// _edDfBounds del editor: ×1,15 + 24 px). Es un cuadrado centrado en el objeto, así que no depende del giro. Con ella CxDefocus solo prepara esa
+// zona (antes: la hoja entera, 360×780 —o 1080×2340 en una hoja HD— por cada bocadillo que se movía) y no hace nada cuando queda fuera de la
+// hoja. undefined = no se sabe acotar (viñeta «thought» antigua sin bitmap, hoja de texto maquetada, datos raros) o ?dfcull=0 → como en la
+// v42.56. Función pura de (t, pw, ph): el dibujo y el precalentado obtienen la MISMA caja (la caché no la lleva en la firma).
+// Sigue a _drawBubbleImpl rama por rama (bitmap de la capa · bitmap propio · vectorial): si cambia uno, cambia el otro.
+let _rMeasureCtx = null;
+function _rBubbleBounds(t, pw, ph) {
+  try {
+    if (!t || !(window.CxDefocus && CxDefocus.cullOn && CxDefocus.cullOn())) return undefined;
+    const bl = t._bubbleLayer;
+    let cx, cy, w, h, R, fs, fam, bold, ital, txt, textOn = true, bw = 0;
+    if (t._bubbleLayerImg && bl && bl.renderDataUrl) {                       // bitmap de la forma de la capa + texto encima
+      cx = (t._pathCurX != null ? t._pathCurX : (bl.x || 0.5)) * pw; cy = (t._pathCurY != null ? t._pathCurY : (bl.y || 0.5)) * ph;
+      w = bl._renderW !== undefined ? bl._renderW * pw : (bl.width || 0.3) * pw;
+      h = bl._renderH !== undefined ? bl._renderH * ph : (bl.height || 0.15) * ph;
+      const pad = bl._renderPad || 0;
+      R = Math.hypot(w / 2 + pad, h / 2 + pad);
+      textOn = bl.style !== 'explosion';
+      fs = Math.max(10, t.font_size || t.fontSize || bl.fontSize || 30);
+      fam = t.font_family || t.fontFamily || bl.fontFamily || 'Patrick Hand';
+      bold = !!(t.font_bold || t.fontBold || bl.fontBold); ital = !!(t.font_italic || t.fontItalic || bl.fontItalic);
+      txt = t.text || bl.text || '';
+    } else {
+      const fromLayers = t.width !== undefined || t.height !== undefined;
+      if (t.renderDataUrl && t._renderImg) {                                  // bitmap propio (thought / explosión) + texto encima
+        if (fromLayers && t.width !== undefined) {
+          cx = (t._pathCurX != null ? t._pathCurX : t.x) * pw; cy = (t._pathCurY != null ? t._pathCurY : t.y) * ph;
+          w = t.width * pw; h = t.height * ph;
+        } else {
+          const rw = (t.w || 30) / 100, rh = (t.h || 15) / 100;
+          cx = (t.x / 100 + rw / 2) * pw; cy = (t.y / 100 + rh / 2) * ph; w = rw * pw; h = rh * ph;
+        }
+        R = Math.hypot(w / 2, h / 2);
+        fs = Math.max(10, t.font_size || t.fontSize || 30);
+        fam = t.font_family || t.fontFamily || 'Patrick Hand';
+        bold = !!(t.font_bold || t.fontBold); ital = !!(t.font_italic || t.fontItalic);
+        txt = t.text || '';
+      } else {                                                                // vectorial: elipse / caja de texto / explosión + cola
+        const style = t.style || 'conventional', type = t.type || 'bubble';
+        if (style === 'thought') return undefined;                            // nube antigua sin bitmap: sus burbujas de cola miden cientos de px
+        if (type === 'text' && ((t._bubbleLayer && Array.isArray(t._bubbleLayer.richLines) && t._bubbleLayer.richLines.length) || (Array.isArray(t.richLines) && t.richLines.length))) return undefined;   // hoja de texto: marco = página
+        const rawW = fromLayers ? (t.width || 0.3) : ((t.w || 30) / 100), rawH = fromLayers ? (t.height || 0.15) : ((t.h || 15) / 100);
+        const curX = fromLayers && t._pathCurX != null ? t._pathCurX : t.x, curY = fromLayers && t._pathCurY != null ? t._pathCurY : t.y;
+        const rawX = fromLayers ? (curX - rawW / 2) : (t.x / 100), rawY = fromLayers ? (curY - rawH / 2) : (t.y / 100);
+        w = rawW * pw; h = rawH * ph; cx = rawX * pw + w / 2; cy = rawY * ph + h / 2;
+        R = style === 'explosion' ? 0.7 * Math.max(w, h) : Math.hypot(w, h) / 2;     // la explosión llega a 1,3 × el semieje mayor
+        const bwv = t.border !== undefined && t.border !== null ? t.border : (t.borderWidth !== undefined ? t.borderWidth : 2);
+        bw = Math.max(0, +bwv || 0);
+        const parse = v => { if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return null; } } return v; };
+        const starts = parse(t.tailStarts || t.tail_starts), ends = parse(t.tailEnds || t.tail_ends);
+        if (type === 'bubble' && style === 'radio') {
+          const te = (ends && ends[0]) || { x: 0, y: 0.5 };
+          R = Math.max(R, Math.hypot((te.x || 0) * w, (te.y || 0) * h) + 26);   // ondas de radio: círculos de hasta 25 px en el extremo
+        } else if (type === 'bubble' && (t.hasTail ?? t.has_tail ?? true)) {
+          const vc = Math.min(64, +(t.voiceCount ?? t.voice_count ?? 1) || 1), ss = starts || [{ x: -0.4, y: 0.4 }], ee = ends || [{ x: -0.4, y: 0.6 }];
+          for (let v = 0; v < vc; v++) {
+            const ts = ss[v] || ss[0], te = ee[v] || ee[0];
+            if (!ts || !te) return undefined;
+            R = Math.max(R, Math.hypot((ts.x || 0) * w, (ts.y || 0) * h) + 6, Math.hypot((te.x || 0) * w, (te.y || 0) * h) + 6);
+          }
+        }
+        fs = Math.max(10, Math.round(t.font_size || t.fontSize || 30));
+        fam = t.font_family || t.fontFamily || 'Patrick Hand';
+        bold = !!(t.font_bold ?? t.fontBold ?? false); ital = !!(t.font_italic ?? t.fontItalic ?? false);
+        txt = t.text || '';
+      }
+    }
+    if (textOn) {                                                             // el texto puede salirse de la caja (solo se divide por saltos de línea)
+      const lines = _getLines(txt);
+      if (!_rMeasureCtx) _rMeasureCtx = document.createElement('canvas').getContext('2d');
+      const m = _rMeasureCtx;
+      m.font = (ital ? 'italic ' : '') + (bold ? 'bold ' : '') + fs + 'px ' + fam;
+      if (String(m.font).indexOf(fs + 'px') < 0) return undefined;           // fuente no válida: no se sabe medir
+      let mw = 0; for (const ln of lines) mw = Math.max(mw, m.measureText(ln).width);
+      R = Math.max(R, Math.hypot(mw / 2, lines.length * fs * 0.6) * 1.2 + 4);
+    }
+    if (!(R >= 0) || !isFinite(cx + cy + R)) return undefined;
+    R = (R + 2 * bw + 24) * 1.15;
+    return { x: cx - R, y: cy - R, w: 2 * R, h: 2 * R };
+  } catch (e) { return undefined; }
 }
 // v42.55 — caché de desenfoques (js/defocus.js): solo bocadillos/textos QUE NO SE MUEVEN (sin trayectoria), sin hoja de texto maquetada
 // (richLines) y con su fuente YA cargada: las fuentes web se cargan la primera vez que se usan, y un bitmap guardado con la fuente de
