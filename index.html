@@ -63,8 +63,8 @@
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="css/main.css?v=42.57">
-  <link rel="stylesheet" href="css/home.css?v=42.57">
+  <link rel="stylesheet" href="css/main.css?v=42.58">
+  <link rel="stylesheet" href="css/home.css?v=42.58">
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="fonts/typefaces.css">
   <!-- Ventana de bienvenida/condiciones de uso (ver #cxIntro más abajo, justo tras
@@ -158,7 +158,7 @@
        con el primer parseo del HTML, antes de que se ejecute ningún script. -->
   <div id="cxIntro">
     <div id="cxIntroCard">
-      <img src="intro-anim.png?v=42.57" alt="Comxow — IDEA Y COMPARTE">
+      <img src="intro-anim.png?v=42.58" alt="Comxow — IDEA Y COMPARTE">
       <div id="cxIntroGate">
         <label>
           <input type="checkbox" id="cxIntroCheck">
@@ -185,6 +185,25 @@
       if (hash === 'terms') { ov.style.display = 'none'; return; }
 
       var already = !!localStorage.getItem(KEY);
+
+      // v42.58 · Vuelta desde el lector en la app instalada de Android. Allí el lector se abre en la MISMA ventana (ver
+      // _openReaderTab en js/utils.js), así que al cerrarlo «atrás» recarga esta página cuando el navegador no puede
+      // restaurarla de la bfcache — y la animación de bienvenida se repetiría cada vez. Se omite solo si ya se aceptaron
+      // las condiciones, la marca cx_from_reader es reciente y esta carga es de verdad una navegación atrás/adelante
+      // (abrir la app de nuevo o refrescar sí la muestran). La marca se gasta al leerla.
+      var fromReader = false;
+      try {
+        var rdStamp = parseInt(sessionStorage.getItem('cx_from_reader') || '0', 10) || 0;
+        if (rdStamp) sessionStorage.removeItem('cx_from_reader');
+        var navEntry = performance.getEntriesByType('navigation')[0];
+        fromReader = already && rdStamp > 0 && (Date.now() - rdStamp) < 12 * 3600e3 && !!navEntry && navEntry.type === 'back_forward';
+      } catch (e) {}
+      if (fromReader) {
+        ov.style.display = 'none';
+        window._cxSplashReady = function () {};   // router.js / home.js la llaman: aquí no hay nada que ocultar
+        return;
+      }
+
       // Estructura real de intro-anim.png, verificada leyendo directamente
       // los chunks APNG del propio archivo (acTL/fcTL) en vez de fiarse de
       // un cálculo a mano: 42 frames de movimiento (20 a 71ms + 1 a 500ms +
@@ -302,57 +321,57 @@
   <!-- Core -->
   <!-- v42.54: interruptor de diagnóstico de ESTE dispositivo (botones y registros de diagnóstico, apagado de serie). Primero de todos:
        supabase-client.js, editor.js y el resto lo consultan al cargar. -->
-  <script src="js/diag.js?v=42.57"></script>
-  <script src="js/utils.js?v=42.57"></script>
-  <script src="js/anim-clock.js?v=42.57"></script>
-  <script src="js/defocus.js?v=42.57"></script>
-  <script src="js/orient-lock.js?v=42.57"></script>
-  <script src="js/editor-animctl.js?v=42.57"></script>
-  <script src="js/i18n.js?v=42.57"></script>
-  <script src="js/auth.js?v=42.57"></script>
-  <script src="js/storage.js?v=42.57"></script>
-  <script src="js/pako.min.js?v=42.57"></script>
-  <script src="js/trix.umd.min.js?v=42.57"></script>
-  <script src="js/supabase-client.js?v=42.57"></script>
-  <script src="js/genres.js?v=42.57"></script>
+  <script src="js/diag.js?v=42.58"></script>
+  <script src="js/utils.js?v=42.58"></script>
+  <script src="js/anim-clock.js?v=42.58"></script>
+  <script src="js/defocus.js?v=42.58"></script>
+  <script src="js/orient-lock.js?v=42.58"></script>
+  <script src="js/editor-animctl.js?v=42.58"></script>
+  <script src="js/i18n.js?v=42.58"></script>
+  <script src="js/auth.js?v=42.58"></script>
+  <script src="js/storage.js?v=42.58"></script>
+  <script src="js/pako.min.js?v=42.58"></script>
+  <script src="js/trix.umd.min.js?v=42.58"></script>
+  <script src="js/supabase-client.js?v=42.58"></script>
+  <script src="js/genres.js?v=42.58"></script>
   <!-- seed.js desactivado — solo para desarrollo local -->
-  <!-- <script src="js/seed.js?v=42.57"></script> -->
+  <!-- <script src="js/seed.js?v=42.58"></script> -->
 
   <!-- Router SPA -->
-  <script src="js/router.js?v=42.57"></script>
+  <script src="js/router.js?v=42.58"></script>
 
   <!-- Lógica de cada vista -->
-  <script src="js/home.js?v=42.57"></script>
-  <script src="js/auth-pages.js?v=42.57"></script>
-  <script src="js/editor-layers.js?v=42.57"></script>
-  <script src="js/editor-pages.js?v=42.57"></script>
-  <script src="js/editor-textdoc.js?v=42.57"></script>
-  <script src="js/omggif.js?v=42.57"></script>
-  <script src="js/UPNG.js?v=42.57"></script>
+  <script src="js/home.js?v=42.58"></script>
+  <script src="js/auth-pages.js?v=42.58"></script>
+  <script src="js/editor-layers.js?v=42.58"></script>
+  <script src="js/editor-pages.js?v=42.58"></script>
+  <script src="js/editor-textdoc.js?v=42.58"></script>
+  <script src="js/omggif.js?v=42.58"></script>
+  <script src="js/UPNG.js?v=42.58"></script>
   <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.min.js"></script>
-  <script src="js/editor.js?v=42.57"></script>
-  <script src="js/logo-data.js?v=42.57"></script>
-  <script src="js/icon-data.js?v=42.57"></script>
-  <script src="js/reader.js?v=42.57"></script>
-  <script src="js/admin.js?v=42.57"></script>
-  <script src="js/admin-backup.js?v=42.57"></script>
-  <script src="js/admin-restore.js?v=42.57"></script>
-  <script src="js/admin-r2.js?v=42.57"></script>
+  <script src="js/editor.js?v=42.58"></script>
+  <script src="js/logo-data.js?v=42.58"></script>
+  <script src="js/icon-data.js?v=42.58"></script>
+  <script src="js/reader.js?v=42.58"></script>
+  <script src="js/admin.js?v=42.58"></script>
+  <script src="js/admin-backup.js?v=42.58"></script>
+  <script src="js/admin-restore.js?v=42.58"></script>
+  <script src="js/admin-r2.js?v=42.58"></script>
 
   <!-- Fullscreen -->
-  <script src="js/fullscreen.js?v=42.57"></script>
+  <script src="js/fullscreen.js?v=42.58"></script>
 
   <!-- My comics view -->
-  <script src="js/my-works.js?v=42.57"></script>
+  <script src="js/my-works.js?v=42.58"></script>
 
   <!-- Registro de vistas -->
-  <script src="js/views.js?v=42.57"></script>
+  <script src="js/views.js?v=42.58"></script>
 
   <!-- Header persistente -->
-  <script src="js/header.js?v=42.57"></script>
+  <script src="js/header.js?v=42.58"></script>
 
   <!-- PWA -->
-  <script src="js/pwa.js?v=42.57"></script>
+  <script src="js/pwa.js?v=42.58"></script>
 
   <!-- Arrancar -->
   <script>
@@ -379,6 +398,8 @@
       // de una carga nueva de verdad (que ya recarga fresco solo con
       // Router.start(), sin necesidad de esto).
       if (e.persisted) {
+        // v42.58: la marca de «vengo del lector» (ver el script de #cxIntro) solo sirve a una recarga; restaurada de la bfcache no se usa.
+        try { sessionStorage.removeItem('cx_from_reader'); } catch (_) {}
         if (document.getElementById('worksGrid')) {
           if (typeof homeInvalidateCache === 'function') homeInvalidateCache();
           if (typeof _loadPublishedWorks === 'function') _loadPublishedWorks();

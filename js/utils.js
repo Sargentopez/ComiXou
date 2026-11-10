@@ -589,15 +589,66 @@ function _shareModalClose() {
   overlay.style.pointerEvents = 'none';
 }
 
-// Abre el lector externo (reader/index.html) en una pestaña nueva — NUEVO,
-// pedido explícito de Alberto: así la app nunca se abandona al leer una
-// obra (no hace falta recargarla al volver) y pueden tenerse varias
-// lecturas abiertas a la vez. Si el navegador bloquea window.open (raro
-// estando dentro de un manejador de clic real, pero posible en algún
-// WebView/PWA), recurre a navegar en la MISMA pestaña como última opción —
-// ver el comentario de _doClose en reader/reader.js sobre por qué cerrar
-// el lector sigue volviendo bien a la vista de origen incluso en ese caso.
+// Abre el lector externo (reader/index.html). Dónde se abre:
+//
+//  · Navegador y PC (y todo lo que no sea el caso siguiente): en una pestaña
+//    nueva — pedido explícito de Alberto: así la app nunca se abandona al leer
+//    una obra (no hace falta recargarla al volver) y pueden tenerse varias
+//    lecturas abiertas a la vez. Si el navegador bloquea window.open (raro
+//    estando dentro de un manejador de clic real, pero posible en algún
+//    WebView/PWA), recurre a navegar en la MISMA pestaña como última opción —
+//    ver el comentario de _doClose en reader/reader.js sobre por qué cerrar
+//    el lector sigue volviendo bien a la vista de origen incluso en ese caso.
+//
+//  · v42.58 · App instalada en Android (WebAPK): en la MISMA ventana. Motivo:
+//    en Android, window.open() desde una PWA instalada abre un «navegador
+//    integrado» encima de la app, incluso si la URL está dentro del ámbito
+//    (scope) de la PWA — Google lo documenta en web.dev, «Window management»
+//    (https://web.dev/learn/pwa/windows): ese navegador integrado lleva una
+//    barra estática con el origen, el título y un menú. Esa es la franja de
+//    Chrome que quedaba arriba al leer una obra desde la app (en el navegador
+//    se leía a pantalla completa y en la app no), y esa ventana nueva no hereda
+//    el `display: fullscreen` del manifiesto. Navegando en la misma ventana, el
+//    lector (dentro del ámbito de la app) lo hereda, como el resto de la app.
+//    Al cerrar el lector, history.back() vuelve a la app: el navegador la
+//    restaura de la bfcache (ver el manejador pageshow de index.html) o, si no
+//    puede, la recarga sin repetir la animación de bienvenida (marca
+//    cx_from_reader de sessionStorage; ver el script de #cxIntro en index.html).
+//
+//  Interruptor por dispositivo (mismo patrón que js/orient-lock.js): ?rdsame=0
+//  devuelve el comportamiento anterior (pestaña nueva también en la app) y
+//  ?rdsame=1 lo reactiva; se recuerda en este dispositivo (localStorage
+//  cx_rdsame). Se lee aquí, al cargar, porque la app instalada no tiene barra
+//  de direcciones: se activa abriendo la dirección con el parámetro en Chrome.
+(function () {
+  try {
+    const q = new URLSearchParams(location.search).get('rdsame');
+    if (q === '0') localStorage.setItem('cx_rdsame', '0');
+    else if (q === '1') localStorage.removeItem('cx_rdsame');
+  } catch (_) {}
+})();
+
+// ¿Es la app instalada de Android? UA de Android + modo de visualización de app (fullscreen del manifiesto,
+// standalone o minimal-ui). En el navegador, la API Fullscreen también hace que display-mode valga «fullscreen»:
+// eso NO es la app instalada, y ahí document.fullscreenElement está definido (en la app instalada, no).
+function _rdIsAndroidApp() {
+  try {
+    if (!/Android/i.test(navigator.userAgent || '')) return false;
+    if (document.fullscreenElement || document.webkitFullscreenElement) return false;
+    const mm = m => window.matchMedia('(display-mode: ' + m + ')').matches;
+    return mm('fullscreen') || mm('standalone') || mm('minimal-ui');
+  } catch (_) { return false; }
+}
+
 function _openReaderTab(url) {
+  let same = false;
+  try { same = _rdIsAndroidApp() && localStorage.getItem('cx_rdsame') !== '0'; } catch (_) {}
+  if (same) {
+    // Marca para que, si al volver hay que recargar esta página, no repita la animación de bienvenida.
+    try { sessionStorage.setItem('cx_from_reader', String(Date.now())); } catch (_) {}
+    window.location.assign(url);
+    return;
+  }
   const w = window.open(url, '_blank');
   if (!w) window.location = url;
 }
