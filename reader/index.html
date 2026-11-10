@@ -125,7 +125,7 @@
     // vieja; en cualquier otro caso (coincide, no aplica, o falla la
     // comprobación) si se llama, para no dejar la pantalla en blanco.
     (function () {
-      var READER_BUILD = '42.57';
+      var READER_BUILD = '42.59';
       var RETRY_KEY = 'cxReaderCacheRetry';
       if (/[?&]_cb=/.test(location.search)) {
         var clean = location.href.replace(/([?&])_cb=[^&]*&?/, '$1').replace(/[?&]$/, '');
@@ -189,9 +189,9 @@
 
   <!-- Fuentes autoalojadas (WOFF2) — sin dependencia de conectividad, sin llamadas a terceros -->
   <link rel="stylesheet" href="../fonts/typefaces.css">
-  <link rel="stylesheet" href="reader.css?v=42.10">
+  <link rel="stylesheet" href="reader.css?v=42.59">
 </head>
-<script src="../js/i18n.js?v=42.10"></script>
+<script src="../js/i18n.js?v=42.59"></script>
 <script>
   if ('serviceWorker' in navigator)
     navigator.serviceWorker.getRegistrations().then(r => r.forEach(s => s.unregister()));
@@ -278,6 +278,6 @@
   <script src="../js/anim-clock.js?v=42.27"></script>
   <script src="../js/defocus.js?v=42.57"></script>
   <script src="../js/orient-lock.js?v=42.57"></script>
-  <script src="reader.js?v=42.57"></script>
+  <script src="reader.js?v=42.59"></script>
 </body>
 </html>

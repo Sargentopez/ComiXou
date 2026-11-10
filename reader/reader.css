@@ -140,6 +140,31 @@ html, body {
 .corner-btn:hover  { background: rgba(0,0,0,.55); }
 .corner-btn:active { background: rgba(0,0,0,.75); }
 
+/* v42.59 — protección contra toques involuntarios en los 4 botones de esquina (ver «PROTECCIÓN DE LOS 4 BOTONES» en reader.js).
+   Solo cuando la protección está activa (html.rd-guard). Pulsación larga: un relleno amarillo de marca (el de las barras de carga del
+   lector: se ve sobre hojas claras y oscuras, a diferencia de un aro blanco) crece de izquierda a derecha durante --rd-hold-ms, por
+   DETRÁS del texto; al llenarse (.rd-ready) el borde se vuelve amarillo y la acción ocurre al soltar. Doble toque: el primer toque
+   deja el botón agrandado y con borde amarillo (.rd-armed) hasta que llega el segundo. Girando (html.rd-rotating) los botones se ven
+   atenuados e inertes. */
+html.rd-guard .corner-btn {
+  touch-action: none;                 /* ni zoom por doble toque ni desplazamiento: el gesto lo decide el lector */
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;                   /* recorta el relleno a las esquinas redondeadas */
+}
+html.rd-guard .corner-btn::before {   /* z-index:-1: queda sobre el fondo del botón pero bajo su texto (el botón ya es un contexto de apilamiento) */
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(90deg, #f5c400, #f59000);
+  transform: scaleX(0); transform-origin: 0 50%;
+}
+html.rd-guard .corner-btn.rd-holding::before { transform: scaleX(1); transition: transform var(--rd-hold-ms, 500ms) linear; }
+html.rd-guard .corner-btn.rd-ready  { border-color: #f5c400; box-shadow: 0 0 0 2px #f5c400, 0 0 0 3px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.5); }
+html.rd-guard .corner-btn.rd-armed  { border-color: #f5c400; box-shadow: 0 0 0 2px #f5c400, 0 0 0 3px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.5); transform: scale(1.12); }
+html.rd-guard .corner-btn.rd-fired  { animation: rdGuardFire .3s ease-out; }
+@keyframes rdGuardFire { 0% { transform: scale(1); } 40% { transform: scale(1.22); } 100% { transform: scale(1); } }
+html.rd-rotating .corner-btn { opacity: .35; }
+
 /* Hoja de recorrido dirigido (Alberto: botón de autor "ir a hoja...") — el
    botón de navegación por hoja se ve atenuado y no responde mientras la
    hoja actual solo se puede abandonar usando ese botón del autor. */

@@ -1604,6 +1604,173 @@ function _roOnSheet() {
 
 function _roReport() { return _ROC ? _ROC.report() : '— giro nativo de la pantalla — inactivo: js/orient-lock.js no se cargó'; }
 
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// v42.59 — PROTECCIÓN DE LOS 4 BOTONES DE ESQUINA CONTRA TOQUES INVOLUNTARIOS (pantallas táctiles)
+// Petición de Alberto (2026-11-10): en el móvil, al girar la pantalla leyendo una obra, los dedos con los que se sujeta el
+// teléfono acaban sobre los botones de las esquinas (_positionBtns los pega a la hoja, y la hoja cambia de sitio con el giro)
+// y se activaba sin querer cualquiera de los cuatro: [ ] pantalla completa, ✕ cerrar, 1/1 ir a hoja y ⬇ descargar. Pidió:
+// (1) que no funcionen hasta que el giro se haya hecho y (2) que funcionen manteniendo el dedo un poco más o con doble toque.
+//
+// Solo toques (pointerType 'touch'): ratón, lápiz y teclado siguen funcionando con un clic, como siempre. Es el patrón habitual
+// de «mantener pulsado / doble toque para confirmar» (Android: la pulsación larga del sistema es de ≈ 400–500 ms) y respeta
+// WCAG 2.5.2 (cancelación del puntero): la acción ocurre al SOLTAR y se aborta deslizando el dedo fuera.
+//  · Pulsación larga: HOLD_MS con el dedo casi quieto. Un relleno amarillo (el de las barras de carga del lector) crece detrás del
+//    texto del botón; al llenarse el borde se resalta y la acción ocurre al levantar el dedo (así el gesto del usuario es el de
+//    soltar, que es el que Chrome exige para la pantalla completa).
+//  · Doble toque: dos toques en el mismo botón, ≤ DOUBLE_MS entre ellos y casi en el mismo sitio.
+//  · Un toque suelto no hace nada: el botón se resalta un instante y, si no llega el segundo toque, sale un aviso.
+//  · Giro: desde el primer indicio (resize que cambia vertical↔horizontal, orientationchange, screen.orientation, o el sensor de
+//    OrientLock, que lo nota antes de que el sistema gire la pantalla) y hasta SETTLE_MS tras el último, los botones no responden a
+//    nada (se ven atenuados) y se descarta lo que estuviera a medias.
+// Los manejadores de cada botón NO se tocan: esta capa decide qué gestos les llegan y, cuando uno vale, llama a btn.click().
+// Interruptor de emergencia por dispositivo: ?rdguard=0 la desactiva (queda guardado) y ?rdguard=1 la reactiva.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+const RG = {
+  HOLD_MS: 500, DOUBLE_MS: 400, SETTLE_MS: 1200, SLOP: 14, DBL_SLOP: 30, HINT_EVERY: 5000,
+  IDS: ['fullscreenToggle', 'closeBtn', 'pageNavToggle', 'offlineDlBtn'],
+  on: false, why: 'sin iniciar', t0: 0,
+  lockUntil: 0, lockTimer: 0, fam: '',
+  press: null,                 // dedo puesto ahora: { btn, id, x, y, ready, moved, timer }
+  tap: null, tapTimer: 0,      // primer toque a la espera del segundo
+  pass: false,                 // true solo mientras la propia protección lanza btn.click()
+  touchAt: -1e9, hintAt: -1e9,
+  n: { arms: 0, ignored: 0, hold: 0, dbl: 0, hints: 0, blocked: 0 }, last: '', log: [],
+};
+function _rgWanted() {
+  let q = null;
+  try { q = _PL_QS.get('rdguard'); } catch (_) {}
+  try {
+    if (q === '0') { localStorage.setItem('cx_rdguard_off', '1'); return false; }
+    if (q === '1') { localStorage.removeItem('cx_rdguard_off'); return true; }
+    return localStorage.getItem('cx_rdguard_off') !== '1';
+  } catch (_) { return q !== '0'; }
+}
+const _rgLocked = () => performance.now() < RG.lockUntil;
+function _rgLog(m) {   // solo con el diagnóstico activado en este dispositivo (js/diag.js)
+  if (!_cxDiagOn()) return;
+  RG.log.push(((performance.now() - RG.t0) / 1000).toFixed(1) + 's ' + m);
+  if (RG.log.length > 40) RG.log.shift();
+}
+function _rgAbortPress() {
+  const p = RG.press;
+  if (!p) return;
+  clearTimeout(p.timer); p.btn.classList.remove('rd-holding', 'rd-ready'); RG.press = null;
+}
+function _rgAbortTap() {
+  clearTimeout(RG.tapTimer);
+  if (RG.tap) { RG.tap.btn.classList.remove('rd-armed'); RG.tap = null; }
+}
+// Indicio de giro: los botones quedan inertes hasta SETTLE_MS después del último indicio (el dedo tarda en recolocarse).
+function _rgArm(why) {
+  if (!RG.on) return;
+  RG.lockUntil = performance.now() + RG.SETTLE_MS;
+  RG.n.arms++; RG.last = why;
+  document.documentElement.classList.add('rd-rotating');
+  _rgAbortPress(); _rgAbortTap();
+  clearTimeout(RG.lockTimer);
+  RG.lockTimer = setTimeout(_rgRelease, RG.SETTLE_MS + 20);
+  _rgLog('giro → botones inertes (' + why + ')');
+}
+function _rgRelease() {
+  const left = RG.lockUntil - performance.now();
+  if (left > 0) { RG.lockTimer = setTimeout(_rgRelease, left + 20); return; }
+  document.documentElement.classList.remove('rd-rotating');
+  _rgLog('botones operativos de nuevo');
+}
+function _rgHint() {
+  const now = performance.now();
+  if (now - RG.hintAt < RG.HINT_EVERY) return;
+  RG.hintAt = now; RG.n.hints++;
+  _readerToast(I18n.t('reader_guardHint'), 2600);
+}
+function _rgFire(btn, how) {
+  btn.classList.remove('rd-armed', 'rd-holding', 'rd-ready');
+  btn.classList.add('rd-fired');
+  setTimeout(() => btn.classList.remove('rd-fired'), 300);
+  if (how === 'larga') RG.n.hold++; else RG.n.dbl++;
+  _rgLog('activado ' + btn.id + ' (' + how + ')');
+  RG.pass = true;
+  try { btn.click(); } finally { RG.pass = false; }
+}
+// ¿Este clic viene de un dedo? Chrome/Android: click.pointerType === 'touch'. Safari/iOS: sin pointerType → se mira el último toque.
+const _rgTouchClick = e => e.pointerType === 'touch' || (e.pointerType === undefined && performance.now() - RG.touchAt < 800);
+function _rgBind(btn) {
+  btn.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    RG.touchAt = performance.now();
+    if (!e.isPrimary || btn.disabled) return;
+    if (_rgLocked()) { RG.n.ignored++; return; }          // girando: ni relleno ni aviso
+    _rgAbortPress();                                        // otra pulsación a medias (dedo perdido): se descarta
+    if (RG.tap && RG.tap.btn !== btn) _rgAbortTap();        // el primer toque era de OTRO botón: ya no cuenta
+    const p = { btn, id: e.pointerId, x: e.clientX, y: e.clientY, ready: false, moved: false, timer: 0 };
+    p.timer = setTimeout(() => { if (RG.press === p && !p.moved) { p.ready = true; btn.classList.add('rd-ready'); } }, RG.HOLD_MS);
+    RG.press = p;
+    btn.classList.add('rd-holding');
+  });
+  btn.addEventListener('pointermove', e => {
+    const p = RG.press;
+    if (!p || p.moved || e.pointerId !== p.id) return;
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > RG.SLOP) {   // el dedo se desliza: ni toque ni pulsación larga
+      p.moved = true; clearTimeout(p.timer); btn.classList.remove('rd-holding', 'rd-ready');
+    }
+  });
+  btn.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'touch') return;
+    RG.touchAt = performance.now();
+    const p = RG.press;
+    if (!p || p.btn !== btn || e.pointerId !== p.id) return;
+    clearTimeout(p.timer); btn.classList.remove('rd-holding', 'rd-ready'); RG.press = null;
+    if (p.moved || btn.disabled || _rgLocked()) return;
+    if (p.ready) { _rgAbortTap(); _rgFire(btn, 'larga'); return; }
+    const now = performance.now(), t = RG.tap;
+    if (t && t.btn === btn && now - t.t <= RG.DOUBLE_MS && Math.hypot(e.clientX - t.x, e.clientY - t.y) <= RG.DBL_SLOP) {
+      _rgAbortTap(); _rgFire(btn, 'doble'); return;
+    }
+    _rgAbortTap();
+    RG.tap = { btn, t: now, x: e.clientX, y: e.clientY };
+    btn.classList.add('rd-armed');
+    RG.tapTimer = setTimeout(() => { const had = RG.tap; _rgAbortTap(); if (had) _rgHint(); }, RG.DOUBLE_MS);
+  });
+  btn.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') _rgAbortPress(); });
+  // Un dedo nunca llega a los manejadores del botón por su cuenta (ni touchend —el de ✕ cerraba también aquí— ni el clic que le sigue):
+  // solo lo hace un gesto válido, vía btn.click() de _rgFire.
+  btn.addEventListener('touchend', e => { RG.touchAt = performance.now(); if (e.cancelable) e.preventDefault(); e.stopImmediatePropagation(); }, { capture: true, passive: false });
+  btn.addEventListener('click', e => {
+    if (RG.pass || !_rgTouchClick(e)) return;
+    RG.n.blocked++;
+    e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
+  btn.addEventListener('contextmenu', e => { if (performance.now() - RG.touchAt < 1500) e.preventDefault(); }, true);   // pulsación larga de Android
+}
+function _rgInstall() {
+  if (RG.on) return;
+  if (RS.isEmbed) { RG.why = 'lector incrustado (embed)'; return; }
+  if (!_rgWanted()) { RG.why = 'desactivada en este dispositivo (?rdguard=0)'; return; }
+  RG.on = true; RG.why = ''; RG.t0 = performance.now();
+  const root = document.documentElement;
+  root.classList.add('rd-guard');
+  root.style.setProperty('--rd-hold-ms', RG.HOLD_MS + 'ms');
+  RG.IDS.forEach(id => { const b = document.getElementById(id); if (b) _rgBind(b); });
+  // Indicios de giro
+  RG.fam = window.innerWidth > window.innerHeight ? 'l' : 'p';
+  window.addEventListener('resize', () => {
+    const f = window.innerWidth > window.innerHeight ? 'l' : 'p';
+    if (f !== RG.fam) { RG.fam = f; _rgArm('resize → ' + (f === 'l' ? 'horizontal' : 'vertical')); }
+  });
+  window.addEventListener('orientationchange', () => _rgArm('orientationchange'));
+  try { screen.orientation.addEventListener('change', () => _rgArm('screen.orientation → ' + screen.orientation.type)); } catch (_) {}
+  // El sensor de OrientLock nota el giro físico antes de que el sistema gire la pantalla (solo si está en marcha en este teléfono)
+  try { if (typeof OrientLock !== 'undefined' && OrientLock.sense && OrientLock.sense.onChange) OrientLock.sense.onChange(f => _rgArm('sensor → ' + (f || 'plano'))); } catch (_) {}
+}
+function _rgReport() {
+  const n = RG.n;
+  const out = ['— protección de los botones de esquina — ' + (RG.on ? 'ACTIVA · giros detectados ' + n.arms + (RG.last ? ' (último: ' + RG.last + ')' : '') +
+    ' · toques ignorados por el giro ' + n.ignored + ' · activaciones ' + n.hold + ' largas + ' + n.dbl + ' dobles · clics táctiles bloqueados ' + n.blocked +
+    ' · avisos ' + n.hints + ' · ahora ' + (_rgLocked() ? 'INERTES (giro)' : 'operativos') : 'inactiva: ' + RG.why)];
+  RG.log.slice(-12).forEach(l => out.push('   ' + l));
+  return out.join('\n');
+}
+
 // ── ARRANQUE ─────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -1657,6 +1824,7 @@ document.addEventListener('DOMContentLoaded', () => {
         _doClose();
       };
   if (RS.isEmbed) document.body.classList.add('embed-mode');
+  _rgInstall(); // v42.59: protección de los 4 botones de esquina contra toques involuntarios — ver su bloque más arriba
   _roInit(); // giro nativo de la pantalla según la hoja (solo teléfono) — ver el bloque «GIRO NATIVO» más arriba
 
   // Si la app estaba en fullscreen, entrar en fullscreen.
@@ -4038,6 +4206,7 @@ function _frReport() {
   _FR.rec.samples.slice(-8).forEach(s => out.push(_frFmt(s)));
   if (_PL.nativeErr) out.push('anim. nativas: último motivo de respaldo (UPNG) → ' + _PL.nativeErr);
   out.push(_roReport()); // v42.09: giro nativo de la pantalla (peticiones, respuestas, pantalla completa)
+  out.push(_rgReport()); // v42.59: protección de los botones de esquina (giros detectados, toques ignorados, activaciones)
   const p = _FR.prev;
   if (p && p.samples) {
     const age = Math.round((_FR.rec.start - p.last) / 1000);
