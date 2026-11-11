@@ -1758,9 +1758,9 @@ _edSnapLayerFragment = function(l) {
   return r;
 };
 const _edNameApplyHistoryOrig = edApplyHistory;
-edApplyHistory = function(snapshot) {
-  _edNameApplyHistoryOrig(snapshot);
-  if (!snapshot) return;
+edApplyHistory = function(snapshot, fromSnapshot) {
+  const _rulesOnlyStep = _edNameApplyHistoryOrig(snapshot, fromSnapshot); // v42.60: el paso que se deja viaja también (ver edApplyHistory)
+  if (!snapshot || _rulesOnlyStep === true) return; // paso solo de guías: las capas no se han tocado, no hay nombres que restaurar
   try {
     const _raw = JSON.parse(snapshot.layersJSON);
     _raw.forEach((o, i) => {
@@ -6752,6 +6752,13 @@ function edPushHistory(force, movedLayer){
   window._edAutosavePushTimer = setTimeout(_edAutosaveWrite, 5000);
   // Durante una sesión de dibujo a mano activa, bloquear push global (salvo force=true).
   // La flag _edDrawSessionActive se activa en _edDrawInitHistory y se desactiva al congelar.
+  // v42.60 — red de seguridad: si la marca sigue puesta pero NO hay sesión de dibujo real (sin panel de dibujo, sin herramienta de dibujo y
+  // sin DrawLayer en la hoja) es una marca huérfana; se limpia y el apunte pasa con normalidad (ver _edFreezeDrawLayer: era la causa de que
+  // giros, escalados y movimientos de imágenes pegadas no llegaran al historial).
+  if(!force && window._edDrawSessionActive && !_edDrawSessionIsLive()){
+    window._edDrawSessionActive = false;
+    _edHistDiagPush('DRAW_SESSION_HUERFANA — marca limpiada');
+  }
   if(!force && window._edDrawSessionActive){
     _edHistDiagPush('BLOCKED_DRAW_SESSION');
     return;
@@ -6797,7 +6804,8 @@ function edPushHistory(force, movedLayer){
     }
     _vsHistory=[]; _vsHistIdx=-1; // sesión vectorial huérfana (sin panel ni barra): limpiar y dejar pasar el push
   }
-  const layersJSON = _edLayersSnapshot(movedLayer);
+  let layersJSON = _edLayersSnapshot(movedLayer);
+  const rulesJSON = _edRulesSnapshot(); // v42.60: las guías también son parte de cada paso (ver _edRulesSnapshot)
   // DIAG: registrar cada push
   _edHistDiagPush(() => 'push force='+force+' layers='+JSON.parse(layersJSON).length+' total_antes='+edHistory.length);
 
@@ -6810,13 +6818,20 @@ function edPushHistory(force, movedLayer){
   // varias rondas de fallos sutiles — deshacer/rehacer ya no pueden navegar
   // a otra hoja bajo ningún concepto, porque sencillamente no hay nada de
   // otra hoja que aplicar.
-  if(!force && edHistory.length > 0 && edHistoryIdx >= 0){
+  // v42.60 — un paso es igual al último solo si coinciden las capas Y las guías; si solo cambian las guías, el paso nuevo reutiliza la MISMA
+  // cadena de capas del anterior (sin copiarla: con una hoja pesada serían MB por cada guía movida) y se marca sharedLayers para que el
+  // presupuesto de memoria (_edHistoryChars) no la cuente dos veces.
+  let sharedLayers = false;
+  if(edHistory.length > 0 && edHistoryIdx >= 0){
     const last = edHistory[edHistoryIdx];
-    if(last.layersJSON === layersJSON){ _edHistDiagPush('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
+    if(last.layersJSON === layersJSON){
+      if(!force && last.rulesJSON === rulesJSON){ _edHistDiagPush('SKIP_SAME_JSON len='+layersJSON.length); edUpdateUndoRedoBtns(); return; }
+      layersJSON = last.layersJSON; sharedLayers = true;
+    }
   }
 
   edHistory = edHistory.slice(0, edHistoryIdx + 1);
-  edHistory.push({ pageIdx: edCurrentPage, layersJSON,
+  edHistory.push({ pageIdx: edCurrentPage, layersJSON, rulesJSON, sharedLayers,
     groupRot: edMultiGroupRot,
     multiSel: edMultiSel.length ? [...edMultiSel] : [] });
   _edTrimHistory(); // v42.18: tope de pasos + presupuesto de memoria (PC)
@@ -6829,19 +6844,28 @@ function edPushHistory(force, movedLayer){
 // memoria (ED_HISTORY_BUDGET): se descartan los pasos más antiguos mientras el total supere el presupuesto, pero siempre quedan los
 // ED_MIN_HISTORY más recientes (el último apuntado incluido). Con ED_HISTORY_BUDGET=0 (táctil) solo cuenta el número de pasos.
 function _edTrimHistory(){
-  while(edHistory.length > ED_MAX_HISTORY) edHistory.shift();
+  while(edHistory.length > ED_MAX_HISTORY) _edHistShiftOldest();
   if(ED_HISTORY_BUDGET > 0){
     let used = _edHistoryChars();
     while(used > ED_HISTORY_BUDGET && edHistory.length > ED_MIN_HISTORY){
-      used -= (edHistory[0].layersJSON ? edHistory[0].layersJSON.length : 0);
-      edHistory.shift();
+      used -= _edHistShiftOldest();
     }
   }
 }
+// v42.60 — descarta el paso más antiguo y devuelve los caracteres que libera. Un paso «solo de guías» comparte la cadena de capas con el
+// anterior (sharedLayers): si el que se descarta era el dueño de esa cadena, el siguiente pasa a serlo (la cadena sigue viva y sigue contando).
+function _edHistShiftOldest(){
+  const h0 = edHistory[0], h1 = edHistory[1];
+  let freed = (h0 && h0.layersJSON) ? h0.layersJSON.length : 0;
+  if(h1 && h1.sharedLayers && h0 && h1.layersJSON === h0.layersJSON){ h1.sharedLayers = false; freed = 0; }
+  edHistory.shift();
+  return freed;
+}
 // Caracteres que ocupan ahora los pasos del historial general (≈ bytes: JSON/base64 son ASCII). También lo muestra el 🩺.
+// v42.60: un paso que comparte la cadena de capas con el anterior (solo cambiaron las guías) no la cuenta otra vez.
 function _edHistoryChars(){
   let n = 0;
-  for(const h of edHistory) n += (h && h.layersJSON) ? h.layersJSON.length : 0;
+  edHistory.forEach((h, i) => { if(h && h.layersJSON && (i === 0 || !h.sharedLayers)) n += h.layersJSON.length; });
   return n;
 }
 
@@ -6856,19 +6880,31 @@ function _edHistoryChars(){
 function edUndo(){
   if(_edLoadProjectInProgress){ edToast(I18n.t('admin_loading')); return; }
   if(edHistoryIdx <= 0){ edToast(I18n.t('ed_nothingToUndo')); return; }
+  const _from = edHistory[edHistoryIdx]; // v42.60: el paso que se deja (ver edApplyHistory: paso solo de guías)
   edHistoryIdx--;
-  edApplyHistory(edHistory[edHistoryIdx]);
+  edApplyHistory(edHistory[edHistoryIdx], _from);
 }
 
 function edRedo(){
   if(_edLoadProjectInProgress){ edToast(I18n.t('admin_loading')); return; }
   if(edHistoryIdx >= edHistory.length - 1){ edToast(I18n.t('ed_nothingToRedo')); return; }
+  const _from = edHistory[edHistoryIdx]; // v42.60: el paso que se deja
   edHistoryIdx++;
-  edApplyHistory(edHistory[edHistoryIdx]);
+  edApplyHistory(edHistory[edHistoryIdx], _from);
 }
 
-function edApplyHistory(snapshot){
+function edApplyHistory(snapshot, fromSnapshot){
   if(!snapshot) return;
+  // v42.60 — GUÍAS: se restauran las de este paso (si las lleva). Si además las CAPAS son las mismas que las del paso que se deja (el paso
+  // era solo de guías), no hay nada que reconstruir: se repinta y ya (sin parpadeo de imágenes, sin deseleccionar, sin cerrar el panel).
+  if(typeof snapshot.rulesJSON === 'string' && snapshot.rulesJSON !== _edRulesSnapshot()) _edRulesRestore(snapshot.rulesJSON);
+  if(fromSnapshot && fromSnapshot.layersJSON === snapshot.layersJSON && fromSnapshot.pageIdx === snapshot.pageIdx
+     && snapshot.pageIdx === edCurrentPage && edPages[snapshot.pageIdx]){
+    _edMarkPageDirty(snapshot.pageIdx);
+    edUpdateUndoRedoBtns();
+    edRedraw();
+    return true;
+  }
   // Deshacer/rehacer también deja el contenido de la página distinto de lo
   // guardado — edPushHistory no se llama en este camino, así que hay que
   // marcar sucio aquí explícitamente (si no, un guardado posterior podría
@@ -19870,6 +19906,9 @@ function edOnEnd(e){
         }
       }
     }
+    // v42.60: fin del gesto sobre una guía (extremo, línea entera, punto de fuga, fusión de círculos) → un paso en el historial; si no se
+    // movió nada (un toque sobre el tirador) las guías son idénticas y edPushHistory no añade nada.
+    _edRulesPushHistory();
     edRedraw();
   }
   // Cancelar timer de doble tap de regla si el dedo se levantó sin segundo tap
@@ -26912,7 +26951,16 @@ function _edFreezeDrawLayer(){
   const page = edPages[edCurrentPage]; if(!page) return;
   let dlIdx = page.layers.findIndex(l => l.type === 'draw');
 
-  if(dlIdx < 0) return;
+  if(dlIdx < 0){
+    // v42.60 — HISTORIAL (Alberto: «tengo unas imágenes pegadas, los giros y transformaciones no se guardan en el historial, solo comienzan a
+    // guardarse después de que creo un dibujo»). Entrar en «Dibujar» marca la sesión como activa (_edDrawInitHistory pone
+    // _edDrawSessionActive = true, y con ella edPushHistory descarta todo apunte sin force), pero el DrawLayer no existe hasta el PRIMER
+    // TRAZO. Si se salía sin trazar nada (OK, abrir otro menú, cambiar de herramienta) este return dejaba la sesión marcada como activa: desde
+    // ese momento ningún giro, escalado, movimiento o borrado de ningún objeto se apuntaba, hasta que se creaba un dibujo y se le daba OK (lo
+    // único que la cerraba). La sesión termina por CUALQUIER vía, también cuando no hay dibujo que congelar.
+    if(window._edDrawSessionActive){ _edDrawClearHistory(); edUpdateUndoRedoBtns(); }
+    return;
+  }
   const dl = page.layers[dlIdx];
   // v40.92 — VALIDACIÓN + REINTENTO PRE-CONGELADO: petición explícita de
   // Alberto tras confirmar que el fallo (relleno/acuarela que desaparece o
@@ -27374,6 +27422,14 @@ function _edSetPaletteColor(idx, hex){
 function _edDrawModeActive(){
   const p = $('edOptionsPanel');
   return !!(p && p.classList.contains('open') && p.dataset.mode === 'draw');
+}
+// v42.60 — ¿hay de verdad una sesión de dibujo a mano abierta? Sí si está el panel de dibujo (también plegado), si la herramienta activa es de
+// dibujo, o si queda un DrawLayer sin congelar en la hoja. Sin nada de eso no hay sesión que proteger (ver edPushHistory).
+function _edDrawSessionIsLive(){
+  if(_edDrawModeActive()) return true;
+  if(edActiveTool === 'draw' || edActiveTool === 'eraser' || edActiveTool === 'fill' || edActiveTool === 'color-erase') return true;
+  const pg = edPages[edCurrentPage];
+  return !!(pg && pg.layers.some(l => l.type === 'draw'));
 }
 // Elección de color del USUARIO en modo dibujo (paleta del panel, barra flotante,
 // picker, cuentagotas, casilla sanguina): fija el color vivo y lo guarda en la
@@ -30677,6 +30733,7 @@ function _edRuleAdd() {
   const halfLen = (visRight - visLeft) * (2/3) / 2;
   const id = ++_edRuleId;
   edRules.push({ id, x1: cx - halfLen, y1: cy, x2: cx + halfLen, y2: cy });
+  _edRulesPushHistory(); // v42.60: crear una guía se puede deshacer
   edRedraw();
 }
 
@@ -30686,6 +30743,7 @@ function _edRuleClear() {
     edRules = [];
     edRuleNodes = [];
     _edRulesPanelClose();
+    _edRulesPushHistory(); // v42.60: vaciar todas las guías se puede deshacer
     edRedraw();
   }, I18n.t('ed_clearBtn'));
 }
@@ -30713,6 +30771,7 @@ function _edRuleDelete(id) {
     edRules = edRules.filter(r => r.id !== id);
   }
   _edRulesPanelClose();
+  _edRulesPushHistory(); // v42.60: borrar una guía (o su grupo) se puede deshacer
   edRedraw();
 }
 
@@ -30721,6 +30780,7 @@ function _edRuleDuplicate(id) {
   const newId = ++_edRuleId;
   edRules.push({ id: newId, x1: r.x1+20, y1: r.y1+20, x2: r.x2+20, y2: r.y2+20 });
   _edRulesPanelClose();
+  _edRulesPushHistory(); // v42.60: duplicar una guía se puede deshacer
   edRedraw();
 }
 
@@ -30744,7 +30804,7 @@ function _edRulesNodePanel(n) {
     ev.stopPropagation();
     n.locked = !n.locked;
     for(const rid of n.ruleIds) { const _rr=edRules.find(r=>r.id===rid); if(_rr) _rr.locked=n.locked; }
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: bloquear/desbloquear un punto de fuga se puede deshacer
   });
   document.getElementById('enp-del')?.addEventListener('click', ev => {
     ev.stopPropagation();
@@ -30753,7 +30813,7 @@ function _edRulesNodePanel(n) {
       if(_rr) { if(_rr.nodeA===n.id) _rr.nodeA=null; if(_rr.nodeB===n.id) _rr.nodeB=null; }
     }
     edRuleNodes = edRuleNodes.filter(nn=>nn.id!==n.id);
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: eliminar un punto de fuga se puede deshacer
   });
   ['pointerdown','touchstart'].forEach(ev2 => pop.addEventListener(ev2, e => e.stopPropagation(), {passive:true}));
   setTimeout(() => { document.addEventListener('pointerdown', _edRulesPopOutside, {passive:true}); }, 50);
@@ -30819,23 +30879,23 @@ function _edRulesOpenPanel(id, part, wx, wy) {
     e.stopPropagation();
     const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
     if(part==='a'){ r.x2=r.x1+dist; r.y2=r.y1; } else { r.x1=r.x2-dist; r.y1=r.y2; }
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: hacerla horizontal se puede deshacer
   });
   document.getElementById('erp-vert')?.addEventListener('click', e => {
     e.stopPropagation();
     const dist = Math.hypot(r.x2-r.x1, r.y2-r.y1);
     if(part==='a'){ r.x2=r.x1; r.y2=r.y1+dist; } else { r.x1=r.x2; r.y1=r.y2-dist; }
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: hacerla vertical se puede deshacer
   });
   document.getElementById('erp-lock')?.addEventListener('click', e => {
     e.stopPropagation();
     r.locked = !r.locked;
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: bloquear/desbloquear una guía se puede deshacer
   });
   document.getElementById('erp-hide')?.addEventListener('click', e => {
     e.stopPropagation();
     r.hidden = true; // ocultar solo esta guía
-    _edRulesClosePop(); edRedraw();
+    _edRulesClosePop(); _edRulesPushHistory(); edRedraw(); // v42.60: ocultar una guía se puede deshacer
   });
   document.getElementById('erp-del')?.addEventListener('click', e => {
     e.stopPropagation(); _edRuleDelete(id);
@@ -31075,6 +31135,60 @@ function _edRulesForSave() {
   });
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.60 — LAS GUÍAS EN EL HISTORIAL DE DESHACER/REHACER (Alberto: «quiero que las guías se guarden en el historial, la creación,
+   desplazamiento o modificación de las guías»).
+   Las guías son de la OBRA (no de una hoja): edRules/edRuleNodes. Cada paso del historial general (edPushHistory) lleva ahora, además de las
+   capas, una instantánea de las guías (rulesJSON) y deshacer/rehacer (edApplyHistory) la restaura:
+     · se apunta tras crear, duplicar, borrar, vaciar, mover (extremo, línea entera, punto de fuga, fusión de círculos), horizontal/vertical,
+       bloquear/desbloquear (guía, punto de fuga, todas) y ocultar/mostrar cada guía (_edRulesPushHistory);
+     · si las capas no cambiaron (paso solo de guías), edPushHistory reutiliza la MISMA cadena de capas del paso anterior (sin copiarla) y
+       edApplyHistory no reconstruye nada: restaura las guías y repinta (no parpadea ni deselecciona);
+     · lo que es VISTA y no dato —el interruptor global «Ocultar guías» (edRulesHidden)— no entra en el historial.
+   Forma canónica (claves ordenadas, sin los false/undefined): dos estados iguales dan siempre la misma cadena, así que un gesto sin efecto
+   (tocar un tirador sin moverlo) no añade pasos.
+   ══════════════════════════════════════════════════════════════════════════════════════════════════════════ */
+function _edRulesCanon(o, dropFalsy) {
+  const out = {};
+  for(const k of Object.keys(o).sort()) {
+    const v = o[k];
+    if(v === undefined) continue;
+    if(!v && dropFalsy.indexOf(k) >= 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
+function _edRulesSnapshot() {
+  try {
+    return JSON.stringify({
+      r: edRules.map(r => _edRulesCanon(r, ['locked', 'hidden', 'nodeA', 'nodeB'])),
+      n: edRuleNodes.map(n => _edRulesCanon(n, ['locked']))
+    });
+  } catch(_) { return ''; }
+}
+// Restaura las guías desde una instantánea. Los contadores de ids NUNCA retroceden: deshacer una creación y crear otra guía no puede repetir
+// el id de la que se acaba de deshacer (rehacer la traería de vuelta con el mismo id).
+function _edRulesRestore(json) {
+  let o = null;
+  try { o = JSON.parse(json); } catch(_) { return false; }
+  if(!o || !Array.isArray(o.r) || !Array.isArray(o.n)) return false;
+  edRules = o.r; edRuleNodes = o.n;
+  _edRuleDrag = null; _edRulePanelId = null; window._edRuleMoveReady = null;
+  _edRulesClosePop(); // el popover de una guía guarda la guía que tenía (ya no es la viva)
+  for(const r of edRules) { if((r.id || 0) > _edRuleId) _edRuleId = r.id; }
+  for(const n of edRuleNodes) { if((Number(n.id) || 0) > _edRuleNodeId) _edRuleNodeId = Number(n.id); }
+  _edRuleToggleSync();
+  return true;
+}
+// Apunta en el historial general el estado de las guías tras una acción sobre ellas. Solo cambian las guías, no las capas: movedLayer = []
+// deja todas las capas «seguras para la caché» y no se reserializan los dibujos. Si nada cambió, edPushHistory no añade paso (SKIP_SAME_JSON).
+// Con una sesión vectorial abierta o en pausa (_vsHistory) NO se apunta: edPushHistory la daría por huérfana y vaciaría su historial local
+// (p. ej. se abre «Guías» desde el menú con el panel vectorial cerrado a medias). El cambio de guías se recoge en el siguiente apunte general.
+function _edRulesPushHistory() {
+  if(_vsHistory.length > 0) return;
+  edPushHistory(false, []);
+}
+
 function _edRulesHit(wx, wy, isTouch) {
   if(edRulesHidden) return null; // guías ocultas: no seleccionables
   const z = edCamera.z;
@@ -31276,6 +31390,7 @@ function edInitRules() {
       // Hay algo oculto → mostrar todo
       edRulesHidden = false;
       edRules.forEach(r => { r.hidden = false; });
+      _edRulesPushHistory(); // v42.60: si había guías ocultas una a una, mostrarlas se puede deshacer (el interruptor global no entra en el historial)
     } else {
       // Todo visible → ocultar todo
       edRulesHidden = true;
@@ -31290,6 +31405,7 @@ function edInitRules() {
     edRules.forEach(r => { if(!r.locked){ r.locked = true; _count++; } });
     // Bloquear también los nodos compartidos
     edRuleNodes.forEach(n => { if(!n.locked){ n.locked = true; } });
+    _edRulesPushHistory(); // v42.60: bloquear todas las guías se puede deshacer
     edCloseMenus(); // v41.47: también restablece edMenuOpen (antes quedaba «abierto» y el siguiente toque en el botón del menú no hacía nada)
     edRedraw();
   });
