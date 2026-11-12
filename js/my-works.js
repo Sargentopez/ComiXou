@@ -56,7 +56,6 @@ const _mcThumbCache = new Map();
 
 const _MC_BASE = 'https://qqgsbyylaugsagbxsetc.supabase.co/rest/v1';
 const _MC_KEY  = 'sb_publishable_1bB9Y8TtvFjhP49kwLpZmA_nTVsE2Hd';
-const _MC_HDRS = { 'apikey': _MC_KEY, 'Authorization': 'Bearer ' + _MC_KEY };
 
 // Verificar que una obra pertenece al usuario autenticado actual
 function _mcOwns(comic) {
@@ -411,8 +410,7 @@ function _mcInitTitlePillObserver(){
 
 /* v41.86 — «Nueva obra» ya NO abre un modal de datos (título, género, modo de lectura, hoja final): entra directo
    al editor (ver _mcCreateBlankWork). Esos datos se piden al GUARDAR, con el modal «Datos del proyecto» del editor
-   (editor.js, _edEnsureProjectData). El antiguo modal #mcNewModal y sus funciones (_mcInjectModal, _mcOpenModal,
-   _mcCreateProject, _mcConfirmDuplicate…) se han retirado porque ya nada los llamaba. */
+   (editor.js, _edEnsureProjectData). */
 
 
 /* ── ACCESO A cxAutosave DESDE LA LIMPIEZA DE HUÉRFANOS (v40.55) ─────────
@@ -559,7 +557,6 @@ async function _mcCheckOrphanData() {
   // Una clave de obra es huérfana si su comicId no está en _validIds.
   // Una clave de biblioteca es huérfana si su item.id no está en _validBibAnimIds
   // (ninguna biblioteca válida la referencia).
-  const _animOrphanKeys = []; // para borrar también las animaciones de bibliotecas huérfanas
   try {
     const _animOrphans = await new Promise(res => {
       const req = indexedDB.open('cxAnims', 1);
@@ -1296,9 +1293,6 @@ function _mcRenderList() {
     // (imagen, ⏳ si se va a pedir, 📄 si no hay nada) y se marca la fila para pedirla cuando esté cerca de la pantalla.
     const _tv = _mcThumbView(comic);
     const pages = comic.panelCount || (comic.pages ? comic.pages.length : (comic.panels ? comic.panels.length : 0));
-    const pubLabel = comic.approved
-      ? I18n.t('mc_pubApproved')
-      : (comic.pendingReview ? I18n.t('mc_pubPending') : I18n.t('mc_pubDraft'));
 
     return `
     <div class="work-row" data-id="${comic.id}">
@@ -2327,37 +2321,6 @@ async function _mcCloudLoad() {
   }
 }
 
-/* ── MODAL READER EMBED (my-works) ── */
-function _mcOpenReaderModal(url) {
-  let overlay = document.getElementById('mcReaderModal');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'mcReaderModal';
-    overlay.className = 'reader-modal';
-    overlay.innerHTML = `
-      <div class="reader-modal-inner">
-        <button class="reader-modal-close" aria-label="${I18n.t('mc_closeAria')}">✕</button>
-        <iframe class="reader-modal-frame" allowfullscreen></iframe>
-      </div>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector('.reader-modal-close').addEventListener('click', _mcCloseReaderModal);
-    overlay.addEventListener('click', e => { if (e.target === overlay) _mcCloseReaderModal(); });
-    window.addEventListener('message', e => {
-      if (e.data?.type === 'reader:close') _mcCloseReaderModal();
-    });
-  }
-  overlay.querySelector('.reader-modal-frame').src = url;
-  overlay.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-}
-
-function _mcCloseReaderModal() {
-  const overlay = document.getElementById('mcReaderModal');
-  if (!overlay) return;
-  overlay.classList.add('hidden');
-  overlay.querySelector('.reader-modal-frame').src = '';
-  document.body.style.overflow = '';
-}
 
 // ── DIAGNÓSTICO ──────────────────────────────────────────────────────────────
 async function _mcRunDiag() {
@@ -2387,7 +2350,6 @@ async function _mcRunDiag() {
       r.onupgradeneeded = e => e.target.result.createObjectStore('anims');
       r.onsuccess = e => {
         const db = e.target.result;
-        const keys = [];
         const tx = db.transaction('anims', 'readonly');
         const req = tx.objectStore('anims').getAllKeys();
         req.onsuccess = ev => {
@@ -2425,7 +2387,6 @@ async function _mcRunDiag() {
     L('  ' + c.title + ' (' + c.id.slice(0,8) + '): bib=' + (_bib?'sí':'NO') + ' animItems=' + _animCount);
     if (_animFolder && _animFolder.items.length) {
       for (const item of _animFolder.items) {
-        const hasApngIdbKey = !!item._apngIdbKey;
         const hasApngSrc = !!item.apngSrc;
         L('    item ' + item.id + ': _apngIdbKey=' + (item._apngIdbKey||'NO') + ' apngSrc=' + (hasApngSrc?'sí':'NO'));
         if (item._apngIdbKey && window._sbAnimIdbLoad) {

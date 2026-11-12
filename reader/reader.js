@@ -1897,23 +1897,6 @@ document.addEventListener('DOMContentLoaded', () => {
   showError(I18n.t('reader_errorNoWorkId'));
 });
 
-function _toggleFullscreen() {
-  if (RS.isEmbed) return;
-  // Usar el mismo módulo Fullscreen que el editor de ComXow
-  if (typeof Fullscreen !== 'undefined') {
-    Fullscreen.request();
-  } else {
-    // Fallback si el script no cargó
-    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
-    if (isFs) {
-      (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
-    } else {
-      const el = document.documentElement;
-      const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (req) req.call(el, { navigationUI: 'hide' }).catch(() => {});
-    }
-  }
-}
 
 function _onFullscreenChange() {
   const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -2077,17 +2060,6 @@ async function _offlineHas(workId) {
   } catch(e) { return false; }
 }
 
-async function _offlineDelete(workId) {
-  try {
-    const db = await _offlineDbOpen();
-    return await new Promise(resolve => {
-      const tx = db.transaction(_OFFLINE_STORE, 'readwrite');
-      tx.objectStore(_OFFLINE_STORE).delete(workId);
-      tx.oncomplete = () => resolve(true);
-      tx.onerror    = () => resolve(false);
-    });
-  } catch(e) { return false; }
-}
 
 // Construye la instantánea a partir de RS._sourcePanels (copia limpia que
 // deja cada hoja al prepararse, justo antes de decodificarla — ver
@@ -4003,7 +3975,7 @@ function _plAllReady() {
   return true;
 }
 // RS._allLoadedAt = instante en que estuvieron listas todas a la vez (con la ventana de memoria de v41.68 solo ocurre
-// en obras que caben en ella, con ?rdwin=all o durante _plEnsureAll; al soltar una hoja vuelve a 0).
+// en obras que caben en ella, o con ?rdwin=all; al soltar una hoja vuelve a 0).
 function _plCheckAllLoaded() {
   if (!_plAllReady()) return;
   if (!RS._allLoadedAt) RS._allLoadedAt = Math.round(performance.now());
@@ -4011,28 +3983,10 @@ function _plCheckAllLoaded() {
   w.forEach(fn => fn(true));
 }
 
-// Espera a tener TODAS las hojas listas a la vez: sin ventana de memoria, sin pausas por interacción y con más descargas
-// a la vez. Resuelve false si no se consigue en el plazo (hoja que no se puede traer).
-// OJO (v41.68): ya no la usa la descarga offline (_plCollectSources trae solo lo que falta, sin decodificar) — traerlo
-// todo a «lista» es justo lo que agota la memoria de un móvil. Se conserva para pruebas.
-function _plEnsureAll(timeoutMs) {
-  if (_plAllReady()) return Promise.resolve(true);
-  _PL.forceAll = true; _PL.netMax = 4; _PL.bg = true; _PL.keep = null;
-  for (const p of RS.panels) {
-    if (!p.isCredits && p._st === 'error') { p._st = (p._raw ? 'fetched' : 'idle'); p._tries = 0; }
-    if (!p.isCredits && p._st !== 'ready') p._retryAt = 0;
-  }
-  _plSchedule();
-  return new Promise(res => {
-    const t = setTimeout(() => { const i = _PL.allWaiters.indexOf(fn); if (i >= 0) _PL.allWaiters.splice(i, 1); res(false); }, timeoutMs || 180000);
-    const fn = v => { clearTimeout(t); res(v); };
-    _PL.allWaiters.push(fn);
-  }).finally(() => { _PL.forceAll = false; _PL.netMax = 3; });
-}
 
 // Copias limpias de TODAS las hojas para la descarga offline (v41.68). Las hojas que están en memoria ya tienen la suya
 // (RS._sourcePanels[i]); las que se soltaron o nunca se cargaron se bajan y se parsean aquí, SIN decodificar ninguna
-// imagen y sin dejarlas en memoria al terminar — antes (v41.52, _plEnsureAll) la descarga lo traía todo a «lista» a la
+// imagen y sin dejarlas en memoria al terminar — antes (v41.52) la descarga lo traía todo a «lista» a la
 // vez, que es justo lo que agota la memoria de un móvil. Devuelve el array de copias (índice = hoja) o null si alguna
 // no se pudo traer en el plazo.
 async function _plCollectOne(i) {
@@ -4365,7 +4319,6 @@ async function _plBootFirst() {
 // Obra de la red: esqueletos de todas las hojas a partir de la lista de la tabla panels.
 async function _plBoot(panelRows, sbFetch) {
   RS._sbFetch = sbFetch;
-  RS.images = []; // legacy, ya no se usa para render pero se mantiene para no romper nada
   RS.panels = panelRows.map(_plSkeleton);
   RS._sourcePanels = new Array(RS.panels.length).fill(null); // se va rellenando hoja a hoja (ver _plParse)
   _plAddCredits();
@@ -4375,7 +4328,6 @@ async function _plBoot(panelRows, sbFetch) {
 // Copia offline / archivo standalone: los datos ya están en memoria; solo falta prepararlos (hoja de inicio ya,
 // el resto en segundo plano, igual que desde la red).
 async function _plBootOffline(snapshotPanels) {
-  RS.images = [];
   RS.panels = snapshotPanels.map(_plSkeletonFromData);
   RS._sourcePanels = snapshotPanels; // copia limpia: _plSkeletonFromData clona las capas, esta no se toca
   RS._srcResident = true;            // v41.68: los datos de todas las hojas ya están aquí — al soltar una hoja se vuelve a clonar de esta copia (ver _plEvict)
@@ -4457,19 +4409,10 @@ function _bezierSampleClosed(pts, numSamples) {
   return AnimClock.bezierSampleClosed(pts, numSamples);
 }
 
-// ── Helper: posición a lo largo de un trayecto (t = fracción de longitud de arco) ─
-// pw/ph: dimensiones reales del lienzo en px para arc-length en espacio píxel real
-function _easeT(t,accel){
-  return AnimClock.easeT(t, accel);
-}
 function _pathPositionAt(points, closed, t, pw, ph) {
   return AnimClock.pathPositionAt(points, closed, t, pw, ph);
 }
 
-// ── Motion path: ángulo de la tangente (grados) en el punto t ── (idem editor.js)
-function _pathTangentDeg(points, closed, t, pw, ph) {
-  return AnimClock.pathTangentDeg(points, closed, t, pw, ph);
-}
 // Delta de rotación (grados), relativo a la tangente inicial (t=0) — idem editor.js
 function _pathOrientDelta(points, closed, t, pw, ph) {
   return AnimClock.pathOrientDelta(points, closed, t, pw, ph);
@@ -4719,13 +4662,10 @@ function _readerGifTick() {
       // Frame sincronizado al path respetando el comportamiento de la animación
 // ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
 // v38.06: delegan en AnimClock (js/anim-clock.js) — misma fuente que
-// _edLayerCumTimeMs/_edFrameProgressAt/_edApplyHoldFreeze/_edMpSyncFrame en
+// _edLayerCumTimeMs/_edApplyHoldFreeze/_edMpSyncFrame en
 // editor.js. Antes de v38.06 esta era una copia independiente del reader.
 function _rLayerCumTimeMs(layer, totalF) {
   return AnimClock.layerCumTimeMs(layer, totalF);
-}
-function _rFrameProgressAt(cumTime, totalF, tMs, holds) {
-  return AnimClock.frameProgressAt(cumTime, totalF, tMs, holds);
 }
 function _rApplyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01) {
   return AnimClock.applyHoldFreeze(cumTime, totalF, holds, cycles, pathFrac01);
@@ -5344,7 +5284,6 @@ function _startScrollReader() {
     if (RS.fadeRaf) { cancelAnimationFrame(RS.fadeRaf); RS.fadeRaf = null; RS.fadeAlpha = 0; }
     const panel = RS.panels[RS.idx];
     const isSeq = (panel?.text_mode || 'sequential') === 'sequential';
-    const texts = panel?.texts || [];
     if (isSeq && RS.textStep > 1) {
       RS.textStep--;
       _activateCanvas(RS.idx);
@@ -5692,38 +5631,8 @@ function _startScrollReader() {
   );
 }
 
-function _renderVectorLayer(ctx, layer, pw, ph, img) {
-  if (img) {
-    ctx.save();
-    ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
-    ctx.drawImage(img, 0, 0, pw, ph);
-    ctx.restore();
-  }
-}
 
 // ── POSICIÓN DE BOTONES ───────────────────────────────────────
-// Los botones se anclan a los bordes del canvas, no a la ventana.
-// Se llama cada vez que el canvas cambia de tamaño o posición.
-// Posicionar botones sobre el canvas del estado activo en modo scroll
-function _positionScrollBtns(stateIdx) {
-  const entry = RS.scrollMap?.[stateIdx];
-  if (!entry) return;
-  const { panelIdx, canvas } = entry;
-  if (!canvas) return;
-  const { pw, ph } = _panelDims(panelIdx);
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const scale = Math.min(vw / pw, vh / ph);
-  const dw = Math.round(pw * scale);
-  const dh = Math.round(ph * scale);
-  const cl = Math.round((vw - dw) / 2);
-  const ct = Math.round((vh - dh) / 2);
-  const PAD = 8, OFY = 10;
-  const fsBtn    = document.getElementById('fullscreenToggle');
-  const closeBtn = document.getElementById('closeBtn');
-  if (fsBtn)    { fsBtn.style.left    = (cl + PAD) + 'px'; fsBtn.style.top    = (ct + OFY) + 'px'; }
-  if (closeBtn) { const btnW = closeBtn.getBoundingClientRect().width || 32;
-                  closeBtn.style.left = (cl + dw - PAD - btnW) + 'px'; closeBtn.style.top = (ct + OFY) + 'px'; }
-}
 
 function _positionBtns() {
   const PAD = 8, OFY = 10;
@@ -6277,7 +6186,6 @@ async function _setupOfflineBtn() {
 }
 
 
-
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // v42.43 — TINTA HD CON DEFINICIÓN (gemelo del visor interno del editor: ver «VISOR INTERNO: LA TINTA HD…» en editor.js)
 // Alberto: la tinta a mano guardada a más resolución que la hoja (p. ej. la de las uniones) se veía «rateada» al previsualizar. El lector
@@ -6557,7 +6465,6 @@ function _rLayerKit(panel, pw, ph) {
       if (rot) ctx.rotate(rot);
       // Si tiene renderDataUrl (línea con curvas), usarlo directamente
       if (layer.renderDataUrl && layerImgs[j]) {
-        const _pad = layer._renderPad || 0; // pad en px de página
         const _pw2 = pw, _ph2 = ph;
         // El bitmap cubre w+2*pad × h+2*pad centrado en el objeto
         const _bw = (layer.width || 0.3) * _pw2 + (layer._renderPad||0)*2;
@@ -7006,7 +6913,6 @@ function _drawBubbleImpl(ctx, t, pw, ph, alpha) {
                    : t.borderWidth !== undefined ? t.borderWidth : 2;
   const borderC_   = t.border_color || t.borderColor || '#000000';
   const textColor_ = t.color || '#000000';
-  const padding_   = t.padding || 10;
   const fs = Math.max(10, Math.round(fontSize_ * scale));
   const bg     = bgColor_;
   const border = borderC_;
@@ -7079,7 +6985,6 @@ function _drawBubbleImpl(ctx, t, pw, ph, alpha) {
     ctx.font = (fontItalic_ ? 'italic ' : '') + (fontBold_ ? 'bold ' : '') + fs + 'px ' + fontFamily_;
     ctx.fillStyle = textColor_;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const padT = padding_ * scale;
     const linesT = _getLines(t.text || '');
     const lhT = fs * 1.2, totalHT = linesT.length * lhT;
     linesT.forEach((line, i) => ctx.fillText(line, 0, -totalHT/2 + lhT/2 + i*lhT));
@@ -8012,7 +7917,7 @@ function _resetCredits() {
 function _creditsClick() {
   // v40.61 — Petición de Alberto: NO recargar la página (window.location.reload()
   // volvía a descargar toda la obra) — la obra ya está entera en memoria
-  // (RS.panels/RS.images), así que basta con navegar a la hoja 0. Se usa la MISMA
+  // (RS.panels), así que basta con navegar a la hoja 0. Se usa la MISMA
   // vía que cualquier botón "ir a hoja X" del autor o la barra de hojas
   // (_navGoToPanelLocked → _rGoToPanel): reinicia textStep, fadeAlpha, el zoom
   // (_rzReset, dentro de _resizeCanvas) y las animaciones de esa hoja
@@ -8201,8 +8106,6 @@ function _readerToast(msg, duration) {
     el.classList.add('rt-hide');
   }, duration || 2500);
 }
-
-
 
 
 function setLoadingMsg(msg) { const el = document.getElementById('loadingMsg'); if (el) el.textContent = msg; }

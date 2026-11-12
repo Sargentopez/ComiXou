@@ -236,20 +236,6 @@ const Auth = (() => {
     } catch (_) { return null; }
   }
 
-  async function _upsertProfile(id, username, email, role, token) {
-    try {
-      await fetch(`${SB_URL}/rest/v1/authors`, {
-        method: 'POST',
-        headers: {
-          'apikey': SB_KEY,
-          'Authorization': `Bearer ${token || SB_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'resolution=merge-duplicates'
-        },
-        body: JSON.stringify({ id, username, email, role })
-      });
-    } catch (_) {}
-  }
 
   // Versión que detecta conflicto de username único (constraint DB)
   async function _upsertProfileSafe(id, username, email, role, token) {

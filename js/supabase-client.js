@@ -1664,22 +1664,6 @@ const SupabaseClient = (() => {
     }
   }
 
-  // Limpia del bucket los gif/anim de las filas panel_layers antiguas de un
-  // panelId concreto — usada por la ruta incremental antes de sustituir sus
-  // filas (la ruta completa hace el equivalente en bloque, para toda la obra,
-  // justo antes del borrado general de panels).
-  async function _cleanupPanelFiles(panelId) {
-    if (!panelId) return;
-    try {
-      const _oldLayers = await _get(`panel_layers?panel_id=eq.${panelId}&select=gif_url,anim_url`);
-      const _jobs = [];
-      (_oldLayers || []).forEach(_ol => {
-        if (_ol.gif_url)  _jobs.push(_gifDelete(_ol.gif_url).catch(()=>{}));
-        if (_ol.anim_url) _jobs.push(_animDelete(_ol.anim_url).catch(()=>{}));
-      });
-      await Promise.all(_jobs);
-    } catch(_e) { /* no bloquear el guardado si falla la limpieza */ }
-  }
 
   // prefetched (opcional, v41.46): promesa con el resultado ya pedido de la lista de hojas existentes en
   // la nube — {ok:true, v:[{id,panel_order}…]} o {ok:false, e:error} — que saveDraft lanza EN PARALELO

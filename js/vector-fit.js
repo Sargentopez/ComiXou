@@ -129,20 +129,6 @@ function turnAngle(a, b, c) {   // ángulo entre (b−a) y (c−b), 0…π
   let c_ = (v1x * v2x + v1y * v2y) / (l1 * l2);
   return Math.acos(c_ > 1 ? 1 : c_ < -1 ? -1 : c_);
 }
-// distancia de un punto a una poligonal (abierta o cerrada)
-function distToPoly(px, py, P, closed) {
-  let best = Infinity;
-  const n = P.length, last = closed ? n : n - 1;
-  for (let i = 0; i < last; i++) {
-    const a = P[i], b = P[(i + 1) % n];
-    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-    let t = l2 > 0 ? ((px - a.x) * dx + (py - a.y) * dy) / l2 : 0;
-    t = t < 0 ? 0 : t > 1 ? 1 : t;
-    const qx = a.x + t * dx - px, qy = a.y + t * dy - py, d = qx * qx + qy * qy;
-    if (d < best) best = d;
-  }
-  return sqrt(best);
-}
 
 /* ───────────────────────── MODELO: cadena de nodos + radios ─────────────────────────
    chain = { K, X[], Y[], R[] (radio PEDIDO), A[] (ancla: índice del dato junto al que nació el nodo), fixed[], closed }

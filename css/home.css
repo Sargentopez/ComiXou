@@ -114,10 +114,6 @@
   left: 0 !important;
   min-width: 180px;
 }
-.coming-soon {
-  font-size: 0.7rem; color: var(--gray-300);
-  font-weight: 400; margin-left: 6px;
-}
 
 /* ── CONTENIDO SCROLLABLE ── */
 /* Empuja el contenido para que no quede bajo las dos barras fijas */
@@ -354,8 +350,6 @@
 .mc-modal-overlay.open .mc-modal-box {
   animation: authSlideDown .22s cubic-bezier(.4,0,.2,1) both;
 }
-
-.mc-modal-handle { display: none; }
 
 /* Cabecera amarilla igual que auth-card-header */
 .mc-modal-title {

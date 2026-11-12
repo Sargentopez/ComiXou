@@ -117,7 +117,6 @@ function AuthView_init() {
   if (loginForm) {
     // Usar click en el botón submit en vez de submit del form
     // (más fiable en SPA con HTML inyectado)
-    const submitBtn = loginForm.querySelector('button[type="submit"]');
     
     async function doLogin(e) {
       if (e) e.preventDefault();
@@ -182,7 +181,6 @@ function AuthView_init() {
   // ── REGISTRO ──
   const registerForm = document.getElementById('registerForm');
   if (registerForm) {
-    const submitBtn = registerForm.querySelector('button[type="submit"]');
 
     async function doRegister(e) {
       if (e) e.preventDefault();

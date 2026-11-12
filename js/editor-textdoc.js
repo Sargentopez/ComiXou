@@ -69,15 +69,6 @@ const TD_MARGIN_FRAC   = 0.045;  // margen de página al APLICAR al lienzo (frac
 const TD_BODY_SIZE     = 22;     // cuerpo de texto al APLICAR al lienzo
 const TD_H1_SIZE        = 34;     // título (heading1) al APLICAR al lienzo
 
-// ── A4 del editor (solo el aspecto visual de la hoja mientras se escribe) ───
-// El tamaño de letra y los márgenes con los que se ESCRIBE aquí son fijos
-// (CSS de .td-editor/.td-page, formato A4 habitual) y no cambian. Dónde caen
-// los saltos de página SÍ se predice con el tamaño real de la hoja actual
-// (edPageW/edPageH) — ver _tdRecomputeViewPagination — para que las líneas
-// discontinuas marquen el punto real en el que se cortará al aplicar.
-const TD_A4_W = 794, TD_A4_H = 1123; // A4 a 96dpi — medida estándar en diseño web
-const TD_A4_MARGIN_FRAC = 0.09;
-const TD_A4_BODY_SIZE = 17, TD_A4_H1_SIZE = 27; // a juego con el CSS de .td-editor (1.05rem/1.55em)
 const TD_LINE_MULT     = 1.42;   // interlineado por defecto ("Normal")
 const TD_LINE_COMPACT  = 1.15;   // interlineado "Compacto" (mismo valor que ya tenía el desplegable)
 const TD_LINE_AMPLIO   = 1.75;   // interlineado "Amplio" (ídem)
@@ -5090,7 +5081,6 @@ function _tdFontStr(fontSize, bold, italic, mono, fontFamily){
 // adapte" — lo hace porque nunca decide por adelantado dónde irá cada salto.
 function _tdLayoutPages(blocks, frameSizes, lineHeightMult, opts, forcedBreakChars){
   const sizes = Array.isArray(frameSizes) ? frameSizes : [frameSizes];
-  const lhMult = lineHeightMult || TD_LINE_MULT;
   const marginFracX = (opts && (opts.marginFracX ?? opts.marginFrac)) ?? TD_MARGIN_FRAC;
   const marginFracY = (opts && (opts.marginFracY ?? opts.marginFrac)) ?? TD_MARGIN_FRAC;
   const hasExplicitPad = !!(opts && (opts.padTop !== undefined || opts.padBottom !== undefined));

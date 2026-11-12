@@ -295,7 +295,6 @@ function _lyRender() {
   const page     = edPages[edCurrentPage];
   if(!page.textMode) page.textMode = 'immediate'; // fallback para proyectos antiguos
   const isSeq    = page.textMode === 'sequential';
-  const imgPairs = edLayers.map((l,i) => ({l,i})).filter(({l}) => l.type==='image'); // mantenido por compatibilidad
   const textObjs = edLayers.filter(l => (l.type==='text' || l.type==='bubble') && !l._tdExceptFlow);
 
   /* ══ SECCIÓN TEXTOS ══ */
@@ -905,121 +904,6 @@ function _lyBuildGroupSubRow(la, realIdx, label, borderColor) {
   return row;
 }
 
-/* -- Sub-fila del FillLayer en el panel de capas (alias por compatibilidad) -- */
-function _lyBuildFillSubRow(la, realIdx) {
-  return _lyBuildGroupSubRow(la, realIdx, `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIxMyIgaGVpZ2h0PSIxMiIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="13" height="12" style="image-rendering:pixelated;vertical-align:middle"/> Relleno`, '#93c5fd');
-}
-
-/* -- Sub-fila real (conservada por si se usa desde algún otro lugar) -- */
-function _lyBuildFillSubRowOld(la, realIdx) {
-  const row = document.createElement('div');
-  row.className = 'ed-layer-item';
-  row.style.cssText = 'margin-left:18px;border-style:dashed;border-color:#93c5fd;opacity:'+(la.hidden?'0.45':'1')+';';
-  row.dataset.realIdx = realIdx;
-
-  // Miniatura
-  const thumb = document.createElement('canvas');
-  thumb.className = 'ed-layer-thumb';
-  thumb.width = 80; thumb.height = 60;
-  const tctx = thumb.getContext('2d');
-  tctx.fillStyle = '#f0f8ff';
-  tctx.fillRect(0, 0, 80, 60);
-  if (la._canvas && la._canvas.width > 0) {
-    const pw = (typeof edPageW==='function')?edPageW():800;
-    const ph = (typeof edPageH==='function')?edPageH():1100;
-    const mx = (typeof edMarginX==='function')?edMarginX():0;
-    const my = (typeof edMarginY==='function')?edMarginY():0;
-    // Usar draw() que maneja tanto canvas workspace como canvas local (bbox)
-    // Escalar para que la página entera quepa en el thumb 80×60
-    const _sc = Math.min(80 / pw, 60 / ph);
-    const _ox = (80 - pw * _sc) / 2, _oy = (60 - ph * _sc) / 2;
-    tctx.save();
-    // Escala uniforme con centrado — preserva ratio de la página
-    tctx.setTransform(_sc, 0, 0, _sc, -mx * _sc + _ox, -my * _sc + _oy);
-    if (typeof la.draw === 'function') _lySharp(la, tctx);   // v42.51: miniatura nítida
-    tctx.restore();
-  }
-  tctx.strokeStyle = '#93c5fd'; tctx.lineWidth = 2;
-  tctx.setLineDash([4,3]); tctx.strokeRect(1,1,78,58); tctx.setLineDash([]);
-  row.appendChild(thumb);
-
-  // Nombre
-  const info = document.createElement('div');
-  info.className = 'ed-layer-info';
-  const name = document.createElement('span');
-  name.className = 'ed-layer-name';
-  name.textContent = `<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSIxMyIgaGVpZ2h0PSIxMiIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="13" height="12" style="image-rendering:pixelated;vertical-align:middle"/> Relleno`;
-  info.appendChild(name); row.appendChild(info);
-
-  // Acciones: ojo + limpiar
-  const acts = document.createElement('div');
-  acts.className = 'ed-layer-actions';
-
-  // Ojo
-  const eyeBtn = document.createElement('button');
-  eyeBtn.className = 'ed-layer-del';
-  eyeBtn.textContent = '👁';
-  eyeBtn.style.color = 'var(--black)';
-  eyeBtn.style.opacity = la.hidden ? '0.5' : '1';
-  eyeBtn.title = la.hidden ? 'Mostrar relleno' : 'Ocultar relleno';
-  eyeBtn.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    la.hidden = !la.hidden;
-    edPushHistory();
-    edRedraw(); _lyRender();
-  });
-  acts.appendChild(eyeBtn);
-
-  // Eliminar relleno (igual que el ✕ del resto de capas)
-  const clrBtn = document.createElement('button');
-  clrBtn.className = 'ed-layer-del';
-  clrBtn.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
-  clrBtn.title = 'Eliminar relleno';
-  clrBtn.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    edConfirm('¿Eliminar el relleno?', () => {
-      const _flIdx = edLayers.indexOf(la);
-      if (_flIdx >= 0) edLayers.splice(_flIdx, 1);
-      // Desconectar el vínculo en la capa de dibujo
-      const _pair = edLayers.find(l => l._fillLayerId && l._fillLayerId === la._drawLayerId);
-      if (_pair) { delete _pair._fillLayerId; delete _pair._uid; }
-      edPushHistory(); edRedraw(); _lyRender();
-    });
-  });
-  acts.appendChild(clrBtn);
-
-  row.appendChild(acts);
-
-  // Tap en la sub-fila de relleno: si la herramienta de dibujo está activa, ofrecer dibujar en ella
-  row.addEventListener('pointerup', e => {
-    if (e.target.closest('.ed-layer-actions')) return; // toques en botones: ya manejados
-    const _isTool = typeof edActiveTool !== 'undefined' &&
-                    ['draw','eraser'].includes(edActiveTool);
-    const _panelDraw = typeof _edDrawLayerTarget !== 'undefined';
-    if (!_isTool || !_panelDraw) return;
-
-    // Encontrar el DrawLayer vinculado para saber el índice a seleccionar
-    const _drawLa = (typeof edLayers !== 'undefined')
-      ? edLayers.find(l => l._fillLayerId && l._fillLayerId === la._drawLayerId)
-      : null;
-
-    edConfirm('¿Quieres usar las herramientas de dibujo en la capa de relleno?', () => {
-      // Seleccionar el DrawLayer vinculado en el editor
-      if (_drawLa && typeof edSelectedIdx !== 'undefined') {
-        edSelectedIdx = edLayers.indexOf(_drawLa);
-      }
-      // Activar capa de relleno como destino de dibujo
-      if (typeof _edDrawLayerTarget !== 'undefined') _edDrawLayerTarget = 'fill';
-      // Cerrar panel de capas y abrir panel de dibujo
-      edCloseLayers();
-      if (typeof edRenderOptionsPanel === 'function') {
-        edRenderOptionsPanel(edActiveTool === 'eraser' ? 'eraser' : 'draw');
-      }
-    }, 'Sí');
-  });
-
-  return row;
-}
 
 function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
   const row = document.createElement('div');
@@ -1138,7 +1022,6 @@ function _lyBuildTextRow(la, realIdx, seqPos, selected, draggable) {
 function _lyBuildVisualItem(la, realIdx, selected) {
   const isDrawType = la.type === 'stroke' || la.type === 'draw';
   const isShapeType = la.type === 'shape' || la.type === 'line';
-  const isGroup = false; // obsoleto
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
   item.style.position = 'relative';
@@ -1156,8 +1039,6 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     _lyDrawStrokeThumb(thumb, la);
   } else if (isShapeType) {
     _lyDrawShapeThumb(thumb, la);
-  } else if (isGroup) {
-    _lyDrawGroupThumb(thumb, la);
   } else {
     _lyDrawThumb(thumb, la);
   }
@@ -1509,90 +1390,6 @@ function _lyDrawStrokeThumb(canvas, la) {
   }
 }
 
-function _lyBuildImgItem(la, realIdx, selected) {
-  const item = document.createElement('div');
-  item.className = 'ed-layer-item' + (selected ? ' selected' : '');
-  item.dataset.realIdx = realIdx;
-  if (!la._uid) la._uid = ++_lyUidCounter;
-  item.dataset.uid = la._uid;
-
-  /* Miniatura — handle de arrastre */
-  const thumb = document.createElement('canvas');
-  thumb.className = 'ed-layer-thumb drag-handle';
-  thumb.width = 80; thumb.height = 60;
-  _lyDrawThumb(thumb, la);
-  thumb.title = 'Arrastra para reordenar · toca para seleccionar';
-  thumb.addEventListener('pointerup', () => {
-    if (!item.classList.contains('was-dragged')) {
-      edSelectedIdx = realIdx;
-      edRedraw();
-      edCloseLayers();
-    }
-    item.classList.remove('was-dragged');
-  });
-  item.appendChild(thumb);
-
-  /* Info + opacidad (solo desktop) */
-  const info = document.createElement('div');
-  info.className = 'ed-layer-info';
-  const name = document.createElement('span');
-  name.className = 'ed-layer-name';
-  const _isApngPanel = la.animKey || la._pngFramesKey || la._apngIdbKey || la._apngSrc || (la._pngFrames && la._pngFrames.length) || la._gcpProc; // v41.64
-  name.textContent = (_isApngPanel ? '📽️ APNG ' : 'Imagen ') + (realIdx + 1);
-  info.appendChild(name);
-
-  // Opacidad ahora en el panel de propiedades de imagen (⚙)
-  item.appendChild(info);
-
-  /* Flechas subir/bajar nivel */
-  const imgPairsAll = edLayers.map((l,i)=>({l,i})).filter(({l})=>l.type==='image');
-  const imgPosInList = imgPairsAll.findIndex(({i})=>i===realIdx);
-  // La lista se muestra invertida (primero = encima), así ▲ = índice más alto en edLayers
-  const upBtnI = document.createElement('button');
-  upBtnI.className = 'ed-layer-arrow';
-  upBtnI.title = 'Subir nivel';
-  upBtnI.textContent = '▲';
-  upBtnI.disabled = imgPosInList >= imgPairsAll.length - 1; // ya es el último (más arriba visualmente)
-  upBtnI.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    // Subir = mover hacia índice mayor en edLayers (más arriba en la pila)
-    const nextImg = imgPairsAll[imgPosInList + 1];
-    if (nextImg) _lyReorderImages(realIdx, nextImg.i + 1);
-  });
-  const dnBtnI = document.createElement('button');
-  dnBtnI.className = 'ed-layer-arrow';
-  dnBtnI.title = 'Bajar nivel';
-  dnBtnI.textContent = '▼';
-  dnBtnI.disabled = imgPosInList <= 0; // ya es el primero (más abajo visualmente)
-  dnBtnI.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    const prevImg = imgPairsAll[imgPosInList - 1];
-    if (prevImg) _lyReorderImages(realIdx, prevImg.i);
-  });
-  /* Eliminar */
-  const del = document.createElement('button');
-  del.className = 'ed-layer-del';
-  del.title = 'Eliminar';
-  del.innerHTML = '<span style="color:#e63030;font-weight:900;font-size:1rem">✕</span>';
-  del.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    edConfirm('¿Eliminar esta capa?', ()=>{
-      edLayers.splice(realIdx, 1);
-      if (edSelectedIdx >= edLayers.length) edSelectedIdx = edLayers.length - 1;
-      edPushHistory(); edRedraw(); _lyRender();
-    });
-  });
-  const actsI = document.createElement('div');
-  actsI.className = 'ed-layer-actions';
-  actsI.appendChild(upBtnI);
-  actsI.appendChild(dnBtnI);
-  actsI.appendChild(del);
-  item.appendChild(actsI);
-
-  /* Drag desde miniatura */
-  _lyBindImgDrag(item, thumb, realIdx);
-  return item;
-}
 
 /* ──────────────────────────────────────────
    DRAG TEXTOS (solo en modo secuencial)
@@ -2019,24 +1816,6 @@ function _lyReorderImages(fromRealIdx, toRealIdx) {
 /* ──────────────────────────────────────────
    OPACIDAD (solo desktop)
 ────────────────────────────────────────── */
-function _lyMakeOpRow(initVal, onChange) {
-  const wrap = document.createElement('label');
-  wrap.className = 'ed-layer-op-row';
-  const slider = document.createElement('input');
-  slider.type = 'range'; slider.min = 0; slider.max = 100;
-  slider.value = Math.round(initVal * 100);
-  slider.className = 'ed-layer-slider';
-  const val = document.createElement('span');
-  val.className = 'ed-layer-op-val';
-  val.textContent = slider.value + '%';
-  slider.addEventListener('input', () => {
-    val.textContent = slider.value + '%';
-    onChange(slider.value / 100);
-  });
-  wrap.appendChild(slider);
-  wrap.appendChild(val);
-  return wrap;
-}
 
 /* ──────────────────────────────────────────
    MINIATURA
@@ -2092,27 +1871,6 @@ function _lyDrawThumb(canvas, la) {
 /* ──────────────────────────────────────────
    MINIATURA SHAPE / LINE
 ────────────────────────────────────────── */
-function _lyDrawGroupThumb(canvas, la) {
-  const ctx = canvas.getContext('2d');
-  const sw = canvas.width, sh = canvas.height;
-  ctx.fillStyle = '#f5f5f5';
-  ctx.fillRect(0, 0, sw, sh);
-  if (la._cache && la._cache.width > 0) {
-    ctx.save();
-    ctx.globalAlpha = la.opacity ?? 1;
-    const pad = 4;
-    const scale = Math.min((sw-pad*2)/la._cache.width, (sh-pad*2)/la._cache.height);
-    const dx = pad + (sw-pad*2 - la._cache.width*scale)/2;
-    const dy = pad + (sh-pad*2 - la._cache.height*scale)/2;
-    ctx.drawImage(la._cache, dx, dy, la._cache.width*scale, la._cache.height*scale);
-    ctx.restore();
-  } else {
-    ctx.fillStyle = '#bbb';
-    ctx.font = '20px sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('⊞', sw/2, sh/2);
-  }
-}
 
 function _lyDrawShapeThumb(canvas, la) {
   const ctx = canvas.getContext('2d');

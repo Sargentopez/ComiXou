@@ -499,7 +499,6 @@ body.editor-page #appView {
   left: auto; right: 0;
 }
 .ed-dropdown-item:hover > .ed-subdropdown { display: block; }
-.ed-dropdown-item.has-sub::after { content: '›'; margin-left: auto; color: var(--gray-400); }
 
 /* ── Submenú inline para exportar (se despliega hacia abajo dentro del dropdown) ── */
 .ed-dropdown-submenu { position: relative; }
@@ -768,20 +767,6 @@ body.ed-scale-tablet {
 #edb-brush-pop.open { display: flex; }
 #edb-brush-pop.horiz-pop { flex-direction: row; }
 
-#edb-shapes-pop {
-  position: fixed;
-  z-index: 1300;
-  display: none;
-  flex-direction: row;
-  gap: calc(6px * var(--edb-scale, 1));
-  padding: calc(8px * var(--edb-scale, 1)) calc(10px * var(--edb-scale, 1));
-  background: rgba(20,20,20,.92);
-  border: 1px solid rgba(255,255,255,.15);
-  border-radius: 10px;
-  box-shadow: 0 3px 16px rgba(0,0,0,.45);
-}
-#edb-shapes-pop.open { display: flex; }
-
 .edb-pal-dot {
   width: calc(22px * var(--edb-scale, 1)); height: calc(22px * var(--edb-scale, 1));
   border-radius: 50%;
@@ -1017,161 +1002,6 @@ body.ed-scale-tablet {
 /* ═══════════════════════════════════════
    PANEL DE HERRAMIENTAS DE DIBUJO (3 filas)
    ═══════════════════════════════════════ */
-.dp-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  width: 100%;
-}
-
-/* Fila 1: herramientas (Dibujar | Borrar | Rellenar) */
-.dp-row1 {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 4px 0 4px 0;
-  min-height: 34px;
-}
-.dp-tool-btn {
-  flex: 1;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 5px 4px;
-  font-family: var(--font-body);
-  font-size: clamp(.7rem, 2.2vw, .82rem);
-  font-weight: 900;
-  color: var(--gray-600);
-  cursor: pointer;
-  text-align: center;
-  white-space: nowrap;
-  transition: color .12s, background .12s;
-}
-.dp-tool-btn.active {
-  color: var(--black);
-  background: rgba(0,0,0,.06);
-  border-radius: 6px;
-}
-.dp-tool-btn:active { opacity: .7; }
-.dp-vsep {
-  width: 1px;
-  height: 20px;
-  background: var(--gray-300);
-  flex-shrink: 0;
-}
-.dp-hsep {
-  height: 1px;
-  background: var(--gray-300);
-  width: 100%;
-  margin: 0;
-}
-
-/* Fila 2: controles (Transparencia | Grosor | Color) */
-.dp-row2 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 0;
-  flex-wrap: nowrap;
-  min-height: 34px;
-}
-.dp-ctrl-btn {
-  background: transparent;
-  border: 1px solid var(--gray-300);
-  border-radius: 6px;
-  padding: 3px 7px;
-  font-family: var(--font-body);
-  font-size: clamp(.67rem, 2vw, .78rem);
-  font-weight: 900;
-  color: var(--gray-700);
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: background .1s;
-}
-.dp-ctrl-btn:active, .dp-ctrl-btn.open { background: var(--gray-200); }
-.dp-slider-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-.dp-slider-wrap input[type=range] {
-  flex: 1;
-  min-width: 40px;
-  accent-color: var(--black);
-}
-.dp-color-btn {
-  width: 28px; height: 28px;
-  border-radius: 50%;
-  border: 2px solid var(--gray-300);
-  padding: 2px;
-  cursor: pointer;
-  flex-shrink: 0;
-  box-shadow: 1px 1px 0 rgba(0,0,0,.07);
-}
-.dp-color-hidden {
-  width: 0; height: 0;
-  opacity: 0; position: absolute; pointer-events: none;
-}
-
-/* Fila 3: acciones (✕ | ↩↪ | info) + ✓ */
-.dp-row3 {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 0 2px 0;
-  min-height: 32px;
-}
-.dp-act-btn {
-  background: transparent;
-  border: 1px solid var(--gray-300);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-family: var(--font-body);
-  font-size: clamp(.72rem, 2.2vw, .82rem);
-  font-weight: 900;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background .1s;
-}
-.dp-act-btn:active { background: var(--gray-200); }
-.dp-act-btn.danger { color: #c00; border-color: #fcc; }
-.dp-act-btn.dup    { color: var(--gray-700); }
-.dp-info {
-  flex: 1;
-  text-align: right;
-  font-size: clamp(.65rem, 1.8vw, .75rem);
-  font-weight: 700;
-  color: var(--gray-500);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  padding-right: 4px;
-}
-.dp-ok-btn {
-  background: var(--black);
-  color: var(--white);
-  border: none;
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-family: var(--font-body);
-  font-size: clamp(.75rem, 2.2vw, .85rem);
-  font-weight: 900;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-/* Slider inline expandible */
-.dp-inline-slider {
-  display: none;
-  align-items: center;
-  gap: 5px;
-  flex: 1;
-  min-width: 0;
-  animation: dpSlideIn .15s ease;
-}
-.dp-inline-slider.visible { display: flex; }
 @keyframes dpSlideIn { from { opacity:0; transform: scaleX(.9); } to { opacity:1; transform:scaleX(1); } }
 
 
@@ -1657,7 +1487,6 @@ body.ed-scale-tablet .ed-modal-sheet {
 }
 
 /* Cursor offset (T18) */
-#edb-offset-l, #edb-offset-c, #edb-offset-r,
 #edb-offset {
   width: auto !important;
   height: 30px;
@@ -1665,14 +1494,10 @@ body.ed-scale-tablet .ed-modal-sheet {
   font-size: .6rem !important;
   line-height: 1.1;
 }
-#edb-offset-l.active, #edb-offset-c.active, #edb-offset-r.active,
 #edb-offset.active {
   background: rgba(60,140,255,.25) !important;
   color: #7ec8ff !important;
   box-shadow: 0 0 0 1.5px rgba(60,140,255,.5);
-}
-#edOffsetLine, #edTouchDot {
-  position: fixed; pointer-events: none; z-index: 998; display: block;
 }
 
 /* ══════════════════════════════════════════
@@ -1778,20 +1603,11 @@ body.ed-scale-tablet .ed-modal-sheet {
    por hoja del lector externo (ver reader/reader.css .page-nav-*), con
    clases propias porque vive en un documento distinto. Se comparte clase
    entre editor general y GCP porque el estilo es idéntico — solo cambian
-   los id (edPageJump*/gcpFrameJump*), que sí son propios de cada uno.
+   los id (edPageJump… / gcpFrameJump…), que sí son propios de cada uno.
    Totalmente ADICIONAL a la navegación ya existente (edPagePrev/edPageNext,
    ddNavPages, gcpFramePrev/gcpFrameNext, gcpFramesBar) — Alberto pidió
    expresamente no tocar esa.
    ══════════════════════════════════════════════════════ */
-#edQuickTools .ed-pagejump-toggle,
-#gcpQuickTools .ed-pagejump-toggle {
-  width: auto;
-  min-width: 44px;
-  padding: 0 6px;
-  font-size: .68rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
 .ed-pagejump-scrim {
   position: fixed; inset: 0;
   z-index: 780; /* por debajo de la barra (800), por encima del canvas */
@@ -2586,11 +2402,6 @@ body.ed-scale-tablet .ed-fulloverlay-box {
 #editorShell.mp-active #edMenuBar .ed-menu-item:has([data-menu="rules"]) {
   pointer-events: auto;
 }
-/* En modo texto/bocadillo (props-active) la barra de menús permanece accesible */
-#editorShell.props-active #edMenuBar {
-  pointer-events: auto !important;
-  opacity: 1 !important;
-}
 #editorShell.draw-active #edTopbar .ed-top-action,
 #editorShell.draw-active #edUndoBtn,
 #editorShell.draw-active #edRedoBtn,
@@ -3088,24 +2899,6 @@ body:has(#edOptionsPanel.open[data-mode="biblioteca"]) #gcpQuickTools {
 
 /* Las cards de frames usan .ed-page-card del editor general */
 #gcpFramesToggleBtn.active { font-weight: 900; background: rgba(0,0,0,.08); border-radius: 4px; }
-
-/* Los frames interpolados no se muestran como cards — se representan
-   mediante el botón ⟳ rojo entre dos frames clave */
-
-
-/* ── Chips de comportamiento GCP (velocidad / repeticiones) ── */
-.gcp-chip {
-  padding: 4px 10px;
-  border: 1.5px solid var(--gray-300);
-  border-radius: 20px;
-  background: var(--white);
-  font-size: .78rem; font-weight: 700;
-  cursor: pointer; color: var(--black);
-  transition: background .12s, border-color .12s;
-  font-family: var(--font-body);
-}
-.gcp-chip:hover { background: var(--gray-100); }
-.gcp-chip.active { background: var(--yellow); border-color: var(--black); }
 
 /* ── Sistema de ayuda editor de animaciones ─────────────────────────── */
 /* Barra naranja interior en el borde inferior del botón, por encima del

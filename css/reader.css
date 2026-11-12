@@ -68,13 +68,6 @@
   width: 0;
 }
 .reader-topbar .home-logo-area { position: relative; z-index: 2; }
-.reader-home-btn {
-  font-size: 1.2rem;
-  text-decoration: none;
-  opacity: .7;
-  transition: opacity .2s;
-}
-.reader-home-btn:hover { opacity: 1; }
 
 .reader-info {
   position: relative; z-index: 2;
@@ -215,17 +208,6 @@
 .reader-tail.tail-left         { left:-22px;   top:50%;    transform:translateY(-50%) rotate(90deg);  width:22px; height:30px; }
 .reader-tail.tail-right        { right:-22px;  top:50%;    transform:translateY(-50%) rotate(-90deg); width:22px; height:30px; }
 
-.reader-text-block {
-  position: absolute; left: 0; right: 0;
-  background: rgba(255,255,255,.93);
-  border: 2px solid var(--black);
-  padding: clamp(4px,1vw,8px) clamp(8px,2vw,16px);
-  font-family: var(--font-comic); font-weight: 700;
-  font-size: clamp(0.78rem, 2vw, 1rem);
-}
-.reader-text-block.header { top:0;    border-top:none;    border-left:none; border-right:none; }
-.reader-text-block.footer { bottom:0; border-bottom:none; border-left:none; border-right:none; }
-
 /* ── FLECHAS DE NAVEGACIÓN (solo PC) ── */
 .reader-arrow {
   position: fixed;
@@ -287,18 +269,6 @@
   pointer-events: none;
 }
 @media(min-width:601px) { .swipe-hint { display: none; } }
-
-/* ── CAPTION (caja de texto posicionada del editor) ── */
-.reader-text-caption {
-  position: absolute;
-  pointer-events: none;
-  font-weight: 700;
-  line-height: 1.3;
-  padding: clamp(3px,0.8vw,7px) clamp(5px,1.2vw,10px);
-  word-break: break-word;
-  border-radius: 6px;
-  /* La fuente y colores vienen del estilo inline del editor */
-}
 
 /* ── BUBBLE: width controlado por el dato, no hardcodeado ── */
 .reader-bubble {

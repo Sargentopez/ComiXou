@@ -1386,17 +1386,11 @@ function _edArmObjDrag(e, idx){
   }
   window._edMoved = false;
 }
-// v38.18 — Guard anti-arrastre tras doble tap ELIMINADO (Alberto: redundante,
-// el bloqueo de arrastre mientras el panel de propiedades está abierto —ver
-// edOnMove— ya cubre el temblor sin los falsos positivos de una ventana fija
-// de tiempo/distancia que seguía activa tras cerrar el panel). Constantes
-// _edDblTapGuardMs/_EdDblTapGuardPx y window._edDblTapGuard retiradas.
 window._edPenDragPending = null;
 window._edPenGroupDragPending = null;
 window._edPenNodeDragPending = null;
 let edTailPointType = null, edResizeCorner = null, edTailVoiceIdx = 0;
 let edDragOffX = 0, edDragOffY = 0, edInitialSize = {};
-let edRotateStartAngle = 0;  // ángulo inicial al empezar rotación
 let edOrientation = 'vertical';
 let edProjectId = null;
 // v41.86 — metaPending: obra recién creada cuyos datos (título, género, modo de lectura, hoja final) el usuario aún no
@@ -1800,15 +1794,6 @@ function _edTmpDestroy() {
   _edTmp.pen=null; _edTmp.pencil=null; _edTmp.watercolor=null; _edTmp.bucket=null;
 }
 
-// Canvas activo según herramienta
-function _edTmpCanvas() {
-  const dl = _edTmp[_edTmp.active] || _edTmp.pen;
-  return dl ? dl._canvas : null;
-}
-function _edTmpCtx() {
-  const dl = _edTmp[_edTmp.active] || _edTmp.pen;
-  return dl ? dl._ctx : null;
-}
 
 // DrawLayer activo (objeto real)
 function _edTmpProxy() {
@@ -1905,7 +1890,6 @@ function _edTmpLoadFromLayers() {
 let _edCursorOffset = false;           // estado del botón (activo/inactivo)
 let _edCursorOffsetAngle = 0;          // ángulo respecto a vertical: -40, 0, +40 grados
 let _edOffsetFirstMove = false;        // true: el primer move debe incluir el punto inicial
-let _edFromSaved = false;              // true: venimos de edStartPaintFromSaved — ignorar posición del primer move
 let _edOffsetLastTouch = null;         // última posición táctil conocida {x, y, sz} para refrescar el cursor
 const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 // Cursor offset — modo "posición guardada":
@@ -1913,10 +1897,6 @@ const _ED_CURSOR_OFFSET_PX = 76;       // 2 cm en px CSS (2 × 96/2.54 ≈ 76)
 // Si el siguiente tap llega en < 500ms, el trazo empieza desde la posición guardada.
 let _edCursorSavedPos = null;          // {nx, ny, clientX, clientY} posición guardada del cursor
 let _edCursorSavedTime = 0;            // timestamp del último levantamiento de dedo con cursor activo
-let _edCursorPositioning = false;      // true: arrastre actual es solo posicionamiento (no dibuja)
-const _ED_CURSOR_TAP_MS = 1000;         // ventana activa tras ubicar cursor (ms antes de volver a azul)
-const _ED_CURSOR_STROKE_MS = 500;       // ventana activa tras terminar trazo (ms antes de volver a azul)
-let _edCursorExpireTimer = null;       // timer que vuelve a azul al expirar el estado rojo
 let _edCursorLineColor = 'rgba(60,140,255,0.75)';
 // ── Nuevo sistema de cursor desplazado: objeto de estado ──
 const _cof = {
@@ -1964,7 +1944,6 @@ let edPinching = false, edPinchDist0 = 0, edPinchAngle0 = 0, edPinchScale0 = nul
 let _edPinchHappened = false; // true desde que empieza el pinch hasta que se levantan TODOS los dedos
 let edPinchCenter0 = null, edPinchCamera0 = null;
 // Transformación de DrawLayer durante pinch
-let _edDrawPinch = null; // { snapshotImg, tx, ty, scale } — activo durante pinch en modo draw
 let edPanelUserClosed = false;  // true = usuario cerró panel con ✓, no reabrir al seleccionar
 let _edFocusDone = false;       // true mientras panel abierto — inhibe recentrado repetido
 let _ppKbHeaderHideDone = false; // true tras auto-ocultar la cabecera completa (edMinimize) por falta real de espacio en horizontal — no repetir si el usuario la restaura a mano (v40.30, antes solo colapsaba el panel en v40.21)
@@ -3418,7 +3397,6 @@ class BubbleLayer extends BaseLayer {
     ctx.fillStyle=this.backgroundColor;ctx.strokeStyle=this.borderColor;ctx.lineWidth=this.borderWidth;
     const angle=Math.atan2(ey-sy,ex-sx),bw=10;
     const perp={x:-Math.sin(angle),y:Math.cos(angle)};
-    const dir={x:Math.cos(angle),y:Math.sin(angle)};
     const left={x:sx+perp.x*bw/2,y:sy+perp.y*bw/2};
     const right={x:sx-perp.x*bw/2,y:sy-perp.y*bw/2};
     ctx.beginPath();ctx.moveTo(left.x,left.y);ctx.lineTo(ex,ey);ctx.lineTo(right.x,right.y);
@@ -5771,82 +5749,7 @@ function _edSyncFillsFor(idxList, preview) {
 
 
 // ── Proxy de DrawLayer para pintar sobre el FillLayer (espacio local) ──────
-// Devuelve un objeto compatible con dl.beginStroke/continueStroke/etc.
-// Las coords (nx,ny) de página se transforman al espacio local del stroke.
-function _edFillDrawProxy(fl, stroke) {
-  if (!fl || !fl._canvas || !stroke) return null;
-  const _pw = edPageW(), _ph = edPageH();
-  // Transformar (nx,ny) de página a coordenadas del canvas del fill.
-  // Si el fill es workspace (ED_CANVAS_W×H), mapeo directo como el DrawLayer.
-  // Si es canvas local (bbox del stroke), mapeo relativo al centro del stroke.
-  const _toLocal = (nx, ny) => {
-    if (fl._isWorkspaceCanvas) {
-      // Coordenadas workspace absolutas: igual que DrawLayer
-      return {
-        x: Math.round(edMarginX() + nx * _pw),
-        y: Math.round(edMarginY() + ny * _ph)
-      };
-    }
-    const rot = -(stroke.rotation || 0) * Math.PI / 180;
-    const dx = (nx - stroke.x) * _pw;
-    const dy = (ny - stroke.y) * _ph;
-    const lx = dx * Math.cos(rot) - dy * Math.sin(rot);
-    const ly = dx * Math.sin(rot) + dy * Math.cos(rot);
-    return {
-      x: fl._canvas.width  / 2 + lx,
-      y: fl._canvas.height / 2 + ly
-    };
-  };
-  return {
-    _canvas: fl._canvas,
-    _ctx:    fl._ctx,
-    _lastX:  fl._canvas.width  / 2,
-    _lastY:  fl._canvas.height / 2,
-    _toLocal,
-    beginStroke(nx, ny, color, size, isEraser, opacity, clipR) {
-      const {x, y} = this._toLocal(nx, ny);
-      const alpha = (opacity ?? 100) / 100;
-      this._ctx.save();
-      if (clipR > 0) { this._ctx.beginPath(); this._ctx.arc(x, y, clipR, 0, Math.PI*2); this._ctx.clip(); }
-      this._ctx.globalAlpha = alpha;
-      if (isEraser) { this._ctx.globalCompositeOperation = 'destination-out'; this._ctx.fillStyle = 'rgba(0,0,0,1)'; }
-      else { this._ctx.globalCompositeOperation = 'source-over'; this._ctx.fillStyle = color; }
-      this._ctx.beginPath(); this._ctx.arc(x, y, size / 2, 0, Math.PI * 2); this._ctx.fill();
-      this._ctx.restore(); this._ctx.globalCompositeOperation = 'source-over';
-      this._lastX = x; this._lastY = y;
-    },
-    beginStrokeNoDot(nx, ny) {
-      const {x, y} = this._toLocal(nx, ny);
-      this._lastX = x; this._lastY = y;
-    },
-    continueStroke(nx, ny, color, size, isEraser, opacity, clipR) {
-      const {x, y} = this._toLocal(nx, ny);
-      const alpha = (opacity ?? 100) / 100;
-      this._ctx.save();
-      if (clipR > 0) { this._ctx.beginPath(); this._ctx.arc(x, y, clipR, 0, Math.PI*2); this._ctx.clip(); }
-      this._ctx.globalAlpha = alpha;
-      this._ctx.beginPath(); this._ctx.moveTo(this._lastX, this._lastY); this._ctx.lineTo(x, y);
-      if (isEraser) { this._ctx.globalCompositeOperation = 'destination-out'; this._ctx.strokeStyle = 'rgba(0,0,0,1)'; }
-      else { this._ctx.globalCompositeOperation = 'source-over'; this._ctx.strokeStyle = color; }
-      this._ctx.lineWidth = size; this._ctx.lineCap = 'round'; this._ctx.lineJoin = 'round'; this._ctx.stroke();
-      this._ctx.restore(); this._ctx.globalCompositeOperation = 'source-over';
-      this._lastX = x; this._lastY = y;
-    },
-    clear() { this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height); }
-  };
-}
 
-// Obtener la capa de pintura activa (DrawLayer o proxy del FillLayer)
-function _edGetPaintTarget() {
-  const page = edPages[edCurrentPage]; if (!page) return null;
-  const dl = page.layers.find(l => l.type === 'draw'); if (!dl) return null;
-  if (_edDrawLayerTarget === 'fill' && dl._fillLayerId) {
-    const stroke = page.layers.find(l => l.type === 'draw' || l._fillLayerId === dl._fillLayerId);
-    const fl = page.layers.find(l => l.type === 'fill' && l._drawLayerId === dl._fillLayerId);
-    if (fl) return _edFillDrawProxy(fl, { x: 0.5, y: 0.5, width: 1, height: 1, rotation: 0 });
-  }
-  return dl;
-}
 // Hash simple (djb2) del contenido de la biblioteca — no criptográfico, solo
 // necesita detectar de forma fiable si cambió desde el último guardado en la
 // nube. Mucho más barato que subir la biblioteca entera "por si acaso".
@@ -6956,7 +6859,6 @@ function edApplyHistory(snapshot, fromSnapshot){
     else if(o.type === 'bubble') l = new BubbleLayer(o.text, o.x, o.y);
     else if(o.type === 'image') {
       // Buscar layer vivo con la misma _uid o animKey para preservar _pngFrames/_apngSrc
-      const _rawIdx = raw.indexOf(o);
       const _curPage = edPages[snapshot.pageIdx];
       const _liveLayers = _curPage ? _curPage.layers : edLayers;
       const _liveImg = _liveLayers?.find(lv =>
@@ -7700,7 +7602,6 @@ function _msClear(){
   edMultiBbox=null; edMultiSelAnchor=-1;
   // Limpiar siempre el botón y el dropdown para que no queden activos en PC
   $('edMultiSelBtn')?.classList.remove('active');
-  $('_edMultiSelDd')?.classList.remove('open');
 }
 
 function _edDeactivateMultiSel(){
@@ -7710,7 +7611,6 @@ function _edDeactivateMultiSel(){
   if(edCanvas) edCanvas.className='';
   const btn = document.getElementById('edMultiSelBtn');
   if(btn) btn.classList.remove('active');
-  $('_edMultiSelDd')?.classList.remove('open');
   $('dd-select')?.classList.remove('open');
   document.querySelector('[data-menu="select"]')?.classList.remove('open');
   if(edMenuOpen==='select') edMenuOpen=null;
@@ -7819,121 +7719,7 @@ function _msRecalcBbox(){
    T1: Render de grupo de fusión con evenodd en tiempo real
    Combina todos los objetos del grupo en un único Path2D con evenodd
    ══════════════════════════════════════════ */
-function _edRenderFusionGroup(ctx, members, alpha) {
-  if (!members || members.length === 0) return;
-  const pw = edPageW(), ph = edPageH();
-  const mx = edMarginX(), my = edMarginY();
 
-  // Usar propiedades visuales del primer miembro
-  const _ref = members[0];
-  const col      = _ref.color     || '#000000';
-  const fillCol  = _ref.fillColor || 'none';
-  const lw       = _ref.lineWidth ?? 3;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-
-  // Construir Path2D combinado con todos los contornos
-  const combined = new Path2D();
-
-  members.forEach(m => {
-    if (m.type === 'line') {
-      // LineLayer: obtener puntos absolutos y construir contornos
-      const rot = (m.rotation || 0) * Math.PI / 180;
-      const cos = Math.cos(rot), sin = Math.sin(rot);
-      const cx = mx + m.x * pw, cy = my + m.y * ph;
-
-      // Separar en contornos (null = separador)
-      const contours = [];
-      let cur = [];
-      for (const p of m.points) {
-        if (p === null) { if (cur.length >= 2) contours.push(cur); cur = []; }
-        else cur.push(p);
-      }
-      if (cur.length >= 2) contours.push(cur);
-
-      contours.forEach(c => {
-        if (c.length < 2) return;
-        combined.moveTo(cx + (c[0].x*pw*cos - c[0].y*ph*sin), cy + (c[0].x*pw*sin + c[0].y*ph*cos));
-        for (let i = 1; i < c.length; i++) {
-          combined.lineTo(cx + (c[i].x*pw*cos - c[i].y*ph*sin), cy + (c[i].x*pw*sin + c[i].y*ph*cos));
-        }
-        combined.closePath();
-      });
-    } else if (m.type === 'shape' && m.shape === 'rect') {
-      // ShapeLayer rect: añadir rectángulo
-      const rot = (m.rotation || 0) * Math.PI / 180;
-      const cx = mx + m.x * pw, cy = my + m.y * ph;
-      const hw = m.width * pw / 2, hh = m.height * ph / 2;
-      const cos = Math.cos(rot), sin = Math.sin(rot);
-      const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
-      combined.moveTo(cx + corners[0][0]*cos - corners[0][1]*sin, cy + corners[0][0]*sin + corners[0][1]*cos);
-      for (let i = 1; i < 4; i++) {
-        combined.lineTo(cx + corners[i][0]*cos - corners[i][1]*sin, cy + corners[i][0]*sin + corners[i][1]*cos);
-      }
-      combined.closePath();
-    } else if (m.type === 'shape' && m.shape === 'ellipse') {
-      // ShapeLayer ellipse (por si acaso queda alguno)
-      const rot = (m.rotation || 0) * Math.PI / 180;
-      const cx = mx + m.x * pw, cy = my + m.y * ph;
-      const N = 32;
-      const hw = m.width * pw / 2, hh = m.height * ph / 2;
-      const cos = Math.cos(rot), sin = Math.sin(rot);
-      for (let i = 0; i <= N; i++) {
-        const a = (i / N) * Math.PI * 2;
-        const lx = Math.cos(a) * hw, ly = Math.sin(a) * hh;
-        const wx = cx + lx*cos - ly*sin, wy = cy + lx*sin + ly*cos;
-        if (i === 0) combined.moveTo(wx, wy); else combined.lineTo(wx, wy);
-      }
-      combined.closePath();
-    }
-  });
-
-  // Rellenar con evenodd
-  if (fillCol && fillCol !== 'none') {
-    ctx.fillStyle = fillCol;
-    ctx.fill(combined, 'evenodd');
-  }
-  // Trazar borde
-  if (lw > 0) {
-    ctx.strokeStyle = col;
-    ctx.lineWidth = lw;
-    ctx.lineJoin = 'round';
-    ctx.stroke(combined);
-  }
-
-  ctx.restore();
-}
-
-
-/* T1: Fusión inmediata — incorporar nuevo LineLayer al objeto principal de _fusionId */
-function _edFuseIntoMain(newLL) {
-  if (!_edLineFusionId || !newLL) return newLL;
-  // Buscar objeto principal (el primero en edLayers con _fusionId, distinto del nuevo)
-  const _primary = edLayers.find(l => l !== newLL && l._fusionId === _edLineFusionId && l.type === 'line');
-  if (!_primary) {
-    // Primer objeto — es el principal
-    newLL._fusionId = _edLineFusionId;
-    return newLL;
-  }
-  // Fusionar: convertir puntos del nuevo al espacio local del principal
-  const _rot = -(_primary.rotation || 0) * Math.PI / 180;
-  const _cos = Math.cos(_rot), _sin = Math.sin(_rot);
-  const _newAbs = newLL.absPoints();
-  const _newLocal = _newAbs.map(p => {
-    if (!p) return null;
-    const dx = p.x - _primary.x, dy = p.y - _primary.y;
-    return { x: dx * _cos - dy * _sin, y: dx * _sin + dy * _cos };
-  });
-  // Concatenar con null separador
-  _primary.points.push(null);
-  _primary.points.push(..._newLocal);
-  _primary._updateBbox();
-  // Eliminar el nuevo de edLayers
-  const _ni = edLayers.indexOf(newLL);
-  if (_ni >= 0) edLayers.splice(_ni, 1);
-  return _primary;
-}
 
 // ── Canvas estático para accelerar el drag de capas ──────────────────────
 // Al arrastrar un shape/image/text, se pre-renderiza todo (sin esa capa) en
@@ -8099,8 +7885,6 @@ function _edRenderFrameInner(ctx, excludeLayerIdx = -1, drawTmpMode = 'inline') 
   // Sin clip: los objetos pueden sobresalir del lienzo (workspace visible)
   // Imágenes primero, luego texto/bocadillos encima
   // Render: imágenes en su orden, luego la capa agrupada de textos/bocadillos siempre encima
-  const _imgLayers    = edLayers.filter(l=>l.type==='image');
-  const _strokeLayers = edLayers.filter(l=>l.type==='stroke');
   const _textLayers   = edLayers.filter(l=>l.type==='text'||l.type==='bubble');
   // Opacidad global de la capa de textos (máximo de todos sus objetos individuales,
   // o bien edPage.textLayerOpacity si se definió desde el panel de capas)
@@ -8611,9 +8395,6 @@ function edRedraw(){
    ICONOS FLOTANTES SOBRE OBJETO SELECCIONADO
    ══════════════════════════════════════════ */
 
-function edIsTouchDevice(){
-  return navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
-}
 
 /* ── Clase de dispositivo: separa "¿es táctil?" de "¿cuánta pantalla hay?" ──
    En varios sitios del editor, window._edIsTouch (¿el usuario está interactuando
@@ -8859,7 +8640,6 @@ function edDrawSel(){
       const hw=la.width*pw/2, hh=la.height*ph/2;
       // TL=0, TR=1, BR=2, BL=3 en coordenadas locales
       const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
-      const crs2=la.cornerRadii||[0,0,0,0];
       corners.forEach(([lx,ly],ci2)=>{
         const ax2=(la.x*pw+lx*cos2-ly*sin2)/pw;
         const ay2=(la.y*ph+lx*sin2+ly*cos2)/ph;
@@ -9776,7 +9556,7 @@ function _edTextEditWatchTick() {
 // esta función — ver el comentario de v40.40 en ese manejador.
 function _edFollowTextCursor(la, source) {
   if (!la || !edCanvas) return false;
-  const pw = edPageW(), ph = edPageH();
+  const ph = edPageH();
   const canvasRect = edCanvas.getBoundingClientRect();
   const panel = $('edOptionsPanel');
   const _panelOpen = panel && panel.classList.contains('open');
@@ -12454,8 +12234,6 @@ function edAddImage(file){
   reader.onload=ev=>{
     const img=new Image();
     img.onload=()=>{
-      const pw=edPageW()||ED_PAGE_W, ph=edPageH()||ED_PAGE_H;
-      const natW=img.naturalWidth||1, natH=img.naturalHeight||1;
       const w=0.7;
       // height calculado por el constructor como fraccion de pw (h = w*(natH/natW))
       const layer=new ImageLayer(img,0.5,0.5,w);
@@ -14100,8 +13878,6 @@ function edPinchStart(e) {
       return m;
     })() : null
   } : null;
-  // En modo draw, el pinch mueve la cámara (no el dibujo)
-  _edDrawPinch = null;
   // Snapshot multiselección (tiene prioridad sobre objeto individual)
   if(edActiveTool === 'multiselect' && edMultiSel.length && edMultiBbox){
     edPinchScale0 = null; // no usar modo objeto individual
@@ -14311,9 +14087,6 @@ function edPinchEnd() {
       if(typeof _pep._dirtyCountCloud === 'number') _pep._dirtyCountCloud = Math.max(0, _pep._dirtyCountCloud - 2);
     }
   }
-  // syncFill en pinch individual — cubierto por onEnd
-  // _edDrawPinch ya no se usa (pinch en modo draw mueve la cámara)
-  _edDrawPinch = null;
   edPinching    = false;
   edPinchDist0  = 0;
   edPinchScale0 = null;
@@ -14337,29 +14110,6 @@ function edPinchEnd() {
   }
 }
 
-function _edDrawApplyPinchTransform(dl, dp){
-  // Aplica la transformación (translate + scale desde el centro del pinch) al _canvas del DrawLayer.
-  // Patrón estándar: copiar snapshot transformado sobre un canvas limpio.
-  const tmp = document.createElement('canvas');
-  tmp.width  = ED_CANVAS_W;
-  tmp.height = ED_CANVAS_H;
-  const ctx = tmp.getContext('2d');
-  // Punto de pivote = centro del pinch en workspace
-  const px = dp.wsCenterX, py = dp.wsCenterY;
-  ctx.save();
-  ctx.translate(px + dp.tx, py + dp.ty);
-  ctx.scale(dp.scale, dp.scale);
-  ctx.translate(-px, -py);
-  ctx.drawImage(dp.snap, 0, 0);
-  ctx.restore();
-  // Reemplazar el contenido del DrawLayer
-  dl.clear();
-  dl._ctx.drawImage(tmp, 0, 0);
-  // Guardar en historial de dibujo
-  edSaveDrawData();
-  edRedraw();
-}
-
 
 /* ══════════════════════════════════════════
    ICONO ⚙ SOBRE OBJETO SELECCIONADO
@@ -14368,15 +14118,6 @@ function _edDrawApplyPinchTransform(dl, dp){
    Se mueve con el objeto en tiempo real.
    ══════════════════════════════════════════ */
 
-function _edGearPos(la){
-  // Workspace coords del centro-superior del objeto
-  const pw=edPageW(), ph=edPageH();
-  const wx = edMarginX() + la.x * pw;
-  const wy = edMarginY() + (la.y - la.height/2) * ph;
-  // Convertir workspace → screen con la cámara
-  const s = edWorldToScreen(wx, wy);
-  return { cx: s.x, ty: s.y + _edCanvasTop };
-}
 
 // Gear icon eliminado — se usa doble toque / long press
 
@@ -14613,15 +14354,6 @@ function _edInitHTMLScrollbars(){
   });
 }
 
-function _edRoundRect(ctx, x, y, w, h, r){
-  ctx.beginPath();
-  ctx.moveTo(x+r, y);
-  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w, y, x+w, y+r, r);
-  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
-  ctx.lineTo(x+r, y+h); ctx.arcTo(x, y+h, x, y+h-r, r);
-  ctx.lineTo(x, y+r); ctx.arcTo(x, y, x+r, y, r);
-  ctx.closePath();
-}
 
 function _edHandleDoubleTap(idx, e){
   const la = edLayers[idx];
@@ -14693,13 +14425,6 @@ function _edAllCornersInside(la, rx0, ry0, rx1, ry1){
 }
 
 // ── Bezier sampling para trayectorias cerradas ─────────────────────────────────────
-// v38.06: delega en AnimClock (js/anim-clock.js) — fuente única compartida con el
-// visor interno, el editor de trayectorias y el lector externo. Ver ese archivo
-// para la implementación real y su documentación; esta función se conserva con
-// su nombre histórico porque tiene ~10 puntos de llamada en este archivo.
-function _edBezierSampleClosed(pts, numSamples) {
-  return AnimClock.bezierSampleClosed(pts, numSamples);
-}
 
 // ── Motion path: interpolación por longitud de arco en espacio píxel ───────────
 // v38.06: delega en AnimClock — ver js/anim-clock.js.
@@ -14713,11 +14438,6 @@ function _edPathArcLengthPx(points, closed, pw, ph) {
   return AnimClock.pathArcLengthPx(points, closed, pw || ED_PAGE_W, ph || ED_PAGE_H);
 }
 
-// ── Motion path: ángulo de la tangente (grados) en el punto t de la trayectoria ──
-// v38.06: delega en AnimClock — ver js/anim-clock.js.
-function _edPathTangentDeg(points, closed, t, pw, ph) {
-  return AnimClock.pathTangentDeg(points, closed, t, pw, ph);
-}
 
 // Delta de rotación (grados) para orientar el objeto según la tangente de la
 // trayectoria en el instante t, relativo a la tangente inicial (t=0).
@@ -14802,11 +14522,6 @@ function _edPathCurY(l) {
 function _edCurX(l) { const v = _edPathCurX(l); return v != null ? v : l.x; }
 function _edCurY(l) { const v = _edPathCurY(l); return v != null ? v : l.y; }
 
-// ── Easing para trayectorias: reasigna t dentro de [0,1] sin cambiar la duración ─
-// v38.06: delega en AnimClock — ver js/anim-clock.js.
-function _edEaseT(t,accel){
-  return AnimClock.easeT(t, accel);
-}
 
 // ── Sincronización trayectoria↔animación respetando pausas por frame (T) ──────
 // Cuando un frame tiene pausa (window._gcpFrameHolds en el editor GCP, guardada
@@ -14822,12 +14537,6 @@ function _edLayerCumTimeMs(la, totalF) {
   return AnimClock.layerCumTimeMs(la, totalF);
 }
 
-// Posición fraccional dentro de la secuencia de frames en el instante tMs,
-// respetando pausas por frame.
-// v38.06: delega en AnimClock — ver js/anim-clock.js.
-function _edFrameProgressAt(cumTime, totalF, tMs, holds) {
-  return AnimClock.frameProgressAt(cumTime, totalF, tMs, holds);
-}
 
 // Convierte una fracción 0-1 de UN traversal completo de la trayectoria en la
 // fracción equivalente respetando pausas por frame.
@@ -15321,7 +15030,7 @@ function _edAlignPathToGuides(rawPts, bx, by) {
       // Petición de Alberto: el ajuste a guías debe prevalecer sobre el
       // suavizado — un punto ajustado a una guía marca una esquina DURA
       // (p.ej. un giro de 90°) que la curva bezier del overlay/reproducción
-      // no debe redondear (ver _edDrawMotionPath y _edBezierSampleClosed).
+      // no debe redondear (ver _edDrawMotionPath).
       sharp: true,
     };
   });
@@ -15920,8 +15629,6 @@ function _edDrawMotionPath(pts, closed, editing, layerIdx) {
 // Usado al abrir una capa ⊕ Unida para edición vectorial, para que cada
 // sub-camino sea un objeto independiente y seleccionable durante la sesión.
 function _edDissolveJoined(la) {
-  const pw = edPageW(), ph = edPageH();
-  const rot = (la.rotation || 0) * Math.PI / 180;
   const cr  = la.cornerRadii || {};
   const gs  = la.groupedStyles || [];
   const ranges = _edGetSubPathRanges(la.points);
@@ -16043,7 +15750,6 @@ function _edLineHitTest(la, nx, ny, isTouch, hitSegOverride){
       const _prevP = (i>0 && la.points[i-1]!==null) ? la.points[i-1] : null;
       const _nextP = (i<n-1 && la.points[i+1]!==null) ? la.points[i+1] : null;
       // Para nodos en los extremos del sub-contorno, usar wrap dentro del sub-contorno
-      const _spRanges = la.points.includes(null) ? null : null; // solo si multi-contorno
       const prev = _prevP || (la.closed && !la.points.includes(null) ? la.points[(i-1+n)%n] : null);
       const next = _nextP || (la.closed && !la.points.includes(null) ? la.points[(i+1)%n] : null);
       if(prev && next){
@@ -17693,7 +17399,6 @@ function edOnStart(e){
     }
     // En táctil: retardo breve para detectar si viene un segundo dedo (pinch/zoom)
     if(e.pointerType === 'touch'){
-      const _pid = e.pointerId;
       const _cx = c.nx, _cy = c.ny;
       clearTimeout(window._edLineTouchTimer);
       window._edPendingLineAddPoint = { nx: _cx, ny: _cy };
@@ -17763,12 +17468,10 @@ function edOnStart(e){
        && e.pointerType!=='touch' && !_vsMultiActive()
        && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))){
       const _laForH = la;
-      const _isT2 = false; // PC only
       const _pw2=edPageW(), _ph2=edPageH(), _z2=edCamera.z;
       // Radio proporcional: min(18, 70% semidimensión menor en screen px)
       const _lineRectMinHalfScreen = Math.min(_laForH.width * _pw2, _laForH.height * _ph2) * _z2 / 2;
       const _hitR2 = Math.min(18, Math.max(4, _lineRectMinHalfScreen * 0.7));
-      const _rot2=(_laForH.rotation||0)*Math.PI/180;
       const _cm2 = _edCurveModeActive && _edCurveModeActive();
       for(const hp of _laForH.getControlPoints()){
         if(hp.corner==='rotate') continue; // rotate se gestiona por el bloque de handles
@@ -17816,37 +17519,8 @@ function edOnStart(e){
     // (elipses incluidas — mismo criterio que el resto de objetos)
     if(la.points.length>=2 && ($('edOptionsPanel')?.dataset.mode==='line' || $('edShapeBar')?.classList.contains('visible'))
        && (_edCurveModeActive && _edCurveModeActive())){
-      const rot=(la.rotation||0)*Math.PI/180;
-      const cos=Math.cos(rot),sin=Math.sin(rot);
-      const pw=edPageW(),ph=edPageH();
       const _n=la.points.length;
-      const _cr=la.cornerRadii||{};
       // Función que calcula la posición visual del handle (igual que en edDrawSel)
-      const _handlePos=(i)=>{
-        const p=la.points[i];
-        const r=_cr[i]||0;
-        let lpx=p.x*pw,lpy=p.y*ph;
-        if(r>0){
-          // Vecinos solo dentro del mismo sub-contorno (no cruzar null)
-          const _pPrev = (i>0 && la.points[i-1]!==null) ? la.points[i-1] : null;
-          const _pNext = (i<_n-1 && la.points[i+1]!==null) ? la.points[i+1] : null;
-          const prev = _pPrev || (la.closed && !la.points.includes(null) ? la.points[(i-1+_n)%_n] : null);
-          const next = _pNext || (la.closed && !la.points.includes(null) ? la.points[(i+1)%_n] : null);
-          if(prev && next){
-            const cur=la.points[i];
-            const d1=Math.hypot((cur.x-prev.x)*pw,(cur.y-prev.y)*ph);
-            const d2=Math.hypot((next.x-cur.x)*pw,(next.y-cur.y)*ph);
-            const rr=Math.max(0,Math.min(r,Math.min(d1/2,d2/2)));
-            const v1x=d1>0?(cur.x-prev.x)*pw/d1:0,v1y=d1>0?(cur.y-prev.y)*ph/d1:0;
-            const v2x=d2>0?(next.x-cur.x)*pw/d2:0,v2y=d2>0?(next.y-cur.y)*ph/d2:0;
-            const p1x=cur.x*pw-v1x*rr,p1y=cur.y*ph-v1y*rr;
-            const p2x=cur.x*pw+v2x*rr,p2y=cur.y*ph+v2y*rr;
-            lpx=(p1x+2*cur.x*pw+p2x)/4;
-            lpy=(p1y+2*cur.y*ph+p2y)/4;
-          }
-        }
-        return {lpx,lpy};
-      };
       // ── Doble tap sobre nodo/segmento ──
       // Arquitectura: _edLineHitTest detecta qué se tocó.
       // Primer tap: guardar candidato. Segundo tap (<400ms, mismo hit): ejecutar acción.
@@ -17946,8 +17620,6 @@ function edOnStart(e){
   // Handles de control (resize + rotate): todos los tipos en PC; táctil usa pinch para resize
   const _la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : null;
   // En panel line con LineLayer seleccionado: los nodos tienen prioridad sobre los handles de bbox
-  const _panelLineOpen = $('edOptionsPanel')?.dataset.mode === 'line';
-  const _panelShapeOpen = $('edOptionsPanel')?.dataset.mode === 'shape';
   // Saltar handles de resize/rotate en modo V⟺C (todos los dispositivos —
   // esto ya existía) y, en táctil, también cuando no se está usando el
   // selector (cualquier otra herramienta del panel Línea/Forma) — ver
@@ -18634,10 +18306,6 @@ function edOnStart(e){
       }
       _edLastTapTime = _nowEmpty; _edLastTapIdx = -1;
     }
-    const _wasType = edSelectedIdx >= 0 ? edLayers[edSelectedIdx]?.type : null;
-    const _wasLayer = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
-    const _panel = $('edOptionsPanel');
-    const _panelWasProps = _panel?.dataset.mode === 'props';
     edHideContextMenu();
     // Con barra flotante activa: solo deseleccionar, sin abrir submenús
     if($('edDrawBar')?.classList.contains('visible')){
@@ -19036,8 +18704,6 @@ function edOnMove(e){
       const delta=curAngle-startAngle;
       // Acumular rotación del bbox del grupo desde el inicio del gesto
       edMultiGroupRot = startGroupRot + delta*180/Math.PI;
-      const _rotCxPx = edMarginX() + cx * edPageW();
-      const _rotCyPx = edMarginY() + cy * edPageH();
       items.forEach(s=>{
         const la=edLayers[s.i]; if(!la) return;
         // DrawLayer: no rotar (su bitmap no se puede rotar en tiempo real)
@@ -19440,8 +19106,6 @@ function edOnMove(e){
     const pw=edPageW(), ph=edPageH();
     const rot=(edInitialSize.rot||0)*Math.PI/180;
     const corner=edResizeCorner;
-    const asp = edInitialSize.width*pw > 0 ? (edInitialSize.height*ph)/(edInitialSize.width*pw) : 1;
-    const isImg = la.type==='image';
 
     // ── Resize profesional: el vértice opuesto (ancla) permanece fijo ──
     // Vector ancla→cursor en píxeles de página
@@ -20028,7 +19692,6 @@ function edOnEnd(e){
   if(!window._gcpActive && edActiveTool==='select' && edRubberBand){
     // v42.36: dentro de la sesión vectorial la marquesina selecciona SOLO objetos de la sesión (o nodos, con NODOS) — ver _vsMarqueeFinish
     if(_vsMarqueeActive()){ _vsMarqueeFinish(); edRedraw(); return; }
-    const _rbPos = window._edRubberBandEndPos || {clientX: window.innerWidth/2, clientY: window.innerHeight/2};
     window._edRubberBandEndPos = null;
     const rx0=Math.min(edRubberBand.x0,edRubberBand.x1);
     const ry0=Math.min(edRubberBand.y0,edRubberBand.y1);
@@ -20173,7 +19836,7 @@ function edOnEnd(e){
   if(edPainting && (edActiveTool !== 'fill' || _edDodgeBurnActive || (typeof edFillBrushType !== 'undefined' && edFillBrushType === 'watercolor'))){
     // Nuevo sistema cursor: el trazo lo gestiona _cofHandleUp → no duplicar
     if(_cof.on && _cof._strokeStarted) return;
-    edSaveDrawData(); _edOffsetFirstMove = false; _edFromSaved = false;
+    edSaveDrawData(); _edOffsetFirstMove = false;
   }
   // v42.61 — MODO LIBRE: al soltar se calculan los nodos y se crea el objeto vectorial (o se descarta si fue un toque suelto)
   if(_edFreeStroke && _edFreeEnd(e)) return;
@@ -20777,74 +20440,6 @@ function _edShapeClearHistory(){
   _edShapeUpdateUndoRedoBtns();
 }
 
-function _edShapeApplyHistory(snapshot){
-  if(!snapshot){
-    // Estado inicial: el objeto no existía → eliminar
-    const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : (_edLineLayer || null);
-    if(la){
-      // Si tiene múltiples contornos (fusión), quitar solo el último contorno
-      if(la.type==='line' && la.points){
-        const _lastNull = la.points.lastIndexOf(null);
-        if(_lastNull > 0){
-          la.points = la.points.slice(0, _lastNull);
-          la._updateBbox();
-          // Si queda solo 1 contorno, ya no hay fusión activa
-          if(!la.points.includes(null)) _edLineFusionId = null;
-          edRedraw();
-          return;
-        }
-      }
-      // Solo 1 contorno o no es line → eliminar el objeto
-      const idx = edLayers.indexOf(la);
-      if(idx>=0) edLayers.splice(idx, 1);
-      const page=edPages[edCurrentPage]; if(page) page.layers=edLayers;
-    }
-    if(la === _edLineLayer) _edLineLayer = null;
-    // Limpiar sesión de fusión
-    _edLineFusionId = null;
-    edSelectedIdx=-1;
-    edCloseOptionsPanel();
-    edShapeBarHide();
-    _edDrawUnlockUI();
-    edActiveTool='select'; edCanvas.className='';
-    _edShapeStart=null; _edShapePreview=null; _edPendingShape=null;
-    // Bloquear el siguiente toque para evitar selección accidental
-    window._edIgnoreNextTap = true;
-    // Limpiar historial vectorial: ya no hay sesión activa
-    _edShapeHistory = []; _edShapeHistIdx = -1; _edShapeHistIdxBase = 0;
-    // Sincronizar historial global: el objeto ya no existe en el canvas
-    // Esto evita que un redo global restaure el objeto eliminado por undo local
-    edPushHistory();
-    edRedraw();
-    return;
-  }
-  const la = edSelectedIdx>=0 ? edLayers[edSelectedIdx] : (_edLineLayer || null); if(!la) return;
-  const d = JSON.parse(snapshot);
-  // Restaurar propiedades del layer sin cambiar su posición en el array
-  if(d.color        !== undefined) la.color       = d.color;
-  if(d.fillColor    !== undefined) la.fillColor   = d.fillColor;
-  la.fillGradient = _edCloneGrad(d.fillGradient); // undefined = sin degradado (undo de un degradado)
-  if(d.lineWidth    !== undefined) la.lineWidth   = d.lineWidth;
-  if(d.opacity      !== undefined) la.opacity     = d.opacity;
-  _edSetDf(la, d.defocus);   // v42.51 (ausente en la instantánea = nítido)
-  if(d.rotation     !== undefined) la.rotation    = d.rotation;
-  if(d.x            !== undefined){ la.x=d.x; la.y=d.y; la.width=d.width; la.height=d.height; }
-  if(d.shape        !== undefined) la.shape       = d.shape;
-  if(d.points       !== undefined) la.points      = d.points.slice();
-  // T1: restaurar _fusionId para que el historial vectorial sea coherente
-  if(d._fusionId !== undefined){ la._fusionId = d._fusionId; }
-  else { delete la._fusionId; } // snapshot sin _fusionId → objeto ya no es miembro de fusión
-  // Restaurar flag de unión y estilos por contorno
-  if(d.grouped !== undefined) la.grouped = d.grouped; else delete la.grouped;
-  if(d.groupedStyles) la.groupedStyles = _edCloneGroupedStyles(d.groupedStyles); else delete la.groupedStyles;
-  if(d.closed       !== undefined) la.closed      = d.closed;
-  if(d.cornerRadius !== undefined) la.cornerRadius= d.cornerRadius;
-  la.cornerRadii = d.cornerRadii
-    ? (Array.isArray(d.cornerRadii) ? [...d.cornerRadii] : {...d.cornerRadii})
-    : undefined;
-  _edVecRefreshColorUI('', la);   // v41.84: panel Y barra (antes solo la barra)
-  edRedraw();
-}
 
 // isNew=true: solo hay algo que deshacer si se ha creado/cambiado algo real
 // más allá del snapshot inicial de sesión (idx 0). Antes de eso, deshacer
@@ -23436,7 +23031,6 @@ function _edFreeDrawPreview(ctx){
   ctx.stroke();
   ctx.restore();
 }
-let _edLineAddTimer = null; // retardo táctil para detectar segundo dedo
 function _edLineAddPoint(nx, ny, isTouch=false){
   if(!_edLineLayer){
     // Crear capa con el primer punto como centro
@@ -23938,18 +23532,10 @@ function _vcofShowHint(show) {
   }
 }
 
-// Stubs de compatibilidad
-function _edCursorStartPositioning(e){ if(_cof.on){ _cof._dragging=true; _cofHandleMove(e); } }
 function _edRefreshOffsetCursor(){ if(_cof.on) _cofDraw(); }
 function _edCursorSetLineColor(c){ _edCursorLineColor=c; }
 function _edOffsetHide(){ _cofHide(); }
-function _edOffsetShowReset(){ if(_cof.on) _cofDraw(); }
 function _edOffsetShow(){ if(_cof.on) _cofDraw(); }
-function _edCursorStartExpireTimer(ms){ clearTimeout(_cof._timer); _cof._timer=setTimeout(_cofExpire, ms||_cof.MS_READY); }
-function edStartPaintFromSaved(e) {
-  if (_cof.on && (_cof.state==='red_ready'||_cof.state==='red_cool')) { _cofStartStroke(e); }
-  else { edStartPaint(e); }
-}
 
 function _edApplyCursorOffset(e){
   // Eventos sintéticos del nuevo cursor: coordenadas ya correctas
@@ -24403,22 +23989,6 @@ function edDodgeBurnStroke(nx, ny, lastWx, lastWy) {
   return { wx, wy };
 }
 
-// Aplica la capa de tinta (_edTmp.pen) como máscara destructiva sobre la acuarela:
-// elimina los píxeles de acuarela en todas las zonas donde existe tinta.
-// Se llama (a) tras cada segmento de acuarela y (b) al terminar un trazo de tinta o D/B.
-function _edApplyInkMaskToWatercolor() {
-  const wc  = _edTmp.watercolor;
-  const pen = _edTmp.pen;
-  if (!wc?._canvas || !pen?._canvas) return;
-  wc._ctx.save();
-  wc._ctx.globalCompositeOperation = 'destination-out';
-  wc._ctx.drawImage(pen._canvas, 0, 0);
-  wc._ctx.restore();
-  // Invalidar el estado de dodge/burn para el canvas de acuarela: fuerza una
-  // recaptura fresca la próxima vez que se use iluminar/oscurecer, evitando que
-  // datos obsoletos de origData restauren píxeles que deben estar enmascarados.
-  _dbOriginMap.delete(wc._canvas);
-}
 
 function _edWatercolorStroke(fl, nx, ny, color, size, opacity, lastWx, lastWy){
   if(!fl || !fl._canvas) return null;
@@ -24657,7 +24227,6 @@ function edStartPaint(e){
   if(_dlCheck && _dlCheck.locked && !_drawPanelOpen){ edPainting = false; _edShowLockIconDraw(_dlCheck); return; }
   if(e.pointerId !== undefined && edCanvas){
     try { edCanvas.setPointerCapture(e.pointerId); } catch(_){} }
-  const _drawPanelIsOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='draw';
   // Deseleccionar cualquier objeto previo al iniciar un nuevo trazo
   if(edSelectedIdx >= 0){ edSelectedIdx = -1; }
   if(edMultiSel.length){ _msClear(); edActiveTool='draw'; edCanvas.className='tool-draw'; }
@@ -24800,7 +24369,6 @@ function edContinuePaint(e, _noRender){
     }
   }
   const dl = _edTmpProxy(); if(!dl) return;
-  if(_edFromSaved){ _edFromSaved = false; edMoveBrush(e); return; }
   const _eTmp = _edApplyCursorOffset(e);
   const c = edCoords(_eTmp), er = edActiveTool==='eraser';
   const isTouch = e.pointerType === 'touch' || (e.touches && e.touches.length > 0);
@@ -24844,7 +24412,7 @@ function edSaveDrawData(){
   if(_edDodgeBurnActive){
     // Dodge/burn: solo guardar historial, no ejecutar commit de acuarela
     window._edDbLast = undefined;
-    // NOTA: NO llamar _edApplyInkMaskToWatercolor() aquí — la máscara de tinta es
+    // NOTA: la máscara de tinta es
     // no destructiva: el contenido previo en watercolor/bucket se preserva bajo la
     // tinta; la tinta cubre visualmente (está encima en el render). Al borrar tinta,
     // el contenido previo reaparece. Nuevo D/B bajo tinta ya está bloqueado via _inkMaskData.
@@ -24866,8 +24434,7 @@ function edSaveDrawData(){
     // con tinta ningún hueco al rellenar: las fugas del bote las evita el cierre VIRTUAL
     // (edFloodFill/_edFloodFillOnLayer → _edFillRetryVirtual), que no toca el dibujo.
     // (Los campos _gc* de DrawLayer son restos inertes de aquel cierre: sólo se escriben, nadie los lee.)
-    // NOTA: NO llamar _edApplyInkMaskToWatercolor() al terminar un trazo de tinta —
-    // la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
+    // NOTA: al terminar un trazo de tinta la máscara es no destructiva: el contenido previo (acuarela/D/B) se preserva
     // bajo la tinta y reaparece si la tinta es borrada. Nueva acuarela bajo tinta
     // ya está bloqueada inline en _edWatercolorStroke (destination-out en tiempo real).
     // v42.02: la goma / «borrar color» acaba de quitar tinta → el borde del relleno que queda al descubierto recibe el antialiasing de la tinta
@@ -25032,7 +24599,6 @@ function _edGhostUpSweep(e){
    MENÚ
    ══════════════════════════════════════════ */
 function edCloseMenus(){
-  _edEraserPickClose(); // cerrar picker del borrador al cerrar menús
   document.querySelectorAll('.ed-dropdown').forEach(d=>{
     d.classList.remove('open');
     // Devolver al padre original si fue movido a body
@@ -25149,20 +24715,6 @@ function edDeactivateDrawTool(){
 
 
 // ── Pestaña del panel colapsado ──────────────────────────────────
-// Preservar estado colapsado al regenerar el panel
-function _edPanelSetInnerHTML(panel, html) {
-  const _wasCollapsed = panel.classList.contains('panel-collapsed');
-  panel.innerHTML = html;
-  if (_wasCollapsed) {
-    panel.classList.add('panel-collapsed');
-    // Re-registrar listener de la pestaña (el DOM fue reemplazado)
-    const _tab = document.getElementById('edPanelTab');
-    if (_tab) {
-      _tab.removeEventListener('pointerup', _edPanelTabClick);
-      _tab.addEventListener('pointerup', _edPanelTabClick);
-    }
-  }
-}
 
 function _edPanelTabShow() {
   const _p = $('edOptionsPanel');
@@ -25184,7 +24736,6 @@ function _edPanelTabClick(e) {
   if (e) e.stopPropagation();
   const _p = $('edOptionsPanel');
   if (!_p) return;
-  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _mode = _p.dataset.mode;
   // Capturar ANTES de ocultar la barra (edShapeBarHide resetea este flag) si
   // la edición de nodos (V⟺C) estaba activa en la barra flotante — mismo
@@ -25212,15 +24763,8 @@ function _edPanelTabClick(e) {
   _edRefocusAfterCollapse();
 }
 
-// Cierra el selector de capa del borrador si está abierto
-function _edEraserPickClose() {
-  const _ov = document.getElementById('_edEraserPickOverlay');
-  if (_ov) _ov.remove();
-}
-
 function _edDrawCollapseHandler() {
   const _p = $('edOptionsPanel'); if (!_p) return;
-  _edEraserPickClose(); // cerrar picker si estaba abierto
   const _collapsed = _p.classList.toggle('panel-collapsed');
   if (_collapsed) { _edPanelTabShow(); edDrawBarShow(true); }
   else             { _edPanelTabHide(); edDrawBarHide(); }
@@ -26237,13 +25781,6 @@ function _edActivateLineTool(isNew, isCreating) {
 }
 
 
-// _edApplyFillToClosedLayers — DEPRECATED: causaba contaminación de relleno entre objetos independientes.
-// Cada objeto vectorial mantiene únicamente el relleno asignado explícitamente por el usuario.
-// No se llama desde ningún OK handler. Se conserva por compatibilidad pero no debe usarse.
-function _edApplyFillToClosedLayers() {
-  // No-op: la independencia de objetos es prioritaria sobre la aplicación automática de relleno.
-}
-
 // keepTool (v42.22): true cuando el objeto se remata con la propia herramienta (polígono que se cierra, recta que llega a su 2.º punto,
 // botón «Cerrar objeto»): la herramienta SIGUE activa y el siguiente toque empieza un objeto nuevo, sin pasar por selección.
 // Sin él (OK, otra herramienta, selección…) se queda en selección como siempre; quien llama fija entonces la herramienta que toque.
@@ -26271,7 +25808,6 @@ function _edFinishLine(keepTool) {
     if (typeof _vcofSetOn === 'function' && typeof _vcof !== 'undefined' && _vcof && _vcof.on) _vcofSetOn(false);
     edRedraw();
     if(!keepTool){ _edLineType='select'; edActiveTool='select'; edCanvas.className=''; }
-    const _panelOpen = $('edOptionsPanel')?.classList.contains('open') && $('edOptionsPanel')?.dataset.mode==='line';
     const _shapeBarActive = $('edShapeBar')?.classList.contains('visible');
     // Al finalizar un objeto, siempre continuar la sesión (isCreating=true) para preservar
     // _vsPreSessionLayers y que los objetos recién creados sigan siendo seleccionables/fusionables.
@@ -27525,7 +27061,6 @@ function _edFreezeDrawLayer(){
    PANEL DE OPCIONES
    ══════════════════════════════════════════ */
 function edCloseOptionsPanel(){
-  _edEraserPickClose(); // cerrar picker del borrador si está abierto
   _edInlineTextEditEnd(); // edición de texto en la propia caja/bocadillo, si había alguna activa (v40.14)
   // Misma razón que en _bibClose: el ghost de arrastre de la biblioteca vive
   // en document.body, no dentro del panel — si este cierre genérico se
@@ -28497,21 +28032,6 @@ function _edInitSliderBubbles(container) {
   });
 }
 
-function _edBindNumInput(el) {
-  if (!el) return;
-  el.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') { e.preventDefault(); this.blur(); }
-  });
-  el.addEventListener('change', function() {
-    // En Android táctil, blur cierra el teclado virtual
-    if (window._edIsTouch) this.blur();
-  });
-}
-function _edBindAllNumInputs(container) {
-  if (!container) return;
-  container.querySelectorAll('input[type="number"]').forEach(_edBindNumInput);
-  _edInitSliderBubbles(container);
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // EDICIÓN DE TEXTO DIRECTAMENTE EN LA CAJA/BOCADILLO (v40.14)
@@ -28899,13 +28419,7 @@ function edRenderOptionsPanel(mode){
     _edSyncToolColor();
     _edSyncToolParams();
     // ────────────────────────────────────────────────────────────────
-    const curSize = isEr ? edEraserSize : edDrawSize;
-    const curOpacity = 100; // sin uso: la opacidad de cada herramienta vive en _edToolParams (v41.82)
     // Función helper para generar info de estado
-    const _infoText = () => {
-      if(isFill) return `Color ${edDrawColor}`;
-      return `${isEr ? edEraserSize : edDrawSize}px`;
-    };
     panel.innerHTML=`
 <div style="display:flex;flex-direction:column;width:100%;gap:0">
   <div id="edPanelHeader" style="display:flex;flex-direction:row;align-items:center;gap:4px"><button id="op-tmp-pen" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pen'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pen'?'var(--black)':'transparent'};color:${_edTmp.active==='pen'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_inkTool')}</button><button id="op-tmp-pencil" style="flex-shrink:0;border:2px solid ${_edTmp.active==='pencil'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='pencil'?'var(--black)':'transparent'};color:${_edTmp.active==='pencil'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_pencilTool')}</button><button id="op-tmp-wc" style="flex-shrink:0;border:2px solid ${_edTmp.active==='watercolor'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='watercolor'?'var(--black)':'transparent'};color:${_edTmp.active==='watercolor'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('op_watercolorTool')}</button><button id="op-tmp-bucket" style="flex-shrink:0;border:2px solid ${_edTmp.active==='bucket'?'var(--black)':'var(--gray-300)'};border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:${_edTmp.active==='bucket'?'var(--black)':'transparent'};color:${_edTmp.active==='bucket'?'var(--white)':'var(--gray-600)'};white-space:nowrap">${I18n.t('ed_fillTool')}</button><button id="op-layer-clear" style="flex-shrink:0;border:2px solid #e63030;border-radius:6px;padding:3px 7px;font-family:inherit;font-size:clamp(.65rem,1.9vw,.75rem);font-weight:900;cursor:pointer;background:transparent;color:#e63030;white-space:nowrap">🗑</button><div style="flex:1"></div><button id="op-draw-ok" style="background:var(--black);color:var(--white);border:none;border-radius:6px;padding:4px 14px;font-family:inherit;font-size:clamp(.75rem,2.2vw,.85rem);font-weight:900;cursor:pointer">✓ OK</button></div>  <!-- FILA 1: Herramientas con scroll horizontal -->
@@ -29430,8 +28944,6 @@ function edRenderOptionsPanel(mode){
       }
       // Offset inactivo → abrir popover
       const br = _opOffsetBtn.getBoundingClientRect();
-      const panel = $('edOptionsPanel');
-      const pr = panel ? panel.getBoundingClientRect() : {left:0,top:0};
       _opOffsetPop.style.display = 'flex';
       _opOffsetPop.style.left = br.left + 'px';
       _opOffsetPop.style.top = '0px';
@@ -30518,10 +30030,6 @@ function edRenderOptionsPanel(mode){
         _edActivateShapeTool(true);
       }
     });
-    $('pp-shape-rect')?.addEventListener('click',()=>{ la.shape='rect'; edRedraw(); edRenderOptionsPanel('props'); });
-    $('pp-shape-ellipse')?.addEventListener('click',()=>{ la.shape='ellipse'; edRedraw(); edRenderOptionsPanel('props'); });
-    $('pp-shape-color')?.addEventListener('input',e=>{ la.color=e.target.value; edRedraw(); });
-    $('pp-shape-lw')?.addEventListener('change',e=>{ la.lineWidth=Math.max(0,Math.min(20,+e.target.value)); edRedraw(); });
     // Line props — editar recta abre submenú Rectas (re-editar objeto existente)
     $('pp-edit-line')?.addEventListener('click',()=>{
       const _lla = edLayers[edSelectedIdx]; if(!_lla) return;
@@ -30563,7 +30071,6 @@ function edRenderOptionsPanel(mode){
 
       _edActivateLineTool(false); // isNew=false: re-editar objeto existente simple
     });
-    $('pp-line-toggle-close')?.addEventListener('click',()=>{ la.closed=!la.closed; edRedraw(); edRenderOptionsPanel('props'); });
     $('pp-rot')?.addEventListener('input',e=>{
       const la2=edSelectedIdx>=0?edLayers[edSelectedIdx]:null; if(!la2)return;
       la2.rotation=parseFloat(e.target.value)||0;
@@ -32032,99 +31539,6 @@ function _edZoomPick(anchorEl) {
 /* ══════════════════════════════════════════
    SELECTOR DE CAPA PARA EL BORRADOR
    ══════════════════════════════════════════ */
-// Muestra un pequeño menú para elegir en cuál de las 4 sub-capas actúa el borrador.
-// Se llama tanto desde el botón del panel (op-tool-eraser) como desde la barra flotante.
-function _edEraserPick(anchorEl) {
-  // Toggle: si ya está abierto, cerrar
-  const _old = document.getElementById('_edEraserPickOverlay');
-  if (_old) { _old.remove(); return; }
-
-  const _opts = [
-    { key:'pen',        icon:`<svg xmlns="http://www.w3.org/2000/svg" width="38" height="41" viewBox="0 0 64 70"><g transform="translate(27.143 54.666)"><path d="M 5.726 5.124 L 7.133 0.079 L 6.731 -5.386 L 1.507 -6.542 L -5.124 -2.496 L -7.133 0.867 L -7.133 6.542 L 5.726 5.124 Z" fill="#aa6e6e" stroke="none" stroke-width="0"/></g><g transform="translate(25.853 55.352)"><path d="M -2.039 5.295 L -1.768 -0.655 L -4.747 7.279 L -6.102 3.312 L -5.435 -1.244 L -2.190 -4.450 L 3.217 -7.279 L 6.102 -6.336 L 2.496 -0.490 L 1.054 6.110 L -2.039 5.295 Z" fill="#f9cdcd" stroke="none" stroke-width="0"/></g><g transform="translate(26.201 62.884)"><path d="M -6.530 -4.099 L -5.274 -4.388 Q -4.018 -4.677 -2.779 -4.323 L -0.006 -3.532 Q 2.612 -2.785 5.124 -3.836 L 7.635 -4.887 L 6.077 -1.166 L -0.402 3.100 L -7.937 4.835 L -6.329 2.312 L -6.329 -0.841 L -6.530 -4.099 Z" fill="#321a1a" stroke="none" stroke-width="0"/></g><g transform="translate(45.560 24.586)"><path d="M -15.267 20.131 L -10.178 21.130 L -2.863 10.648 L 3.181 1.830 L 10.496 -8.652 L 14.631 -15.140 L 15.267 -19.133 L 14.313 -21.130 L 10.178 -19.965 L 3.817 -15.307 L -1.272 -7.154 L -6.997 3.327 L -11.132 12.312 L -15.267 20.131 Z" fill="#f2deba" stroke="none" stroke-width="0"/></g><g transform="translate(44.755 24.239)"><path d="M -14.421 19.989 L -10.816 20.744 L -0.000 -3.583 L 5.768 -11.503 L 14.060 -20.744 L 1.803 -11.315 L -3.245 -1.697 L -8.292 9.429 L -14.421 19.989 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(48.009 24.598)"><path d="M -11.710 21.312 L -5.900 10.714 L 0.655 2.766 L 6.912 -6.274 L 13.795 -16.437 L 12.601 -21.312 L 10.450 -16.749 Q 8.299 -12.187 5.412 -8.051 L 5.148 -7.672 Q 1.996 -3.157 -1.295 1.258 L -2.145 2.399 Q -4.857 6.039 -7.539 9.701 L -7.895 10.188 Q -10.220 13.364 -12.008 16.870 L -13.795 20.377 L -11.710 21.312 Z" fill="#9f8484" stroke="none" stroke-width="0"/></g><g transform="translate(32.546 46.929)"><path d="M -1.812 -2.397 L 3.730 -1.059 L 1.428 2.700 L -3.844 1.666 L -1.812 -2.397 Z" fill="#ffe135" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(39.607 34.949)"><path d="M -20.214 30.952 L -19.812 29.954 Q -19.410 28.955 -19.534 27.886 L -19.611 27.221 Q -19.812 25.487 -19.677 23.746 L -19.587 22.604 Q -19.410 20.337 -18.004 18.550 L -18.004 18.550 Q -16.598 16.764 -14.643 15.601 L -10.526 13.152 L -7.010 6.168 Q -3.495 -0.815 -0.357 -7.976 L 0.819 -10.659 Q 3.495 -16.766 7.466 -22.121 L 8.164 -23.063 Q 11.437 -27.477 16.203 -30.213 L 17.987 -31.237 Q 20.969 -32.949 21.127 -29.515 L 21.127 -29.515 Q 21.286 -26.080 19.518 -23.131 L 18.109 -20.782 Q 14.932 -15.485 11.152 -10.600 L 7.727 -6.174 Q 2.859 0.116 -1.067 7.034 L -5.401 14.670 L -5.195 19.963 Q -5.083 22.820 -6.354 25.381 L -6.354 25.381 Q -7.625 27.943 -10.096 29.381 L -10.325 29.515 Q -13.026 31.086 -16.074 31.774 L -20.181 32.700 Q -21.286 32.949 -20.750 31.951 L -20.214 30.952 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(15.616 16.910) rotate(0.9187586633190588)"><path d="M -11.511 6.000 L -11.413 3.361 Q -11.315 0.740 -8.780 0.069 L -6.909 -0.427 Q -4.375 -1.098 -3.977 -3.690 L -3.544 -6.511 L 3.641 -6.358 L 4.396 -2.943 Q 4.961 -0.383 7.532 0.131 L 9.037 0.431 Q 11.608 0.945 11.448 3.562 L 11.266 6.511 L -11.511 6.000 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.522 12.241) rotate(0.9187586633190588)"><path d="M -4.950 -1.528 L 5.193 -1.528 L 5.922 1.645 L -5.436 0.947 L -4.950 -1.528 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.472 33.578) rotate(0.9187586633190588)"><path d="M -11.467 -12.687 L 11.467 -12.687 L 11.467 11.420 Q 11.467 12.687 10.199 12.687 L -10.199 12.687 Q -11.467 12.687 -11.467 11.420 L -11.467 -12.687 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.663 32.395) rotate(0.9187586633190588)"><path d="M -12.327 -4.912 L 12.327 -4.912 L 12.327 4.912 L -12.327 4.912 L -12.327 -4.912 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(8.883 32.059) rotate(0.9187586633190588)"><path d="M -1.030 -3.400 L 0.910 -3.431 L 1.030 3.431 L -1.000 3.400 L -1.030 -3.400 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(13.737 32.126) rotate(0.9187586633190588)"><path d="M -2.791 3.446 L -3.000 -3.509 L -1.119 -3.509 L 0.821 0.109 L 0.761 -3.540 L 2.798 -3.534 L 3.000 3.480 L 0.940 3.478 L -1.060 0.140 L -0.911 3.540 L -2.791 3.446 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(26.554 32.567) rotate(0.9187586633190588)"><path d="M -1.977 -4.989 L 1.977 -4.897 L 1.932 4.989 L -1.932 4.850 L -1.977 -4.989 Z" fill="#bdb7b7" stroke="none" stroke-width="0"/></g><g transform="translate(15.633 6.439) rotate(0.9187586633190588)"><path d="M -10.419 -4.144 L 10.606 -4.133 L 10.742 4.079 L -10.606 4.133 L -10.419 -4.144 Z" fill="#d4d4d4" stroke="none" stroke-width="0"/></g><g transform="translate(15.639 6.416) rotate(0.9187586633190588)"><path d="M -10.484 4.327 L -10.446 -4.019 L 10.560 -4.137 L 10.684 -4.058 L -7.331 -2.781 Q -8.515 -2.697 -8.551 -1.510 L -8.721 4.073 L -10.484 4.327 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g><g transform="translate(20.844 6.483) rotate(0.9187586633190588)"><path d="M -5.636 4.196 L 2.582 3.096 Q 3.628 2.956 3.692 1.903 L 4.038 -3.814 L 5.499 -4.196 L 5.636 4.053 L -5.636 4.196 Z" fill="#9d9595" stroke="none" stroke-width="0"/></g><g transform="translate(15.666 25.233) rotate(0.9187586633190588)"><path d="M -13.089 -6.323 Q -13.072 -8.723 -10.753 -9.342 L -8.009 -10.074 Q -6.052 -10.596 -5.609 -12.572 L -5.166 -14.548 L -10.782 -14.548 L -10.707 -22.786 L 10.342 -22.864 L 10.416 -14.743 L 5.024 -14.743 L 5.340 -12.532 Q 5.657 -10.321 7.843 -9.864 L 11.422 -9.116 Q 13.301 -8.723 13.298 -6.803 L 13.248 20.578 Q 13.244 22.786 11.036 22.786 L -11.225 22.786 Q -13.301 22.786 -13.286 20.710 L -13.089 -6.323 Z" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(20.776 32.253) rotate(0.9187586633190588)"><path d="M -3.023 -3.438 L -2.909 3.535 L -0.887 3.451 L -0.917 1.549 L 0.725 3.483 L 2.844 3.451 L 0.157 -0.167 L 3.023 -3.379 L 0.814 -3.410 L -1.007 -1.570 L -0.917 -3.535 L -3.023 -3.438 Z" fill="#000000" stroke="none" stroke-width="0"/></g><g transform="translate(15.530 10.656) rotate(0.9187586633190588)"><path d="M -5.031 0.039 L 5.332 -0.169" fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="translate(6.643 31.419) rotate(0.9187586633190588)"><path d="M -1.072 -14.966 L 1.030 -15.213 L 1.072 15.213 L -1.072 14.985 L -1.072 -14.966 Z" fill="#ffffff" stroke="none" stroke-width="0"/></g></svg>`, label:I18n.t('op_inkTool') },
-    { key:'pencil',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxOSIgaGVpZ2h0PSIzMSIgdmlld0JveD0iMCAwIDE5IDMxIj4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMC42NjIgMTUuMzM5KSI+PHBhdGggZD0iTSAtNy4yNjMgMy4wMjAgTCAwLjc5NSAtMTQuMTA1IEwgMy44NzAgLTE1LjA1OSBMIDYuOTQ1IC0xMy4yNTcgTCA4LjE2NSAtOS44MTEgTCAwLjE1OSA3LjIwOCBMIC01Ljk3MiAxMy4wNjYgUSAtOC4xNjUgMTUuMTYxIC03Ljk0MCAxMi4xMzYgTCAtNy4yNjMgMy4wMjAgWiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjMDAwMDAwIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2Ljg2MCAyMS41MjApIj48cGF0aCBkPSJNIC0zLjgyNCAzLjc1MSBMIC0xLjE3NyA1LjczNiBMIDMuODk4IDAuODA5IEwgNC4yNjYgLTIuMzUzIEwgMC4wNzQgLTUuNzM2IEwgLTMuMzA5IC0zLjA4OSBMIC0zLjgyNCAzLjc1MSBaIiBmaWxsPSIjZmZlZGM3IiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNC4xOTAgMjcuMTQxKSByb3RhdGUoLTguOTQyMDQ0NTA2MjY4NzQyKSI+PHBhdGggZD0iTSAwLjI0MyAxLjIyMCBMIC0wLjY2MyAxLjY5NSBRIC0xLjU3MCAyLjE2OSAtMS40MzcgMS4xNTUgTCAtMS4zMDEgMC4xMTkgTCAtMC44MzMgLTIuMTY5IEwgMC4xMDIgLTEuOTQxIFEgMS4wMjcgLTEuNzE2IDEuMjk5IC0wLjgwMiBMIDEuNTcwIDAuMTExIEwgMC4yNDMgMS4yMjAgWiIgZmlsbD0iIzRlMzIzMiIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcuODY4IDIyLjQ4MCkiPjxwYXRoIGQ9Ik0gLTIuNjM3IDMuNDIzIEwgMi45MzEgLTQuODAxIEwgMi44OTggLTAuMTgyIEwgLTIuMTA3IDQuNjk1IEwgLTIuNjM3IDMuNDIzIFoiIGZpbGw9IiNjNGI2OTciIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5LjExNSA5LjUwOSkiPjxwYXRoIGQ9Ik0gLTUuNDk2IDguODM5IEwgLTQuNjgzIDguODMzIFEgLTMuODcwIDguODI4IC0zLjI1OSA4LjI5MyBMIC0yLjU5OCA3LjcxNCBMIDUuNDQ3IC05LjA3OSBMIDIuNjgyIC04LjExNiBMIC01LjQ5NiA4LjgzOSBaIiBmaWxsPSIjZjdmNWJiIiBzdHJva2U9Im5vbmUiLz48L2c+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIuMTI5IDEwLjIzMykgcm90YXRlKDIuODYyODU5NzgyNjk0MDgzNikiPjxwYXRoIGQ9Ik0gLTUuMjM3IDcuMjg5IEwgMS44MDggLTkuOTk3IEwgNS4wMjcgLTguMjQ3IEwgLTEuNjk3IDkuMDc2IEwgLTIuMzAwIDkuNTYyIFEgLTIuODIwIDkuOTgxIC0zLjQ4NiA5LjkzNSBMIC0zLjQ4NiA5LjkzNSBRIC00LjE1MiA5Ljg4OSAtNC41NzUgOS4zNzIgTCAtNC42NTkgOS4yNzAgUSAtNS4xMTMgOC43MTYgLTUuMTc1IDguMDAyIEwgLTUuMjM3IDcuMjg5IFoiIGZpbGw9IiM1MjM4MzgiIHN0cm9rZT0ibm9uZSIvPjwvZz4KICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxNC4zMjggMTIuMzcyKSI+PHBhdGggZD0iTSAtNC4zNjcgNi45NDQgTCAtNC4yOTUgOC4zMTkgUSAtNC4yNjEgOC45NTkgLTMuOTQzIDkuNTE2IEwgLTMuNjI1IDEwLjA3MiBMIDQuMjc0IC02Ljc4NyBMIDMuMTYxIC0xMC4wNzUgTCAtNC4zNjcgNi45NDQgWiIgZmlsbD0iI2FmYWIzYyIgc3Ryb2tlPSJub25lIi8+PC9nPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDguNjg2IDE1LjAyMikiPjxwYXRoIGQ9Ik0gLTUuNjY4IDE0LjUzMiBMIC0zLjg4OSAyLjYyOCBMIDQuMTg0IC0xNC4wMDIgTCA1LjY2OCAtMTQuNTMyIEwgLTIuMzQ5IDMuMTAyIEwgLTUuNjY4IDE0LjUzMiBaIiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9Im5vbmUiLz48L2c+Cjwvc3ZnPg==" width="16" height="26" style="image-rendering:pixelated;vertical-align:middle"/>`, label:I18n.t('op_pencilTool') },
-    { key:'watercolor', icon:'💧', label:I18n.t('op_watercolorTool') },
-    { key:'bucket',     icon:`<img src="data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIgogICAgIHdpZHRoPSI1MCIgaGVpZ2h0PSI0NyIgdmlld0JveD0iMCAwIDUwIDQ3Ij4KICA8aW1hZ2UgaHJlZj0iZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFESUFBQUF2Q0FZQUFBQ2hkNW4wQUFBTS9FbEVRVlI0QWN4WkIxaFVWeFkrYjNxakRDQlZGRUhCUlVWRkpWald0V3hpaVlpb0cxd05saVRZZFkwcmlXV3RFWldJV1d6QmFHU2pKaG9WRUZFcGxxaG9SRVFFQlVWNkhjb012Y3dNVS9mY1FSQU1xeURNOSsxODUzL3YzWHZQUGVmODcvWTNOUGovK3ZYRmNHWWpkdmNSR0NZYnNkbHlTd05EMVNRYlc5a29zMTdGRmx4ZW5vbUJ3WDRzLzRQb2s4aGs5TFo0Y08vZVYwWVpHSi9BWjJkRVc3SEJ4RXpFVG5NTzU3NGhrMWx2eHVGa1RIVVljRzY3cDllV3cwdVhEMHNMREdLWEJKK2czd3dJNUNRRUhiRzV1bm1yM2JnQlRodUdBdjBZMW1zbnRIYXBua3RzWTlCb3NYTmRSNTZZNGpKc3h1alI3bDl3bWN6N1FwN2dtTDJ4U2FJSmg5Tmd3dVhtZitRNE1HeUxoK2UyNE9XcnhqNExEQktJZnp6Rmp0cTVtN1Y5OGhUdzRBckFwa3dDa0o0Qm9GTHBJaHZSeng3T3J2NEhOQm53LzRZWjR4R3RvZzhpZ3l6Wm5KM0ZSNDdSTDZ6M1kreWY3d05CdmUxQktCQUlQVnhITE51M2NOSElSM3UrNVZlYytJa1JzM1U3NHh2M2NlQWxWME9mMk5zQSs3NERhc1U2b05iNkFlVy8velY4MXdEMXcwbUFyQnpnc1ZndzFXV29BUU5nV2lzTGZOQUhFYnZlWEY2dFJVWTJWQWQ4QjFzLzlkRk12eGxWTWdyb01Kek9nTG5GNWVCd05neW85WnVBOGxrSzFKWmRRQjA3Q1ZSVUxGQnBMd0RxR3pDc04wU3BCTGdYRHhRU0pTMjBaTVpNSnAvQlhOVldTeDlFS3FxYTVIbktnOEd3UERNdC84NUlGOG4wRGV1dEg4aGw5VkYzN3dBVmZnWGc4Uk1BTVhhYnRwRjA1cm1wU2RkS1E3UVV1RmhhWWFPQWQwczFmUkJKeUpOSks2NkJDaFRHUm5ZVHAwNjFXTE5tRGF6ZjlpK0RGQmFqVVF6YUZ0L3ZmYWMyN3dSZmo1bGNHNzVnUzRzUmZSQWhvVjQ5RGNyaUNlV1ZjRFR3Z0NZckt3czJidHdJUHF0WFNXY3lWWlV0enJ0ejk3bHhENlFhdFRQYUdJZ0F2UkJCdzlkaVFXV3dEbGl3V2E2aHpaLytzUlR6NE1DQkE3M00vanBSdVFoa05TVGRMV1RuZ29mVG43UTRPeTRoZHZSRkpGc0RVQlFIYXRpQVpGeXk4M2tMUEdkVkU0ZFhvNklza3h3ZDFBR2dVSk4wZCtCSTBSZzhKbXN0c2FFdklpQUhDRDhMeW5MaTVDUndJQzg2VmhqZzcxOUwwcEhSVWFZQkFxWWlGTWNSU2I4ditHWW1ZRUtuaytxSDlFWUVyVis5RENxZEYzeUdFQ1VkL0hmc01MaCsvVHJZMjl2RHhZZ0k3bnk2UXAyRXJVYkt1NHFVUGxZZ1p6TEF3ZHFLWTh6bEQ5WW5rY1E2WEpOVEFUc1pSamtRaCtNcEZaTzJ3TXRMVVZSVUJKTW5UNGFqd2NIME9RSjZmVFdaSGxDbks1SmlhNmxUTitKeWdhWlVtT3VUQ0NoQkczNEpsUFU2ajNqeEFnYXNrNnBaN3NOZFpaZ0VYMTlmbUx2VWwrYkpwNnBJdXJNZ3JWRm1KTkNwQ3hwazZpcVZzbERQUkNEeVBLaDBRZXU4NG1VZE1LRzhzb0xyTVdWS0dTWWg4TUFCdnRHZng5SjlhUXJkK0NGNWI4Tk5ad2VJR2R5L1ZlV2x1QXdiSHBSNkpZTGVZck5Bd3hlMTZUcDhvT0J6SkpOeTQ1YjU5bTNiU2xFSHdpTWpqUjcyNzBzUEFzWC9YQzFmV3ByQno2T0h3bU03YTFKRmgyVGNlK1UwTmlvd2NWamZSQ2dOblU2dGVlTnRMMElpVEsyV2RuanZQclB3OFBBbUpwTUpvWkdSZ2gxOGhnb25DSXlyV1dwNUhJaDNzSVdRY2NNaHd2VlBVQ3cwMUJWb3RGcTRGdjlRL1h0T2RtRWxhSTlpNWsyOUVuRndjRWljTVdNRzc1bVJnSW5PV21VTTBNRUNXMmE5aW1KKzZ1MU5UMDFOQlNjbkovZzFOSlE1bjZWV3h4ano0WnFMSXdSUEdBVjNuZXhBYk5nOEhsUWFEYVNscENyM3hNUks3MWRYWFJkcDFMUFI2RGNJbkVySVZROFlQMzU4RG1KRVJFUUVNTTE2c1c2Q3VsMjNJYTFDWnJSQUZZTXhjOHFVS3FsVUNsT25Ub1hObXpaUkszZzBTTEl5ZXgxVmt3S2VKejFWN28yOUx2K2xwT2pYUnExbUhCWk9SeVFoZEtLWEZuRnpjMHUxdHJhMkR3a0pnWXpjRXBnMDNZc1J4R2ZxVm5hZFY3d1FJbGR3UVhRVm1zQWdvSVR6NTgyRFp5a3A0RDU2Tk0xdHpCaTRoUHN6YzBrVlpNY255bmYrZHF2cGZMbm9WNmxXOHdGV1hZaElSclNUbmlTaU0yeHVibjZheStVT1BuZnVIS1JtRkVGUmFSVk1tZTRKc2JKNllYbWJRYzlGN2NVNFZyYjNFc0M0NGNPb25PUmsyTHQzTCtZQ0xQM2lDNkFiR3FxV1BrN1FYS2lXaE1xMTJoRjRJaUVFbnVrVU9yajBOSkdObHBaVzgyN2Z2cTBqVVY3UlBLUHkrQUw0Y1Bvc0twaWhiYmRabk1VMWdLZTRPSks0aG5PNGNDazhYSk9YbjArUzRPM3R6ZUR5K1ptNENQbGd4blBFVzZVbmlTeGlzVmk3dzhKQ21YbkZFbWdoMGVMZGJjeGY0QkFMREJxd1ZjaFVldmFESWZCa29qdXdLQnBzaVk3VzNsTXFGTjd6NXRINjJkbUJTQ1NDMjNmdTFQQjRQQkYwOHRkalJJeU5qVGZnU2syenNPb05oU1dWN2R4WFYxZEN3b000a0NzVjB0VU9WcnFwdE5EVVdLZno0ZUJCd05CcWF3dUxpa0l2aG9WbHpmZnh5VnIvMVZkSjBiR3haOFJpOFNxZFVpY3VQVVVrMk5IUnFmK1JJMGVvM0NJeGZ2UjR2VU5YNFBIMDZ1VlFTSHAwUDB1bVZDNzdYU0p1L2lUeUtqaEpRd05Zc1RuRkdvMW1xVXdtY3hSTEpDTXJLeXRIWWpIWm5tZmd2VlBTSTBTTWpJd1hCZ2QvenlFdElhbXNhK2M0TXpNZG9pTkRteVRpOHMxWWNBNVV5cUlyejU5RFZIbzZITHA3VnhHWG15dlNzRm5uc2F3UlFhUzlBWkxUQ1hTYmlORFU5R3RuWjJlT3E2c3JkcW1LZGk1bHVEWmN2WHdCYURSR0RoYUVJaUJiS3AxUkl5b051NWVYdDdlMHNYRlhyVnpldTZpdWJqY3A2dzY2VFlUTlpHL2FzOGVmVmxSYUNmSW1uQ1RiUkZOWFh3ZXB5WTgxTmRXU2pXMnlYN3hRS2VaaW1yU1FQOTU3UkxwTHhNZlplYURoaEFrVFFGVFdicjBEalZZRHVkbVpJSk5KVlUxTlRWZDZKTnEzR09rc0ViSlhJcXZxZUxTMWFPaHcxOU1mZk9EK2pNdmxoZUMyZ2hManVHaVF5ckhvdFRRMk5FTGl3M3ZBNC9Gcmg0OXdYNDRsZGdpOXlkdUlrS0JqNkhUNlBUTXo4MXloMENSdWxKdmJMUjhmbjU4K25qN054M253NENFNE5oaCtmbjc0Y2JEZGtVTVhyTHhKaGkyU0FRYUdSaVl5V1dPUTBNUTBpOEZnYUN5dGJOUjk3QndhblFjTlMrN1R6OEVYbFp1M3RQalFIWG1UU0grS29zSnhpeUd4dGJXOTdPazFaK3lGaStIamZvdUw3MzAvNFJucnlQR3pqQ1VyTnNMRWFmTkFqWHZBMmJPOWRMNXI2blZmZTNUUExSZVpWQVo4Z1FFc1c3MkJmdmo0V2ZhRnlEdU1pTmlIMU01OWgyaWozTWZ5aklUR3d5aUFZTE5lRmxYT0xzUFNzTjRNeEh0TEN4RkhPenY3Vzdpb1pYaDRlTXlLanIxcEZuTXIzdmlmbTNZTERNM3RvYnhLQ2lYaWFxaHJrSUVhdDlMRTI4djBOT2pmdi9ta1ZsM2JNbk9Ta21aSXBZMUlWZ1hhVi9va2w4MW1nNzJESXl4ZjdRZTc5aDJHSDg5RTBJT0N6OUF0TFd3R21WdFlYVFFTQ3YySTN2dUFFRmxnTEJTR3pmVDBuRlFzS3FQdDJYK1VVdElNZFlFM0tkcXRYYTMyNVhJWmxKV1Z3eWVmZk5LYTE5RkRXYWtJaklRbUhSVzE1bGxZV3NHbTdmdmc2KzBCSEJPVFhtUWE5bTh0N01JRElUSnZsdGVjdmdlRHZvTUNVUVdVU3RydDZ6bzB4Y0VOM3AzN2o5cXQ0RzhxOG5HanVPL2Z4NEcwd0p0bEhhVUYyQTFkaG85a0dSZ2FUK2lvL0YxNU5MNUE0SFRvNENFRG9raTZEN2wzQmprRjVYQW5JUjErZjV6Wm9icXRiUit3dEh4OXZ1NVE2VlVtVHMrZ1VDaGdvUE5Rd081dGlkbmtCZU90ODBKcmJHZ29pWXU3cTV0MmhqalpkcjdtSzAxWkV6bjd2MHE4eDAycFZJQllYQVljRGdlU0V1NlhGeFhtSjZBWkRhSkxRcGlmMnJCaFE0My9ubjFnWVdZRUU5MmRZY1RnZmpEQXpoS3N6WVZnS09BQ25VN1V1bVMzUTJVVi9vWFcyTmdBVlZWVlVGcGFBdm41dVZCUVVBQ1pMOUlVZ2Y1YlN1L2VqaTNFaWo4anVpd2t3dis4VEgrK2RlZU83YytHdVk0czJSTVFXQytSU0RRMmxrSndIbUFEYmtNZFlPUVFlNkRUaUNwMDY0ZnJDSlNYbDBGRTZDOXc1dVQzRFJoODJhWXZmWE1DOTI1OW1wR2VkaENQSktQUlFSU2l5OUlTM1VtbFV1SDVORG5wNXJZdFgyYzREZWhYeldRd3RFd21xMVlvTkNudGI5OVh6bWFUeGIzTDl2OVF3Y1RVRkdLdWhzT1R4QWRaR1B6eW11cktsU3FWa2hBSVFHVTE0cjJraFFpcFRNNllpL0JoRklKOHdxQ2pBMGM2azNXQnplR3dKWkwyaHlYVWVUL0JiMUpmYnR3RlFGRkRzWVhJREhVZEFONGtnRmxkazdaRTNxeXB4WXhabEZhekt1TFNKUXBuTjB4MlQyUXlHZFRWMVlQUXhCVG16RnRNRXhnYWplbWV4ZGUxMzBhRWFJMVl1V3ExeGhYUEdweHVkQzBsL2l0TFpxYUNnandnS3o2Tm9rQmNKbExqRm9XOExPS24yM2dYRVcxaFVRbUxlT2xyUTNvYmVlbzg2dkU4SWhJVlEyNXV0bTZtNHJBNWtJTW54dE1uRDlmZHZuRXR1YnFxa3V5S08yL3dMWnJ2SW5JNkxPejgwNCttelpEbTVlVkNYMnZUdDVocUxpTGJGN0c0SEFvTEMvRHRTeEdONnZpNFczWG5UaDh2OTF1N3BPU0hJOThtSmp5NGQ2YTJ0b2FNeFpUbVd0Mi92b3ZJZy9yYW1zOSt1eEVUOHVIRThmR085dGFhanllTnFQS2VOU2wzMmVJNUx6NWI0Sm5qdC9ieng4c1d6Y240Nmt2ZlIrUysydmZ2YWNzV3ppNWNzWGgyMldMdmFWa3JsOHdWL1hMcWg5UUhjYmQrcXFtdVdpbVRTdDB3N05XSUhwVjNFU0hPbnFqVjZqVUtoWndNVERwdUpWeXFLaVM3YzdNenR4WVY1RjVNZWZJb0pEY25Nem81OGVFWnZFY1c1T1ZzYldpbyt3YjFSdU1DU041Nlh6UXlEckVSY1JtaEYva3ZBQUFBLy85UmhLb1BBQUFBQmtsRVFWUURBQ00xQTlDTHU4M1NBQUFBQUVsRlRrU3VRbUNDIiB4PSIwIiB5PSIwIiB3aWR0aD0iNTAiIGhlaWdodD0iNDciLz4KPC9zdmc+" width="27" height="25" style="image-rendering:pixelated;vertical-align:middle"/>`, label:I18n.t('ed_fillTool') },
-  ];
-
-  // Capa transparente para cerrar al pulsar fuera
-  const overlay = document.createElement('div');
-  overlay.id = '_edEraserPickOverlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:1070;';
-
-  // Popup con los 4 botones
-  const pop = document.createElement('div');
-  pop.style.cssText = 'position:fixed;display:flex;flex-direction:row;gap:4px;' +
-    'background:rgba(25,25,25,0.97);border-radius:12px;padding:6px;' +
-    'box-shadow:0 4px 20px rgba(0,0,0,.55);' +
-    'border:1px solid rgba(255,255,255,.13);z-index:1071;';
-
-  _opts.forEach(({ key, icon, label }) => {
-    const isActive = _edTmp && _edTmp.active === key;
-    const btn = document.createElement('button');
-    btn.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
-      'border:none;border-radius:8px;padding:6px 10px;cursor:pointer;min-width:44px;gap:3px;' +
-      (isActive
-        ? 'background:rgba(255,255,255,.18);outline:2px solid rgba(255,255,255,0.7);outline-offset:-1px;color:#fff;'
-        : 'background:transparent;color:rgba(255,255,255,.75);');
-    btn.innerHTML = '<span style="font-size:1.3rem;pointer-events:none">' + icon + '</span>' +
-                    '<span style="font-size:0.58rem;white-space:nowrap;pointer-events:none">' + label + '</span>';
-    btn.addEventListener('pointerdown', e => e.stopPropagation());
-    btn.addEventListener('pointerup', e => {
-      e.stopPropagation();
-      overlay.remove();
-      // Limpiar pointers fantasma (táctil)
-      if (window._edActivePointers) window._edActivePointers.clear();
-      clearTimeout(window._edDrawTouchTimer);
-      _edFastTouchConfirm();
-      edPinching = false; edPainting = false;
-      if (window._edWcFl) { window._edWcFl = null; window._edWcLast = null; }
-      // Activar borrador en la capa elegida
-      if (_edTmp) _edTmp.active = key;
-      _edWcReset();
-      edActiveTool = 'eraser';
-      edCanvas.className = 'tool-eraser';
-      edDrawOpacity = 100;
-      edRenderOptionsPanel('eraser');
-      _edbSyncTool();
-    });
-    pop.appendChild(btn);
-  });
-
-  overlay.appendChild(pop);
-  document.body.appendChild(overlay);
-
-  // Posicionar el popup cerca del botón ancla
-  requestAnimationFrame(() => {
-    const ar = anchorEl
-      ? anchorEl.getBoundingClientRect()
-      : { left: window.innerWidth * 0.1, bottom: 80, top: 50, right: window.innerWidth * 0.3 };
-    const pw = pop.offsetWidth || 224;
-    const ph = pop.offsetHeight || 72;
-    const W = window.innerWidth, H = window.innerHeight, G = 8;
-    let left = ar.left;
-    let top = ar.bottom + G;
-    if (top + ph > H - G) top = Math.max(G, ar.top - ph - G);
-    left = Math.max(G, Math.min(W - pw - G, left));
-    pop.style.left = left + 'px';
-    pop.style.top  = top  + 'px';
-  });
-
-  // Bloquear eventos fuera del popup: stopPropagation evita que lleguen
-  // a los botones del panel que quedan debajo del overlay
-  overlay.addEventListener('pointerdown', e => {
-    if (!pop.contains(e.target)) {
-      e.stopPropagation();
-      e.preventDefault();
-      overlay.remove();
-    }
-  });
-  overlay.addEventListener('pointerup', e => {
-    if (!pop.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
-  });
-  overlay.addEventListener('click', e => {
-    if (!pop.contains(e.target)) { e.stopPropagation(); e.preventDefault(); }
-  });
-}
 
 /* ══════════════════════════════════════════
    BARRA HERRAMIENTAS DIBUJO FLOTANTE (T5)
@@ -32244,10 +31658,6 @@ function edInitDrawBar() {
     // Fuera de rango: mantener orientación sin tocarla
   }, { passive: false });
 
-  function _edbApplySnap() {
-    // La orientación ya se gestiona en tiempo real durante el drag.
-    // Esta función se mantiene por si se necesita en el futuro (p.ej. resize de ventana).
-  }
 
   function _edbEndDrag() {
     if (_longTimer) { clearTimeout(_longTimer); _longTimer = null; }
@@ -32377,52 +31787,6 @@ function edInitDrawBar() {
   // curva) — nunca dos abiertos a la vez (petición de Alberto).
   window._edbCloseBrushPop = _edbCloseBrushPop;
 
-  // Diálogo "¿En qué capa quieres dibujar?" con dos botones de acción.
-  // onCancel: callback opcional al cerrar sin elegir (click en fondo oscuro).
-  function _edbAskLayer(msg, onDraw, onFill, onCancel) {
-    const overlay = $('edLayerPickModal');
-    const msgEl   = $('edLayerPickMsg');
-    const drawBtn = $('edLayerPickDraw');
-    const fillBtn = $('edLayerPickFill');
-    if (!overlay) { onDraw(); return; }
-    msgEl.textContent = msg;
-    overlay.classList.add('open');
-    // Detener propagacion solo en la caja interior para que el fondo sea clickable
-    const box = overlay.querySelector('.ed-confirm-box');
-    const _stopBox = e => e.stopPropagation();
-    if (box) box.addEventListener('pointerdown', _stopBox);
-    let _closed = false;
-    const close = (cb) => {
-      if (_closed) return; _closed = true;
-      overlay.classList.remove('open');
-      if (box) box.removeEventListener('pointerdown', _stopBox);
-      overlay.removeEventListener('pointerdown', _onOverlayDown);
-      drawBtn.removeEventListener('click', onDrawClick);
-      fillBtn.removeEventListener('click', onFillClick);
-      if (cb) cb();
-    };
-    // Click en el fondo oscuro → cancelar (cerrar sin accion o llamar onCancel)
-    const _onOverlayDown = (e) => {
-      if (e.target === overlay) close(onCancel || null);
-    };
-    const onDrawClick = () => close(onDraw);
-    const onFillClick = () => close(onFill);
-    overlay.addEventListener('pointerdown', _onOverlayDown);
-    drawBtn.addEventListener('click', onDrawClick);
-    fillBtn.addEventListener('click', onFillClick);
-    // Modal de verdad: nada de lo que hay detrás (guías/reglas) debe
-    // reaccionar al toque mientras este diálogo está abierto — ver
-    // edStopCanvasLeak. No interfiere con _onOverlayDown de arriba (mismo
-    // elemento, listener ya registrado antes: sigue disparándose igual,
-    // stopPropagation solo afecta a los ANCESTROS, no a otros listeners del
-    // propio nodo). Con guard interno: seguro llamarlo en cada apertura.
-    edStopCanvasLeak(overlay);
-  }
-  // Cierra el picker de capa si esta abierto (helper local)
-  function _edbCloseLayerPickLocal() {
-    const overlay = $('edLayerPickModal');
-    if (overlay && overlay.classList.contains('open')) overlay.classList.remove('open');
-  }
 
   function _edbClearPhantomPointers() {
     // Al cambiar herramienta desde el popup, el pointerup se consumió en el botón
@@ -32772,7 +32136,6 @@ function edInitDrawBar() {
     const pw  = pop.offsetWidth  || 130;
     const ph  = pop.offsetHeight || 52;
     const W   = window.innerWidth;
-    const H   = window.innerHeight;
     const GAP = 8;
     const spaceRight = W - br.right - GAP;
     const spaceLeft  = br.left - GAP;
@@ -32835,7 +32198,6 @@ function edInitDrawBar() {
     const pw  = pop.offsetWidth  || 100;
     const ph  = pop.offsetHeight || 60;
     const W   = window.innerWidth;
-    const H   = window.innerHeight;
     const GAP = 8;
     const spaceRight = W - br.right - GAP;
     const spaceLeft  = br.left - GAP;
@@ -33344,7 +32706,6 @@ function _edbOpenSizePop(btn, opts) {
   const pw  = pop.offsetWidth  || 170;
   const ph  = pop.offsetHeight || 120;
   const W   = window.innerWidth;
-  const H   = window.innerHeight;
   const GAP = 8;
   // Al LADO de la barra, en el lado con más espacio (izquierda o derecha) y centrado respecto a ella, ajustado para no salir de pantalla.
   // v42.64: si la barra es ancha (2 columnas, o una horizontal en un móvil) y a ningún lado cabe sin taparla, debajo o encima de ella
@@ -33856,13 +33217,6 @@ function _vsNodeSelHas(l, i){
   const st = s.ext && s.ext.get(l);
   return !!(st && st.has(i));
 }
-// Índices de los nodos seleccionados EN `la`: el conjunto, o el nodo activo suelto, o [].
-function _vsNodeSelIdxs(la){
-  const set = _vsNodeSelActive(la);
-  if(set) return [...set];
-  const i = window._edCurveVertIdx;
-  return (la && i >= 0 && la.points && la.points[i]) ? [i] : [];
-}
 // v42.62: la selección de nodos vigente como lista [{la, idxs}] con el objeto seleccionado primero: el conjunto (puede abarcar varios
 // objetos), o el nodo activo suelto del objeto seleccionado, o [].
 function _vsNodeSelEntries(){
@@ -34305,7 +33659,6 @@ function edDrawBarShow(snapToCanvas) {
 }
 
 function edDrawBarHide() {
-  _edEraserPickClose(); // cerrar picker del borrador al ocultar la barra
   if (_edPanelIsCollapsed()) return;
   $('edDrawBar')?.classList.remove('visible');
   // Cerrar todos los submenús flotantes de la barra
@@ -34471,100 +33824,6 @@ function _esbCtxUpdate(){
   _edBarRefit(bar);
 }
 
-// Congela un LineLayer con radios en un StrokeLayer, guardando los datos geométricos
-function _edFreezeLineLayer(la, idx) {
-  if(la.type !== 'line') return;
-  const cr = la.cornerRadii || {};
-  const hasR = Object.keys(cr).some(k => (cr[k]||0) > 0);
-  if(!hasR) return; // sin radios, no congelar
-
-  // Renderizar el LineLayer en un canvas del tamaño del workspace
-  const offW = ED_CANVAS_W, offH = ED_CANVAS_H;
-  const off = document.createElement('canvas');
-  off.width = offW; off.height = offH;
-  const octx = off.getContext('2d');
-  // Aplicar transformación idéntica a edRedraw
-  octx.setTransform(1,0,0,1,0,0);
-  _edDrawSharp(la, octx);   // v42.51: nítida; el desenfoque pasa como atributo a la capa congelada
-
-  // Crear StrokeLayer con el bitmap
-  const sl = new StrokeLayer(off);
-  // Copiar propiedades comunes
-  sl.opacity = la.opacity ?? 1;
-  _edCopyDf(sl, la);   // v42.51
-  sl.rotation = la.rotation || 0;
-  // Guardar datos geométricos originales para descongelar
-  sl._frozenLine = {
-    points: la.points.map(p=>p?({...p}):null),
-    cornerRadii: {...cr},
-    color: la.color,
-    fillColor: la.fillColor,
-    fillGradient: _edCloneGrad(la.fillGradient),
-    lineWidth: la.lineWidth,
-    closed: la.closed,
-    opacity: la.opacity ?? 1,
-    rotation: la.rotation || 0,
-    // Guardar dimensiones originales para calcular transformaciones al descongelar
-    origX: la.x, origY: la.y,
-    origW: la.width, origH: la.height,
-  };
-  // Reemplazar la capa en el array
-  edLayers[idx] = sl;
-  edPages[edCurrentPage].layers[idx] = sl;
-  edSelectedIdx = idx;
-  edPushHistory();
-  edRedraw();
-}
-
-// Descongela un StrokeLayer congelado de vuelta a LineLayer editable
-function _edUnfreezeLineLayer(la, idx) {
-  if(la.type !== 'stroke' || !la._frozenLine) return;
-  const d = la._frozenLine;
-  const pw = edPageW(), ph = edPageH();
-
-  // Factores de transformación: ratio entre dimensiones actuales y originales
-  const origW = d.origW || la.width;
-  const origH = d.origH || la.height;
-  const scaleX = origW > 0.001 ? la.width  / origW : 1;
-  const scaleY = origH > 0.001 ? la.height / origH : 1;
-  // Diferencia de rotación entre el estado actual y el original
-  const rotDelta = ((la.rotation||0) - (d.rotation||0)) * Math.PI / 180;
-  const cosD = Math.cos(rotDelta), sinD = Math.sin(rotDelta);
-
-  const ll = new LineLayer();
-  // Aplicar escala asimétrica a los puntos (en espacio local, en px)
-  ll.points = d.points.map(p => {
-    // Escalar en espacio local
-    const lpx = p.x * pw * scaleX;
-    const lpy = p.y * ph * scaleY;
-    // Rotar por el delta de rotación
-    const rx = (lpx * cosD - lpy * sinD) / pw;
-    const ry = (lpx * sinD + lpy * cosD) / ph;
-    return {x: rx, y: ry};
-  });
-  // Escalar también los radios de curva
-  const cr = d.cornerRadii || {};
-  ll.cornerRadii = {};
-  for(const k in cr){
-    if(cr[k]) ll.cornerRadii[k] = cr[k] * Math.min(scaleX, scaleY);
-  }
-  ll.color = la.color || d.color;       // respetar cambios de color
-  ll.fillColor = la.fillColor || d.fillColor;
-  if(_edGradValid(d.fillGradient)) ll.fillGradient = _edCloneGrad(d.fillGradient);
-  ll.lineWidth = la.lineWidth || d.lineWidth;
-  ll.closed = d.closed;
-  ll.opacity = la.opacity ?? d.opacity;
-  _edCopyDf(ll, la);   // v42.51
-  ll.rotation = la.rotation || 0;       // usar rotación actual
-  // Posición: usar la posición actual del StrokeLayer
-  ll.x = la.x; ll.y = la.y;
-  ll._updateBbox();
-  edLayers[idx] = ll;
-  edPages[edCurrentPage].layers[idx] = ll;
-  edSelectedIdx = idx;
-  edPushHistory();
-  edRedraw();
-}
 
 function edInitShapeBar() {
   const bar = $('edShapeBar'); if(!bar) return;
@@ -35045,34 +34304,7 @@ function _edPropsOverlayHide()  { _edMenuLock(false); }
 // No usa pointer-events en la barra — así los clicks en barra no llegan al canvas
 // _edPropsOverlayShow/_edPropsOverlayHide → ver _edMenuLock arriba
 
-function edDrawBarUpdate() {
-  if (!$('edDrawBar')?.classList.contains('visible')) return;
-  _edbSyncTool();
-}
 
-
-function _edBubbleTailDir(l){
-  // Determinar la dirección de la cola del bocadillo para el reader.
-  // tailEnd es la punta de la cola en coordenadas relativas al centro del bocadillo.
-  // Devuelve: 'bottom', 'bottom-left', 'bottom-right', 'top', 'top-left', 'top-right', 'left', 'right'
-  const e = (l.tailEnds && l.tailEnds[0]) || l.tailEnd || {x:0, y:0.6};
-  const ex = e.x, ey = e.y;  // fracción relativa al bbox del bocadillo
-  // ey > 0.3 → cola hacia abajo; ey < -0.3 → cola hacia arriba
-  // ex > 0.3 → cola hacia derecha; ex < -0.3 → cola hacia izquierda
-  if(Math.abs(ey) >= Math.abs(ex)){
-    if(ey > 0){
-      if(ex < -0.15) return 'bottom-left';
-      if(ex >  0.15) return 'bottom-right';
-      return 'bottom';
-    } else {
-      if(ex < -0.15) return 'top-left';
-      if(ex >  0.15) return 'top-right';
-      return 'top';
-    }
-  } else {
-    return ex > 0 ? 'right' : 'left';
-  }
-}
 let _edCloudSavingStart = 0;
 let _edCloudSavingTimer = null;
 function _edCloudSavingUpdateBadge() {
@@ -36679,20 +35911,6 @@ function edRenderPage(page, withText){
           }
         }
       }
-      // Código original inline para el stroke (puede haber lógica de _previewSx etc.)
-      const _flS2 = _slWsUid ? page.layers.find(f=>f.type==='fill'&&f._drawLayerId===_slWsUid) : null;
-      if(_flS2 && false){ // ya renderizado arriba — bloque desactivado
-        const _fsrc2 = (_flS2._previewSx != null && _flS2._srcCanvas) ? _flS2._srcCanvas : _flS2._canvas;
-        const _fpx2 = edMarginX() + _flS2.x * edPageW();
-        const _fpy2 = edMarginY() + _flS2.y * edPageH();
-        const _fw2  = _flS2.width  * edPageW();
-        const _fh2  = _flS2.height * edPageH();
-        ctx.save(); ctx.globalAlpha = _flS2.opacity??1;
-        ctx.translate(_fpx2, _fpy2);
-        if(_flS2.rotation) ctx.rotate(_flS2.rotation * Math.PI / 180);
-        ctx.drawImage(_fsrc2, -_fw2/2, -_fh2/2, _fw2, _fh2);
-        ctx.restore(); ctx.globalAlpha = 1;
-      }
       ctx.save(); ctx.globalAlpha=l.opacity??1; l.draw(ctx); ctx.globalAlpha=1; ctx.restore(); return;
     }
     if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
@@ -37184,7 +36402,6 @@ function edAlignSelected(mode){
 }
 
 
-
 /* ── Comprueba si la selección actual es unible, devuelve el tipo o null ── */
 function _edMergeableTypes(){
   if(!edMultiSel || edMultiSel.length < 2) return null;
@@ -37207,43 +36424,6 @@ function _edMergeableTypes(){
   return null;
 }
 
-/* ── Convierte un ShapeLayer a array de puntos absolutos (normalizados 0-1) ── */
-function _edShapeToAbsPoints(sl, nEllipse){
-  const n = nEllipse || 48;
-  const pts = [];
-  if(sl.shape === 'ellipse'){
-    for(let i = 0; i < n; i++){
-      const ang = (i / n) * Math.PI * 2;
-      pts.push({
-        x: sl.x + Math.cos(ang) * sl.width  / 2,
-        y: sl.y + Math.sin(ang) * sl.height / 2
-      });
-    }
-  } else {
-    // rect (con rotación si la tiene)
-    const hw = sl.width / 2, hh = sl.height / 2;
-    const rot = (sl.rotation || 0) * Math.PI / 180;
-    const cos = Math.cos(rot), sin = Math.sin(rot);
-    for(const [lx, ly] of [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]]){
-      pts.push({
-        x: sl.x + lx * cos - ly * sin,
-        y: sl.y + lx * sin + ly * cos
-      });
-    }
-  }
-  return pts;
-}
-
-/* ── Renderiza un layer en el canvas workspace completo (para merge de stroke/draw) ── */
-function _edRenderLayerToWorkspace(la){
-  const pw = edPageW(), ph = edPageH();
-  const wc = document.createElement('canvas');
-  wc.width  = ED_CANVAS_W;
-  wc.height = ED_CANVAS_H;
-  const ctx = wc.getContext('2d');
-  _edDrawSharp(la, ctx);   // v42.51: nítida (ver _edDrawSharp)
-  return wc;
-}
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
    v42.16 — «⊕ Unir» DIBUJOS A MANO: la unión conserva EXACTAMENTE el aspecto de los dibujos apilados.
@@ -40504,12 +39684,9 @@ function _edOpenViewerScroll(navMode) {
 
   // ── Render inicial de todos los slides (sin textos secuenciales aún) ──
   (document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
-    const _si = edViewerIdx, _ss = edViewerTextStep;
+    const _si = edViewerIdx;
     edPages.forEach((page, pi) => {
       _activateCanvas(pi);
-      const orient = page.orientation || _savedOrient;
-      const pw = orient === 'vertical' ? ED_PAGE_W : ED_PAGE_H;
-      const ph = orient === 'vertical' ? ED_PAGE_H : ED_PAGE_W;
       edViewerIdx      = pi;
       edViewerTextStep = 0;
       edUpdateViewer();
@@ -40621,7 +39798,6 @@ function _edOpenViewerScroll(navMode) {
     if (_vFadeRaf) { cancelAnimationFrame(_vFadeRaf); _vFadeRaf = null; _vPrevBubbleFade = 0; }
     const page  = edPages[edViewerIdx];
     const isSeq = (page?.textMode || 'sequential') === 'sequential';
-    const tl    = (page?.layers || []).filter(l => l.type==='text' || l.type==='bubble');
     if (isSeq && edViewerTextStep > 1) {
       // Aún hay bocadillos que retroceder en esta hoja
       edViewerTextStep--;
@@ -40792,56 +39968,6 @@ function _edOpenViewerScroll(navMode) {
   sc._vsOverlay = overlay;
 }
 
-// Función de render de un estado concreto sobre un canvas destino (usada en resize)
-function _edRenderViewerState(canvas, page, pageIdx, textStep, pw, ph, orient) {
-  const ctx = canvas.getContext('2d');
-  const _savedOrient   = edOrientation;
-  const _savedPage     = edCurrentPage;
-  const _savedIdx      = edViewerIdx;
-  const _savedStep     = edViewerTextStep;
-  const _savedCanvas   = edViewerCanvas;
-  const _savedCtx      = edViewerCtx;
-
-  edOrientation    = orient;
-  edCurrentPage    = pageIdx;
-  edViewerIdx      = pageIdx;
-  edViewerTextStep = textStep;
-  edViewerCanvas   = canvas;
-  edViewerCtx      = ctx;
-
-  const full = document.createElement('canvas');
-  full.width  = ED_CANVAS_W;
-  full.height = ED_CANVAS_H;
-  const fctx  = full.getContext('2d');
-  const mx = (ED_CANVAS_W - pw) / 2;
-  const my = (ED_CANVAS_H - ph) / 2;
-  fctx.fillStyle = '#fff';
-  fctx.fillRect(mx, my, pw, ph);
-  _edVwView(full, { x: mx, y: my, w: pw, h: ph });   // v42.57: solo la hoja se ve (el resto del lienzo de trabajo no se copia)
-
-  _edViewerMode = true; // las capas usarán _pathCurX/_pathCurY
-  _edVwCurGrp = _edVwGrpFor(pageIdx);   // v42.56: grupo de la caché de desenfoques de esta hoja
-  page.layers.forEach(l => {
-    if (l.type==='text' || l.type==='bubble') return;
-    if (l.hidden) return; // capa oculta: no renderizar en visor
-    fctx.globalAlpha = l.opacity ?? 1;
-    if (typeof l.draw === 'function') l.draw(fctx, full);
-    fctx.globalAlpha = 1;
-  });
-  _edViewerDrawTextsOnCtx(page, fctx, full);
-  _edViewerMode = false;
-  _edVwCurGrp = null;
-  _edVwView(full, null);
-  ctx.clearRect(0, 0, pw, ph);
-  ctx.drawImage(full, mx, my, pw, ph, 0, 0, pw, ph);
-
-  edOrientation    = _savedOrient;
-  edCurrentPage    = _savedPage;
-  edViewerIdx      = _savedIdx;
-  edViewerTextStep = _savedStep;
-  edViewerCanvas   = _savedCanvas;
-  edViewerCtx      = _savedCtx;
-}
 
 // Flag: true cuando el visor está en modo scroll (canvas dentro de slide flex)
 let _viewerScrollMode = false;
@@ -43041,10 +42167,6 @@ function EditorView_init(){
   $('edBackBtn')?.addEventListener('click', () => _edExitRequest(false));
   $('edPagePrev')?.addEventListener('click',()=>{ if(edCurrentPage>0) edLoadPage(edCurrentPage-1); });
   $('edPageNext')?.addEventListener('click',()=>{ if(edCurrentPage<edPages.length-1) edLoadPage(edCurrentPage+1); });
-  function _edToggleMultiSel(){
-    // Solo desactiva — la herramienta se activa únicamente via rubber band
-    if(edActiveTool==='multiselect') _edDeactivateMultiSel();
-  }
   // _edDeactivateMultiSel definida en scope global
 
   // Botón Selección ▾ — ahora usa data-menu="select" + edToggleMenu (ver edInitSelectMenu)
@@ -43474,12 +42596,6 @@ function EditorView_init(){
     },0);
   }
   $('esb-shapes')?.addEventListener('pointerup', e => { e.stopPropagation(); _esbTogglePop(); });
-  // ── Seleccionar ──
-  $('esb-select')?.addEventListener('pointerup', e => {
-    e.stopPropagation();
-    edSelectedIdx = -1; edActiveTool = 'select'; edCanvas.className = '';
-    edRedraw(); _esbSyncTool();
-  });
   // ── OK: igual que op-draw-ok pero cierra edShapeBar ──
   $('esb-ok')?.addEventListener('click', () => {
     if(_edEyeCancel) _edEyeCancel(true); // v41.84: un cuentagotas armado no sobrevive al OK
@@ -43970,7 +43086,6 @@ function EditorView_init(){
     else edRedo();
   });
   $('edMinimizeBtn')?.addEventListener('click',edMinimize);
-  // edMenuMinBtn eliminado — el único botón ocultar es edMinimizeBtn (fuera del scroll)
   _edSetupPageJumpBar(); // NUEVO: barra flotante "ir a hoja" (ver su cabecera)
   _edShapePushHistory();
   edInitFloatDrag();
@@ -45602,7 +44717,6 @@ function _edLayerToSvgElement(la, bb, pw, ph, pad=0) {
 
     // ── Grouped: cada contorno tiene su propio estilo ──────────────────────
     if (la.grouped && la.groupedStyles && la.groupedStyles.length > 0) {
-      const _ptBase = [0];
       const parts = contoursWithGIdx.map((c, ci) => {
         const localCr = {};
         c.forEach(({ p, gi }, li) => { const r = cr[gi]; if (r) localCr[li] = r; });
@@ -46310,9 +45424,6 @@ function _bibUsedBytes(data) {
     s + f.items.reduce((s2, it) => s2 + (it.thumb ? it.thumb.length : 0)
       + (it.layerData ? JSON.stringify(it.layerData).length : 0)
       + (it.layers   ? JSON.stringify(it.layers).length   : 0), 0), 0);
-}
-function _bibTotalItems(data) {
-  return data.folders.reduce((s, f) => s + f.items.length, 0);
 }
 function _bibFormatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
@@ -48039,15 +47150,6 @@ function _gcpRecalcMultiBbox() {
   window._gcpMultiBbox = { cx:(minX+maxX)/2, cy:(minY+maxY)/2, w:maxX-minX, h:maxY-minY, rot:0 };
 }
 
-function _gcpMultiHandles(bb) {
-  const hw = bb.w/2, hh = bb.h/2;
-  const cx = bb.cx, cy = bb.cy;
-  return [
-    {x:cx-hw, y:cy-hh, c:'tl'}, {x:cx,    y:cy-hh, c:'tm'}, {x:cx+hw, y:cy-hh, c:'tr'},
-    {x:cx+hw, y:cy,    c:'mr'}, {x:cx+hw, y:cy+hh, c:'br'}, {x:cx,    y:cy+hh, c:'bm'},
-    {x:cx-hw, y:cy+hh, c:'bl'}, {x:cx-hw, y:cy,    c:'ml'},
-  ];
-}
 
 function _gcpDrawMultiSel() {
   if (!window._gcpMultiBbox || !window._gcpMultiSel || !window._gcpMultiSel.length) return;
@@ -48252,7 +47354,6 @@ function _gcpHandleDown(e) {
   if (clientX < rect.left || clientX > rect.right || clientY2 < rect.top || clientY2 > rect.bottom) return;
 
   const c = edCoords(e);
-  const idx = window._gcpSelIdx;
 
   // ── Hit de guías GCP (prioridad antes que handles de capas) ──────────────
   if (_gcpRules.length || _gcpRuleNodes.length) {
@@ -49354,9 +48455,6 @@ const _gcpPtrMap = new Map();
 let _gcpPinching = false, _gcpPinchDist0 = 0;
 let _gcpPinchMidX = 0, _gcpPinchMidY = 0;
 let _gcpPinchCam0 = { x: 0, y: 0, z: 1 };
-let _gcpPanActive = false;
-let _gcpPanStartX = 0, _gcpPanStartY = 0;
-let _gcpPanCam0X = 0, _gcpPanCam0Y = 0;
 
 // Lista de capas GIF — equivalente a edLayers
 window._gcpLayers = [];
@@ -49475,15 +48573,6 @@ function _gcpClearHistory() {
   _gcpUpdateUndoRedoBtns();
 }
 
-// Guarda el estado en vivo de cada layer en su frame activo
-function _gcpSaveCurrentToFrame() {
-  const fi = window._gcpGlobalFrameIdx;
-  window._gcpLayers.forEach(la => {
-    if (!la._frames || fi < 0 || fi >= la._frames.length) return;
-    if (la._gcpVisible === false) { la._frames[fi] = null; return; }
-    la._frames[fi] = {x:la.x,y:la.y,width:la.width,height:la.height,rotation:la.rotation||0,opacity:la.opacity??1,..._edDfField(la)};
-  });
-}
 
 // Helper: total de frames global
 function _gcpGetTotalFrames() {
@@ -49627,10 +48716,6 @@ function _gcpInitLayerFrames(la, startFi) {
   }
 }
 
-// Aplicar frame global fi a todas las capas
-function _gcpApplyTempToLayers() {
-  _gcpApplyFrame(window._gcpGlobalFrameIdx);
-}
 
 // _gcpSaveFrame: guarda el estado actual de todos los layers en el frame activo.
 function _gcpSaveFrame() {
@@ -50256,7 +49341,6 @@ function _gcpDoInterpolate(fi, n) {
 // Modal para ajustar la interpolación circular automática
 function _gcpShowCircularInterpModal(fi) {
   const _n = window._gcpCircularInterpN || 3;
-  const _msg = I18n.t(_n !== 1 ? 'gcp_circularInterpMsgPlural' : 'gcp_circularInterpMsgSingular', { n: _n });
   // Usar el modal existente de interpolación reutilizando _gcpShowInterpModal
   _gcpInterpPendingFi = fi;
   _gcpInterpN = _n;
@@ -50461,7 +49545,6 @@ function _gcpInvalidateSampleThumb(la) {
     if (k.startsWith(la._gcpUid + '-')) _gcpSampleThumbCache.delete(k);
   }
 }
-function _gcpInvalidateAllSampleThumbs() { _gcpSampleThumbCache.clear(); }
 
 function _gcpLayerSampleThumb(la, S) {
   S = S || 40;
@@ -50957,11 +50040,6 @@ function _gcpSetupFrameJumpBar() {
   slider.addEventListener('keydown', e => e.stopPropagation());
 }
 
-// Refrescar miniatura del frame activo (no-op ahora que la barra se reconstruye entera)
-function _gcpRefreshActiveThumb() {
-  const bar = document.getElementById('gcpFramesBar');
-  if (bar && bar.style.display === 'flex') _gcpUpdateFramesBar();
-}
 
 // Cierra el panel de la matriz de frames — siempre cierra, sin comprobar
 // nada (el que llama ya sabe que está abierta). Se usa al tocar el botón con
@@ -50979,9 +50057,8 @@ function _gcpCloseFramesBar() {
 
 // Abre la barra de Matriz en el modo elegido (petición de Alberto: el botón
 // ya no abre directamente — primero se elige "fila de fotogramas" o "matriz
-// de objetos", ver el desplegable gdd-matrixMode y su listener). Sustituye
-// a la antigua _gcpToggleFramesBar(); cerrar sigue siendo _gcpCloseFramesBar()
-// tal cual, sin cambios (ver también el "click fuera cierra" en _edDocDownFn).
+// de objetos", ver el desplegable gdd-matrixMode y su listener).
+// Cerrar sigue siendo _gcpCloseFramesBar() (ver también el "click fuera cierra" en _edDocDownFn).
 function _gcpOpenFramesBar(mode) {
   const bar = document.getElementById('gcpFramesBar');
   const btn = document.getElementById('gcpFramesToggleBtn');
@@ -51034,7 +50111,6 @@ function _gcpPreview() {
   let fi    = 0;
   let loopN = 0; // contador de repeticiones completadas
 
-  const _previewStartFi = window._gcpGlobalFrameIdx; // frame donde estaba antes de previsualizar
 
   // Detener animaciones internas de capas del GCP para evitar frames fantasmas
   window._gcpLayers.forEach(la => {
@@ -52641,8 +51717,6 @@ function _gcpSbDiag() {
 
   const hBar = document.getElementById('ed-hscroll');
   const vBar = document.getElementById('ed-vscroll');
-  const hThumb = document.getElementById('ed-hscroll-thumb');
-  const vThumb = document.getElementById('ed-vscroll-thumb');
   L('hBar display: ' + (hBar ? hBar.style.display : 'NO ELEMENT'));
   L('vBar display: ' + (vBar ? vBar.style.display : 'NO ELEMENT'));
   L('hBar zIndex: ' + (hBar ? hBar.style.zIndex : '-'));
@@ -52719,7 +51793,6 @@ function _gcpDrawLayerAt(ctx, l, alpha) {
 // Aplica temporalmente el estado de frame previo a un layer y lo dibuja con alpha dado
 function _gcpDrawLayerBlurGhost(ctx, l, prevSnap, alpha) {
   if (!prevSnap) return;
-  const pw = edPageW(), ph = edPageH();
   // Guardar estado actual
   const cx = l.x, cy = l.y, cw2 = l.width, ch2 = l.height, cr = l.rotation, co = l.opacity;
   // Aplicar estado previo
@@ -54176,7 +53249,6 @@ function gcpOpen(edLayerIdx) {
   if (typeof _edPageJumpCloseBar === 'function') _edPageJumpCloseBar();
 
 
-
   // Mostrar overlay y bloqueante
   shell.style.display = 'block';
   // v41.67 — pintar YA el lienzo de animaciones: una sesión nueva (sin objetos) no llamaba a _gcpRedraw al
@@ -54893,7 +53965,6 @@ function _gcpSaveToLib(onDone) {
   tc2.fillStyle='#f0f0f0'; tc2.fillRect(0,0,S,S);
   const sc=Math.min((S-4)/Math.max(cropW,1),(S-4)/Math.max(cropH,1));
   tc2.drawImage(renderedFrames[0], cropX,cropY,cropW,cropH, (S-cropW*sc)/2,(S-cropH*sc)/2,cropW*sc,cropH*sc);
-  const thumb=thumbC.toDataURL('image/png',0.7);
 
   // Posición y tamaño derivados del RECORTE REAL de píxeles renderizados.
   // Garantiza que la animación se inserta exactamente donde y con las
@@ -55974,7 +55045,6 @@ async function _gcpDownloadMp4() {
   // el encoder (afecta a parámetros internos, no al timestamp real de cada frame).
   const frameDurationUsArr = Array.from({length: totalFrames},
     (_, fi) => ((window._gcpFrameHolds && window._gcpFrameHolds[fi]) || frameDelay) * 1000);
-  const frameDurationUs = frameDurationUsArr[0] || (frameDelay * 1000); // usado solo como estimación media
 
   try {
     // Verificar soporte H.264 en este dispositivo
@@ -56000,7 +55070,6 @@ async function _gcpDownloadMp4() {
     });
 
     // Configurar VideoEncoder
-    const chunks = [];
     const encoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
       error: e => { throw e; }
