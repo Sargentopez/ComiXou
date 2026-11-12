@@ -34400,9 +34400,11 @@ function edInitShapeBar() {
     const _insertAt = Math.max(0, Math.min(_firstIdx, edLayers.length));
     edLayers.splice(_insertAt, 0, _newLayer);
     edSelectedIdx = _insertAt;
-    // La sesión termina con la fusión: el objeto fusionado es el resultado final
+    // v42.73 — la fusión es UN PASO MÁS del historial de la sesión, igual que desde el panel (op-line-fuse-btn). Antes aquí se hacía además
+    // _vsClear() + edPushHistory() («la sesión termina con la fusión»), pero la sesión NO termina: la barra sigue abierta y se sigue dibujando,
+    // así que el ↩ quedaba vacío y la fusión no se podía deshacer (bug de Alberto). El historial general recibe el resultado al pulsar OK.
+    edPages[edCurrentPage].layers = edLayers;
     _edShapePushHistory();
-    _vsClear(); edPushHistory();
     window._esbCheckFuse();
     edRedraw();
     edToast(I18n.t('ed_objectsMerged'));
