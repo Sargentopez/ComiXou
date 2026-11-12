@@ -8178,6 +8178,7 @@ function _edRenderOverlays() {
   _vsDrawOtherNodes();   // v42.62: con NODOS, los nodos de los demás objetos de la sesión (debajo de los del seleccionado, que pinta edDrawSel)
   edDrawSel();
   if(_edFreeStroke) _edFreeDrawPreview(edCtx);   // v42.61: trazo del modo libre en curso
+  _edFreeCofWatch();                             // v42.69: botón/estado del cursor desplazado al cambiar de herramienta
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
     const pw=edPageW(), ph=edPageH();
@@ -16807,7 +16808,8 @@ function edOnStart(e){
     // el 2.º (zoom/desplazamiento) no era un trazo: se descarta sin dejar ninguna forma minúscula y se devuelve la selección anterior.
     if(_edShapePreview){ _edShapeCancelPreview(); edRedraw(); }
     // v42.61: ídem con el trazo del modo libre (el 2.º dedo es zoom/desplazamiento, no un trazo)
-    if(_edFreeStroke) _edFreeCancel();
+    if(_edFreeStroke) _edFreeCancel('llegó un 2.º dedo (pid=' + e.pointerId + ' tipo=' + e.pointerType + ' en=' + Math.round(e.clientX) + ',' + Math.round(e.clientY) + ')');
+    if(_cof.on && _edFreeActive()) _edFreeCofAbort();   // v42.69: y el cursor desplazado del modo libre vuelve a reposo (guía azul)
     // Cancelar timer de recorte si había uno pendiente
     if(window._edCropTouchTimer){ clearTimeout(window._edCropTouchTimer); window._edCropTouchTimer = null; }
     // Cancelar drag de nodo de recorte si estaba activo
@@ -17343,9 +17345,26 @@ function edOnStart(e){
     return;
   }
   if(edActiveTool==='line'){
-    if(tgt !== edCanvas) return;
+    if(tgt !== edCanvas){ if(_edLineType === 'free') _edFreeDg('toque FUERA del lienzo, sobre «' + (tgt && (tgt.id || tgt.className || tgt.tagName)) + '»: no empieza trazo'); return; }
     // v42.61: modo LIBRE — el gesto es un trazo a mano alzada (no hay vértices que tocar), ver _edFreeStart
-    if(_edLineType === 'free'){ _edFreeStart(e); return; }
+    if(_edLineType === 'free'){
+      // v42.69: con el cursor desplazado (COF) activo, el dedo NO traza donde toca: mueve/arma el cursor y el trazo sale por el círculo, con la
+      // misma mecánica que en «Dibujar» (guía azul = colocar · guía roja = arrastrar para trazar). Ratón y lápiz trazan directo, como siempre.
+      if(e.pointerType === 'touch' && _cof.on){
+        clearTimeout(window._edDrawTouchTimer);
+        if(_cofTouchOnSquare(e)) _cofHandleTouch(e);   // sobre el cuadrado: inequívoco, sin esperar a un posible 2.º dedo
+        else {
+          const _eSavedF = e;
+          window._edDrawTouchTimer = setTimeout(() => {
+            if(!window._edActivePointers || window._edActivePointers.size !== 1) return;
+            if(!_edFreeActive() || !_cof.on) return;
+            _cofHandleTouch(_eSavedF);
+          }, 120);
+        }
+        return;
+      }
+      _edFreeStart(e); return;
+    }
     const c=edCoords(e);
     // En táctil: comprobar primero si hay un nodo existente para doble-tap
     // Si el toque cae sobre un nodo, no usar timer — procesar inmediatamente
@@ -19320,6 +19339,7 @@ function edOnMove(e){
   // No cerrar el panel mientras se arrastra — el dimming debe mantenerse activo
 }
 function edOnEnd(e){
+  if(_edFreeStroke) _edFreeDg('llega ' + (e && e.type) + ' pid=' + (e && e.pointerId) + ' (trazo pid=' + _edFreeStroke.pid + ')');   // v42.68: diagnóstico del modo libre
   // Simétrico a la guarda de edOnStart: el botón secundario del ratón lo
   // gestiona en exclusiva el menú contextual propio. edOnStart ya ignora su
   // pointerdown por completo (nunca llega a fijar edIsDragging, captura de
@@ -22908,6 +22928,38 @@ const _ED_FREE_RCAP   = 80;     // radio máximo de curvatura que produce el aju
 let _edFreeStroke = null;       // trazo en curso: { pts:[{x,y}] (px de página), pid, touch, prevSel }
 let _edFreeRaf = 0;
 function _edFreeActive(){ return edActiveTool === 'line' && _edLineType === 'free'; }
+// ── v42.69 — CURSOR DESPLAZADO (COF) EN EL MODO LIBRE ──
+// Petición de Alberto: «el nuevo trazo libre es muy parecido al trazo de dibujo a mano, pero falta que pueda usarse también el cursor COF con él».
+// Se reutiliza TAL CUAL el sistema _cof del dibujo a mano (mismo aspecto, mismos estados azul/rojo, mismo aviso); solo cambia qué es «el trazo»:
+// _cofStartStroke/_cofHandleMove/_cofHandleUp llaman a _edFreeStart/_edFreeAdd/_edFreeEnd en vez de pintar. El botón es el mismo del panel
+// vectorial que ya activaba el cursor de nodos (op-vcof-btn): con Libre gobierna _cof, con NODOS gobierna _vcof.
+function _edFreeCofAbort(){   // gesto interrumpido (2.º dedo): nada a medias y cursor en reposo
+  clearTimeout(window._edDrawTouchTimer);
+  _cof._dragging = false; _cof._pendingStart = false; _cof._strokeStarted = false;
+  clearTimeout(_cof._timer);
+  _cofExpire();
+}
+let _edFreeCofKey = '';
+// Visibilidad y aspecto del botón del cursor en el panel vectorial, y apagado de _cof al salir de Libre. Se llama al pintar el panel y cuando
+// cambia la herramienta (edRedraw compara una clave barata; no toca el DOM si nada cambió).
+function _edFreeCofSync(){
+  const free = _edFreeActive();
+  if(_cof.on && !free && !['draw','eraser','fill'].includes(edActiveTool)) _cofSetOn(false);   // _cof encendido desde Libre no sobrevive fuera de Libre
+  const wrap = $('op-vcof-wrap');
+  if(wrap){
+    const nodes = !!_edCurveModeActive();
+    wrap.style.display = (free || nodes) ? 'flex' : 'none';
+    if(!free && !nodes){ const pop = $('op-vcof-pop'); if(pop) pop.style.display = 'none'; }
+  }
+  const b = $('op-vcof-btn'); if(b) b.title = I18n.t(free ? 'ed_offsetCursor' : 'op_offsetCursorNodes');
+  _vcofSyncBtn();
+}
+function _edFreeCofWatch(){
+  const k = edActiveTool + '/' + _edLineType;
+  if(k === _edFreeCofKey) return;
+  _edFreeCofKey = k;
+  _edFreeCofSync();
+}
 // Calienta el motor (la primera ejecución de un módulo nuevo es más lenta: compilación JIT) cuando se elige Libre, en un momento ocioso:
 // así el primer trazo de verdad no paga ese coste al levantar el lápiz.
 let _edFreeWarmed = false;
@@ -22937,6 +22989,16 @@ function _edFreeAdd(s, ev, force){
   if(q && Math.hypot(x - q.x, y - q.y) * edCamera.z < 0.4) return;   // por debajo de medio píxel de pantalla no aporta nada
   s.pts.push({ x, y });
 }
+// v42.68 — DIAGNÓSTICO (solo con el diagnóstico activado, ver _edDgOn): cada trazo del modo libre deja en el registro del 🩺 cómo empezó y
+// por qué acabó (creado / descartado y el motivo). Alberto: con el dedo en Android el trazo desaparece al soltar y no se pudo reproducir.
+function _edFreeDg(msg){
+  if(!_edDgOn()) return;
+  try{
+    const ap = window._edActivePointers;
+    _edFCL('[libre] ' + msg + ' · herr=' + edActiveTool + '/' + _edLineType + ' punteros=' + (ap ? ap.size : '?') + ' pinch=' + (edPinching ? 1 : 0) +
+      ' cof=' + (_cof.on ? 1 : 0) + ' z=' + edCamera.z.toFixed(2) + ' sel=' + edSelectedIdx + ' capas=' + edLayers.length);
+  }catch(_){}
+}
 function _edFreeStart(e){
   if(window._edEyedropActive) return;
   if(e.pointerType === 'pen' && e.buttons === 0) return;   // hover sin contacto (tabletas Wacom)
@@ -22946,6 +23008,7 @@ function _edFreeStart(e){
   const s = { pts: [], pid: e.pointerId, touch: e.pointerType === 'touch', prevSel };
   _edFreeAdd(s, e, true);
   _edFreeStroke = s;
+  _edFreeDg('INICIO pid=' + e.pointerId + ' tipo=' + e.pointerType + ' en=' + Math.round(e.clientX) + ',' + Math.round(e.clientY));
   edRedraw();
 }
 function _edFreeMove(e){
@@ -22961,28 +23024,32 @@ function _edFreeMove(e){
   _edFreeRedrawSoon();
 }
 // Descarta el trazo en curso (2.º dedo, cancelación del sistema, toque suelto…) y devuelve la selección anterior.
-function _edFreeCancel(){
+function _edFreeCancel(why){
   const s = _edFreeStroke; if(!s) return;
+  _edFreeDg('DESCARTADO: ' + (why || 'sin motivo anotado') + ' · muestras=' + s.pts.length);
   _edFreeStroke = null;
   edSelectedIdx = s.prevSel ? edLayers.indexOf(s.prevSel) : -1;
   edRedraw();
 }
 function _edFreeEnd(e){
   const s = _edFreeStroke; if(!s) return false;
-  if(e && e.pointerId !== undefined && s.pid !== undefined && e.pointerId !== s.pid) return true;   // otro puntero: no es el del trazo
-  if(e && e.type === 'pointercancel'){ _edFreeCancel(); return true; }
-  if(!_edFreeActive()){ _edFreeCancel(); return true; }   // se cambió de herramienta a mitad de trazo (p. ej. con la otra mano): no se crea nada
+  if(e && e.pointerId !== undefined && s.pid !== undefined && e.pointerId !== s.pid){ _edFreeDg('se suelta OTRO puntero (pid=' + e.pointerId + ', el del trazo es ' + s.pid + '): se ignora'); return true; }   // otro puntero: no es el del trazo
+  if(e && e.type === 'pointercancel'){ _edFreeCancel('pointercancel del sistema'); return true; }
+  if(!_edFreeActive()){ _edFreeCancel('la herramienta ya no es Libre al soltar'); return true; }   // se cambió de herramienta a mitad de trazo (p. ej. con la otra mano): no se crea nada
   if(e) _edFreeAdd(s, e, true);   // el pointerup trae la posición final
   // toque suelto (sin arrastre): no crea nada, como rectángulo/elipse (y como Illustrator, Inkscape y Affinity)
   const p0 = s.pts[0]; let ext = 0;
   for(const p of s.pts) ext = Math.max(ext, Math.abs(p.x - p0.x), Math.abs(p.y - p0.y));
-  if(ext * edCamera.z < (s.touch ? 10 : 5)){ _edFreeCancel(); return true; }
+  if(ext * edCamera.z < (s.touch ? 10 : 5)){ _edFreeCancel('toque suelto, recorrido ' + (ext * edCamera.z).toFixed(1) + ' px'); return true; }
   let res = null;
   try{ res = CxFit.fit(s.pts, { tol: _ED_FREE_TOL_PX / edCamera.z, rCap: _ED_FREE_RCAP }); }
-  catch(err){ console.error('[libre] ajuste', err); res = null; }
-  if(!res){ _edFreeCancel(); return true; }
+  catch(err){ console.error('[libre] ajuste', err); _edFreeDg('EXCEPCIÓN en el ajuste: ' + (err && err.message)); res = null; }
+  if(!res){ _edFreeCancel('el ajuste no devolvió nodos'); return true; }
   _edFreeStroke = null;
-  _edFreeCreate(res, s);
+  const _n0 = edLayers.length;
+  try{ _edFreeCreate(res, s); }
+  catch(err){ _edFreeDg('EXCEPCIÓN al crear el objeto: ' + (err && err.message) + ' ¦ ' + String(err && err.stack).split('\n').slice(1, 4).join(' < ')); throw err; }
+  _edFreeDg('CREADO: ' + s.pts.length + ' muestras → ' + res.K + ' nodos' + (res.closed ? ' (cerrado)' : '') + ' · capas ' + _n0 + ' → ' + edLayers.length);
   return true;
 }
 // Crea el objeto vectorial a partir del ajuste (nodos en px de página → coords locales normalizadas, igual que _edShapeToLineLayer).
@@ -23205,8 +23272,26 @@ function _cofHandleMove(e) {
     // a mitad de un trazo sin pasar por _cofHandleUp, _strokeStarted se queda
     // atascado en true y este nuevo trazo nunca llegaría a iniciarse de
     // verdad (el bucle de continueStroke exige _strokeStarted && edPainting).
-    if (_cof._strokeStarted && !edPainting) _cof._strokeStarted = false;
+    if (_cof._strokeStarted && !(_edFreeActive() ? _edFreeStroke : edPainting)) _cof._strokeStarted = false;
     if (!_cof._strokeStarted) _cofStartStroke(e);
+    return;
+  }
+  // v42.69 — MODO LIBRE vectorial: las muestras del trazo son las posiciones del CÍRCULO (no las del dedo)
+  if (_cof._strokeStarted && _edFreeStroke && _edFreeActive()) {
+    let _cesF = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+    if (!_cesF || !_cesF.length) _cesF = [e];
+    const _radF = _edCursorOffsetAngle * Math.PI / 180;
+    for (const _ce of _cesF) {
+      const _refX = _cof._prevTx ?? _cof.touchX, _refY = _cof._prevTy ?? _cof.touchY;
+      _cof._prevTx = _ce.clientX; _cof._prevTy = _ce.clientY;
+      _cof.cursorX += _ce.clientX - _refX;
+      _cof.cursorY += _ce.clientY - _refY;
+      _edFreeAdd(_edFreeStroke, { clientX: _cof.cursorX, clientY: _cof.cursorY, pointerType: 'touch', pointerId: e.pointerId });
+    }
+    _cof.touchX = _cof.cursorX - _cof.dist * Math.sin(_radF);
+    _cof.touchY = _cof.cursorY + _cof.dist * Math.cos(_radF);
+    _edFreeRedrawSoon();
+    _cofDraw();
     return;
   }
   if (_cof._strokeStarted && edPainting) {
@@ -23292,7 +23377,9 @@ function _cofHandleUp(e) {
     _cof._strokeStarted = false;
     _cof._dragging = false;
     _cof.savedClientX = _cof.cursorX; _cof.savedClientY = _cof.cursorY;
-    edSaveDrawData();
+    if (_edFreeStroke) {   // v42.69: modo libre vectorial — al soltar se calculan los nodos con el punto final del CÍRCULO
+      _edFreeEnd({ type: (e && e.type) || 'pointerup', pointerId: _edFreeStroke.pid, pointerType: 'touch', clientX: _cof.cursorX, clientY: _cof.cursorY });
+    } else edSaveDrawData();
     _cofAfterStroke();
   }
 }
@@ -23334,6 +23421,7 @@ function _cofStartStroke(e) {
     pointerType: 'touch', pointerId: e.pointerId, touches: null,
     _skipMoveBrush: true, _cofStroke: true
   };
+  if (_edFreeActive()) { _edFreeStart(synth); return; }   // v42.69: en modo libre vectorial el trazo es el del objeto nuevo
   edStartPaint(synth);
 }
 
@@ -23501,9 +23589,10 @@ function _vcofDraw(touchCX, touchCY) {
 function _vcofSyncBtn() {
   const btn = document.getElementById('op-vcof-btn');
   if (!btn) return;
-  btn.style.background  = _vcof.on ? 'var(--black)' : 'transparent';
-  btn.style.color       = _vcof.on ? 'var(--white)' : 'var(--gray-700)';
-  btn.style.borderColor = _vcof.on ? 'var(--black)' : 'var(--gray-300)';
+  const on = _vcof.on || (_cof.on && _edFreeActive());   // v42.69: en modo Libre el botón gobierna el cursor de dibujo (_cof)
+  btn.style.background  = on ? 'var(--black)' : 'transparent';
+  btn.style.color       = on ? 'var(--white)' : 'var(--gray-700)';
+  btn.style.borderColor = on ? 'var(--black)' : 'var(--gray-300)';
 }
 function _vcofShowHint(show) {
   let h = document.getElementById('edVcofHint');
@@ -25677,6 +25766,7 @@ function _edActivateLineTool(isNew, isCreating) {
     if (_vcofBtn) {
       _vcofBtn.addEventListener('click', e => {
         e.stopPropagation();
+        if (_edFreeActive() && _cof.on) { _cofSetOn(false); _vcofSyncBtn(); return; }   // v42.69: Libre → cursor de dibujo
         if (_vcof.on) { _vcofSetOn(false); return; }
         // Mostrar popover de ángulo (no requiere V/C activo para activar la herramienta)
         if (!_vcofPop) return;
@@ -25695,12 +25785,16 @@ function _edActivateLineTool(isNew, isCreating) {
     }
     [['op-vcof-pop-l', 40], ['op-vcof-pop-r', -40]].forEach(([bid, angle]) => {
       $(bid)?.addEventListener('click', () => {
+        if (_vcofPop) _vcofPop.style.display = 'none';
+        if (_edFreeActive()) {   // v42.69: en modo Libre se enciende el cursor de DIBUJO con esa inclinación
+          _edCursorOffsetAngle = angle; _cofSetOn(true); _vcofSyncBtn(); return;
+        }
         _vcof.angle = angle;
         _vcofSetOn(true);
-        if (_vcofPop) _vcofPop.style.display = 'none';
       });
     });
   }
+  _edFreeCofSync();   // v42.69: el botón del cursor también se ve (y se marca) con la herramienta Libre
   // ── Minimizar (idéntico a draw) ──
   // ── Colapso del panel ──
   // Nota: la sincronización de herramienta/nodos al mostrar la barra ya la
