@@ -711,27 +711,13 @@ body.ed-scale-tablet {
 /* v42.64 — barras flotantes CONTEXTUALES (js/editor.js: «BARRAS FLOTANTES CONTEXTUALES Y AJUSTADAS AL ESPACIO»).
    · .edb-hide: el botón/separador no sirve ahora con la herramienta o el estado actuales. Clase aparte (con !important) del style.display en
      línea que ya usa el resto del código, para que los dos mecanismos no se pisen.
-   · .edb-wrap: la barra con todos sus botones no cabe en el lienzo → se reparte en columnas (vertical, --edb-rows filas por columna) o en
-     filas (horizontal, --edb-cols botones por fila), como el «toolbox» de Krita o GIMP. Los separadores sobran en este reparto. */
+   · v42.70: las barras son SIEMPRE una sola fila o columna; si no caben en la pantalla, _edBarFit las encoge enteras bajando --edb-scale en la
+     propia barra (el reparto en columnas de la v42.64, .edb-wrap, se retiró a petición de Alberto). */
 .edb-hide { display: none !important; }
-#edDrawBar.edb-wrap .edb-content,
-#edShapeBar.edb-wrap .edb-content {
-  display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(var(--edb-rows, 6), auto);
-  align-items: center;
-  justify-items: center;
-  gap: 1px;
-}
-#edDrawBar.edb-wrap.horiz .edb-content,
-#edShapeBar.edb-wrap.horiz .edb-content {
-  grid-auto-flow: row;
-  grid-template-rows: none;
-  grid-template-columns: repeat(var(--edb-cols, 6), auto);
-}
-#edDrawBar.edb-wrap .edb-sep,
-#edShapeBar.edb-wrap .edb-sep { display: none; }
-
+/* v42.70 — barra encogida porque no cabe: los iconos de tamaño fijo (SVG e imágenes) se reducen con el mismo factor (--edb-fit la pone
+   _edBarFit solo en la barra que lo necesita; sin ella vale 1 y no cambia nada). */
+#edDrawBar  .edb-content svg, #edDrawBar  .edb-content img,
+#edShapeBar .edb-content svg, #edShapeBar .edb-content img { transform: scale(var(--edb-fit, 1)); }
 /* ── Popover paleta de colores ── */
 #edb-palette-pop {
   position: absolute;

@@ -84,10 +84,10 @@
  *     simplificación inicial de Ramer–Douglas–Peucker y poda de nodos por el área de Visvalingam–Whyatt (1993). Implementación propia, sin código copiado.
  *     https://github.com/erich666/GraphicsGems  ·  http://paperjs.org/
  *
- * - Barras flotantes contextuales y repartidas en columnas (v42.64; _edbCtxUpdate, _esbCtxUpdate, _edBarFit, _edbPlacePop)
+ * - Barras flotantes contextuales (v42.64; _edbCtxUpdate, _esbCtxUpdate, _edbPlacePop) y siempre en una sola fila/columna que se encoge entera si no cabe (v42.70; _edBarFit)
  *     Patrón estándar de las barras de herramientas contextuales (la «Contextual Task Bar» de Photoshop, la barra de control de Illustrator e Inkscape y el
- *     panel de propiedades de Figma: solo se muestran los controles que valen para la herramienta y el estado actuales), reparto del cuadro de herramientas
- *     en columnas cuando no cabe (el «toolbox» de Krita y de GIMP) y colocación de los desplegables «flip + shift» (Floating UI / Popper).
+ *     panel de propiedades de Figma: solo se muestran los controles que valen para la herramienta y el estado actuales)
+ *     y colocación de los desplegables «flip + shift» (Floating UI / Popper).
  *     Implementación propia, sin código copiado.
  *     https://floating-ui.com/docs/flip  ·  https://docs.krita.org/  ·  https://www.gimp.org/
  */
@@ -7310,7 +7310,7 @@ function edFitCanvas(resetCamera){
     edCamera.z = _savedCam.z;
   }
   _edScrollbarsUpdate();
-  _edBarsRefitAll();   // v42.64: el tamaño del lienzo decide cuántas columnas necesitan las barras flotantes
+  _edBarsRefitAll();   // v42.64/v42.70: el tamaño de la pantalla decide si las barras flotantes caben o hay que encogerlas
   // Siempre redibujar tras ajustar el canvas
   edRedraw();
   // v41.63 — con el editor de animaciones abierto, el bloque de arriba que
@@ -8178,6 +8178,7 @@ function _edRenderOverlays() {
   _vsDrawOtherNodes();   // v42.62: con NODOS, los nodos de los demás objetos de la sesión (debajo de los del seleccionado, que pinta edDrawSel)
   edDrawSel();
   if(_edFreeStroke) _edFreeDrawPreview(edCtx);   // v42.61: trazo del modo libre en curso
+  _edVjDrawHint(edCtx);                          // v42.71: anillo sobre el extremo al que se uniría el nodo que se arrastra
   _edFreeCofWatch();                             // v42.69: botón/estado del cursor desplazado al cambiar de herramienta
   // ── Indicador parpadeante del primer punto de una línea en construcción ──
   if(_edLineLayer && _edLineLayer.points.length === 1){
@@ -19975,13 +19976,18 @@ function edOnEnd(e){
     // Ver _edLayersSnapshot(movedLayer) más abajo.
     const _plainDragLayer = (edIsDragging && !edIsResizing && !edIsRotating && !edIsTailDragging && edSelectedIdx>=0)
       ? edLayers[edSelectedIdx] : null;
+    const _vjNode = (edIsTailDragging && edTailPointType === 'linevertex' && !(_vsNodeSel && _vsNodeSel.set && _vsNodeSel.set.size > 1)) ? edTailVoiceIdx : -1;   // v42.71
     const _doPush = () => {
       const _panel=$('edOptionsPanel');
       const _mode=_panel?.dataset.mode;
       const _la=edSelectedIdx>=0?edLayers[edSelectedIdx]:null;
       if((_mode==='shape'||_mode==='line'||$('edShapeBar')?.classList.contains('visible'))
          && _la && (_la.type==='shape'||_la.type==='line')){
+        const _vjH0 = _vsHistory.length + ':' + _vsHistIdx;
         _edShapePushHistory();
+        // v42.71: nodo extremo soltado sobre el extremo de otro objeto abierto → se unen (paso propio: ↩ los separa y deja el nodo donde se soltó).
+        // Solo si el nodo se MOVIÓ de verdad (el apunte anterior abrió un paso): tocar un extremo para seleccionarlo no une nada.
+        if(_vjNode >= 0 && (_vsHistory.length + ':' + _vsHistIdx) !== _vjH0 && _edVjAfterNodeDrag(_la, _vjNode)){ _edShapePushHistory(); edRedraw(); }
       } else {
         edPushHistory(false, _plainDragLayer);
       }
@@ -22927,6 +22933,133 @@ const _ED_FREE_ICON   = "<svg xmlns='http://www.w3.org/2000/svg' width='20' heig
 const _ED_FREE_RCAP   = 80;     // radio máximo de curvatura que produce el ajuste (el deslizador «Curvatura» del editor llega a 80)
 let _edFreeStroke = null;       // trazo en curso: { pts:[{x,y}] (px de página), pid, touch, prevSel }
 let _edFreeRaf = 0;
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// v42.71 — UNIÓN AUTOMÁTICA DE EXTREMOS de objetos vectoriales ABIERTOS
+// Petición de Alberto: «cuando se creen dibujos vectoriales abiertos, de cualquier tipo, los nodos de los extremos de objetos distintos, si
+// están superpuestos o muy cercanos, se unan formando un solo nodo y un solo objeto; igualmente cuando se arrastre un nodo de un extremo
+// sobre el nodo de otro extremo de otro objeto. Deshacer deshará la unión».
+// Es la unión de extremos coincidentes de los editores vectoriales (Inkscape: «unir nodos finales seleccionados»; Illustrator: Objeto >
+// Trazado > Unir, y el ajuste automático de la herramienta Pluma sobre un extremo): los dos extremos pasan a ser UN nodo y los dos trazados
+// UNO. Aquí es automática al terminar un trazo abierto (libre, recta, polígono sin cerrar) y al soltar un nodo extremo sobre otro.
+//  · Quién se une: LineLayer abiertos de un solo contorno, visibles, sin bloquear, de la sesión vectorial en curso (los que ya existían
+//    antes de la sesión, _vsPreSessionLayers, no se tocan: tampoco son seleccionables). Nunca el polígono que se está construyendo.
+//  · Sobrevive el objeto ACTIVO (el recién dibujado o el del nodo arrastrado): conserva estilo y posición en las capas; el otro desaparece
+//    dentro de él. El nodo común queda en el punto del objeto que ya estaba (el que no se movía). Las curvaturas (cornerRadii) de los
+//    nodos interiores de ambos se conservan; el nodo común nace en esquina.
+//  · Si los DOS extremos del trazo nuevo caen sobre los dos extremos de un mismo objeto, el resultado se CIERRA. Y (v42.72) un extremo
+//    arrastrado sobre el otro extremo de su PROPIO objeto también lo cierra.
+//  · Deshacer: la unión es un paso propio del historial de la sesión, posterior al de crear/mover. Un ↩ separa los objetos (y deja el
+//    trazo o el nodo donde se soltó); otro ↩ deshace el trazo o el movimiento.
+const _EDVJ_TOL_MOUSE = 8, _EDVJ_TOL_TOUCH = 14;   // px de PANTALLA entre dos extremos para considerarlos «el mismo»
+function _edVjTol(){ return (window._edIsTouch === true ? _EDVJ_TOL_TOUCH : _EDVJ_TOL_MOUSE) / (edCamera.z || 1); }   // → px de página
+function _edVjOpen(l){
+  return !!l && l.type === 'line' && !l.closed && !l.grouped && !l.hidden && !l.locked && Array.isArray(l.points) && l.points.length >= 2 &&
+         !l.points.includes(null) && !(l.subPaths && l.subPaths.length) && !l._motionPath;
+}
+// Nodos en px de página (misma transformación que LineLayer.draw: centro + giro en píxeles)
+function _edVjAbs(l){
+  const pw = edPageW(), ph = edPageH(), r = (l.rotation || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r), cx = l.x * pw, cy = l.y * ph;
+  return l.points.map(p => { const x = p.x * pw, y = p.y * ph; return { x: cx + x * c - y * sn, y: cy + x * sn + y * c }; });
+}
+// Extremo de OTRO objeto abierto de la sesión más cercano a (x,y) dentro de la tolerancia → {l, end:'start'|'end', x, y, d} o null
+function _edVjFind(self, x, y, skip){
+  const tol = _edVjTol(); let best = null;
+  for(const l of edLayers){
+    if(l === self || l === _edLineLayer || !_edVjOpen(l) || _vsPreSessionLayers.has(l)) continue;
+    const P = _edVjAbs(l);
+    for(const [end, q] of [['start', P[0]], ['end', P[P.length - 1]]]){
+      if(skip && skip.l === l && skip.end === end) continue;
+      const d = Math.hypot(q.x - x, q.y - y);
+      if(d <= tol && (!best || d < best.d)) best = { l, end, x: q.x, y: q.y, d };
+    }
+  }
+  return best;
+}
+// Funde B dentro de A: el extremo endA de A con el extremo endB de B. Devuelve el índice del nodo común en A.
+function _edVjJoin(A, endA, B, endB, close){
+  const pw = edPageW(), ph = edPageH();
+  const side = (l, flip) => {
+    let P = _edVjAbs(l), R = l.points.map((_, i) => (l.cornerRadii && l.cornerRadii[i]) || 0);
+    if(flip){ P = P.reverse(); R = R.reverse(); }
+    return { P, R };
+  };
+  const a = side(A, endA === 'start'), b = side(B, endB === 'end');   // A termina en la unión · B empieza en ella
+  const P = a.P.slice(0, -1).concat(b.P), R = a.R.slice(0, -1).concat(b.R);
+  const j = a.P.length - 1; R[j] = 0;                                 // nodo común: en el punto de B, en esquina
+  if(close){ P.pop(); R.pop(); R[0] = 0; }                            // los otros dos extremos también coinciden → contorno cerrado (queda el de A)
+  A.rotation = 0;
+  A.x = P[0].x / pw; A.y = P[0].y / ph;
+  A.points = P.map(q => ({ x: (q.x - P[0].x) / pw, y: (q.y - P[0].y) / ph }));
+  const cr = {}; R.forEach((r, i) => { if(r > 0) cr[i] = r; });
+  if(Object.keys(cr).length) A.cornerRadii = cr; else delete A.cornerRadii;
+  if(close) A.closed = true;
+  A._updateBbox();
+  const bi = edLayers.indexOf(B); if(bi >= 0) edLayers.splice(bi, 1);
+  if(_vsMulti.length) _vsMultiClear();
+  edSelectedIdx = edLayers.indexOf(A);
+  return j;
+}
+// Tras CREAR un objeto abierto: une sus extremos con los de otros objetos. Devuelve true si unió algo (quien llama apunta el historial).
+function _edVjAfterCreate(A){
+  if(!_edVjOpen(A) || _vsPreSessionLayers.has(A)) return false;
+  const P = _edVjAbs(A), s0 = P[0], e0 = P[P.length - 1];
+  let hE = _edVjFind(A, e0.x, e0.y), hS = _edVjFind(A, s0.x, s0.y);
+  if(!hE && !hS) return false;
+  if(hE && hS && hE.l === hS.l){
+    if(hE.end === hS.end){ if(hE.d <= hS.d) hS = null; else hE = null; }      // trazo diminuto con los dos extremos sobre el MISMO punto: solo el más cercano
+    else { _edVjJoin(A, 'end', hE.l, hE.end, true); return true; }           // los dos extremos sobre los dos extremos del mismo objeto → se cierra
+  }
+  if(hE) _edVjJoin(A, 'end', hE.l, hE.end, false);
+  if(hS && _edVjOpen(hS.l) && edLayers.includes(hS.l)) _edVjJoin(A, 'start', hS.l, hS.end, false);   // tras la 1.ª unión el inicio de A sigue siendo su inicio
+  return true;
+}
+// Tras ARRASTRAR un nodo: si era un extremo y quedó sobre el extremo de otro objeto, los une. Devuelve true si unió.
+function _edVjAfterNodeDrag(A, idx){
+  if(!_edVjOpen(A) || _vsPreSessionLayers.has(A)) return false;
+  const n = A.points.length; if(idx !== 0 && idx !== n - 1) return false;
+  const P = _edVjAbs(A), q = P[idx];
+  const h = _edVjFind(A, q.x, q.y);
+  // v42.72 — sobre el OTRO extremo del MISMO objeto: se cierra (Alberto: «arrastrar un extremo sobre el otro extremo en el mismo objeto lo debe
+  // cerrar»). Gana el extremo más cercano si además hay uno ajeno a tiro. Hacen falta 4 nodos: al fundirse dos quedan 3, el mínimo de un cerrado.
+  const o = P[idx === 0 ? n - 1 : 0], dSelf = Math.hypot(o.x - q.x, o.y - q.y);
+  if(n >= 4 && dSelf <= _edVjTol() && (!h || dSelf <= h.d)){
+    const cr = {}, old = A.cornerRadii || {};
+    A.points.forEach((_, i) => { if(i === idx) return; const r = old[i] || 0, k = idx === 0 ? i - 1 : i; if(r > 0) cr[k] = r; });
+    A.points.splice(idx, 1);                      // el nodo arrastrado se funde en el extremo que estaba quieto
+    const jc = idx === 0 ? A.points.length - 1 : 0;
+    delete cr[jc];                                // el nodo común nace en esquina
+    if(Object.keys(cr).length) A.cornerRadii = cr; else delete A.cornerRadii;
+    A.closed = true;
+    A._updateBbox();
+    if(window._edCurveVertIdx >= 0) window._edCurveVertIdx = jc;
+    if(_vcof.activeNodeIdx >= 0) _vcof.activeNodeIdx = jc;
+    _vsNodeSel = null;
+    return true;
+  }
+  if(!h) return false;
+  const j = _edVjJoin(A, idx === 0 ? 'start' : 'end', h.l, h.end, false);
+  if(window._edCurveVertIdx >= 0) window._edCurveVertIdx = j;                 // el nodo activo sigue siendo el que se arrastraba (ahora, el común)
+  if(_vcof.activeNodeIdx >= 0) _vcof.activeNodeIdx = j;
+  _vsNodeSel = null;
+  return true;
+}
+// Aviso visual mientras se arrastra un nodo extremo: anillo sobre el extremo al que se uniría si se soltase ahí.
+function _edVjDrawHint(ctx){
+  if(!edIsTailDragging || edTailPointType !== 'linevertex' || edSelectedIdx < 0) return;
+  const A = edLayers[edSelectedIdx]; if(!_edVjOpen(A) || _vsPreSessionLayers.has(A)) return;
+  if(_vsNodeSel && _vsNodeSel.set && _vsNodeSel.set.size > 1) return;
+  const i = edTailVoiceIdx, n = A.points.length; if(i !== 0 && i !== n - 1) return;
+  const PA = _edVjAbs(A), q = PA[i]; let h = _edVjFind(A, q.x, q.y);
+  const o = PA[i === 0 ? n - 1 : 0], dSelf = Math.hypot(o.x - q.x, o.y - q.y);
+  if(n >= 4 && dSelf <= _edVjTol() && (!h || dSelf <= h.d)) h = { x: o.x, y: o.y };   // v42.72: el otro extremo del mismo objeto (se cerraría)
+  if(!h) return;
+  const z = edCamera.z || 1;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(edMarginX() + h.x, edMarginY() + h.y, 9 / z, 0, Math.PI * 2);
+  ctx.lineWidth = 3 / z; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+  ctx.lineWidth = 1.5 / z; ctx.strokeStyle = '#1a73e8'; ctx.stroke();
+  ctx.restore();
+}
 function _edFreeActive(){ return edActiveTool === 'line' && _edLineType === 'free'; }
 // ── v42.69 — CURSOR DESPLAZADO (COF) EN EL MODO LIBRE ──
 // Petición de Alberto: «el nuevo trazo libre es muy parecido al trazo de dibujo a mano, pero falta que pueda usarse también el cursor COF con él».
@@ -23072,6 +23205,7 @@ function _edFreeCreate(res, s){
   // igual que al soltar un rectángulo/elipse: historial de la sesión vectorial + historial general ANTES de tocar la herramienta
   _edShapePushHistory();
   edPushHistory();
+  if(_edVjAfterCreate(l)){ _edShapePushHistory(); edPushHistory(); }   // v42.71: extremos sobre los de otro objeto → un solo objeto (paso propio: ↩ lo separa)
   edCanvas.className = 'tool-line';   // la herramienta sigue activa: el siguiente trazo crea otro objeto
   edRedraw();
   _edActivateLineTool(false, true);   // true = objeto recién creado
@@ -25898,6 +26032,7 @@ function _edFinishLine(keepTool) {
     // apuntaban en el local; ahora los cuatro tipos se comportan igual: el historial GENERAL recibe solo el «antes» (al entrar) y el
     // «después» (al pulsar OK), y _vsPreSessionLayers no se toca (Fusionar sigue sabiendo qué objetos existían antes de la sesión).
     _edShapePushHistory();
+    if(_edVjAfterCreate(finished)) _edShapePushHistory();   // v42.71: unión automática de extremos (paso propio del historial)
     // (_vsClear() apagaba además el cursor COF vectorial al terminar cada objeto: se conserva ese comportamiento)
     if (typeof _vcofSetOn === 'function' && typeof _vcof !== 'undefined' && _vcof && _vcof.on) _vcofSetOn(false);
     edRedraw();
@@ -30231,14 +30366,25 @@ function _edExpandGroupLayerToWs(la, drawLayer) {
    ══════════════════════════════════════════ */
 /* Reposiciona las barras flotantes visibles para que queden
    completamente dentro de la pantalla (se llama tras cambios de layout). */
+// v42.70: borde inferior de la cabecera y de la barra de menús cuando están a la vista. Las barras flotantes quedan por DEBAJO de ellas en
+// pantalla (se pintan detrás): lo que cae ahí arriba no se ve ni se puede tocar, así que no cuenta como sitio útil. 0 con la interfaz oculta.
+function _edBarTopLimit(){
+  let t = 0;
+  for(const id of ['edTopbar', 'edMenuBar']){
+    const e = $(id); if(!e) continue;
+    const r = e.getBoundingClientRect();
+    if(r.height > 0 && r.width > 0 && r.bottom > t && r.bottom < window.innerHeight * 0.6 && getComputedStyle(e).visibility !== 'hidden') t = r.bottom;
+  }
+  return Math.round(t);
+}
 function _edBarClampToScreen(){
-  const W = window.innerWidth, H = window.innerHeight;
+  const W = window.innerWidth, H = window.innerHeight, T = _edBarTopLimit();
   const drawBar = $('edDrawBar');
   if(drawBar && drawBar.classList.contains('visible')){
     const bw = drawBar.offsetWidth  || 36;
     const bh = drawBar.offsetHeight || 200;
     _edbX = Math.max(0, Math.min(W - bw, _edbX));
-    _edbY = Math.max(0, Math.min(H - bh, _edbY));
+    _edbY = Math.max(T, Math.min(H - bh, _edbY));   // v42.70: nunca debajo de la cabecera/menús (T)
     drawBar.style.left = _edbX + 'px';
     drawBar.style.top  = _edbY + 'px';
   }
@@ -30247,7 +30393,7 @@ function _edBarClampToScreen(){
     const bw = shapeBar.offsetWidth  || 36;
     const bh = shapeBar.offsetHeight || 200;
     _esbX = Math.max(0, Math.min(W - bw, _esbX));
-    _esbY = Math.max(0, Math.min(H - bh, _esbY));
+    _esbY = Math.max(T, Math.min(H - bh, _esbY));
     shapeBar.style.left = _esbX + 'px';
     shapeBar.style.top  = _esbY + 'px';
   }
@@ -30259,20 +30405,21 @@ function _edBarClampToScreen(){
    parte de la zona de dibujo útil. Es necesario que solo aparezcan los iconos que realmente pueden usarse según la herramienta seleccionada
    (p. ej. si no hay relleno no tiene sentido la muestra de color de relleno, solo la casilla)… Busca otros casos».
    Es el estándar de las barras de herramientas contextuales (Photoshop «Contextual Task Bar», la barra de control de Illustrator e Inkscape,
-   el panel de propiedades de Figma): solo se muestran los controles aplicables a la herramienta y al estado actuales (divulgación progresiva);
-   y una paleta flotante que no cabe se reparte en columnas en vez de salirse (el «toolbox» de Krita y GIMP se reparte así según el espacio).
+   el panel de propiedades de Figma): solo se muestran los controles aplicables a la herramienta y al estado actuales (divulgación progresiva).
    Técnica estándar; código propio, sin copiar.
    1) CONTEXTO — cada botón se oculta con la clase .edb-hide (display:none !important). Es distinta del style.display en línea que ya usa el
       resto del código (edb-offset, edb-pen-size / edb-eraser-size, esb-fuse): los dos mecanismos no se pisan. Reglas en _esbCtxUpdate (barra
       vectorial) y _edbCtxUpdate (barra de dibujo a mano); ambas se llaman desde la sincronía que ya existía (_esbSync, _edbSyncTool…).
    2) SEPARADORES — _edbTidySeps oculta los que quedarían al principio, al final o dos seguidos tras ocultar botones.
-   3) AJUSTE — _edBarFit reparte los botones en 2–4 columnas (barra vertical) o filas (barra horizontal) cuando la barra con TODOS sus botones
-      ocuparía más de una fracción del lienzo (_EDB_CAP_*). El número de columnas sale del conjunto completo y no de lo visible en ese momento:
-      la barra no cambia de forma cuando aparecen o desaparecen botones, solo de altura. */
-const _EDB_CAP_V_PHONE  = 0.36;  // fracción máxima del alto del lienzo que ocupa una barra VERTICAL en una pantalla PEQUEÑA (< 600 px: móvil; la de dibujo a mano pasa a 2 columnas)
-const _EDB_CAP_V_TABLET = 0.45;  // ídem en una tablet táctil (pantalla ≥ 600 px, botones a 1,4× y mucho más lienzo)
-const _EDB_CAP_V_MOUSE  = 0.70;  // ídem con ratón (PC): hay más sitio y la barra se queda como siempre salvo ventanas muy bajas
-const _EDB_CAP_H        = 0.95;  // una barra HORIZONTAL pegada a un borde puede ocupar casi todo el ancho
+   3) AJUSTE (rehecho en la v42.70) — las barras son SIEMPRE una sola fila o una sola columna. Alberto, tras probar el reparto en 2–3 columnas
+      de la v42.64: «tapa aún más el espacio de trabajo y no facilita nada. Debe ser siempre una sola fila o columna. Si debido al tamaño de la
+      pantalla la barra no cabe dentro entera, como mucho debe poder reducirse entera, lo mínimo necesario para que no quede oculto ningún
+      icono». _edBarFit mide la barra y, solo si no cabe en la pantalla, la encoge ENTERA bajando su --edb-scale (la misma variable CSS que ya
+      agranda las barras en tablet: todas sus medidas dependen de ella, así que iconos, asa y márgenes se reducen a la vez y sin deformarse).
+      El factor sale de los botones VISIBLES en ese momento («lo mínimo necesario»): en una pantalla donde no cabe, la barra puede cambiar algo
+      de tamaño al aparecer o desaparecer botones con la herramienta; donde cabe (lo normal) no se encoge nunca. NO volver al reparto en columnas/filas (probado y descartado por Alberto). */
+const _EDB_FIT_MARGIN = 4;      // px libres que se dejan entre la barra y el borde de la pantalla
+const _EDB_FIT_MIN    = 0.4;    // por debajo de esto los iconos dejan de distinguirse: no se encoge más
 function _edbHide(el, hide){ if(el) el.classList.toggle('edb-hide', !!hide); }
 function _edbTidySeps(bar){
   if(!bar) return;
@@ -30287,33 +30434,27 @@ function _edbTidySeps(bar){
   });
   want.forEach((v, e) => e.classList.toggle('edb-hide', !v));
 }
-// Reparte los botones visibles en columnas/filas si la barra con todos sus botones no cabe. Devuelve true si cambió la disposición.
+// Una sola fila/columna siempre; si la barra (con los botones que se ven ahora) no cabe en la pantalla, se encoge entera lo justo. Devuelve true si cambió el tamaño.
 function _edBarFit(bar){
   if(!bar || !bar.classList.contains('visible')) return false;
   const content = bar.querySelector('.edb-content'); if(!content) return false;
   const horiz = bar.classList.contains('horiz');
-  const items = Array.from(content.children).filter(e => !e.classList.contains('edb-sep'));
-  const shown = items.filter(e => !e.classList.contains('edb-hide') && getComputedStyle(e).display !== 'none').length;
-  const full  = items.filter(e => !e.hasAttribute('data-edb-alt') && !e.hasAttribute('data-edb-never')).length;   // «alt»: grosor lápiz/goma se turnan en el mismo sitio · «never»: no existe en este dispositivo (la lupa en táctil)
-  const sc = parseFloat(getComputedStyle(document.body).getPropertyValue('--edb-scale')) || 1;
-  const cv = $('editorCanvas'), sh = $('editorShell');
-  const A = horiz ? ((cv && cv.clientWidth)  || (sh && sh.clientWidth)  || window.innerWidth)
-                  : ((cv && cv.clientHeight) || (sh && sh.clientHeight) || window.innerHeight);
-  const cls = (typeof edGetDeviceClass === 'function') ? edGetDeviceClass() : 'desktop';   // 'desktop' | 'tablet' | 'phone' (según el último puntero usado)
-  // El tope depende del TAMAÑO de la pantalla, no del puntero: un móvil con lápiz (S-Pen) tiene la misma pantalla pequeña que con el dedo y la barra no debe
-  // saltar de una disposición a otra al cambiar de puntero. Una ventana de PC de menos de 600 px de alto o de ancho también es «pantalla pequeña».
-  const small = Math.min(window.innerWidth, window.innerHeight) < 600;
-  const cap = horiz ? _EDB_CAP_H : (small ? _EDB_CAP_V_PHONE : cls === 'tablet' ? _EDB_CAP_V_TABLET : _EDB_CAP_V_MOUSE);
-  const fullLen = full * (30 * sc + 1) + 20 * sc;                  // largo aproximado con TODOS los botones en una sola línea
-  let lines = Math.ceil(fullLen / Math.max(1, cap * A));
-  lines = Math.max(1, Math.min(lines, 4, Math.floor(shown / 3)));  // nunca menos de 3 botones por línea
-  const per = Math.ceil(shown / lines);
-  const sig = lines > 1 ? ((horiz ? 'h' : 'v') + lines + '/' + per) : '1';
+  const base  = parseFloat(getComputedStyle(document.body).getPropertyValue('--edb-scale')) || 1;                 // 1 (móvil, PC) o 1,4 (tablet)
+  const avail = (horiz ? window.innerWidth : window.innerHeight - _edBarTopLimit()) - 2 * _EDB_FIT_MARGIN;   // lo que se ve de verdad: bajo la cabecera y los menús
+  // --edb-scale encoge todo lo que ya dependía de ella; --edb-fit (solo el factor de encogido, 1 = sin encoger) lo usan en CSS los iconos de tamaño fijo
+  const apply = f => {
+    if(f >= 0.999){ bar.style.removeProperty('--edb-scale'); bar.style.removeProperty('--edb-fit'); }
+    else { bar.style.setProperty('--edb-scale', (base * f).toFixed(3)); bar.style.setProperty('--edb-fit', f.toFixed(3)); }
+  };
+  const need = () => horiz ? bar.offsetWidth : bar.offsetHeight;   // largo real de la barra a la escala actual
+  let f = 1; apply(1);
+  for(let i = 0; i < 4; i++){            // casi todo escala con --edb-scale, pero no todo (bordes de 1 px…): se afina en un par de pasadas
+    const n = need(); if(n <= avail || f <= _EDB_FIT_MIN) break;
+    f = Math.max(_EDB_FIT_MIN, f * avail / n * 0.995); apply(f);
+  }
+  const sig = f.toFixed(3) + (horiz ? 'h' : 'v');
   if(bar._edbFitSig === sig) return false;
   bar._edbFitSig = sig;
-  bar.classList.toggle('edb-wrap', lines > 1);
-  content.style.removeProperty('--edb-rows'); content.style.removeProperty('--edb-cols');
-  if(lines > 1) content.style.setProperty(horiz ? '--edb-cols' : '--edb-rows', per);
   return true;
 }
 // Pone al día separadores y disposición de una barra VISIBLE y la mantiene dentro de la pantalla (al aparecer botones puede crecer hacia abajo).
@@ -31738,7 +31879,7 @@ function edInitDrawBar() {
       const shouldHoriz = distPtrTB <= distPtrLR;
       if (shouldHoriz !== wasHoriz) {
         bar.classList.toggle('horiz', shouldHoriz);
-        _edBarFit(bar);   // v42.64: otra orientación = otro reparto en columnas/filas
+        _edBarFit(bar);   // v42.70: otra orientación = otro largo disponible (puede tener que encogerse)
         // Reajustar origen del drag para compensar el nuevo tamaño
         const newBw = bar.offsetWidth, newBh = bar.offsetHeight;
         const adjX = (bw - newBw) / 2, adjY = (bh - newBh) / 2;
@@ -32581,8 +32722,8 @@ function _edbSyncTool() {
 //  · color: la goma, iluminar/oscurecer y difuminar no pintan con un color (modifican lo que ya hay). Antes solo se ocultaba con la goma.
 //  · grosor: el bote rellena una zona, no tiene pincel (ED_TOOL_PARAM_DEFAULTS.bucket.size = null; el panel tampoco lo muestra con el bote).
 //  · lupa (🔍+ zoom a un recuadro, 🔍− encajar): fuera en TÁCTIL (petición de Alberto: ahí se hace con dos dedos). Con ratón o lápiz sigue. «Táctil» es
-//    lo que decide edGetDeviceClass() —el último puntero usado—, igual que el resto de la interfaz adaptada al dedo; data-edb-never la excluye del
-//    reparto en columnas (_edBarFit) para que no reserve un hueco que nunca se ve.
+//    lo que decide edGetDeviceClass() —el último puntero usado—, igual que el resto de la interfaz adaptada al dedo; data-edb-never deja
+//    anotado que en este dispositivo no existe.
 // El resto (herramientas, opacidad, cursor desplazado —ya condicionado a táctil y a trazo continuo—, deshacer/rehacer, OK) sirve siempre.
 function _edbCtxUpdate(){
   const bar = $('edDrawBar'); if(!bar) return;
@@ -33714,7 +33855,7 @@ function _edBarSnapToCanvas(bar, xVar, yVar) {
   const canvR  = canv.getBoundingClientRect();
   const isVert = (edOrientation || 'vertical') !== 'horizontal';
   if (isVert) bar.classList.remove('horiz'); else bar.classList.add('horiz');
-  _edBarFit(bar);   // v42.64: la orientación acaba de decidirse → columnas/filas antes de medir la barra
+  _edBarFit(bar);   // v42.70: la orientación acaba de decidirse → tamaño definitivo antes de medir la barra
 
   const visLeft = canvR.left - shellR.left;
   const visTop  = canvR.top  - shellR.top;
@@ -33984,7 +34125,7 @@ function edInitShapeBar() {
       const shouldHoriz=distTB<=distLR;
       if(shouldHoriz!==wasHoriz){
         bar.classList.toggle('horiz',shouldHoriz);
-        _edBarFit(bar);   // v42.64: otra orientación = otro reparto en columnas/filas
+        _edBarFit(bar);   // v42.70: otra orientación = otro largo disponible (puede tener que encogerse)
         const nBw=bar.offsetWidth, nBh=bar.offsetHeight;
         const adjX=(bw-nBw)/2, adjY=(bh-nBh)/2;
         _sl+=adjX; _st+=adjY;

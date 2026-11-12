@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.69</footer>
+    <footer class="app-version">v42.72</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -792,7 +792,7 @@ Router.register('editor', {
           <button id="esb-opacity"  class="edb-tool"    data-i18n-title="ed_opacityTool" title="Opacidad" style="font-size:.65rem;font-weight:900">Op</button>
           <button id="esb-defocus"  class="edb-tool"    data-i18n-title="op_defocusTitle" title="Desenfocar el objeto (0 = nítido)"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="pointer-events:none"><circle cx="12" cy="12" r="4.5" fill="currentColor"/><circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="2.2 2.6" opacity=".75"/></svg></button>
           <div class="edb-sep"></div>
-          <button id="esb-curve"    class="edb-tool" data-i18n-title="ed_convertToCurve" title="Convertir vértice a curva" style="font-size:.65rem;font-weight:900" data-i18n="ed_nodesLabel">NODOS</button>
+          <button id="esb-curve"    class="edb-tool" data-i18n-title="ed_convertToCurve" title="Convertir vértice a curva" style="font-size:calc(.65rem * var(--edb-fit, 1));font-weight:900" data-i18n="ed_nodesLabel">NODOS</button>
           <div class="edb-sep"></div>
           <button id="esb-undo"     class="edb-tool" data-i18n-title="td_undo" title="Deshacer">${ICON_UNDO_SVG}</button>
           <button id="esb-redo"     class="edb-tool" data-i18n-title="td_redo" title="Rehacer">${ICON_REDO_SVG}</button>
