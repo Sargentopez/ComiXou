@@ -8734,8 +8734,10 @@ function edDrawSel(){
   // y la guía de la línea también se mantienen. En PC no aplica: el ratón no
   // tiene pinch y los handles siguen siendo la única forma de redimensionar/
   // rotar (ver comentario en edOnStart).
-  const _hideVecHandles = window._edIsTouch === true && (la.type==='line'||la.type==='shape')
-    && _edVectorFreehandGesture();
+  // v42.63: con una herramienta de CREAR activa los tiradores se ocultan también en PC (ratón/lápiz) y en la barra flotante: nunca fueron
+  // agarrables (ver _edVecCreationToolActive); el marco discontinuo se conserva. El resto de la regla táctil no cambia.
+  const _hideVecHandles = (la.type==='line'||la.type==='shape')
+    && (_edVecCreationToolActive() || (window._edIsTouch === true && _edVectorFreehandGesture()));
   edCtx.strokeStyle='#1a8cff';
   edCtx.lineWidth=lw;
   // Rect bbox y handles de selección
@@ -14008,6 +14010,13 @@ function _edVectorSelectorActive(){
   if(_mode === 'shape') return _edShapeType === 'select';
   // Panel fuera del modo línea/forma (p.ej. 'props', o cerrado): selector general.
   return true;
+}
+// v42.63 — ¿hay activa una herramienta de CREACIÓN vectorial (polígono, recta, mano alzada, rectángulo o elipse)? Se mira edActiveTool, que es la
+// verdad de la herramienta: _edLineType/_edShapeType son sub-estados del panel y pueden quedar desfasados. Con una de ellas activa el recuadro
+// del objeto seleccionado NO muestra tiradores en ningún dispositivo (Alberto: «solo deben verse cuando se tiene seleccionada la herramienta de
+// selección, antes no tienen ninguna utilidad»): no se pueden agarrar —el toque siempre empieza un objeto nuevo, ver edOnStart— y solo estorban.
+function _edVecCreationToolActive(){
+  return edActiveTool === 'line' || edActiveTool === 'shape';
 }
 // true cuando, para un dibujo vectorial (línea/forma), el pinch y los handlers
 // de escala/rotación deben comportarse en modo "dibujo a mano" (cámara
@@ -43217,6 +43226,10 @@ function EditorView_init(){
     // T19: confirmar línea en construcción
     if(_edLineLayer && _edLineLayer.points.length >= 2) { _edFinishLine(); _esbSyncTool(); return; }
     if(_edLineLayer){ const _ix=edLayers.indexOf(_edLineLayer); if(_ix>=0) edLayers.splice(_ix,1); _edLineLayer=null; }
+    // v42.63: igual que el selector del panel (op-line-select-btn): también el sub-estado del panel. Sin esto quedaba el de la herramienta
+    // anterior y, en táctil, _edVectorSelectorActive() decía «no es el selector»: con el selector de la barra no se veían ni se podían usar
+    // los tiradores, y al desplegar el panel no salía marcado el selector.
+    _edLineType='select';
     edSelectedIdx=-1; edActiveTool='select'; edCanvas.className='';
     edRedraw(); _esbSyncTool();
   });
