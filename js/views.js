@@ -70,7 +70,7 @@ Router.register('home', {
       </div>
     <main class="home-list" id="worksGrid">
     </main>
-    <footer class="app-version">v42.60</footer>
+    <footer class="app-version">v42.62</footer>
   `,
   init: () => { HomeView_init(); },
   destroy: () => { if (window._homeStoreCleanup) { window._homeStoreCleanup(); window._homeStoreCleanup = null; } }
@@ -441,6 +441,7 @@ Router.register('editor', {
                   <button class="ed-dropdown-item" id="dd-shape-ellipse" data-i18n="ed_shapeEllipse">◯ Elipse</button>
                   <button class="ed-dropdown-item" id="dd-shape-line"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 22'><g transform='translate(11.796 10.646)'><path d='M -5.009 8.486 L -9.796 0.801 L -1.447 -8.486 L 9.796 -2.082 L 5.566 8.806 L -5.009 8.486 Z' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g></svg> <span data-i18n="ed_shapePolygon">Polígonos</span></button>
                   <button class="ed-dropdown-item" id="dd-shape-segment"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><g transform='translate(10.698 9.656)'><path d='M -8.698 7.656 L -2.588 -1.867 L 2.308 3.613 L 8.698 -7.656' fill='none' stroke='currentColor' stroke-width='1' stroke-linecap='round' stroke-linejoin='round'/></g><g transform='translate(8.123 7.544)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L -0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g><g transform='translate(13.073 13.298)'><path d='M 1.383 0.000 L 1.357 0.248 L 1.278 0.487 L 1.150 0.707 L 0.978 0.900 L 0.768 1.059 L 0.529 1.176 L 0.270 1.249 L 0.000 1.273 L -0.270 1.249 L -0.529 1.176 L -0.768 1.059 L -0.978 0.900 L -1.150 0.707 L -1.278 0.487 L -1.357 0.248 L -1.383 0.000 L -1.357 -0.248 L -1.278 -0.487 L -1.150 -0.707 L -0.978 -0.900 L -0.768 -1.059 L -0.529 -1.176 L -0.270 -1.249 L 0.000 -1.273 L 0.270 -1.249 L 0.529 -1.176 L 0.768 -1.059 L 0.978 -0.900 L 1.150 -0.707 L 1.278 -0.487 L 1.357 -0.248 L 1.383 0.000 Z' fill='currentColor' stroke='none'/></g></svg> <span data-i18n="ed_shapeSegments">Segmentos</span></button>
+                  <button class="ed-dropdown-item" id="dd-shape-free"><svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 22 20'><path d='M2.5 15 C5 3 9.5 3 11 10 S16.5 17 19.5 5' fill='none' stroke='currentColor' stroke-width='1.4' stroke-linecap='round'/><circle cx='2.5' cy='15' r='1.5' fill='currentColor'/><circle cx='11' cy='10' r='1.5' fill='currentColor'/><circle cx='19.5' cy='5' r='1.5' fill='currentColor'/></svg> <span data-i18n="ed_shapeFree">Libre</span></button>
                 </div>
               </div>
             </div>

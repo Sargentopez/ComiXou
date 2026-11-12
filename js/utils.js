@@ -375,7 +375,9 @@ const _CREDITS_TECH = [
   // v42.02 / v42.03 — antialiasing del borde del relleno al quitar la tinta, también entre dos colores (editor.js · _edAAFillEdges)
   { nameKey: 'credits_techAAName',     descKey: 'credits_techAADesc',     metaKey: 'credits_techAAMeta',     url: 'https://research.ibm.com/publications/distance-approximations-for-rasterizing-implicit-curves' },
   // v42.04 — Difuminar: mezcla colores arrastrando el pincel (editor.js · _edSmudgeStroke)
-  { nameKey: 'credits_techSmudgeName', descKey: 'credits_techSmudgeDesc', metaKey: 'credits_techSmudgeMeta', url: 'https://docs.gimp.org/en/gimp-tool-smudge.html' }
+  { nameKey: 'credits_techSmudgeName', descKey: 'credits_techSmudgeDesc', metaKey: 'credits_techSmudgeMeta', url: 'https://docs.gimp.org/en/gimp-tool-smudge.html' },
+  // v42.61 — dibujo vectorial «Libre»: ajuste automático de nodos y curvatura a un trazo a mano alzada (js/vector-fit.js)
+  { nameKey: 'credits_techFreeName',   descKey: 'credits_techFreeDesc',   metaKey: 'credits_techFreeMeta',   url: 'https://github.com/erich666/GraphicsGems' }
 ];
 
 function _creditsRowHtml(lib) {
