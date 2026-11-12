@@ -377,7 +377,9 @@ const _CREDITS_TECH = [
   // v42.04 — Difuminar: mezcla colores arrastrando el pincel (editor.js · _edSmudgeStroke)
   { nameKey: 'credits_techSmudgeName', descKey: 'credits_techSmudgeDesc', metaKey: 'credits_techSmudgeMeta', url: 'https://docs.gimp.org/en/gimp-tool-smudge.html' },
   // v42.61 — dibujo vectorial «Libre»: ajuste automático de nodos y curvatura a un trazo a mano alzada (js/vector-fit.js)
-  { nameKey: 'credits_techFreeName',   descKey: 'credits_techFreeDesc',   metaKey: 'credits_techFreeMeta',   url: 'https://github.com/erich666/GraphicsGems' }
+  { nameKey: 'credits_techFreeName',   descKey: 'credits_techFreeDesc',   metaKey: 'credits_techFreeMeta',   url: 'https://github.com/erich666/GraphicsGems' },
+  // v42.64 — barras flotantes contextuales, repartidas en columnas, con desplegables «flip + shift» (editor.js · _edbCtxUpdate, _esbCtxUpdate, _edBarFit, _edbPlacePop)
+  { nameKey: 'credits_techBarsName',   descKey: 'credits_techBarsDesc',   metaKey: 'credits_techBarsMeta',   url: 'https://floating-ui.com/docs/flip' }
 ];
 
 function _creditsRowHtml(lib) {

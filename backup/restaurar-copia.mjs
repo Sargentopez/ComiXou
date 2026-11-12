@@ -28,7 +28,7 @@ import zlib from 'node:zlib';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 
-const VERSION = '42.63';
+const VERSION = '42.66';
 const NL = 10;
 
 // ───────────────────────────────────────────────── opciones ─────────────────────────────────────────────────

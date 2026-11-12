@@ -83,6 +83,13 @@
  *     con mínimos cuadrados y amortiguación de Levenberg–Marquardt (K. Levenberg 1944; D. Marquardt 1963; W. Wang, H. Pottmann, Y. Liu, ACM TOG 2006),
  *     simplificación inicial de Ramer–Douglas–Peucker y poda de nodos por el área de Visvalingam–Whyatt (1993). Implementación propia, sin código copiado.
  *     https://github.com/erich666/GraphicsGems  ·  http://paperjs.org/
+ *
+ * - Barras flotantes contextuales y repartidas en columnas (v42.64; _edbCtxUpdate, _esbCtxUpdate, _edBarFit, _edbPlacePop)
+ *     Patrón estándar de las barras de herramientas contextuales (la «Contextual Task Bar» de Photoshop, la barra de control de Illustrator e Inkscape y el
+ *     panel de propiedades de Figma: solo se muestran los controles que valen para la herramienta y el estado actuales), reparto del cuadro de herramientas
+ *     en columnas cuando no cabe (el «toolbox» de Krita y de GIMP) y colocación de los desplegables «flip + shift» (Floating UI / Popper).
+ *     Implementación propia, sin código copiado.
+ *     https://floating-ui.com/docs/flip  ·  https://docs.krita.org/  ·  https://www.gimp.org/
  */
 /* ── gifuct-js embebido (MIT, Matt Way github.com/matt-way/gifuct-js) ── */
 var _gm = {};
@@ -7401,6 +7408,7 @@ function edFitCanvas(resetCamera){
     edCamera.z = _savedCam.z;
   }
   _edScrollbarsUpdate();
+  _edBarsRefitAll();   // v42.64: el tamaño del lienzo decide cuántas columnas necesitan las barras flotantes
   // Siempre redibujar tras ajustar el canvas
   edRedraw();
   // v41.63 — con el editor de animaciones abierto, el bloque de arriba que
@@ -8637,7 +8645,10 @@ function edGetDeviceClass() {
 // Solo actúa cuando la clase es 'tablet' — 'desktop' y 'phone' quedan
 // exactamente igual que antes de este cambio.
 function edApplyDeviceClass() {
-  document.body.classList.toggle('ed-scale-tablet', edGetDeviceClass() === 'tablet');
+  const _cls = edGetDeviceClass();
+  document.body.classList.toggle('ed-scale-tablet', _cls === 'tablet');
+  // v42.64: se llama en CADA pointerdown; solo cuando la clase cambia de verdad (escala, táctil↔ratón) se reparten de nuevo las barras flotantes
+  if(window._edBarDevCls !== _cls){ window._edBarDevCls = _cls; _edbCtxUpdate(); _edBarsRefitAll(); }   // _edbCtxUpdate: la lupa solo con ratón/lápiz
 }
 
 function edDrawSel(){
@@ -14011,13 +14022,8 @@ function _edVectorSelectorActive(){
   // Panel fuera del modo línea/forma (p.ej. 'props', o cerrado): selector general.
   return true;
 }
-// v42.63 — ¿hay activa una herramienta de CREACIÓN vectorial (polígono, recta, mano alzada, rectángulo o elipse)? Se mira edActiveTool, que es la
-// verdad de la herramienta: _edLineType/_edShapeType son sub-estados del panel y pueden quedar desfasados. Con una de ellas activa el recuadro
-// del objeto seleccionado NO muestra tiradores en ningún dispositivo (Alberto: «solo deben verse cuando se tiene seleccionada la herramienta de
-// selección, antes no tienen ninguna utilidad»): no se pueden agarrar —el toque siempre empieza un objeto nuevo, ver edOnStart— y solo estorban.
-function _edVecCreationToolActive(){
-  return edActiveTool === 'line' || edActiveTool === 'shape';
-}
+// v42.64 — _edVecCreationToolActive() (¿herramienta de CREACIÓN vectorial activa?) vive más abajo, junto a _edNodesOff: en v42.63 se añadió aquí
+// una segunda definición con el mismo nombre que la de v42.34 y, al ser función de script, la última (la de abajo) era la que mandaba. Se deja una sola.
 // true cuando, para un dibujo vectorial (línea/forma), el pinch y los handlers
 // de escala/rotación deben comportarse en modo "dibujo a mano" (cámara
 // únicamente, sin esos handlers): cualquier herramienta que no sea el
@@ -17056,6 +17062,8 @@ function edOnStart(e){
     // Cancelar deselección diferida — el pinch mantiene la selección actual
     if(window._edDeselTouchTimer){ clearTimeout(window._edDeselTouchTimer); window._edDeselTouchTimer = null; }
     window._edPendingDeselC = null;
+    // v42.66: ídem con la selección táctil pendiente de un objeto vectorial (ver _vsPendSelCommit): el 2.º dedo es cámara, no se selecciona nada
+    window._vsPendSel = null;
     // Cancelar drag de nodo pendiente — era un pinch, no una intención de arrastrar el nodo
     if(window._edNodeDragTouchTimer){ clearTimeout(window._edNodeDragTouchTimer); window._edNodeDragTouchTimer = null; }
     window._edPendingNodeDrag = null;
@@ -18156,6 +18164,7 @@ function edOnStart(e){
   // - Objetos vectoriales previos (en _vsPreSessionLayers): bloqueados igual que imágenes/textos
   // - Objetos no-vectoriales (imágenes, textos, draw): siempre bloqueados
   if(_editingVectorial && edActiveTool !== 'shape' && edActiveTool !== 'line'){
+    window._vsPendSel = null;   // v42.66: cada gesto nuevo empieza sin selección táctil pendiente (ver _vsPendSelCommit)
     const _vecLayers = edLayers.filter(l =>
       (l.type === 'line' || l.type === 'shape') && !_vsPreSessionLayers.has(l)
     );
@@ -18189,6 +18198,15 @@ function edOnStart(e){
       }
       // v42.36: con NODOS, pulsar en el cuerpo del objeto que ya se está editando (sin tocar ningún nodo ni segmento) abre la marquesina de nodos
       if(_vsNodesOn && _vsPrevSel === _hitVec && _vsMarqueeArm(e, c)) return;
+      // v42.66: con el DEDO sobre un objeto que NO es el seleccionado (incluida la zona de detección ampliada de la pasada 2), la selección no se
+      // aplica al pulsar: queda PENDIENTE y la resuelve edOnMove (arrastre real) / edOnEnd (toque) — y la descarta el segundo dedo. Así un pellizco
+      // o un desplazamiento de cámara con dos dedos nunca selecciona —y, por tanto, nunca escala— un objeto que quedó bajo los dedos (Alberto:
+      // «una vez no haya seleccionado nada y se hagan gestos con 2 dedos… no se seleccionen de nuevo los objetos aunque los toques queden dentro
+      // de su área de detección»). Ratón y lápiz seleccionan al pulsar, como siempre.
+      if(e.pointerType === 'touch' && edActiveTool === 'select' && _vsPrevSel !== _hitVec){
+        window._vsPendSel = { l: _hitVec, nx: c.nx, ny: c.ny, x: e.clientX, y: e.clientY, id: e.pointerId };
+        edRedraw(); return;
+      }
       // v42.62: con NODOS, cambiar de objeto deja atrás el nodo «activo» del anterior (su número apuntaba a un nodo de OTRO objeto: aparecía
       // activo —parpadeando— un nodo cualquiera del nuevo y el deslizador de curvatura lo habría modificado)
       if(_vsNodesOn && _vsPrevSel !== _hitVec){ window._edCurveVertIdx = -1; if(_vcof.activeNodeIdx >= 0) _vcof.activeNodeIdx = -1; }
@@ -19118,6 +19136,14 @@ function edOnMove(e){
     }
     return;
   }
+  // v42.66: selección táctil PENDIENTE de un objeto vectorial (ver edOnStart y _vsPendSelCommit): mientras el dedo no se desplace ≥ _VS_PEND_SLOP
+  // px ni se seleccionan ni se arrastran; pasado el margen es un arrastre de verdad → se selecciona y empieza a arrastrarse en este mismo movimiento.
+  if (window._vsPendSel && e.pointerType === 'touch' && e.pointerId === window._vsPendSel.id) {
+    const _pp = window._vsPendSel;
+    if (!window._edActivePointers || window._edActivePointers.size !== 1) window._vsPendSel = null;                          // otro dedo: descartada
+    else if (Math.hypot(e.clientX - _pp.x, e.clientY - _pp.y) < _VS_PEND_SLOP) return;                                        // dentro del margen
+    else _vsPendSelCommit(true, e);                                                                                           // arrastre de verdad
+  }
   // EXCEPCIÓN: si hay selección táctil diferida y el dedo se mueve, confirmarla y arrastrar
   if (window._edPendingSelFound !== null && window._edSelTouchTimer &&
       e.pointerType === 'touch' && window._edActivePointers?.size === 1) {
@@ -19820,6 +19846,13 @@ function edOnEnd(e){
         edActiveTool === 'line') {
       _edLineAddPoint(_pndLine.nx, _pndLine.ny, true);
     }
+  }
+  // v42.66: selección táctil PENDIENTE de un objeto vectorial (ver edOnStart y _vsPendSelCommit): el dedo se levantó sin segundo dedo ni arrastre
+  // = un toque → se selecciona ahora. Un pointercancel, o haber habido pellizco, la descarta sin seleccionar nada.
+  if (window._vsPendSel && e && e.pointerId === window._vsPendSel.id) {
+    const _vpTap = e.type === 'pointerup' && !_edPinchHappened && (!window._edActivePointers || window._edActivePointers.size === 0);
+    if (_vpTap && _vsPendSelCommit(false, e)) return;
+    window._vsPendSel = null;
   }
   // Selección táctil diferida: si el dedo se levantó antes de que disparara el timer,
   // aplicar la selección inmediatamente (era un tap, no un pinch)
@@ -20853,6 +20886,7 @@ function _edShapeUpdateUndoRedoBtns(){
   const bu=$('esb-undo'), br=$('esb-redo');
   if(bu) bu.style.opacity = canUndo ? '1' : '0.3';
   if(br) br.style.opacity = canRedo ? '1' : '0.3';
+  _esbCtxUpdate();   // v42.64: deshacer/rehacer hace aparecer o desaparecer objetos (NODOS, opacidad…)
 }
 
 // ── v41.89 — HISTORIAL LOCAL DEL DIBUJO POR BALDOSAS ─────────────────────────────────────────────────────────────────────
@@ -30617,6 +30651,103 @@ function _edBarClampToScreen(){
     shapeBar.style.top  = _esbY + 'px';
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+   v42.64 · BARRAS FLOTANTES CONTEXTUALES Y AJUSTADAS AL ESPACIO (edDrawBar y edShapeBar)
+   Alberto: «las barras flotantes de dibujo a mano y de dibujo vectorial se han hecho demasiado grandes, especialmente en móviles, tapando gran
+   parte de la zona de dibujo útil. Es necesario que solo aparezcan los iconos que realmente pueden usarse según la herramienta seleccionada
+   (p. ej. si no hay relleno no tiene sentido la muestra de color de relleno, solo la casilla)… Busca otros casos».
+   Es el estándar de las barras de herramientas contextuales (Photoshop «Contextual Task Bar», la barra de control de Illustrator e Inkscape,
+   el panel de propiedades de Figma): solo se muestran los controles aplicables a la herramienta y al estado actuales (divulgación progresiva);
+   y una paleta flotante que no cabe se reparte en columnas en vez de salirse (el «toolbox» de Krita y GIMP se reparte así según el espacio).
+   Técnica estándar; código propio, sin copiar.
+   1) CONTEXTO — cada botón se oculta con la clase .edb-hide (display:none !important). Es distinta del style.display en línea que ya usa el
+      resto del código (edb-offset, edb-pen-size / edb-eraser-size, esb-fuse): los dos mecanismos no se pisan. Reglas en _esbCtxUpdate (barra
+      vectorial) y _edbCtxUpdate (barra de dibujo a mano); ambas se llaman desde la sincronía que ya existía (_esbSync, _edbSyncTool…).
+   2) SEPARADORES — _edbTidySeps oculta los que quedarían al principio, al final o dos seguidos tras ocultar botones.
+   3) AJUSTE — _edBarFit reparte los botones en 2–4 columnas (barra vertical) o filas (barra horizontal) cuando la barra con TODOS sus botones
+      ocuparía más de una fracción del lienzo (_EDB_CAP_*). El número de columnas sale del conjunto completo y no de lo visible en ese momento:
+      la barra no cambia de forma cuando aparecen o desaparecen botones, solo de altura. */
+const _EDB_CAP_V_PHONE  = 0.36;  // fracción máxima del alto del lienzo que ocupa una barra VERTICAL en una pantalla PEQUEÑA (< 600 px: móvil; la de dibujo a mano pasa a 2 columnas)
+const _EDB_CAP_V_TABLET = 0.45;  // ídem en una tablet táctil (pantalla ≥ 600 px, botones a 1,4× y mucho más lienzo)
+const _EDB_CAP_V_MOUSE  = 0.70;  // ídem con ratón (PC): hay más sitio y la barra se queda como siempre salvo ventanas muy bajas
+const _EDB_CAP_H        = 0.95;  // una barra HORIZONTAL pegada a un borde puede ocupar casi todo el ancho
+function _edbHide(el, hide){ if(el) el.classList.toggle('edb-hide', !!hide); }
+function _edbTidySeps(bar){
+  if(!bar) return;
+  const kids = Array.from(bar.querySelectorAll('.edb-content > *'));
+  const want = new Map();                       // separador → ¿se ve?
+  let seenItem = false, pending = null;
+  kids.forEach(e => {
+    if(e.classList.contains('edb-sep')){ want.set(e, false); if(seenItem && !pending) pending = e; return; }
+    if(e.classList.contains('edb-hide') || getComputedStyle(e).display === 'none') return;
+    if(pending){ want.set(pending, true); pending = null; }   // la primera separadora entre dos grupos visibles se queda
+    seenItem = true;
+  });
+  want.forEach((v, e) => e.classList.toggle('edb-hide', !v));
+}
+// Reparte los botones visibles en columnas/filas si la barra con todos sus botones no cabe. Devuelve true si cambió la disposición.
+function _edBarFit(bar){
+  if(!bar || !bar.classList.contains('visible')) return false;
+  const content = bar.querySelector('.edb-content'); if(!content) return false;
+  const horiz = bar.classList.contains('horiz');
+  const items = Array.from(content.children).filter(e => !e.classList.contains('edb-sep'));
+  const shown = items.filter(e => !e.classList.contains('edb-hide') && getComputedStyle(e).display !== 'none').length;
+  const full  = items.filter(e => !e.hasAttribute('data-edb-alt') && !e.hasAttribute('data-edb-never')).length;   // «alt»: grosor lápiz/goma se turnan en el mismo sitio · «never»: no existe en este dispositivo (la lupa en táctil)
+  const sc = parseFloat(getComputedStyle(document.body).getPropertyValue('--edb-scale')) || 1;
+  const cv = $('editorCanvas'), sh = $('editorShell');
+  const A = horiz ? ((cv && cv.clientWidth)  || (sh && sh.clientWidth)  || window.innerWidth)
+                  : ((cv && cv.clientHeight) || (sh && sh.clientHeight) || window.innerHeight);
+  const cls = (typeof edGetDeviceClass === 'function') ? edGetDeviceClass() : 'desktop';   // 'desktop' | 'tablet' | 'phone' (según el último puntero usado)
+  // El tope depende del TAMAÑO de la pantalla, no del puntero: un móvil con lápiz (S-Pen) tiene la misma pantalla pequeña que con el dedo y la barra no debe
+  // saltar de una disposición a otra al cambiar de puntero. Una ventana de PC de menos de 600 px de alto o de ancho también es «pantalla pequeña».
+  const small = Math.min(window.innerWidth, window.innerHeight) < 600;
+  const cap = horiz ? _EDB_CAP_H : (small ? _EDB_CAP_V_PHONE : cls === 'tablet' ? _EDB_CAP_V_TABLET : _EDB_CAP_V_MOUSE);
+  const fullLen = full * (30 * sc + 1) + 20 * sc;                  // largo aproximado con TODOS los botones en una sola línea
+  let lines = Math.ceil(fullLen / Math.max(1, cap * A));
+  lines = Math.max(1, Math.min(lines, 4, Math.floor(shown / 3)));  // nunca menos de 3 botones por línea
+  const per = Math.ceil(shown / lines);
+  const sig = lines > 1 ? ((horiz ? 'h' : 'v') + lines + '/' + per) : '1';
+  if(bar._edbFitSig === sig) return false;
+  bar._edbFitSig = sig;
+  bar.classList.toggle('edb-wrap', lines > 1);
+  content.style.removeProperty('--edb-rows'); content.style.removeProperty('--edb-cols');
+  if(lines > 1) content.style.setProperty(horiz ? '--edb-cols' : '--edb-rows', per);
+  return true;
+}
+// Pone al día separadores y disposición de una barra VISIBLE y la mantiene dentro de la pantalla (al aparecer botones puede crecer hacia abajo).
+function _edBarRefit(bar){
+  if(!bar || !bar.classList.contains('visible')) return;
+  _edbTidySeps(bar);
+  _edBarFit(bar);
+  _edBarClampToScreen();
+}
+function _edBarsRefitAll(){ _edBarRefit($('edDrawBar')); _edBarRefit($('edShapeBar')); }
+// Coloca un desplegable (ancho pw, alto ph) junto a la barra de rectángulo br. «order» = lados por orden de preferencia: 'right' | 'left' | 'below' | 'above'.
+// Técnica estándar «flip + shift» (Floating UI / Popper): se elige el primer lado donde cabe SIN tapar la barra (y se desplaza lo justo para no salirse de la
+// pantalla); si en ningún lado cabe, el que menos la tapa. gap = separación con la barra; margin = separación mínima con el borde de la pantalla.
+// Devuelve {left, top} en coordenadas de ventana (position:fixed). Antes los desplegables de grosor, desplazamiento, iluminar/oscurecer y formas solo probaban
+// derecha/izquierda y, con una barra ancha (2 columnas) o una horizontal en un móvil, acababan encima de ella. Código propio.
+function _edbPlacePop(br, pw, ph, order, gap, margin){
+  const W = window.innerWidth, H = window.innerHeight;
+  const g = gap == null ? 8 : gap, m = margin == null ? 8 : margin;
+  const cx = x => Math.max(m, Math.min(W - pw - m, x));
+  const cy = y => Math.max(m, Math.min(H - ph - m, y));
+  const at = {
+    right: () => ({ l: br.right + g,                      t: br.top + br.height / 2 - ph / 2 }),
+    left:  () => ({ l: br.left - pw - g,                  t: br.top + br.height / 2 - ph / 2 }),
+    below: () => ({ l: br.left + br.width / 2 - pw / 2,   t: br.bottom + g }),
+    above: () => ({ l: br.left + br.width / 2 - pw / 2,   t: br.top - ph - g })
+  };
+  let best = null, bestOv = Infinity;
+  for(const k of order){
+    const p = at[k](); const l = cx(p.l), t = cy(p.t);
+    const ov = Math.max(0, Math.min(l + pw, br.right) - Math.max(l, br.left)) * Math.max(0, Math.min(t + ph, br.bottom) - Math.max(t, br.top));
+    if(ov === 0) return { left: l, top: t };
+    if(ov < bestOv){ bestOv = ov; best = { left: l, top: t }; }
+  }
+  return best || { left: cx(br.right + g), top: cy(br.top) };
+}
 function edMinimize(){
   edMinimized=true;
   _edHeaderAutoHidden=false; // v40.41: por defecto manual (botón OCULTAR); _edMaybeHideHeaderForTyping la marca automática justo después de llamar aquí
@@ -32099,6 +32230,7 @@ function edInitDrawBar() {
       const shouldHoriz = distPtrTB <= distPtrLR;
       if (shouldHoriz !== wasHoriz) {
         bar.classList.toggle('horiz', shouldHoriz);
+        _edBarFit(bar);   // v42.64: otra orientación = otro reparto en columnas/filas
         // Reajustar origen del drag para compensar el nuevo tamaño
         const newBw = bar.offsetWidth, newBh = bar.offsetHeight;
         const adjX = (bw - newBw) / 2, adjY = (bh - newBh) / 2;
@@ -32644,16 +32776,10 @@ function edInitDrawBar() {
     const GAP = 8;
     const spaceRight = W - br.right - GAP;
     const spaceLeft  = br.left - GAP;
-    let left;
-    if(spaceRight >= pw || spaceRight >= spaceLeft){
-      left = br.right + GAP;
-    } else {
-      left = br.left - pw - GAP;
-    }
-    let top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
-    left = Math.max(GAP, Math.min(W - pw - GAP, left));
-    pop.style.left = left + 'px';
-    pop.style.top  = top  + 'px';
+    // v42.64: mismo reparto que el de grosor (ver _edbPlacePop): al lado con más espacio y, si la barra es ancha y no cabe a ningún lado, debajo o encima
+    const _pos = _edbPlacePop(br, pw, ph, (spaceRight >= pw || spaceRight >= spaceLeft) ? ['right', 'left', 'below', 'above'] : ['left', 'right', 'below', 'above'], GAP, GAP);
+    pop.style.left = _pos.left + 'px';
+    pop.style.top  = _pos.top  + 'px';
   }
   $('edb-offset')?.addEventListener('click', e => { e.stopPropagation(); _edbOpenOffsetPop(); });
   // Los botones del popover bloquean pointerdown/touchstart igual que edb-size-pop
@@ -32713,16 +32839,10 @@ function edInitDrawBar() {
     const GAP = 8;
     const spaceRight = W - br.right - GAP;
     const spaceLeft  = br.left - GAP;
-    let left;
-    if(spaceRight >= pw || spaceRight >= spaceLeft){
-      left = br.right + GAP;
-    } else {
-      left = br.left - pw - GAP;
-    }
-    let top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
-    left = Math.max(GAP, Math.min(W - pw - GAP, left));
-    pop.style.left = left + 'px';
-    pop.style.top  = top  + 'px';
+    // v42.64: mismo reparto que el de grosor (ver _edbPlacePop): al lado con más espacio y, si la barra es ancha y no cabe a ningún lado, debajo o encima
+    const _pos = _edbPlacePop(br, pw, ph, (spaceRight >= pw || spaceRight >= spaceLeft) ? ['right', 'left', 'below', 'above'] : ['left', 'right', 'below', 'above'], GAP, GAP);
+    pop.style.left = _pos.left + 'px';
+    pop.style.top  = _pos.top  + 'px';
   }
   // Los botones del popover bloquean pointerdown/touchstart igual que edb-size-pop
   ['pointerdown','touchstart'].forEach(ev =>
@@ -32999,6 +33119,30 @@ function _edbSyncTool() {
   _edbSyncDodgeBtn();
   _edbSyncSize();
   _edbSyncColor();
+  _edbCtxUpdate(); // v42.64: solo los iconos que sirven con la herramienta activa
+}
+// v42.64 — Qué iconos de la barra de DIBUJO A MANO sirven con la herramienta activa (las reglas son las del panel grande, que ya las tenía):
+//  · color: la goma, iluminar/oscurecer y difuminar no pintan con un color (modifican lo que ya hay). Antes solo se ocultaba con la goma.
+//  · grosor: el bote rellena una zona, no tiene pincel (ED_TOOL_PARAM_DEFAULTS.bucket.size = null; el panel tampoco lo muestra con el bote).
+//  · lupa (🔍+ zoom a un recuadro, 🔍− encajar): fuera en TÁCTIL (petición de Alberto: ahí se hace con dos dedos). Con ratón o lápiz sigue. «Táctil» es
+//    lo que decide edGetDeviceClass() —el último puntero usado—, igual que el resto de la interfaz adaptada al dedo; data-edb-never la excluye del
+//    reparto en columnas (_edBarFit) para que no reserve un hueco que nunca se ve.
+// El resto (herramientas, opacidad, cursor desplazado —ya condicionado a táctil y a trazo continuo—, deshacer/rehacer, OK) sirve siempre.
+function _edbCtxUpdate(){
+  const bar = $('edDrawBar'); if(!bar) return;
+  const isFill = edActiveTool === 'fill';
+  const dodgeLike = isFill && !!_edDodgeBurnActive;                       // iluminar, oscurecer o difuminar (comparten interruptor)
+  const bucket = isFill && !dodgeLike && edFillBrushType === 'bucket';
+  _edbHide($('edb-color'), edActiveTool === 'eraser' || dodgeLike);
+  _edbHide($('edb-pen-size'), bucket);
+  const zoomBtn = $('edb-zoom');
+  if(zoomBtn){
+    const noZoom = edGetDeviceClass() !== 'desktop';
+    zoomBtn.toggleAttribute('data-edb-never', noZoom);
+    _edbHide(zoomBtn, noZoom);
+    if(noZoom){ const _bp = $('edb-brush-pop'); if(_bp && _bp._anchor === zoomBtn) window._edbCloseBrushPop?.(); }   // su desplegable (🔍+ / 🔍−) se cierra con ella; los demás no se tocan
+  }
+  _edBarRefit(bar);
 }
 function _edbSyncOffsetBtn(){
   // Botón de la barra flotante (edb-offset)
@@ -33202,24 +33346,14 @@ function _edbOpenSizePop(btn, opts) {
   const W   = window.innerWidth;
   const H   = window.innerHeight;
   const GAP = 8;
-  // Posicionar siempre AL LADO de la barra (nunca encima/debajo)
-  // Preferir el lado con más espacio: izquierda o derecha
+  // Al LADO de la barra, en el lado con más espacio (izquierda o derecha) y centrado respecto a ella, ajustado para no salir de pantalla.
+  // v42.64: si la barra es ancha (2 columnas, o una horizontal en un móvil) y a ningún lado cabe sin taparla, debajo o encima de ella
+  // (antes acababa encima de la barra); donde ya cabía al lado la colocación es idéntica a la de siempre.
   const spaceRight = W - br.right - GAP;
   const spaceLeft  = br.left - GAP;
-  let left, top;
-  if (spaceRight >= pw || spaceRight >= spaceLeft) {
-    // A la derecha de la barra
-    left = br.right + GAP;
-  } else {
-    // A la izquierda de la barra
-    left = br.left - pw - GAP;
-  }
-  // Centrado verticalmente respecto a la barra, ajustado para no salir de pantalla
-  top = Math.max(GAP, Math.min(H - ph - GAP, br.top + br.height/2 - ph/2));
-  // Asegurar que no sale por la derecha (por si la barra está muy a la derecha)
-  left = Math.max(GAP, Math.min(W - pw - GAP, left));
-  pop.style.left = left + 'px';
-  pop.style.top  = top  + 'px';
+  const _pos = _edbPlacePop(br, pw, ph, (spaceRight >= pw || spaceRight >= spaceLeft) ? ['right', 'left', 'below', 'above'] : ['left', 'right', 'below', 'above'], GAP, GAP);
+  pop.style.left = _pos.left + 'px';
+  pop.style.top  = _pos.top  + 'px';
 }
 
 function _edbSyncSize() {
@@ -33557,6 +33691,36 @@ function _vsMultiDelete(){
   return true;
 }
 
+// ── Selección táctil PENDIENTE (v42.66) ─────────────────────────────────────────────────────────────────────────────────────────
+// Un dedo que cae sobre un objeto vectorial que NO es el seleccionado no lo selecciona al pulsar: queda «pendiente» (window._vsPendSel, lo arma
+// edOnStart) y se resuelve SIN temporizadores —así que da igual lo tarde que llegue un segundo dedo—:
+//   · llega un 2.º dedo (pellizco, desplazar la cámara)  → se descarta: no se selecciona nada, y por tanto tampoco se escala el objeto;
+//   · el dedo se desplaza ≥ _VS_PEND_SLOP px             → es un arrastre de verdad: se selecciona y se arrastra (edOnMove);
+//   · el dedo se levanta sin más                         → es un toque: se selecciona ahora (edOnEnd).
+// Solo con el dedo (ratón y lápiz seleccionan al pulsar, como siempre) y con el selector dentro de la sesión vectorial. Es la misma idea que ya
+// usa el editor general (_edSelTouchTimer), sin su plazo de 120 ms: allí un segundo dedo lento sí acababa seleccionando el objeto.
+const _VS_PEND_SLOP = 8;   // px de pantalla (CSS) que ha de moverse el dedo para que cuente como arrastre; el margen estándar del táctil (8 dp en Android)
+function _vsPendSelCommit(drag, e){
+  const p = window._vsPendSel; window._vsPendSel = null;
+  if(!p || edActiveTool !== 'select' || !_edVecSessionOpen()) return false;
+  const i = edLayers.indexOf(p.l);
+  if(i < 0 || p.l.hidden) return false;
+  const nodesOn = !!_edCurveModeActive();
+  // v42.62 (mismo criterio que edOnStart): con NODOS, cambiar de objeto deja atrás el nodo «activo» del anterior
+  if(nodesOn && edLayers[edSelectedIdx] !== p.l){ window._edCurveVertIdx = -1; if(_vcof.activeNodeIdx >= 0) _vcof.activeNodeIdx = -1; }
+  edSelectedIdx = i;
+  // Con NODOS nunca se arrastra el objeto entero (solo sus nodos): la selección es lo único que cambia
+  if(drag && !nodesOn){
+    edDragOffX = p.nx - p.l.x;
+    edDragOffY = p.ny - p.l.y;
+    edIsDragging = true;
+    window._edMoved = false;
+    if(e && e.pointerId !== undefined){ try{ edCanvas.setPointerCapture(e.pointerId); }catch(_){} }
+  }
+  edRedraw();
+  return true;
+}
+
 // ── Marquesina desde un punto vacío ─────────────────────────────────────────────────────────────────────────────────────────────
 // Se arma en edOnStart cuando la pulsación no cae sobre nada del selector vectorial. Reutiliza edRubberBand (dibujo y seguimiento del
 // editor general): en PC nace al pulsar; en táctil tras los 120 ms de espera por un posible segundo dedo (o antes, si el dedo se mueve:
@@ -33589,14 +33753,24 @@ function _vsMarqueeArm(e, c){
 function _vsMarqueeActive(){
   return !!edRubberBand && edActiveTool === 'select' && _edVecSessionOpen();
 }
+// Quita TODA la selección de la sesión vectorial (grupo incluido): ningún objeto queda seleccionado.
+function _vsDeselectAll(){
+  _vsMultiClear(); edSelectedIdx = -1; _vsSyncPanel();
+}
 // Un toque en vacío sin llegar a abrir la marquesina (táctil: el dedo se levantó antes de los 120 ms): igual que un clic sin arrastre.
-function _vsMarqueeTap(){
+// v42.66: con el selector y NODOS apagado, un toque/clic en vacío deja la sesión SIN ningún objeto seleccionado (también deshace un grupo), como en
+// cualquier editor vectorial (Illustrator, Inkscape, Figma, Affinity). Hace falta para poder mover y hacer zoom a la cámara con dos dedos: con un objeto
+// seleccionado el pellizco es de ESE objeto (lo escala y gira); sin ninguno, es de la cámara. `keep` (Mayús+clic, modo «añadir») conserva el
+// comportamiento de antes: solo se deshace el grupo. Con NODOS el objeto en edición sigue seleccionado (los nodos son suyos).
+function _vsMarqueeTap(keep){
   if(edActiveTool !== 'select' || !_edVecSessionOpen()) return;
   if(_edCurveModeActive()){
     const la = edSelectedIdx >= 0 ? edLayers[edSelectedIdx] : null;
     if(la && _vsNodeSelActive(la)){ const p = window._edCurveVertIdx; _vsNodeSelSet(la, [p], p); edRedraw(); }
-  } else if(_vsMultiActive()){
-    _vsMultiClear(); _vsSyncPanel(); edRedraw();                 // el grupo se deshace; queda seleccionado el principal
+  } else if(keep){
+    if(_vsMultiActive()){ _vsMultiClear(); _vsSyncPanel(); edRedraw(); }   // Mayús+clic: el grupo se deshace; queda seleccionado el principal
+  } else if(edSelectedIdx >= 0 || _vsMulti.length){
+    _vsDeselectAll(); edRedraw();
   }
 }
 function _vsMarqueeFinish(){
@@ -33606,7 +33780,7 @@ function _vsMarqueeFinish(){
   if(!rb) return;
   const rx0 = Math.min(rb.x0, rb.x1), ry0 = Math.min(rb.y0, rb.y1), rx1 = Math.max(rb.x0, rb.x1), ry1 = Math.max(rb.y0, rb.y1);
   const real = Math.hypot((rx1 - rx0) * edPageW(), (ry1 - ry0) * edPageH()) * edCamera.z >= 4;   // menos de 4 px = un clic, no una marquesina
-  if(!real){ _vsMarqueeTap(); return; }
+  if(!real){ _vsMarqueeTap(add); return; }
   if(_edCurveModeActive()){
     // v42.62: la marquesina de nodos abarca TODOS los objetos de la sesión (antes solo el seleccionado)
     const layers = _vsNodeLayers();
@@ -33638,7 +33812,9 @@ function _vsMarqueeFinish(){
   const cur = _vsMultiCurrent();
   const inside = edLayers.filter(l => _vsSelectable(l) && _edAllCornersInside(l, rx0, ry0, rx1, ry1));
   const found = add ? cur.concat(inside.filter(l => cur.indexOf(l) < 0)) : inside;
-  if(!found.length){ if(cur.length > 1 && !add){ _vsMultiClear(); _vsSyncPanel(); } return; }   // nada encerrado: el grupo, si lo había, se deshace
+  // v42.66: una marquesina que no encierra nada es, como un toque en vacío, «quitar la selección» (también cubre el toque algo largo o con temblor,
+  // que el dedo convierte en una marquesina minúscula). Con Mayús (añadir) no cambia nada.
+  if(!found.length){ if(!add && (edSelectedIdx >= 0 || _vsMulti.length)) _vsDeselectAll(); return; }
   _vsMultiSet(found, (edSelectedIdx >= 0 && found.indexOf(edLayers[edSelectedIdx]) >= 0) ? edLayers[edSelectedIdx] : null);
 }
 
@@ -33964,7 +34140,10 @@ function _vsNodeRetargetTo(la, i){
        NODOS quedara marcado por otra vía, los nodos ni se pintan ni se editan. */
 function _edVecCreationToolActive(){
   // Cualquier herramienta de selección deja edActiveTool en 'select' (flecha del panel/barra, fin de objeto, reedición…), así que
-  // 'line' (polígono/recta) y 'shape' (rectángulo/elipse) SON las herramientas de creación; un polígono a medias también cuenta.
+  // 'line' (polígono/recta/mano alzada) y 'shape' (rectángulo/elipse) SON las herramientas de creación; un polígono a medias también cuenta.
+  // Se mira edActiveTool, que es la verdad de la herramienta: _edLineType/_edShapeType son sub-estados del panel y pueden quedar desfasados.
+  // Además de apagar NODOS (v42.34), con una de ellas activa el recuadro del objeto seleccionado NO muestra tiradores en ningún dispositivo
+  // (v42.63; Alberto: «solo deben verse cuando se tiene seleccionada la herramienta de selección, antes no tienen ninguna utilidad»).
   return edActiveTool === 'line' || edActiveTool === 'shape' || !!_edLineLayer;
 }
 // Apaga NODOS en TODA la interfaz: control del panel de rectas y del de formas, botón de la barra flotante y su control de curvatura,
@@ -34087,6 +34266,7 @@ function _edBarSnapToCanvas(bar, xVar, yVar) {
   const canvR  = canv.getBoundingClientRect();
   const isVert = (edOrientation || 'vertical') !== 'horizontal';
   if (isVert) bar.classList.remove('horiz'); else bar.classList.add('horiz');
+  _edBarFit(bar);   // v42.64: la orientación acaba de decidirse → columnas/filas antes de medir la barra
 
   const visLeft = canvR.left - shellR.left;
   const visTop  = canvR.top  - shellR.top;
@@ -34105,6 +34285,7 @@ function _edPanelIsCollapsed() {
 function edDrawBarShow(snapToCanvas) {
   const bar = $('edDrawBar'); if (!bar) return;
   bar.classList.add('visible'); // visible primero para medir offsetHeight
+  _edbSyncTool(); // v42.64: iconos de la herramienta activa ANTES de colocar la barra (su tamaño depende de ellos); abajo se repite, es idempotente
   if (snapToCanvas) {
     const pos = _edBarSnapToCanvas(bar, _edbX, _edbY);
     _edbX = pos.x; _edbY = pos.y;
@@ -34120,6 +34301,7 @@ function edDrawBarShow(snapToCanvas) {
     _cofSetOn(false);
   }
   _edbSyncTool();
+  _edBarRefit(bar);
 }
 
 function edDrawBarHide() {
@@ -34190,6 +34372,8 @@ function edShapeBarShow(snapToCanvas) {
   bar.classList.add('visible');
   _edShapeInitHistory();
   if(_vsHistory.length === 0) _vsInit(false);
+  if(typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
+  _esbSync();   // v42.64: iconos que sirven ahora ANTES de colocar la barra (su tamaño depende de ellos); abajo se repite, es idempotente
   if (snapToCanvas) {
     const pos = _edBarSnapToCanvas(bar, _esbX, _esbY);
     _esbX = pos.x; _esbY = pos.y;
@@ -34216,6 +34400,7 @@ function edShapeBarShow(snapToCanvas) {
   if(_carryCurve) _esbActivateCurveUI();
   // Actualizar visibilidad del botón ⊕ Fusionar
   if(typeof window._esbCheckFuse === 'function') window._esbCheckFuse();
+  _edBarRefit(bar);   // v42.64
 }
 function edShapeBarHide(force) {
   // force (v41.85): las SALIDAS de la edición vectorial (OK, Escape, cerrar el panel, borrar el último objeto) ocultan la barra
@@ -34239,6 +34424,9 @@ function edShapeBarHide(force) {
 // con un anillo blanco la muestra que es destino del cuentagotas (línea o relleno, el mismo destino del panel).
 function _esbSync(la) {
   la = la || _edVecSelObj() || _edVecNewStyle;
+  // v42.64: sin relleno la barra no enseña la muestra de relleno, así que el destino del cuentagotas/selector no puede quedarse en una muestra
+  // invisible: vuelve a la línea (solo con la barra visible: el panel, que enseña siempre su muestra de relleno, puede marcarla estando apagado).
+  if(_edVecColorTarget === 'fill' && !(la.fillColor && la.fillColor !== 'none') && $('edShapeBar')?.classList.contains('visible')) _edVecColorTarget = 'line';
   const tgt = _edVecTarget();
   // Swatch color borde
   const colorBtn = $('esb-color');
@@ -34261,6 +34449,26 @@ function _esbSync(la) {
   // Grosor: si el panel emergente compartido con el lápiz está abierto en modo
   // vectorial, refrescar su preview (mismo criterio que _edSyncSizeDots)
   if(typeof _edbSyncSizePreview === 'function') _edbSyncSizePreview();
+  _esbCtxUpdate();   // v42.64: solo los iconos que sirven en este momento
+}
+// v42.64 — Qué iconos de la barra VECTORIAL sirven ahora (Alberto: «si no se ha establecido relleno no tiene sentido que aparezca la muestra de
+// color de relleno, solo la casilla; solo si se elige que sí, debe aparecer. Busca otros casos»):
+//  · muestra de relleno: solo con relleno (el objeto seleccionado o, sin objeto, el estilo del próximo). La casilla ▣ se queda siempre.
+//  · opacidad y desenfoque: actúan sobre el objeto seleccionado (sus manejadores no hacen nada sin él) → solo con un objeto vectorial seleccionado.
+//  · NODOS: solo si la sesión tiene objetos con nodos que editar; encendido, nunca se oculta (hay que poder apagarlo).
+// El resto (tipo de objeto, color de línea, casilla de relleno, cuentagotas, grosor, deshacer/rehacer, OK) sirve siempre; ⊕ Fusionar ya era condicional.
+function _esbCtxUpdate(){
+  const bar = $('edShapeBar'); if(!bar) return;
+  const la = _edVecSelObj() || _edVecNewStyle;
+  const hasFill = !!(la.fillColor && la.fillColor !== 'none');
+  const sel = (edSelectedIdx >= 0 && edSelectedIdx < edLayers.length) ? edLayers[edSelectedIdx] : null;
+  const hasTarget = !!sel && (sel.type === 'line' || sel.type === 'shape');
+  const curveOn = $('esb-curve')?.dataset.curveActive === '1';
+  _edbHide($('esb-fill'), !hasFill);
+  _edbHide($('esb-opacity'), !hasTarget);
+  _edbHide($('esb-defocus'), !hasTarget);
+  _edbHide($('esb-curve'), !(curveOn || _vsNodeLayers().length > 0));
+  _edBarRefit(bar);
 }
 
 // Congela un LineLayer con radios en un StrokeLayer, guardando los datos geométricos
@@ -34423,6 +34631,7 @@ function edInitShapeBar() {
       const shouldHoriz=distTB<=distLR;
       if(shouldHoriz!==wasHoriz){
         bar.classList.toggle('horiz',shouldHoriz);
+        _edBarFit(bar);   // v42.64: otra orientación = otro reparto en columnas/filas
         const nBw=bar.offsetWidth, nBh=bar.offsetHeight;
         const adjX=(bw-nBw)/2, adjY=(bh-nBh)/2;
         _sl+=adjX; _st+=adjY;
@@ -34628,6 +34837,7 @@ function edInitShapeBar() {
     const _fb = $('esb-fuse'), _fs = $('esb-fuse-sep');
     if(_fb) _fb.style.display = _canFuse ? 'flex' : 'none';
     if(_fs) _fs.style.display = _canFuse ? '' : 'none';
+    _esbCtxUpdate();   // v42.64: al aparecer/desaparecer ⊕ cambian los separadores y la altura
   };
   $('esb-fuse')?.addEventListener('pointerup', e => {
     e.stopPropagation();
@@ -43250,11 +43460,11 @@ function EditorView_init(){
     const br=bar.getBoundingClientRect();
     _esbPopEl.style.display='flex';
     const pw=_esbPopEl.offsetWidth||160, ph=_esbPopEl.offsetHeight||52;
-    let l,t;
-    if(isH){ l=br.left+(br.width/2)-pw/2; t=br.top-ph-8; if(t<4)t=br.bottom+8; }
-    else { l=br.right+8; t=br.top+(br.height/2)-ph/2; if(l+pw>window.innerWidth-4)l=br.left-pw-8; }
-    _esbPopEl.style.left=Math.max(4,Math.min(window.innerWidth-pw-4,l))+'px';
-    _esbPopEl.style.top=Math.max(4,Math.min(window.innerHeight-ph-4,t))+'px';
+    // v42.64: barra horizontal → encima (o debajo); vertical → a la derecha (o a la izquierda); y si la barra es ancha (2 columnas) y no cabe
+    // a ningún lado sin taparla, el otro eje (antes quedaba encima de la barra en móviles de ~410 px). Donde ya cabía, igual que siempre.
+    const _pos=_edbPlacePop(br,pw,ph,isH?['above','below','right','left']:['right','left','below','above'],8,4);
+    _esbPopEl.style.left=_pos.left+'px';
+    _esbPopEl.style.top=_pos.top+'px';
     setTimeout(()=>{
       window._esbPopClose=ev=>{
         if(!ev.target.closest('#esb-shapes-pop')&&!ev.target.closest('#esb-shapes'))

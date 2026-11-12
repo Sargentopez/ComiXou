@@ -709,6 +709,30 @@ body.ed-scale-tablet {
 }
 .edb-ok:active { background: rgba(100,255,100,.2); }
 
+/* v42.64 — barras flotantes CONTEXTUALES (js/editor.js: «BARRAS FLOTANTES CONTEXTUALES Y AJUSTADAS AL ESPACIO»).
+   · .edb-hide: el botón/separador no sirve ahora con la herramienta o el estado actuales. Clase aparte (con !important) del style.display en
+     línea que ya usa el resto del código, para que los dos mecanismos no se pisen.
+   · .edb-wrap: la barra con todos sus botones no cabe en el lienzo → se reparte en columnas (vertical, --edb-rows filas por columna) o en
+     filas (horizontal, --edb-cols botones por fila), como el «toolbox» de Krita o GIMP. Los separadores sobran en este reparto. */
+.edb-hide { display: none !important; }
+#edDrawBar.edb-wrap .edb-content,
+#edShapeBar.edb-wrap .edb-content {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(var(--edb-rows, 6), auto);
+  align-items: center;
+  justify-items: center;
+  gap: 1px;
+}
+#edDrawBar.edb-wrap.horiz .edb-content,
+#edShapeBar.edb-wrap.horiz .edb-content {
+  grid-auto-flow: row;
+  grid-template-rows: none;
+  grid-template-columns: repeat(var(--edb-cols, 6), auto);
+}
+#edDrawBar.edb-wrap .edb-sep,
+#edShapeBar.edb-wrap .edb-sep { display: none; }
+
 /* ── Popover paleta de colores ── */
 #edb-palette-pop {
   position: absolute;
