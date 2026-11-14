@@ -7631,7 +7631,7 @@ function _edUpdateSelectMenu(){
   const _mergeTypes = _hasSel ? _edMergeableTypes() : null;
   const _dis = 'opacity:0.35;cursor:not-allowed;pointer-events:none';
   // Objetos seleccionables (no ocultos, no capas vinculadas)
-  const _selectable = edLayers.filter(la => la && !la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor');
+  const _selectable = edLayers.filter(la => la && !_edLayerEffHidden(la) && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor');   // v42.76: un dibujo con la tinta oculta pero otras capas a la vista cuenta
   const _canSelAll = _selectable.length >= 1;
   const _canDesel  = (edActiveTool==='multiselect' && edMultiSel.length > 0) || edSelectedIdx >= 0;
   const _btnAll  = $('_sel-all');
@@ -12129,10 +12129,11 @@ function _edRenderPageThumb(canvas, page, pageIdx){
     else _paintG(offCtx);
     offCtx.globalAlpha = 1;
   };
-  const _textLayers=page.layers.filter(l=>l.type==='text'||l.type==='bubble');
-  const _textAlpha=page.textLayerOpacity??1;
-  page.layers.forEach(l=>{
-    if(!l||l.type==='text'||l.type==='bubble') return;
+  // v42.76 — la regla única del editor (ver _edPaintPlan): capas en el orden del array, cada una con SU PROPIO ojo y su opacidad (también relleno,
+  // acuarela y lápiz, que son capas aparte con su ojo), y los textos/bocadillos visibles encima. Esta miniatura no miraba NINGÚN «oculta» (las
+  // capas ocultas salían en el panel de navegación) y pintaba relleno/lápiz/acuarela «colgando» de su tinta, no en su sitio del array.
+  const _plan = _edPaintPlan(page.layers);
+  _plan.main.forEach(l => {
     if(l.type==='gif'){
       if(l._oc && l._ready && l._oc.width > 0){
         const _gc = document.createElement('canvas');
@@ -12149,27 +12150,11 @@ function _edRenderPageThumb(canvas, page, pageIdx){
         offCtx.setTransform(1,0,0,1,-mx,-my);
       }
     } else if(l.type==='image') l.draw(offCtx,off);
-    else if(l.type==='draw'){
-      const _dlUid = l._uid || l._fillLayerId;
-      ['fill','watercolor','pencil'].forEach(_t => {
-        const _lnk = _dlUid ? page.layers.find(f=>f.type===_t&&f._drawLayerId===_dlUid) : null;
-        if (_lnk) { offCtx.globalAlpha=_lnk.opacity??1; _drawGroupLayer(_lnk); offCtx.globalAlpha=1; }
-      });
-      l.draw(offCtx);
-    }
-    else if(l.type==='fill'||l.type==='pencil'||l.type==='watercolor') return; // dibujadas con stroke/draw vinculado
-    else if(l.type==='stroke'){
-      const _slUid = l._uid || l._fillLayerId;
-      ['fill','watercolor','pencil'].forEach(_t => {
-        const _lnk = _slUid ? page.layers.find(f=>f.type===_t&&f._drawLayerId===_slUid) : null;
-        if (_lnk) _drawGroupLayer(_lnk);
-      });
-      offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1;
-    }
-    else if(l.type==='shape'||l.type==='line'){ offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }
+    else if(l.type==='fill'||l.type==='pencil'||l.type==='watercolor') _drawGroupLayer(l);
+    else { offCtx.globalAlpha=l.opacity??1; l.draw(offCtx); offCtx.globalAlpha=1; }   // draw, stroke, shape, line
   });
-  offCtx.globalAlpha=_textAlpha;
-  _textLayers.forEach(l=>l.draw(offCtx,off));
+  offCtx.globalAlpha=_plan.texts.length ? (page.textLayerOpacity??1) : 1;
+  _plan.texts.forEach(l=>l.draw(offCtx,off));
   offCtx.globalAlpha=1;
 
   // Escalar la pagina completa al tamano de la miniatura
@@ -12964,6 +12949,19 @@ function _edClipAdaptOrientation(la, srcOrientation, destOrientation){
 function _edApplyClipboardEnvelope(envelope, targetPos){
   if(!envelope || envelope.sig !== _ED_CLIPBOARD_SIGNATURE || !Array.isArray(envelope.items) || !envelope.items.length) return false;
   if(window._gcpActive) return false;
+
+  // v42.74 — pegar (Ctrl+V) con una sesión de dibujo vectorial abierta: antes el pegado terminaba en edCloseOptionsPanel(), que es «cerrar SIN
+  // OK» y DESCARTA la sesión entera (restaura su primer paso): se perdía todo lo dibujado en ella, sin forma de deshacer. Ahora la sesión se
+  // confirma primero igual que con OK (polígono a medias incluido, y con su unión) y después se pega.
+  if(_vsHistory.length > 0 && _edVecSessionOpen()){
+    if(_edLineLayer) _edFinishLine();
+    _edVecResetNewStyle();
+    _edVecCommitSession();
+    edShapeBarHide(true);
+    window._edMinimizedDrawMode = null; window._edMinimizedCollapsed = false;
+    _edShapeStart = null; _edShapePreview = null; _edPendingShape = null;
+    _edDrawUnlockUI();
+  }
 
   // Mismo criterio defensivo que _edDuplicateGroup: un primer push ANTES de
   // mutar nada, para no arrastrar ningún cambio pendiente sin registrar al
@@ -15970,9 +15968,14 @@ function _edPickAt(nx, ny, o){
   const only = o.only ? new Set(o.only) : null;
   const allowed = i => !only || only.has(i);
   const vis = o.visible || (l => !l.hidden);
-  const usable = l => !!l && vis(l) && typeof l.contains === 'function'
+  // v42.76 — «seleccionable» (typeOk) y «visible» (vis) se separan. Un dibujo a mano son 4 capas (tinta + relleno/acuarela/lápiz), cada una con su
+  // propio ojo: con la TINTA oculta, tocar su relleno/lápiz/acuarela (que se siguen viendo) debe seleccionar el dibujo. Antes la redirección al
+  // dueño exigía que la propia tinta fuese visible (usable(L[oi])) y el dibujo entero dejaba de poder seleccionarse. Lo que se toca sigue
+  // teniendo que verse (usable(l) en cada capa tocada); el dueño solo ha de poder seleccionarse (con contains, sin bloquear).
+  const typeOk = l => !!l && typeof l.contains === 'function'
     && !(typeof l.type === 'string' && l.type.charAt(0) === '_')
     && !(o.skipLocked && l.locked);
+  const usable = l => typeOk(l) && vis(l);
   const ownerOf = sl => {
     if(sl._drawLayerId == null) return -1;
     const oi = L.findIndex(dl => dl._drawLayerId === undefined && dl._uid === sl._drawLayerId);
@@ -16000,7 +16003,7 @@ function _edPickAt(nx, ny, o){
     if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
       if(!hit(l)) continue;
       const oi = ownerOf(l);
-      if(oi >= 0 && allowed(oi) && usable(L[oi])) return oi;
+      if(oi >= 0 && allowed(oi) && typeOk(L[oi])) return oi;   // v42.76: el dueño NO necesita verse (su tinta puede estar oculta)
       continue;
     }
     if(!allowed(i)) continue;
@@ -16014,6 +16017,67 @@ function _edPickAt(nx, ny, o){
     if(hit(l, false)) return i;
   }
   return -1;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// v42.76 — VISIBILIDAD Y ORDEN DE CAPAS: UNA SOLA REGLA PARA TODO LO QUE COMPONE UNA HOJA
+// (Alberto: «cada cosa debe verse exactamente como se ve en el editor… deben respetarse el orden de capas y las capas ocultas»)
+// El compositor del editor (_edRenderFrameInner) es la referencia, y su regla es esta, y solo esta:
+//   · las capas se pintan EN EL ORDEN DEL ARRAY (índice 0 = fondo), cada una con SU PROPIO «oculta» y su propia opacidad;
+//   · los textos y bocadillos se pintan después de todo lo demás (siempre encima), con la opacidad de texto de la hoja.
+// Un dibujo a mano NO es una capa: son 4 (relleno, acuarela, lápiz y tinta) vinculadas por _drawLayerId, y cada una tiene su ojo en el panel de
+// capas. Quien tratara la tinta como «la capa del dibujo» (miniaturas, página publicada, conversión hoja→animación, selección…) descartaba el
+// dibujo entero con solo ocultar la tinta —y pintaba las capas que sí estaban ocultas—. Tampoco se puede pintar «por el padre» (el relleno justo
+// antes de su tinta): eso cambia el orden respecto al editor en cuanto hay algo entre medias.
+// Estas funciones son la única copia de esa regla fuera del editor: exportar hoja y selección (PNG/JPG/SVG), página publicada y portada, las dos
+// miniaturas y la conversión hoja→animación la usan. No tocan nada: solo deciden qué se pinta y en qué orden.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+const _ED_PAINT_TYPES = { fill: 1, pencil: 1, watercolor: 1, image: 1, draw: 1, stroke: 1, shape: 1, line: 1, gif: 1 };
+function _edIsSubLayer(l){ return !!l && (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'); }
+// Relleno / acuarela / lápiz vinculados a un dibujo a mano (stroke / draw), en el orden del array. Acepta los dos vínculos que existen
+// (_uid y _fillLayerId: iguales en los dibujos actuales; en datos antiguos puede faltar uno).
+function _edDrawingSubLayers(owner, layers){
+  const out = [];
+  if(!owner || (owner.type !== 'stroke' && owner.type !== 'draw')) return out;
+  const u1 = owner._uid, u2 = owner._fillLayerId;
+  if(u1 == null && u2 == null) return out;
+  for(const l of (layers || edLayers)){
+    if(_edIsSubLayer(l) && l._drawLayerId != null && (l._drawLayerId === u1 || l._drawLayerId === u2)) out.push(l);
+  }
+  return out;
+}
+// ¿Está OCULTO del todo? Una capa suelta: su propio «hidden». Un dibujo a mano: solo si su tinta Y todas sus capas vinculadas lo están —con la
+// tinta oculta y el relleno a la vista, el dibujo se ve, se puede tocar, seleccionar y exportar—.
+function _edLayerEffHidden(la, layers){
+  if(!la) return true;
+  if(!la.hidden) return false;
+  if(la.type !== 'stroke' && la.type !== 'draw') return true;
+  return _edDrawingSubLayers(la, layers).every(s => s.hidden);
+}
+// Plan de pintado de una lista de capas → { main, texts }. main: las que se pintan (visibles) en el orden del array; texts: textos y bocadillos
+// visibles, que van después. `only` (Set de capas, opcional) lo restringe a una selección.
+function _edPaintPlan(layers, only){
+  const main = [], texts = [];
+  for(const l of (layers || [])){
+    if(!l || l.hidden || (only && !only.has(l))) continue;
+    if(l.type === 'text' || l.type === 'bubble') texts.push(l);
+    else if(_ED_PAINT_TYPES[l.type]) main.push(l);
+  }
+  return { main, texts };
+}
+// Pinta UNA capa no textual como lo hace el editor: imagen y GIF aplican su opacidad dentro de su draw(); el resto, con globalAlpha.
+function _edPaintMain(ctx, l, canvas){
+  if(l.type === 'image' || l.type === 'gif'){ l.draw(ctx, canvas); return; }
+  ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1;
+}
+// Pinta un plan completo: las capas en orden y, encima, textos y bocadillos con la opacidad de texto de la hoja.
+function _edPaintPlanTo(ctx, plan, canvas, textAlpha){
+  for(const l of plan.main) _edPaintMain(ctx, l, canvas);
+  if(plan.texts.length){
+    ctx.globalAlpha = textAlpha ?? 1;
+    for(const l of plan.texts) l.draw(ctx, canvas);
+    ctx.globalAlpha = 1;
+  }
 }
 
 // Visibilidad para _edPickAt en el editor de animaciones: un frame no visible (_gcpVisible === false) no es seleccionable.
@@ -19721,7 +19785,7 @@ function edOnEnd(e){
     edRubberBand=null;
     if((rx1-rx0)>0.01 || (ry1-ry0)>0.01){
       let _found=[];
-      edLayers.forEach((la,i)=>{ if(!la.hidden && !la.locked && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });
+      edLayers.forEach((la,i)=>{ if(!_edLayerEffHidden(la) && !la.locked && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) _found.push(i); });   // v42.76: _edLayerEffHidden (ver su cabecera)
       // Los grupos se seleccionan siempre completos, pero solo si el rubber
       // band llegó a encerrar los handlers de TODOS sus miembros — si solo
       // atrapó a alguno, el grupo entero se descarta (_edFilterPartialGroups).
@@ -19759,7 +19823,7 @@ function edOnEnd(e){
           // Los objetos bloqueados se excluyen — no son seleccionables
           // Los objetos ocultos se excluyen — no son seleccionables
           // Las sub-capas fill/pencil/watercolor no son seleccionables independientemente
-          if(!la.hidden && !la.locked && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);
+          if(!_edLayerEffHidden(la) && !la.locked && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor' && _edAllCornersInside(la,rx0,ry0,rx1,ry1)) edMultiSel.push(i);   // v42.76
         });
         // Los grupos se seleccionan siempre completos, pero solo si el rubber
         // band llegó a encerrar los handlers de TODOS sus miembros (ver
@@ -31312,7 +31376,7 @@ function edInitSelectMenu(){
     edCloseMenus();   // v42.24: también restablece edMenuOpen (con solo quitar «open» el siguiente toque en «Selección ▾» no volvía a abrirlo)
     const _all = [];
     edLayers.forEach((la, i)=>{
-      if(la && !la.hidden && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor') _all.push(i);
+      if(la && !_edLayerEffHidden(la) && la.type!=='fill' && la.type!=='pencil' && la.type!=='watercolor') _all.push(i);   // v42.76
     });
     if(_all.length === 0) return;
     if(_all.length === 1){
@@ -36108,50 +36172,12 @@ function edRenderPage(page, withText){
   const ctx=full.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(edMarginX(),edMarginY(),pw,ph);
   // Imágenes, DrawLayer y Strokes — SIN textos/bocadillos.
   // Los textos se superponen en el reader por encima del data_url, igual que el visor del editor.
-  // Renderizar en el mismo orden que el array de capas (igual que edRedraw)
-  // así fill queda debajo del DrawLayer que lo cubre con sus trazos
-  const _textTypes = new Set(['text', 'bubble']);
-  page.layers.forEach(l => {
-    if (!l || _textTypes.has(l.type)) return;
-    // v40.96 — petición de Alberto: las capas ocultas (l.hidden, ver el ojo
-    // del panel de capas) no deben aparecer en la miniatura de índice/Mis
-    // obras — igual que ya hace _pgRenderThumbLive (panel "Hojas") y que ya
-    // respeta el lienzo normal del editor (_edRenderFrame). Para draw/stroke
-    // con fill/pencil/watercolor vinculados no hace falta comprobarlo aparte
-    // en cada uno: el toggle de grupo (editor-layers.js) siempre propaga el
-    // mismo hidden a la capa madre Y a sus vinculadas, y estas solo se
-    // dibujan más abajo DENTRO de la rama 'draw'/'stroke' de esta misma capa
-    // — este único return ya las excluye a todas si la capa madre está oculta.
-    if (l.hidden) return;
-    if (l.type === 'image') { l.draw(ctx, full); return; }
-    if (l.type === 'gif')   { l.draw(ctx); return; }
-    if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // dibujadas con stroke/draw vinculado
-    if (l.type === 'draw')  {
-      // DrawLayer: capas vinculadas primero (fill, watercolor, pencil)
-      const _dlWsUid = l._uid || l._fillLayerId;
-      if (_dlWsUid) {
-        for (const _t of ['fill','watercolor','pencil']) {
-          const _lnkWs = page.layers.find(f=>f.type===_t&&f._drawLayerId===_dlWsUid);
-          if(_lnkWs){ ctx.save(); ctx.globalAlpha=_lnkWs.opacity??1; _lnkWs.draw(ctx); ctx.globalAlpha=1; ctx.restore(); }
-        }
-      }
-      l.draw(ctx); return;
-    }
-    if (l.type === 'stroke'){
-      // StrokeLayer: capas vinculadas con draw() (maneja canvas local correctamente)
-      const _slWsUid = l._uid || l._fillLayerId;
-      if (_slWsUid) {
-        for (const _t of ['fill','watercolor','pencil']) {
-          const _lnkSl = page.layers.find(f=>f.type===_t&&f._drawLayerId===_slWsUid);
-          if(_lnkSl && _lnkSl._canvas && _lnkSl._canvas.width > 0){
-            ctx.save(); ctx.globalAlpha=_lnkSl.opacity??1; _lnkSl.draw(ctx); ctx.globalAlpha=1; ctx.restore();
-          }
-        }
-      }
-      ctx.save(); ctx.globalAlpha=l.opacity??1; l.draw(ctx); ctx.globalAlpha=1; ctx.restore(); return;
-    }
-    if (l.type === 'shape' || l.type === 'line') { ctx.save(); ctx.globalAlpha = l.opacity ?? 1; l.draw(ctx); ctx.globalAlpha = 1; ctx.restore(); return; }
-  });
+  // v42.76 — UNA sola regla, la del editor (ver _edPaintPlan): las capas se pintan en el orden del array, cada una con SU PROPIO ojo y su propia
+  // opacidad (también relleno/lápiz/acuarela, que son capas aparte con su ojo). Antes el relleno/lápiz/acuarela se pintaban «colgando» de su
+  // tinta (justo antes de ella) y solo se miraba el ojo de la tinta: con la tinta oculta —y el relleno a la vista— el dibujo desaparecía entero
+  // de la página publicada y de la portada, y un relleno oculto aparte salía igualmente.
+  const _plan = _edPaintPlan(page.layers);
+  _plan.main.forEach(l => { ctx.save(); _edPaintMain(ctx, l, full); ctx.restore(); });
   // withText=true: para la miniatura/portada de la obra (Mis Creaciones, home,
   // cover_url) — a diferencia del render normal, aquí SÍ hace falta hornear el
   // texto/bocadillos en la imagen, porque una miniatura estática no tiene el
@@ -36161,8 +36187,8 @@ function edRenderPage(page, withText){
   if (withText) {
     ctx.save();
     ctx.globalAlpha = page.textLayerOpacity ?? 1;
-    // v40.96 — mismo criterio que arriba: un texto/bocadillo oculto tampoco se hornea en la miniatura.
-    page.layers.forEach(l => { if (l && _textTypes.has(l.type) && !l.hidden) l.draw(ctx, full); });
+    // v40.96 — mismo criterio que arriba: un texto/bocadillo oculto tampoco se hornea en la miniatura (ya viene filtrado en el plan).
+    _plan.texts.forEach(l => l.draw(ctx, full));
     ctx.restore();
   }
   // Recortar zona de la página del canvas de trabajo
@@ -36395,7 +36421,7 @@ function _edFilterPartialGroups(foundIdxs){
   return foundIdxs.filter(i => {
     const _gid = edLayers[i]?.groupId;
     if(!_gid) return true;
-    const _visMembers = _edGroupMemberIdxs(_gid).filter(gi => edLayers[gi] && !edLayers[gi].hidden);
+    const _visMembers = _edGroupMemberIdxs(_gid).filter(gi => edLayers[gi] && !_edLayerEffHidden(edLayers[gi]));   // v42.76
     return _visMembers.every(gi => _foundSet.has(gi));
   });
 }
@@ -36404,6 +36430,7 @@ function _edFilterPartialGroups(foundIdxs){
 function edGroupSelected(){
   if(!edMultiSel.length || edMultiSel.length < 2) return;
   edPushHistory();
+  let _groupedOrderChanged = false;   // v42.76: true si agrupar ha tenido que invertir el orden de capas que se solapan
   const gid = _edNewGroupId();
   edMultiSel.forEach(i => {
     const _l = edLayers[i];
@@ -36431,15 +36458,59 @@ function edGroupSelected(){
     const _minPos = _sortedIdxs[0];
     const _isConsecutive = _sortedIdxs.every((idx, k) => k === 0 || idx === _sortedIdxs[k-1] + 1);
     if (!_isConsecutive) {
+      // v42.76 — el grupo va ARRIBA o ABAJO de las capas sueltas que había entre medias, según cuál de los dos
+      // sitios cambia menos el aspecto (antes: siempre abajo). Ver _edGroupSlotCost.
+      const _slot = _edGroupSlotCost(_sortedIdxs);
       const _movedLayers = _sortedIdxs.map(i => edLayers[i]);
       for (let k = _sortedIdxs.length - 1; k >= 0; k--) edLayers.splice(_sortedIdxs[k], 1);
-      edLayers.splice(_minPos, 0, ..._movedLayers);
+      edLayers.splice(_slot.top ? _minPos + _slot.between : _minPos, 0, ..._movedLayers);
+      _groupedOrderChanged = _slot.cost > 0;
     }
   }
   // Volver a herramienta select tras agrupar
   _edDeactivateMultiSel();
   edPushHistory(); edRedraw();
-  edToast(I18n.t('ed_grouped'));
+  edToast(I18n.t(_groupedOrderChanged ? 'ed_groupedOrder' : 'ed_grouped'), _groupedOrderChanged ? 4000 : 2000);   // el aviso es más largo: se deja leer
+}
+
+/* v42.76 — DÓNDE queda el grupo cuando entre sus miembros hay capas que NO se agrupan.
+   Los miembros (con las sub-capas de sus dibujos) tienen que quedar contiguos —el panel de capas lo da por hecho—, así que las capas sueltas
+   que había entre medias acaban todas por debajo o todas por encima del grupo. Como el orden de pintado solo se nota entre capas que se
+   tocan, se calcula cuántas parejas (miembro, capa suelta) que se SOLAPAN y se ven las dos cambiarían de orden en cada caso y se elige
+   el sitio con menos (empate → abajo, como siempre). Textos y bocadillos se pintan SIEMPRE encima de todo, así que su orden frente a las demás capas
+   nunca se nota y no cuenta. Si el mejor sitio aún invierte algo, agrupar avisa (ed_groupedOrder).
+   Lo corriente en editores gráficos es poner el grupo en el sitio del miembro más alto (Illustrator, Inkscape, Figma): aquí también es una de las
+   dos opciones, pero solo cuando es la que menos cambia. */
+function _edGroupSlotCost(sortedIdxs){
+  const L = sortedIdxs[0], H = sortedIdxs[sortedIdxs.length - 1];
+  const inSet = new Set(sortedIdxs);
+  const pw = edPageW(), ph = edPageH();
+  const isTop = l => !!l && (l.type === 'text' || l.type === 'bubble');
+  const seen = l => !!l && !l.hidden;
+  const box = {};
+  const bb = i => {
+    if(box[i]) return box[i];
+    const la = edLayers[i];
+    let b = la.type === 'draw' ? null : _edLayerAABB(la, pw, ph);                       // el lienzo 'draw' cubre toda la hoja
+    if(!b || ![b.x0, b.y0, b.x1, b.y1].every(Number.isFinite)) b = { x0: 0, y0: 0, x1: 1, y1: 1 };   // sin medidas fiables → se supone que se solapa
+    return (box[i] = b);
+  };
+  const touch = (a, b) => { const A = bb(a), B = bb(b); return A.x0 <= B.x1 && B.x0 <= A.x1 && A.y0 <= B.y1 && B.y0 <= A.y1; };
+  let costBottom = 0, costTop = 0;
+  const between = (H - L + 1) - sortedIdxs.length;   // capas sueltas entre el primer y el último miembro
+  for(let n = L; n <= H; n++){
+    if(inSet.has(n) || !edLayers[n]) continue;
+    const ln = edLayers[n];
+    if(!seen(ln)) continue;
+    sortedIdxs.forEach(m => {
+      const lm = edLayers[m];
+      if(!seen(lm) || isTop(lm) !== isTop(ln) || !touch(n, m)) return;
+      if(n < m) costBottom++;      // abajo: la suelta n pasaría por encima de m (antes estaba debajo)
+      else      costTop++;         // arriba: la suelta n pasaría por debajo de m (antes estaba encima)
+    });
+  }
+  const top = costTop < costBottom;
+  return { top, between, cost: top ? costTop : costBottom };
 }
 
 /* ── Desagrupar: elimina groupId de todos los miembros del grupo activo ── */
@@ -36982,6 +37053,10 @@ function _edHandInkHiRes(hm, ux0, uy0, uw, uh){
 function _edBuildUnitedVector(layers){
   const newLL = new LineLayer();
   const first = layers[0];
+  // v42.75 — NOMBRE de la unión (Alberto): «si alguno de los objetos de la unión tiene nombre, deberá heredarlo la unión; si varios tienen
+  // nombre, deberá perderse». Vale para el OK de una sesión y para ⊕ Unir.
+  const _named = layers.filter(l => l && l.name);
+  if(_named.length === 1) newLL.name = _named[0].name;
   newLL.color     = first.color     || '#000000';
   newLL.lineWidth = first.lineWidth || 3;
   newLL.opacity   = first.opacity   ?? 1;   // (se recalcula al final: ver «OPACIDAD POR CONTORNO»)
@@ -37199,7 +37274,7 @@ function _edBuildUnitedVector(layers){
 // _edDissolveJoined) y esa trayectoria se restituye al volver a unirlos, así que no impide la unión.
 function _edVecJoinable(l, uni){
   if(!l || (l.type !== 'line' && l.type !== 'shape')) return false;
-  if(l.hidden || l.locked || l.groupId || l.name || l._buttonAction) return false;
+  if(l.hidden || l.locked || l.groupId || l._buttonAction) return false;   // v42.75: el NOMBRE ya no impide unir (ver _edBuildUnitedVector)
   if(l._motionPath && l._motionPath.length && !(uni && uni.src && uni.src._motionPath && uni.src._motionPath.length)) return false;
   // v42.33: el degradado ya NO impide la unión: cada contorno del ⊕ lleva el suyo (groupedStyles[].fillGradient, ver _edBuildUnitedVector).
   if(l.type === 'line'){
@@ -37226,7 +37301,10 @@ function _edVecJoinable(l, uni){
 function _edVecJoinPick(uni){
   const h0 = _vsHistory[0];
   if(!h0) return null;
-  if(!uni && ((h0.vecLayers && h0.vecLayers.length) || h0.lineLayer)) return null;   // la sesión empezó con un objeto en edición (v42.25: salvo la de un ⊕ disuelto)
+  // v42.74 — ya NO se descarta la unión cuando la sesión empezó EDITANDO un vectorial que ya existía (regla de la v42.23). Alberto abrió un
+  // vectorial existente, dentro creó un polígono y varios rectángulos, pulsó OK y «todos los objetos vectoriales han aparecido por separado en
+  // vez de unidos». Ahora vale lo mismo que al reeditar un ⊕: lo que hay en la sesión al pulsar OK (el objeto que se abrió + los creados
+  // dentro) queda unido en UN objeto. Si no se creó nada nuevo solo hay un candidato y no hay nada que unir, como antes.
   const cands = edLayers.filter(l => l !== _edLineLayer && _vsIsSession(l) && _edVecJoinable(l, uni));   // edLayers va de abajo a arriba → los contornos salen en ese orden
   return cands.length >= 2 ? cands : null;
 }
@@ -37234,12 +37312,16 @@ function _edVecJoinPick(uni){
 // Sustituye `layers` (de abajo a arriba) por su objeto unido y apunta el paso en el historial general. Posición: la del objeto más alto de
 // `layers` (creación) o, al re-editar un ⊕ (`uni`), la del más bajo, que es donde estaba el ⊕ (v42.37; antes subía siempre a la cima y
 // arrastraba consigo los contornos del ⊕ por encima de las capas que tenía encima).
-function _edVecJoinApply(layers, uni){
+function _edVecJoinApply(layers, uni, low){
   const united = _edBuildUnitedVector(layers);
   const idxs = layers.map(l => edLayers.indexOf(l)).filter(i => i >= 0).sort((a, b) => a - b);
   if(!united || idxs.length < 2) return;
-  if(uni) _edVecUnionRestoreMeta(united, uni.src);   // v42.25: re-edición de un ⊕ → el nuevo ⊕ sigue siendo «el mismo objeto»
-  let insertAt = uni ? idxs[0] : idxs[idxs.length - 1];
+  if(uni){
+    _edVecUnionRestoreMeta(united, uni.src);   // v42.25: re-edición de un ⊕ → el nuevo ⊕ sigue siendo «el mismo objeto»
+    // v42.75: el nombre del ⊕ reeditado cuenta como uno más → si además se le ha unido otro objeto con nombre, hay varios y se pierde
+    if(uni.src && uni.src.name && layers.some(l => l && l.name)) delete united.name;
+  }
+  let insertAt = (uni || low) ? idxs[0] : idxs[idxs.length - 1];   // v42.74: `low` = sesión abierta editando un objeto existente → la unión se queda en SU sitio del apilado
   for(let i = idxs.length - 1; i >= 0; i--){
     const ri = idxs[i];
     edLayers.splice(ri, 1);
@@ -37287,12 +37369,14 @@ function _edVecUnionPutBack(uni, sess){
 function _edVecCommitSession(){
   const uni = _vsUnion;                                   // antes de _vsClear()
   const join = _edVecJoinPick(uni);                       // antes de _vsClear(): necesita la sesión viva
+  const _h0 = _vsHistory[0];
+  const reedit = !uni && !!(_h0 && ((_h0.vecLayers && _h0.vecLayers.length) || _h0.lineLayer));   // v42.74: la sesión se abrió editando un vectorial existente
   const sess = uni ? edLayers.filter(l => _vsIsSession(l)) : null;
   const unchanged = !!(uni && _vsHistory[0] && _vsSnapKey(_vsHistory[0]) === _vsSnapKey(_vsSnapshot()));
   _edShapeClearHistory(); _vsClear();                     // limpiar _vs* antes para que edPushHistory no quede bloqueado
   if(uni && unchanged && _edVecUnionPutBack(uni, sess)){ edPushHistory(); edRedraw(); return; }
   if(!(uni && join)) edPushHistory();
-  if(join) _edVecJoinApply(join, uni);
+  if(join) _edVecJoinApply(join, uni, reedit);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -44603,7 +44687,6 @@ async function edExportPagePNG(format){
   offCtx.setTransform(1, 0, 0, 1, -mx, -my);
 
   // Renderizar capas en el mismo orden que edRedraw (sin UI, sin handles, sin borde azul)
-  const _textLayers   = edLayers.filter(l => l.type==='text' || l.type==='bubble');
   const _textGroupAlpha = page.textLayerOpacity ?? 1;
 
   // v42.13 — con «Ver control de animaciones» activo la hoja se descarga en el MISMO instante que marca el reloj
@@ -44613,34 +44696,9 @@ async function edExportPagePNG(format){
   // y todo sale como siempre (fotograma inicial).
   const _acOn = _edAnimCtlBegin();
   try {
-    // Mismo orden que edRedraw: imagen → fill → stroke → draw → shape/line → textos al final
-    edLayers.forEach(l => {
-      if(!l) return;
-      if(l.hidden) return;                               // capa oculta: no exportar
-      if(l.type==='text' || l.type==='bubble') return;  // textos al final
-      if(l.type === 'image' || l.type === 'gif'){
-        l.draw(offCtx, off);
-      } else if(l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor'){
-        offCtx.globalAlpha = l.opacity ?? 1;
-        l.draw(offCtx);
-        offCtx.globalAlpha = 1;
-      } else if(l.type === 'draw'){
-        offCtx.globalAlpha = l.opacity ?? 1;  // Bug fix: respeta opacidad del draw
-        l.draw(offCtx);
-        offCtx.globalAlpha = 1;
-      } else if(l.type === 'stroke'){
-        offCtx.globalAlpha = l.opacity ?? 1;
-        l.draw(offCtx);
-        offCtx.globalAlpha = 1;
-      } else if(l.type === 'shape' || l.type === 'line'){
-        offCtx.globalAlpha = l.opacity ?? 1;
-        l.draw(offCtx);
-        offCtx.globalAlpha = 1;
-      }
-    });
-    offCtx.globalAlpha = _textGroupAlpha;
-    _textLayers.forEach(l => l.draw(offCtx, off));
-    offCtx.globalAlpha = 1;
+    // v42.76 — la regla única del editor (ver _edPaintPlan): capas en el orden del array, cada una con su propio ojo, y textos/bocadillos
+    // VISIBLES encima. Antes los textos y bocadillos ocultos SÍ salían en la hoja descargada (el bucle de capas comprobaba «hidden», el de textos no).
+    _edPaintPlanTo(offCtx, _edPaintPlan(edLayers), off, _textGroupAlpha);
   } finally { _edAnimCtlEnd(_acOn); }
 
   // Descargar
@@ -44705,8 +44763,9 @@ async function edExportSelectionPNG(format, insertMode) {
   });
 
   // Renderizar en ORDEN DE edLayers (no orden de inserción en Set) para respetar la pila visual
-  const _selOrdered = edLayers.filter(l => l && selSet.has(l) && !l.hidden);
-  const _textLayers = _selOrdered.filter(l => l.type==='text'||l.type==='bubble');
+  // v42.76: mismo plan de pintado que el editor (_edPaintPlan): cada capa por su propio ojo (también las sub-capas de un dibujo cuya tinta está oculta).
+  const _plan       = _edPaintPlan(edLayers, selSet);
+  const _selOrdered = _plan.main.concat(_plan.texts);
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
   // Canvas del tamaño exacto del bbox de selección en px
@@ -44725,14 +44784,7 @@ async function edExportSelectionPNG(format, insertMode) {
   // El origen del canvas exportado corresponde a (mx + bb.x0*pw, my + bb.y0*ph) en workspace (menos el margen del halo)
   offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw) + _dfm, -(my + bb.y0*ph) + _dfm);
 
-  _selOrdered.forEach(l => {
-    if(l.type==='text'||l.type==='bubble') return;
-    if(l.type==='image'||l.type==='gif'){ l.draw(offCtx, off); }
-    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
-  });
-  offCtx.globalAlpha = _textAlpha;
-  _textLayers.forEach(l => l.draw(offCtx, off));
-  offCtx.globalAlpha = 1;
+  _edPaintPlanTo(offCtx, _plan, off, _textAlpha);
 
   const mimeType = format==='jpg' ? 'image/jpeg' : 'image/png';
   const quality  = format==='jpg' ? 0.92 : undefined;
@@ -45051,6 +45103,8 @@ async function edExportSelectionSVG() {
       });
     }
   });
+  // v42.76: cada capa por su propio ojo (_edPaintPlan): «_ordered» = lo que se pinta, en el orden del array y con los textos al final
+  const _planSvg = _edPaintPlan(edLayers, selSet);
   const _ordered = edLayers.filter(l => l && selSet.has(l) && !l.hidden);
 
   const bxPx = Math.ceil(bb.w * pw);
@@ -45119,16 +45173,7 @@ async function edExportSelectionSVG() {
   const offCtx = off.getContext('2d', { alpha: true });
   offCtx.setTransform(1, 0, 0, 1, -(mx + bb.x0*pw) + _dfm, -(my + bb.y0*ph) + _dfm);
 
-  const _textLayers = _ordered.filter(l => l.type==='text'||l.type==='bubble');
-  const _textAlpha  = page.textLayerOpacity ?? 1;
-  _ordered.forEach(l => {
-    if(l.type==='text'||l.type==='bubble') return;
-    if(l.type==='image'||l.type==='gif'){ l.draw(offCtx, off); }
-    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
-  });
-  offCtx.globalAlpha = _textAlpha;
-  _textLayers.forEach(l => l.draw(offCtx, off));
-  offCtx.globalAlpha = 1;
+  _edPaintPlanTo(offCtx, _planSvg, off, page.textLayerOpacity ?? 1);
 
   const b64 = off.toDataURL('image/png');
   const svgStr = [
@@ -45700,10 +45745,11 @@ function _bibThumb(la) {
     const off = document.createElement('canvas');
     off.width = ED_CANVAS_W; off.height = ED_CANVAS_H;
     const octx = off.getContext('2d');
-    if (_flThumb     && typeof _flThumb.draw     === 'function') _flThumb.draw(octx, off);
-    if (_wcThumb     && typeof _wcThumb.draw     === 'function') _wcThumb.draw(octx, off);
-    if (_pencilThumb && typeof _pencilThumb.draw === 'function') _pencilThumb.draw(octx, off);
-    if (typeof la.draw === 'function') la.draw(octx, off);
+    // v42.76: cada capa del dibujo por su propio ojo (una capa oculta no sale en la miniatura, igual que en la hoja)
+    if (_flThumb     && !_flThumb.hidden     && typeof _flThumb.draw     === 'function') _flThumb.draw(octx, off);
+    if (_wcThumb     && !_wcThumb.hidden     && typeof _wcThumb.draw     === 'function') _wcThumb.draw(octx, off);
+    if (_pencilThumb && !_pencilThumb.hidden && typeof _pencilThumb.draw === 'function') _pencilThumb.draw(octx, off);
+    if (!la.hidden && typeof la.draw === 'function') la.draw(octx, off);
 
     // Bbox en coordenadas absolutas de workspace — 'draw' (DrawLayer) cubre
     // siempre toda la página entera, igual que en _bibThumbGroup.
@@ -45903,6 +45949,7 @@ function edBibGuardar() {
       return {
         dataUrl:    lyr.toDataUrl(),
         type:       lyr.type,
+        ...(lyr.hidden ? { hidden: true } : {}),   // v42.76: una capa oculta sigue oculta al volver a insertar (y no sale en la miniatura)
         strokeX:    la.x, strokeY: la.y,
         fillX:      lyr.x, fillY: lyr.y,
         fillWidth:  lyr.width, fillHeight: lyr.height,
@@ -46025,14 +46072,15 @@ function _bibThumbGroup(idxs) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(mx, my, pw, ph);
 
+  // v42.76: se pinta como el editor (_edPaintPlan): orden de la hoja, cada capa con su propio ojo (las ocultas no salen) y los
+  // textos/bocadillos siempre encima. El recuadro de la miniatura abarca solo lo que se ha pintado.
+  const _thumbPlan = _edPaintPlan(edLayers, new Set(allIdxs.map(i => edLayers[i]).filter(Boolean)));
+  _edPaintPlanTo(ctx, _thumbPlan, off, 1);
+
   // Calcular bbox en coordenadas absolutas de workspace
   let minWX = Infinity, minWY = Infinity, maxWX = -Infinity, maxWY = -Infinity;
-  allIdxs.forEach(i => {
-    const la = edLayers[i];
+  _thumbPlan.main.concat(_thumbPlan.texts).forEach(la => {
     if (!la) return;
-    ctx.globalAlpha = la.opacity ?? 1;
-    la.draw(ctx, off);
-    ctx.globalAlpha = 1;
     if (la.type === 'draw') {
       minWX = Math.min(minWX, mx); minWY = Math.min(minWY, my);
       maxWX = Math.max(maxWX, mx + pw); maxWY = Math.max(maxWY, my + ph);
@@ -46775,6 +46823,7 @@ function _bibRenderPanel(panel) {
           _la.y = entryData.fillY != null ? entryData.fillY : newLayer.y;
           _la.width  = _sfW; _la.height = _sfH;
           _la.rotation = entryData.fillRotation || 0;
+          if (entryData.hidden) _la.hidden = true;   // v42.76
           _edCopyDf(_la, newLayer);   // v42.51 — las capas vinculadas llevan el mismo desenfoque que el trazo
           _adaptLayerOrientation(_la);
           const _cW = Math.max(1, Math.round(_la.width  * _pwD));
@@ -52439,8 +52488,10 @@ function _gcpMergeLayersToImage(items, cb, opts) {
     off.width = wsW; off.height = wsH;
     const octx = off.getContext('2d');
 
-    results.forEach(r => {
-      if (!r) return;
+    // v42.76: como en el editor — las capas ocultas no se pintan y los textos/bocadillos van siempre encima de todo (cada tipo en su orden)
+    const _mgVis   = results.filter(r => r && r.la && !r.la.hidden);
+    const _mgIsTxt = r => r.la.type === 'text' || r.la.type === 'bubble';
+    _mgVis.filter(r => !_mgIsTxt(r)).concat(_mgVis.filter(_mgIsTxt)).forEach(r => {
       const { la, img, type } = r;
       octx.save();
       octx.globalAlpha = la.opacity ?? 1;
@@ -52737,7 +52788,7 @@ function gcpInsertFromBib(entry) {
         // (la.draw() usaría el canvas de StrokeLayer.fromDataUrl que es asíncrono y podría estar vacío)
         if (_gcpCanvases.stroke) {
           octx.drawImage(_gcpCanvases.stroke, offX, offY);
-        } else {
+        } else if (!la.hidden) {   // v42.76: con la tinta oculta tampoco se recurre a pintarla directamente
           octx.setTransform(1,0,0,1,offX,offY);
           octx.globalAlpha=la.opacity??1; _edDrawSharp(la, octx); octx.globalAlpha=1;   // v42.51: nítido; el desenfoque pasa a la imagen
           octx.setTransform(1,0,0,1,0,0);
@@ -52791,7 +52842,7 @@ function gcpInsertFromBib(entry) {
       let _gcpPending  = 0;
 
       function _gcpRenderGroupLayer(ser, key) {
-        if (!ser || !ser.dataUrl) { _gcpCanvases[key] = null; _gcpCheckReady(); return; }
+        if (!ser || !ser.dataUrl || ser.hidden) { _gcpCanvases[key] = null; _gcpCheckReady(); return; }   // v42.76: oculta → no se pinta
         _gcpPending++;
         const _sfW = ser.fillWidth  != null ? ser.fillWidth  : (la.width  || 1);
         const _sfH = ser.fillHeight != null ? ser.fillHeight : (la.height || 1);
@@ -52836,7 +52887,7 @@ function gcpInsertFromBib(entry) {
       // solo se ejecute cuando TODOS los bitmaps (incluido el trazo) estén listos.
       function _gcpRenderStrokeLayer() {
         const _ser = entry.layerData;
-        if (!_ser || !_ser.dataUrl) { _gcpCanvases.stroke = null; _gcpCheckReady(); return; }
+        if (!_ser || !_ser.dataUrl || _ser.hidden) { _gcpCanvases.stroke = null; _gcpCheckReady(); return; }   // v42.76: tinta oculta → no se pinta
         _gcpPending++;
         const _bw = Math.max(1, Math.round((la.width  || 1) * _pwDGcp));
         const _bh = Math.max(1, Math.round((la.height || 1) * _phDGcp));
@@ -52966,32 +53017,56 @@ function _gcpCpAdaptOrientation(la, srcOrientation, destOrientation){
 // fill/pencil/watercolor (van fusionadas con su dibujo/trazo propietario,
 // nunca solas — mismo criterio que "Guardar en biblioteca", ver más abajo el
 // bloque que construye fillLayerData/watercolorLayerData/pencilLayerData) y
-// 'group' (tipo obsoleto, se ignora en todo el proyecto). Las capas ocultas
-// por el usuario (l.hidden) tampoco se incluyen: no están "en el lienzo".
+// 'group' (tipo obsoleto, se ignora en todo el proyecto).
+// v42.76 — MISMA REGLA QUE EL EDITOR (ver _edPaintPlan): lo que sale es lo que se ve.
+//   · Cada capa cuenta con SU PROPIO ojo. Un dibujo a mano son 4 capas (relleno, acuarela, lápiz, tinta) y cada una se oculta por separado: la
+//     unidad lleva solo las capas que están a la vista. Antes bastaba con que la TINTA estuviera oculta para descartar el dibujo entero (aunque el
+//     relleno/lápiz/acuarela se vieran), y una capa vinculada oculta aparte se fusionaba igualmente.
+//   · El orden es el del array, y la unidad de un dibujo se coloca donde está su capa más alta (con las 4 juntas, como siempre, es su sitio de
+//     siempre). Las capas de un dibujo se fusionan en el orden en que están en el array.
+//   · Textos y bocadillos, al final y en su orden: el editor los pinta SIEMPRE encima de todo, y como unidades sueltas en medio del array se
+//     quedaban debajo de las capas posteriores (la hoja convertida no se parecía a la del editor).
 function _gcpCpCollectPageUnits(page){
   const layers = (page && page.layers) || [];
-  const consumed = new Set();
-  const units = [];
-  layers.forEach((la, i) => {
-    if(!la || consumed.has(i) || la.hidden) return;
-    if(la.type === 'fill' || la.type === 'pencil' || la.type === 'watercolor') return;
-    if(la.type === 'group') return; // obsoleto
-    if(la.type === 'draw' || la.type === 'stroke'){
-      const uid = la._uid || la._fillLayerId;
-      let fl = null, wc = null, pc = null;
-      if(uid){
-        layers.forEach((l2, j) => {
-          if(!l2 || j === i || consumed.has(j)) return;
-          if(l2.type === 'fill'       && l2._drawLayerId === uid){ fl = l2; consumed.add(j); }
-          if(l2.type === 'watercolor' && l2._drawLayerId === uid){ wc = l2; consumed.add(j); }
-          if(l2.type === 'pencil'     && l2._drawLayerId === uid){ pc = l2; consumed.add(j); }
-        });
-      }
-      units.push({ kind:'mergegroup', la, fl, wc, pc });
-      return;
+  const plan = _edPaintPlan(layers);
+  const posOf = new Map(); layers.forEach((l, i) => { if(l) posOf.set(l, i); });
+  const ownerByUid = new Map();   // dueño de un dibujo a mano por cada uno de sus vínculos (_uid / _fillLayerId)
+  layers.forEach(l => {
+    if(l && (l.type === 'draw' || l.type === 'stroke')){
+      if(l._uid != null && !ownerByUid.has(l._uid)) ownerByUid.set(l._uid, l);
+      if(l._fillLayerId != null && !ownerByUid.has(l._fillLayerId)) ownerByUid.set(l._fillLayerId, l);
     }
-    units.push({ kind:'single', la });
   });
+  const groups = new Map();       // dueño → { members:[capas a la vista], at: índice de la más alta }
+  const entries = [];             // { at, unit } en el orden del array
+  const grp = ow => {
+    let g = groups.get(ow);
+    if(!g){ g = { members: [], at: -1 }; groups.set(ow, g); entries.push({ g, at: -1 }); }
+    return g;
+  };
+  plan.main.forEach(la => {
+    const i = posOf.get(la);
+    if(la.type === 'group') return; // obsoleto
+    if(_edIsSubLayer(la)){
+      const ow = ownerByUid.get(la._drawLayerId);
+      if(!ow) return;               // relleno/lápiz/acuarela huérfano: nunca solo
+      const g = grp(ow); g.members.push(la); g.at = Math.max(g.at, i); return;
+    }
+    if(la.type === 'draw' || la.type === 'stroke'){
+      const g = grp(la); g.members.push(la); g.at = Math.max(g.at, i); return;
+    }
+    entries.push({ at: i, unit: { kind:'single', la } });
+  });
+  entries.forEach(e => {
+    if(!e.g) return;
+    const ms = e.g.members.slice().sort((x, y) => posOf.get(x) - posOf.get(y));
+    const byType = t => ms.find(l => l.type === t) || null;
+    const main = ms.find(l => l.type === 'stroke' || l.type === 'draw') || null;
+    e.at = e.g.at;
+    e.unit = { kind:'mergegroup', members: ms, la: main, fl: byType('fill'), wc: byType('watercolor'), pc: byType('pencil') };
+  });
+  const units = entries.filter(e => e.unit).sort((a, b) => a.at - b.at).map(e => e.unit);
+  plan.texts.forEach(la => units.push({ kind:'single', la }));
   return units;
 }
 
@@ -53108,7 +53183,8 @@ function _gcpCpPrepareUnit(unit, srcOrientation, destOrientation){
     _gcpCpAdaptOrientation(copy, srcOrientation, destOrientation);
     items.push({ ld, la: copy });
   };
-  _push(unit.fl); _push(unit.wc); _push(unit.pc); _push(unit.la);
+  // v42.76: solo las capas del dibujo que están a la vista, en el orden del array (relleno → acuarela → lápiz → tinta con las 4 juntas)
+  (unit.members || [unit.fl, unit.wc, unit.pc, unit.la]).forEach(_push);
   if(!items.length) return Promise.resolve(null);
   if(!_gcpCpFitsWorkspace(items.map(it => it.la), destOrientation)){
     console.warn('_gcpCpPrepareUnit: grupo dibujo+relleno demasiado grande/lejano, excluido de la conversión', items);

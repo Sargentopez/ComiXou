@@ -498,7 +498,6 @@ function _pgRenderThumbLive(canvas, page, full) {
     offCtx.setTransform(1, 0, 0, 1, -mx, -my);
   }
 
-  const _textLayers = page.layers.filter(l => (l.type === 'text' || l.type === 'bubble') && !l.hidden);
   const _textAlpha  = page.textLayerOpacity ?? 1;
 
   // Helper: dibuja sub-capa (fill/pencil/watercolor) respetando posición, tamaño y opacidad
@@ -527,34 +526,19 @@ function _pgRenderThumbLive(canvas, page, full) {
     offCtx.globalAlpha = 1;
   };
 
-  page.layers.forEach(l => {
-    if (!l || l.type === 'text' || l.type === 'bubble') return;
-    if (l.hidden) return; // capa oculta por el usuario: no aparece en la miniatura
-    if (l.type === 'gif')              l.draw(offCtx);
+  // v42.76 — la regla única del editor (ver _edPaintPlan en editor.js): capas en el orden del array, cada una con SU PROPIO ojo y su opacidad
+  // (también relleno, acuarela y lápiz, que son capas aparte con su ojo), y textos/bocadillos visibles encima. Antes el relleno/lápiz/acuarela se
+  // pintaban «colgando» de su tinta y solo se miraba el ojo de la tinta: con la tinta oculta —y el relleno a la vista— el dibujo desaparecía
+  // de la miniatura (y del fantasma del papel cebolla), y un relleno oculto aparte sí salía.
+  const _plan = _edPaintPlan(page.layers);
+  _plan.main.forEach(l => {
+    if (l.type === 'gif')               l.draw(offCtx);
     else if (l.type === 'image')        l.draw(offCtx, off);
-    else if (l.type === 'draw') {
-      // Sub-capas vinculadas (fill → watercolor → pencil) + el propio draw
-      const _uid = l._uid || l._fillLayerId;
-      ['fill', 'watercolor', 'pencil'].forEach(_t => {
-        const _lnk = _uid ? page.layers.find(f => f.type === _t && f._drawLayerId === _uid) : null;
-        if (_lnk) _drawGroupLayer(_lnk);
-      });
-      l.draw(offCtx);
-    }
-    else if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') return; // renderizadas desde su stroke/draw
-    else if (l.type === 'stroke') {
-      const _uid = l._uid || l._fillLayerId;
-      ['fill', 'watercolor', 'pencil'].forEach(_t => {
-        const _lnk = _uid ? page.layers.find(f => f.type === _t && f._drawLayerId === _uid) : null;
-        if (_lnk) _drawGroupLayer(_lnk);
-      });
-      offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1;
-    }
-    else if (l.type === 'shape' || l.type === 'line') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
-    else if (l.type === 'group') { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }
+    else if (l.type === 'fill' || l.type === 'pencil' || l.type === 'watercolor') _drawGroupLayer(l);
+    else { offCtx.globalAlpha = l.opacity ?? 1; l.draw(offCtx); offCtx.globalAlpha = 1; }   // draw, stroke, shape, line
   });
   offCtx.globalAlpha = _textAlpha;
-  _textLayers.forEach(l => l.draw(offCtx, off));
+  _plan.texts.forEach(l => l.draw(offCtx, off));
   offCtx.globalAlpha = 1;
   } finally {
     edOrientation  = _savedOrient;

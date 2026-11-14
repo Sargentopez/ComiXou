@@ -2951,6 +2951,8 @@ function _tdLayerCorners(la, pw, ph){
 // tras deserializar (mismo criterio que ya usa _gcpMergeLayersToImage con
 // los miembros de un grupo).
 function _tdRenderLayersToImage(items, cb){
+  // v42.76: como en el editor — las capas ocultas no se pintan (ni cuentan para el recorte) y los textos/bocadillos van siempre encima
+  items = items.filter(it => it && it.la && !it.la.hidden);
   const pw = edPageW(), ph = edPageH();
   const mx = edMarginX(), my = edMarginY();
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
@@ -2989,7 +2991,8 @@ function _tdRenderLayersToImage(items, cb){
     const off = document.createElement('canvas');
     off.width = bxPx; off.height = byPx;
     const offCtx = off.getContext('2d', { alpha: true });
-    results.forEach(({la, img}) => {
+    const _tdIsTxt = r => r.la.type === 'text' || r.la.type === 'bubble';
+    results.filter(r => !_tdIsTxt(r)).concat(results.filter(_tdIsTxt)).forEach(({la, img}) => {
       offCtx.save();
       offCtx.setTransform(1, 0, 0, 1, baseX, baseY);
       offCtx.globalAlpha = la.opacity ?? 1;
@@ -3277,7 +3280,7 @@ function _tdInsertFromBib(entry){
       const cld = entry[key];
       if(!cld || !cld.dataUrl) return;
       items.push({
-        la: { x: cld.fillX, y: cld.fillY, width: cld.fillWidth, height: cld.fillHeight, rotation: cld.fillRotation || 0, opacity: 1, type: cld.type },
+        la: { x: cld.fillX, y: cld.fillY, width: cld.fillWidth, height: cld.fillHeight, rotation: cld.fillRotation || 0, opacity: 1, type: cld.type, hidden: !!cld.hidden },
         ld: cld
       });
     });

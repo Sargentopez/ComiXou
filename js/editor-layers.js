@@ -473,7 +473,12 @@ function _lyBuildGroupItem(groupId, members) {
   // ¿Alguno seleccionado?
   const _isSel = members.some(m => m.i === edSelectedIdx) ||
                  (typeof edMultiSel !== 'undefined' && edMultiSel.some(si => memberIdxs.includes(si)));
-  const _allHidden = members.every(m => m.l.hidden);
+  // v42.76: el ojo del grupo actúa sobre sus miembros Y sobre las capas vinculadas de sus dibujos a mano (relleno/acuarela/lápiz), como ya hacía el
+  // candado. Antes solo tocaba la tinta: un grupo «oculto» seguía enseñando el relleno/lápiz/acuarela de sus dibujos —y un dibujo con la tinta
+  // oculta y lo demás a la vista dejaba de poder seleccionarse, salía mal en miniaturas, página publicada y conversión a animación—.
+  const _eyeSubs = [];
+  members.forEach(m => _edDrawingSubLayers(m.l).forEach(sl => { if (!_eyeSubs.includes(sl)) _eyeSubs.push(sl); }));
+  const _allHidden = members.every(m => m.l.hidden) && _eyeSubs.every(sl => sl.hidden);
 
   const item = document.createElement('div');
   item.className = 'ed-layer-item' + (_isSel ? ' selected' : '');
@@ -571,6 +576,7 @@ function _lyBuildGroupItem(groupId, members) {
     e.stopPropagation();
     const _newHide = !_allHidden;
     members.forEach(m => { m.l.hidden = _newHide; });
+    _eyeSubs.forEach(sl => { sl.hidden = _newHide; });   // v42.76: también relleno/acuarela/lápiz de sus dibujos a mano
     if (typeof edPushHistory === 'function') edPushHistory();
     if (typeof edRedraw === 'function') edRedraw();
     _lyRender();
@@ -1026,7 +1032,7 @@ function _lyBuildVisualItem(la, realIdx, selected) {
   item.className = 'ed-layer-item' + (selected ? ' selected' : '');
   item.style.position = 'relative';
   item.style.paddingBottom = '22px';
-  if (la.hidden) item.style.opacity = '0.45';
+  if (_edLayerEffHidden(la)) item.style.opacity = '0.45';   // v42.76: un dibujo con la tinta oculta pero otras capas a la vista no se atenúa
   item.dataset.realIdx = realIdx;
   if (!la._uid) la._uid = ++_lyUidCounter;
   item.dataset.uid = la._uid;
@@ -1243,19 +1249,15 @@ function _lyBuildVisualItem(la, realIdx, selected) {
     const _eyeBtn = document.createElement('button');
     _eyeBtn.className = 'ed-layer-del';
     _eyeBtn.textContent = '👁';
-    const _eyeAllHidden = () => {
-      if (la.hidden) return true;
-      if (!_eyeGroupUid) return false;
-      const _subs = edLayers.filter(l =>
-        (l.type==='fill'||l.type==='pencil'||l.type==='watercolor') && l._drawLayerId===_eyeGroupUid);
-      return _subs.length > 0 && _subs.every(l => l.hidden);
-    };
+    // v42.76: «oculto» = la tinta Y todas sus capas vinculadas ocultas (_edLayerEffHidden). Con la tinta oculta y otras capas a la vista el ojo
+    // sigue «a la vista»; al pulsarlo se oculta todo. Antes (la.hidden → true) parecía oculto un dibujo que se estaba viendo.
+    const _eyeAllHidden = () => _edLayerEffHidden(la);
     _eyeBtn.title  = _eyeAllHidden() ? I18n.t('ly_showGroup') : I18n.t('ly_hideGroup');
     _eyeBtn.style.color = 'var(--black)';
     _eyeBtn.style.opacity = _eyeAllHidden() ? '0.5' : '1';
     _eyeBtn.addEventListener('pointerup', e => {
       e.stopPropagation();
-      const _newHidden = !la.hidden;
+      const _newHidden = !_eyeAllHidden();
       la.hidden = _newHidden;
       if (_eyeGroupUid) {
         edLayers.forEach(l => {
